@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (require 'cl-lib)
 
 (eval-when-compile
@@ -552,47 +554,52 @@ Routes through the lifecycle-aware permission transition path."
     (mevedel-skills--skill-source-label skill)
     (or (mevedel-skill-description skill) ""))))
 
-(defun mevedel-skills--skill-detail-text (skill &optional context)
-  "Return detail text for SKILL."
+(defun mevedel-skills--skill-detail-report (skill &optional context)
+  "Return the complete information report for SKILL."
   (let ((session (and context (mevedel-cockpit-context-session context))))
-    (concat
-     (format
-      "Skill %s [%s]\nSource: %s\nDescription: %s"
-      (mevedel-skill-name skill)
-      (mevedel-skills--skill-status-label skill)
-      (mevedel-skills--skill-source-label skill)
-      (or (mevedel-skill-description skill) ""))
-     (if-let* ((file (mevedel-skill-source-file skill)))
-         (format "\nFile: %s" file)
-       "")
-     (when-let* ((dependencies (mevedel-skill-dependencies skill)))
-       (concat
-        "\nRequired skills:\n"
-        (mapconcat
-         (lambda (dependency)
-           (let* ((source-key (mevedel-skill-dependency-source-key dependency))
-                  (child
-                   (and session source-key
-                        (cl-find source-key (mevedel-session-skills session)
-                                 :key (lambda (candidate)
-                                        (mevedel-skills-source-key
-                                         (mevedel-skill-source-file candidate)))
-                                 :test #'equal))))
-             (format "- %s%s%s"
-                     (mevedel-skill-dependency-name dependency)
-                     (if source-key (format " -> %s" source-key) "")
-                     (if (and child (not (mevedel-skill-active-p child)))
-                         " [dormant]"
-                       ""))))
-         dependencies "\n")))
-     (when-let* ((diagnostics (mevedel-skill-dependency-diagnostics skill)))
-       (concat "\nDependency errors:\n- "
-               (string-join diagnostics "\n- ")))
-     (when (and (mevedel-skill-model-invocable-p skill)
-                (not (mevedel-skill-effective-model-invocable-p skill)))
-       "\nModel invocation: disabled by a required skill")
-     (when-let* ((warnings (mevedel-skill-warnings skill)))
-       (concat "\nWarnings:\n- " (string-join warnings "\n- "))))))
+    (list :title "Skill"
+          :subtitle (format "%s [%s]" (mevedel-skill-name skill) (mevedel-skills--skill-status-label skill))
+          :identity (mevedel-skill-source-file skill)
+          :sections
+          (list
+           (list :id 'skill :title "Skill"
+                 :body (mevedel-report-fields
+                        (list "Name" (mevedel-skill-name skill))
+                        (list "Status" (mevedel-skills--skill-status-label skill))
+                        (list "Source" (mevedel-skills--skill-source-label skill))
+                        (list "Description" (or (mevedel-skill-description skill) ""))
+                        (when-let* ((file (mevedel-skill-source-file skill))) (list "File" file))))
+           (list :id 'dependencies :title "Required skills"
+                 :body (or (when-let* ((dependencies (mevedel-skill-dependencies skill)))
+			     (concat
+			      "\nRequired skills:\n"
+			      (mapconcat
+			       (lambda (dependency)
+				 (let* ((source-key (mevedel-skill-dependency-source-key dependency))
+					(child
+					 (and session source-key
+					      (cl-find source-key (mevedel-session-skills session)
+						       :key (lambda (candidate)
+							      (mevedel-skills-source-key
+							       (mevedel-skill-source-file candidate)))
+						       :test #'equal))))
+				   (format "- %s%s%s"
+					   (mevedel-skill-dependency-name dependency)
+					   (if source-key (format " -> %s" source-key) "")
+					   (if (and child (not (mevedel-skill-active-p child)))
+					       " [dormant]"
+					     ""))))
+			       dependencies "\n"))) "No required skills."))
+           (list :id 'diagnostics :title "Diagnostics"
+                 :body (let ((text (concat      (when-let* ((diagnostics (mevedel-skill-dependency-diagnostics skill)))
+						  (concat "\nDependency errors:\n- "
+							  (string-join diagnostics "\n- ")))
+						(when (and (mevedel-skill-model-invocable-p skill)
+							   (not (mevedel-skill-effective-model-invocable-p skill)))
+						  "\nModel invocation: disabled by a required skill")
+						(when-let* ((warnings (mevedel-skill-warnings skill)))
+						  (concat "\nWarnings:\n- " (string-join warnings "\n- "))))))
+                         (if (string-empty-p text) "No dependency errors or warnings." text)))))))
 
 (defun mevedel-skills-list--workspace-label (&optional context)
   "Return CONTEXT's skills cockpit workspace root label."
@@ -677,33 +684,29 @@ Routes through the lifecycle-aware permission transition path."
     :collect mevedel-skills-list--collect
     :entry mevedel-skills-list--entry
     :header mevedel-skills-list--header-line
-    :details mevedel-skills--skill-detail-text
+    :details mevedel-skills--skill-detail-report
     :details-buffer "*mevedel skill details*"
     :help-buffer ,mevedel-skills-help-buffer-name
-    :help-function mevedel-skills-list--help-text
+    :help-function mevedel-skills-list--help-report
     :keys (("e" "Enable or disable selected skill"
             mevedel-skills-list-toggle-enabled)
            ("o" "Open selected skill source"
             mevedel-skills-list-open-source)))
   "Cockpit surface spec for the skill list.")
 
-(defun mevedel-skills-list--help-text (&optional _context)
-  "Return help text for the skills cockpit."
-  (concat
-   "mevedel skills cockpit\n\n"
-   "Keys\n"
-   (mevedel-cockpit-surface-key-help-text mevedel-skills-list--surface)
-   "\n\n"
-   "Slash equivalents\n"
-   "/skills help NAME\n"
-   "/skills enable NAME, /skills disable NAME\n"))
+(defun mevedel-skills-list--help-report (&optional _context)
+  "Return the complete cockpit help report."
+  (list :title "Skills help"
+        :sections (list (list :id 'keys :title "Keys"
+                              :body (mevedel-cockpit-surface-key-help-text mevedel-skills-list--surface))
+			(list :id 'slash :title "Slash equivalents" :body "/skills help NAME\n/skills enable NAME, /skills disable NAME\n"))))
 
 (defun mevedel-skills-list-help ()
   "Open skills cockpit help."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-skills-help-buffer-name
-   (mevedel-skills-list--help-text)))
+   (mevedel-skills-list--help-report)))
 
 (defun mevedel-skills-list-quit ()
   "Quit the skills cockpit and return to the main session cockpit."
@@ -748,7 +751,8 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-cmd--skills--help (session name)
   "Message help for skill NAME in SESSION."
   (if-let* ((skill (mevedel-session-get-skill session name)))
-      (message "%s" (mevedel-skills--skill-detail-text skill))
+      (mevedel-cockpit-show-help "*mevedel skill details*"
+                                 (mevedel-skills--skill-detail-report skill))
     (message "Unknown skill: %s" name)))
 
 (defun mevedel-cmd--skills (args)

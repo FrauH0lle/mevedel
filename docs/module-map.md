@@ -131,6 +131,7 @@ Chat / view
   mevedel-view-path.el        deferred target path verification and memoization
   mevedel-view-table.el       rendered pipe tables and window realignment
   mevedel-cockpit.el          shared tabulated cockpit surface plumbing
+  mevedel-report.el           read-only sections, memory navigation, report windows
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu, restoration, and steering routing
   mevedel-executions-list.el  session-wide live execution cockpit and user controls

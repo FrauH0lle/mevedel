@@ -11,6 +11,7 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-cockpit)
 (require 'mevedel-memory-pass)
+(require 'mevedel-report)
 
 ;; `mevedel-journal-jobs'
 (autoload 'mevedel-journal-jobs "mevedel-journal-jobs")
@@ -122,30 +123,62 @@ Check original root authority before disclosing private topic contents."
          (before (or (plist-get intent :before) (plist-get (cdr input) :before)))
          (after (or (plist-get intent :after)
                     (mevedel-memory-write--after before (mevedel-memory-apply-changes (car input) (cdr input))))))
-    (concat (format "Target    %s\nStatus    %s\nPass      %s\nReason    %s\nDecision  %s\n\nProposed body\n%s\n\nCaptured changes\n"
-                    (plist-get item :target) (plist-get item :status) (plist-get item :pass)
-                    (plist-get proposal :reason) (or (plist-get decision :reason) "Pending") (plist-get proposal :body))
-            (mapconcat (lambda (row)
-                         (let ((new (cdr (assoc (car row) after))))
-                           (format "\n%s\nBefore exists: %s, mode: %S\nAfter exists: %s, mode: %S\n%s"
-                                   (car row) (plist-get (cdr row) :exists) (plist-get (cdr row) :mode)
-                                   (plist-get new :exists) (plist-get new :mode) (mevedel-memory-list--diff (cdr row) new)))) before "")
-            "\nRetained evidence\n"
-            (if (not (plist-get proposal :evidence)) "No digest evidence recorded.\n"
-              (mapconcat
-               (lambda (id)
-                 (let ((entry (seq-find (lambda (entry) (equal id (plist-get entry :id)))
-                                        (plist-get (plist-get accepted :prepared) :entries))))
-                   (if entry (format "memory://journal/%s\n%s\n" (plist-get entry :file) (plist-get entry :body))
-                     (format "%s: retained evidence unavailable.\n" id))))
-               (plist-get proposal :evidence) "\n"))
-            "\nReference checks\n"
-            (if (not (plist-get (plist-get accepted :review) :references)) "No reference checks recorded.\n"
-              (mapconcat (lambda (reference)
-                           (format "%s: %s -- %s (%s)\nScope: %s\n"
-                                   (plist-get reference :topic) (plist-get reference :token) (plist-get reference :result)
-                                   (plist-get reference :checked) (plist-get reference :scope)))
-                         (plist-get (plist-get accepted :review) :references) "\n")))))
+    (list
+     :title "Memory proposal"
+     :subtitle (format "%s · %s" (plist-get proposal :title) (plist-get item :status))
+     :identity (list (mevedel-workspace-root workspace) (plist-get item :pass) (plist-get item :id))
+     :navigator t :initial 'body
+     :validate (lambda () (mevedel-memory-scope--root scope (plist-get proposal :root)))
+     :sections
+     (append
+      (list
+       (list :id 'decision :title "Decision"
+             :body (mevedel-report-fields
+                    (list "Status" (plist-get item :status))
+                    (list "Reason" (plist-get proposal :reason))
+                    (list "Decision" (or (plist-get decision :reason) "Pending"))))
+       (list :id 'body :title "Proposed body" :mode 'markdown-mode
+             :body (plist-get proposal :body)))
+      (mapcar
+       (lambda (row)
+         (let ((new (cdr (assoc (car row) after))))
+           (list :id (cons 'change (car row)) :title (concat "Changes · " (car row))
+                 :mode 'diff-mode
+                 :body (format "Before exists: %s, mode: %S\nAfter exists: %s, mode: %S\n\n%s"
+                               (plist-get (cdr row) :exists) (plist-get (cdr row) :mode)
+                               (plist-get new :exists) (plist-get new :mode)
+                               (mevedel-memory-list--diff (cdr row) new)))))
+       before)
+      (if (not (plist-get proposal :evidence))
+          (list (list :id 'evidence :title "Retained evidence" :body "No digest evidence recorded.\n"))
+        (mapcar
+         (lambda (id)
+           (let ((entry (seq-find (lambda (entry) (equal id (plist-get entry :id)))
+                                  (plist-get (plist-get accepted :prepared) :entries))))
+             (list :id (cons 'evidence id)
+                   :title (concat "Evidence · " (or (plist-get entry :file) id))
+                   :mode 'markdown-mode
+                   :body (if entry
+                             (format "memory://journal/%s\n\n%s\n"
+                                     (plist-get entry :file) (plist-get entry :body))
+                           (format "%s: retained evidence unavailable.\n" id)))))
+         (plist-get proposal :evidence)))
+      (list
+       (list :id 'references :title "Reference checks"
+             :body
+             (if (not (plist-get (plist-get accepted :review) :references))
+                 "No reference checks recorded.\n"
+               (mapconcat
+                (lambda (reference)
+                  (format "%s: %s -- %s (%s)\nScope: %s\n"
+                          (plist-get reference :topic) (plist-get reference :token)
+                          (plist-get reference :result) (plist-get reference :checked)
+                          (plist-get reference :scope)))
+                (plist-get (plist-get accepted :review) :references) "\n")))
+       (list :id 'target :title "Target & pass"
+             :body (mevedel-report-fields
+                    (list "Target" (plist-get item :target))
+                    (list "Pass" (plist-get item :pass)))))))))
 
 (defun mevedel-memory-list--act (action &optional reason all)
   "Apply ACTION with REASON to the selected proposal, or ALL pending rows."
@@ -200,12 +233,17 @@ Check original root authority before disclosing private topic contents."
   (interactive) (mevedel-memory-list-recover t))
 
 (defun mevedel-memory-list-running ()
-  "Inspect this client's running consolidation request buffer."
+  "Inspect this client's running consolidation without changing its request buffer."
   (interactive)
   (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
-         (buffer (plist-get (plist-get (mevedel-memory-pass-running workspace) :request) :buffer)))
-    (unless (buffer-live-p buffer) (user-error "No consolidation request is running in this client"))
-    (pop-to-buffer buffer)))
+         (request (plist-get (mevedel-memory-pass-running workspace) :request))
+         (source (plist-get request :buffer))
+         (report (plist-get request :report)))
+    (unless (and (buffer-live-p source) report)
+      (user-error "No consolidation request is running in this client"))
+    (let ((buffer (mevedel-report-show "*mevedel running consolidation*" (funcall report))))
+      (with-current-buffer buffer (mevedel-report-follow-source source report))
+      buffer)))
 
 (defun mevedel-memory-list-kill ()
   "Cancel this client's running consolidation."

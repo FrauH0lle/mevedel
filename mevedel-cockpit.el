@@ -16,6 +16,9 @@
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 
+;; `mevedel-report'
+(declare-function mevedel-report-show "mevedel-report" (buffer report &optional noselect))
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
@@ -258,19 +261,16 @@ item is selected."
      (no-error nil)
      (t (user-error "No %s on this line" row-label)))))
 
-(defun mevedel-cockpit-show-help (buffer text)
-  "Show TEXT in help BUFFER."
-  (let ((help-window-select t))
-    (with-help-window buffer
-      (princ text))))
+(defun mevedel-cockpit-show-help (buffer report)
+  "Show structured REPORT in information BUFFER."
+  (require 'mevedel-report)
+  (mevedel-report-show buffer report))
 
-(defun mevedel-cockpit--generated-help-text (surface)
-  "Return generated key help for SURFACE.
-Used when SURFACE provides neither `:help-function' nor `:help-text', so
-every surface answers \\`?' with at least its own key table."
-  (format "mevedel %s\n\nKeys\n%s\n"
-          (mevedel-cockpit--surface-label surface)
-          (mevedel-cockpit-surface-key-help-text surface)))
+(defun mevedel-cockpit--generated-help-report (surface)
+  "Return generated key help as a report for SURFACE."
+  (list :title (format "mevedel %s" (mevedel-cockpit--surface-label surface))
+        :sections (list (list :id 'keys :title "Keys"
+                              :body (mevedel-cockpit-surface-key-help-text surface)))))
 
 (defun mevedel-cockpit-surface-help ()
   "Open help for the current cockpit surface."
@@ -281,11 +281,32 @@ every surface answers \\`?' with at least its own key table."
                     (user-error nil)))
          (function (plist-get surface :help-function))
          (text (or (and function (funcall function context))
-                   (plist-get surface :help-text)
-                   (mevedel-cockpit--generated-help-text surface)))
+                   (plist-get surface :help-report)
+                   (mevedel-cockpit--generated-help-report surface)))
          (buffer (or (plist-get surface :help-buffer)
                      "*mevedel cockpit help*")))
     (mevedel-cockpit-show-help buffer text)))
+
+(defun mevedel-cockpit--detail-report (surface context id item)
+  "Build ITEM's report for SURFACE, retaining its CONTEXT and row ID."
+  (let* ((report (funcall (plist-get surface :details) item context))
+         (check (plist-get report :validate)))
+    (plist-put report :identity (list id context (plist-get report :identity)))
+    (plist-put report :validate
+               (lambda ()
+                 (mevedel-cockpit-require-owner (mevedel-cockpit--surface-label surface) context)
+                 (when check (funcall check))))
+    (plist-put report :refresh
+               (lambda ()
+                 (mevedel-cockpit-require-owner (mevedel-cockpit--surface-label surface) context)
+                 (let* ((items (funcall (plist-get surface :collect) context))
+                        (fresh (seq-find
+                                (lambda (row)
+                                  (equal id (car (mevedel-cockpit--row-entry surface row context))))
+                                items)))
+                   (unless fresh (user-error "Inspected item is no longer available"))
+                   (mevedel-cockpit--detail-report surface context id fresh))))
+    report))
 
 (defun mevedel-cockpit-surface-details ()
   "Open details for the selected cockpit surface item."
@@ -299,7 +320,9 @@ every surface answers \\`?' with at least its own key table."
     (unless function
       (user-error "No details for this %s"
                   (mevedel-cockpit--surface-label surface)))
-    (mevedel-cockpit-show-help buffer (funcall function item context))))
+    (mevedel-cockpit-show-help buffer
+                               (mevedel-cockpit--detail-report surface context
+                                                               (tabulated-list-get-id) item))))
 
 (defun mevedel-cockpit-format-header (name scope state)
   "Return the shared cockpit header line for NAME, SCOPE, and STATE.

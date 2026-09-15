@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -125,26 +127,28 @@
      (format "%d live" (length items)))))
 
 (defun mevedel-executions-list--details (item _context)
-  "Return detail text for execution ITEM."
+  "Return the information report for execution ITEM."
   (let ((tail (or (plist-get item :output-tail) ""))
         (sandbox (plist-get item :sandbox-facts)))
-    (format
-     (concat "Execution: %s\nOwner: %s\nCommand: %s\nMode: %s\n"
-             "Elapsed: %s\nOutput: %d bytes, %d lines\n"
-             "Artifact: %s\n%s\n\nLive output tail:\n%s")
-     (plist-get item :execution-id)
-     (plist-get item :owner)
-     (plist-get item :command)
-     (if (plist-get item :tty) "PTY" "pipe")
-     (mevedel-executions-list--elapsed
-      (or (plist-get item :wall-time-seconds) 0))
-     (or (plist-get item :output-bytes) 0)
-     (or (plist-get item :output-lines) 0)
-     (or (plist-get item :artifact-path) "none")
-     (if sandbox
-         (mevedel-sandbox-status-text sandbox)
-       "sandbox: pending")
-     (if (string-empty-p tail) "(no output yet)" tail))))
+    (list :title "Execution" :subtitle (plist-get item :execution-id)
+          :identity (plist-get item :execution-id)
+          :sections
+          (list
+           (list :id 'execution :title "Execution"
+                 :body (mevedel-report-fields
+                        (list "Execution" (plist-get item :execution-id))
+                        (list "Owner" (plist-get item :owner))
+                        (list "Command" (plist-get item :command))
+                        (list "Mode" (if (plist-get item :tty) "PTY" "pipe"))
+                        (list "Elapsed" (mevedel-executions-list--elapsed (or (plist-get item :wall-time-seconds) 0)))))
+           (list :id 'output :title "Output & sandbox"
+                 :body (concat
+                        (mevedel-report-fields
+                         (list "Output" (format "%d bytes, %d lines" (or (plist-get item :output-bytes) 0) (or (plist-get item :output-lines) 0)))
+                         (list "Artifact" (or (plist-get item :artifact-path) "none")))
+                        (if sandbox (mevedel-sandbox-status-text sandbox) "sandbox: pending")))
+           (list :id 'tail :title "Live output tail"
+                 :body (if (string-empty-p tail) "(no output yet)" tail))))))
 
 (defun mevedel-executions-list--selected ()
   "Return the selected live execution snapshot."

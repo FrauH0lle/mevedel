@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile (require 'cl-lib))
 (require 'button)
 (require 'mevedel-journal-process)
@@ -150,7 +152,7 @@ explain retention for humans; they grant neither recall nor deletion authority."
 
 (defvar mevedel-journal-jobs-mode-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map special-mode-map)
+    (set-keymap-parent map mevedel-report-mode-map)
     (define-key map (kbd "g") #'mevedel-journal-jobs)
     (define-key map (kbd "RET") #'mevedel-journal-inspect)
     (define-key map (kbd "r") #'mevedel-journal-retry)
@@ -158,7 +160,7 @@ explain retention for humans; they grant neither recall nor deletion authority."
     map)
   "Keys for journal job inspection and explicit decisions.")
 
-(define-derived-mode mevedel-journal-jobs-mode special-mode "Journal jobs"
+(define-derived-mode mevedel-journal-jobs-mode mevedel-report-mode "Journal jobs"
   "Inspect pending journal work; RET inspects, r retries, and d discards.")
 
 ;;;###autoload
@@ -166,68 +168,91 @@ explain retention for humans; they grant neither recall nor deletion authority."
   "Inspect pending jobs and overdue retained journal evidence in WORKSPACE."
   (interactive)
   (setq workspace (or workspace (mevedel-journal-jobs--workspace)))
-  (let ((jobs (mevedel-journal-jobs--records workspace))
-        (retained (mevedel-journal-jobs--retained workspace))
-        (buffer (get-buffer-create "*mevedel journal jobs*")))
+  (let* ((jobs (mevedel-journal-jobs--records workspace))
+         (retained (mevedel-journal-jobs--retained workspace))
+         (pending-text (with-temp-buffer
+			 (if (not jobs) (insert "No pending jobs.\n")
+			   (dolist (job jobs)
+			     (let* ((start (point))
+				    (metadata (plist-get (plist-get job :capture) :metadata)))
+			       (insert (format "[%s] %s | %s | attempts %s\n%s\n%s\n\n"
+					       (plist-get job :status) (or (plist-get metadata :session-name) "unknown session")
+					       (or (plist-get metadata :model) "unknown model") (or (plist-get job :attempts) "unknown")
+					       (plist-get job :id) (or (plist-get job :detail) "")))
+			       (add-text-properties start (point) (list 'mevedel-journal-capture-id (plist-get job :id))))))
+                         (buffer-string)))
+         (retained-text (with-temp-buffer
+			  (insert (format "\nOverdue retained evidence: %d | review mode: %s\n"
+					  (length retained) mevedel-memory-consolidation-mode))
+			  (when retained
+			    (insert "Hidden from ordinary recall; retained until review and recovery dependencies resolve.\n")
+			    (insert-text-button "Review unprocessed evidence"
+						'action (lambda (_) (mevedel-remember nil (list :workspace workspace)))
+						'follow-link t)
+			    (insert "   ")
+			    (insert-text-button "Inspect proposals and recovery"
+						'action (lambda (_) (mevedel-memory-list-open (list :workspace workspace)))
+						'follow-link t)
+			    (insert "\n\n")
+			    (dolist (row retained)
+			      (let* ((entry (plist-get row :entry))
+				     (file (plist-get entry :file)))
+				(insert (format "%s | %d days | %s\n%s\n"
+						(plist-get entry :kind) (plist-get row :age)
+						(string-join (plist-get row :reasons) "; ") file))
+				(insert-text-button
+				 "Inspect retained entry"
+				 'action (lambda (_)
+					   (let ((fresh (mevedel-journal-store-read (mevedel-workspace-root workspace) file)))
+					     (mevedel-report-show
+					      "*mevedel journal evidence*"
+					      (list :title "Retained journal evidence"
+						    :subtitle file :identity (list workspace file)
+						    :sections (list (list :id 'evidence :title "Retained evidence"
+									  :body (plist-get fresh :text)
+									  :mode 'markdown-mode))))))
+				 'follow-link t)
+				(insert "\n\n"))))
+                          (buffer-string)))
+         (buffer (mevedel-report-show
+                  "*mevedel journal jobs*"
+                  (list :title "Journal jobs" :subtitle (mevedel-workspace-root workspace)
+                        :identity workspace :mode 'mevedel-journal-jobs-mode
+                        :sections (list (list :id 'jobs :title "Pending jobs" :body pending-text)
+                                        (list :id 'retained :title "Overdue retained evidence"
+                                              :body retained-text))))))
     (with-current-buffer buffer
-      (mevedel-journal-jobs-mode)
-      (setq-local mevedel-journal-jobs--workspace workspace)
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (format "Journal jobs: %s\n\nRET inspect   r retry   d discard   g refresh\n\n"
-                        (mevedel-workspace-root workspace)))
-        (if (not jobs) (insert "No pending jobs.\n")
-          (dolist (job jobs)
-            (let* ((start (point))
-                   (metadata (plist-get (plist-get job :capture) :metadata)))
-              (insert (format "[%s] %s | %s | attempts %s\n%s\n%s\n\n"
-                              (plist-get job :status) (or (plist-get metadata :session-name) "unknown session")
-                              (or (plist-get metadata :model) "unknown model") (or (plist-get job :attempts) "unknown")
-                              (plist-get job :id) (or (plist-get job :detail) "")))
-              (add-text-properties start (point) (list 'mevedel-journal-capture-id (plist-get job :id))))))
-        (insert (format "\nOverdue retained evidence: %d | review mode: %s\n"
-                        (length retained) mevedel-memory-consolidation-mode))
-        (when retained
-          (insert "Hidden from ordinary recall; retained until review and recovery dependencies resolve.\n")
-          (insert-text-button "Review unprocessed evidence"
-                              'action (lambda (_) (mevedel-remember nil (list :workspace workspace)))
-                              'follow-link t)
-          (insert "   ")
-          (insert-text-button "Inspect proposals and recovery"
-                              'action (lambda (_) (mevedel-memory-list-open (list :workspace workspace)))
-                              'follow-link t)
-          (insert "\n\n")
-          (dolist (row retained)
-            (let* ((entry (plist-get row :entry))
-                   (file (plist-get entry :file)))
-              (insert (format "%s | %d days | %s\n%s\n"
-                              (plist-get entry :kind) (plist-get row :age)
-                              (string-join (plist-get row :reasons) "; ") file))
-              (insert-text-button
-               "Inspect retained entry"
-               'action (lambda (_)
-                         (let ((fresh (mevedel-journal-store-read (mevedel-workspace-root workspace) file)))
-                           (with-help-window "*mevedel journal evidence*"
-                             (princ (plist-get fresh :text)))))
-               'follow-link t)
-              (insert "\n\n"))))
-        (goto-char (point-min))))
-    (pop-to-buffer buffer)
+      (setq-local mevedel-journal-jobs--workspace workspace
+                  header-line-format "RET inspect · r retry · d discard · g refresh · TAB next heading/link · q close"))
     buffer))
+
+;;;###autoload
+(defun mevedel-journal-jobs--capture-report (workspace id)
+  "Inspect frozen evidence and diagnostics for pending capture ID in WORKSPACE."
+  (let ((job (cl-find id (mevedel-journal-jobs--records workspace)
+                      :key (lambda (job) (plist-get job :id)) :test #'equal)))
+    (unless job (user-error "Journal capture is no longer pending"))
+    (list :title "Journal capture" :subtitle (format "%s · %s" id (plist-get job :status))
+          :identity (list workspace id) :navigator t :initial 'evidence
+          :refresh (lambda () (mevedel-journal-jobs--capture-report workspace id))
+          :sections
+          (list (list :id 'diagnostics :title "Capture diagnostics"
+                      :body (concat (mevedel-report-fields
+                                     (list "Capture" id)
+                                     (list "Status" (plist-get job :status))
+                                     (list "Attempts" (or (plist-get job :attempts) "unknown")))
+                                    (or (plist-get job :detail) "")))
+                (list :id 'evidence :title "Frozen evidence" :mode 'markdown-mode
+                      :body (condition-case err
+                                (mevedel-journal-capture-evidence workspace (plist-get job :capture))
+                              (error (format "Evidence unavailable: %s\n" (error-message-string err)))))))))
 
 ;;;###autoload
 (defun mevedel-journal-inspect (workspace id)
   "Inspect frozen evidence and diagnostics for pending capture ID in WORKSPACE."
   (interactive (mevedel-journal-jobs--selection))
-  (let ((job (cl-find id (mevedel-journal-jobs--records workspace)
-                      :key (lambda (job) (plist-get job :id)) :test #'equal)))
-    (unless job (user-error "Journal capture is no longer pending"))
-    (with-help-window "*mevedel journal evidence*"
-      (princ (format "Capture %s\nStatus: %s\nAttempts: %s\n%s\n\n"
-                     id (plist-get job :status) (or (plist-get job :attempts) "unknown") (or (plist-get job :detail) "")))
-      (condition-case err
-          (princ (mevedel-journal-capture-evidence workspace (plist-get job :capture)))
-        (error (princ (format "Evidence unavailable: %s\n" (error-message-string err))))))))
+  (mevedel-report-show "*mevedel journal evidence*"
+                       (mevedel-journal-jobs--capture-report workspace id)))
 
 ;;;###autoload
 (defun mevedel-journal-retry (workspace id)

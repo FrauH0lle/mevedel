@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (require 'mevedel-cockpit)
 
 ;; `mevedel-cockpit'
@@ -169,19 +171,20 @@ An execution profile's remembered child grants follow the pattern."
        "nothing remembered"))))
 
 (defun mevedel-permissions-list--details (item _context)
-  "Return the detail text for authority ITEM."
-  (string-join
-   (list "mevedel remembered authority"
-         ""
-         (format "Scope     %s" (plist-get item :scope))
-         (format "Kind      %s" (plist-get item :kind))
-         (format "Access    %s" (plist-get item :access))
-         (format "Subject   %s" (plist-get item :subject))
-         (format "Spec      %s" (plist-get item :spec))
-         ""
-         (format "Record    %S" (plist-get item :value))
-         "")
-   "\n"))
+  "Return the information report for authority ITEM."
+  (list :title "Remembered authority" :subtitle (format "%s" (plist-get item :subject))
+        :identity (plist-get item :value)
+        :sections
+        (list
+         (list :id 'authority :title "Authority"
+               :body (mevedel-report-fields
+                      (list "Scope" (plist-get item :scope))
+                      (list "Kind" (plist-get item :kind))
+                      (list "Access" (plist-get item :access))
+                      (list "Subject" (plist-get item :subject))
+                      (list "Spec" (plist-get item :spec))))
+         (list :id 'record :title "Record" :mode 'emacs-lisp-mode :folded t
+               :body (format "%S" (plist-get item :value))))))
 
 
 ;;
@@ -239,31 +242,17 @@ An execution profile's remembered child grants follow the pattern."
     :details mevedel-permissions-list--details
     :details-buffer "*mevedel authority details*"
     :help-buffer ,mevedel-permissions-list-help-buffer-name
-    :help-function mevedel-permissions-list--help-text
+    :help-function mevedel-permissions-list--help-report
     :keys (("d" "Revoke the selected authority"
             mevedel-permissions-list-revoke)))
   "Cockpit surface spec for remembered permission authority.")
 
-(defun mevedel-permissions-list--help-text (&optional _context)
-  "Return help text for the remembered authority cockpit."
-  (string-join
-   (list "mevedel permissions cockpit"
-         ""
-         "Keys"
-         (mevedel-cockpit-surface-key-help-text
-          mevedel-permissions-list--surface)
-         ""
-         "Rows"
-         "operation  Tool authority remembered for a matching operation"
-         "network    Operation authority that also carries network access"
-         "resource   Exact or recursive path grant remembered for one access mode"
-         "session    Held by this session only, and saved with it"
-         "workspace  Shared by every session in this workspace"
-         ""
-         "Entries appear here when an authority prompt is answered with"
-         "\"Always\".  Revoking one leaves the others untouched."
-         "")
-   "\n"))
+(defun mevedel-permissions-list--help-report (&optional _context)
+  "Return the complete cockpit help report."
+  (list :title "Permissions help"
+        :sections (list (list :id 'keys :title "Keys"
+                              :body (mevedel-cockpit-surface-key-help-text mevedel-permissions-list--surface))
+			(list :id 'rows :title "Rows" :body "operation  Tool authority remembered for a matching operation\nnetwork    Operation authority that also carries network access\nresource   Exact or recursive path grant remembered for one access mode\nsession    Held by this session only, and saved with it\nworkspace  Shared by every session in this workspace\n\nEntries appear here when an authority prompt is answered with\n\"Always\".  Revoking one leaves the others untouched."))))
 
 (define-derived-mode mevedel-permissions-list-mode tabulated-list-mode
   "mevedel-permissions"

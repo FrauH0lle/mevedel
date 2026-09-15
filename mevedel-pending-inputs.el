@@ -10,6 +10,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -920,8 +922,10 @@ an unrelated remote operation started by redisplay or another package included
                " · delivery paused")))))
 
 (defun mevedel-pending-inputs--details (item _context)
-  "Return full text for pending-input ITEM."
-  (mevedel-view--pending-input-text (plist-get item :entry)))
+  "Return the complete information report for pending-input ITEM."
+  (list :title "Pending input"
+        :sections (list (list :id 'input :title "Full input"
+                              :body (mevedel-view--pending-input-text (plist-get item :entry))))))
 
 (defun mevedel-pending-inputs--setup (context)
   "Pause delivery before rendering the cockpit for CONTEXT."

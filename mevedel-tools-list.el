@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -206,14 +208,19 @@
              item))
     (user-error nil)))
 
-(defun mevedel-tools-list--detail-text (item &optional _context)
-  "Return detail text for tools cockpit ITEM."
-  (format (concat "Tool %s [%s]\nCategory: %s\n\n"
-                  "Description:\n%s")
-          (plist-get item :name)
-          (symbol-name (plist-get item :state))
-          (or (plist-get item :category) "")
-          (or (plist-get item :description) "")))
+(defun mevedel-tools-list--detail-report (item &optional _context)
+  "Return the information report for tool ITEM."
+  (list :title "Tool" :subtitle (format "%s [%s]" (plist-get item :name) (plist-get item :state))
+        :identity (plist-get item :name)
+        :sections
+        (list
+         (list :id 'tool :title "Tool"
+               :body (mevedel-report-fields
+                      (list "Name" (plist-get item :name))
+                      (list "State" (plist-get item :state))
+                      (list "Category" (or (plist-get item :category) ""))))
+         (list :id 'description :title "Description" :mode 'markdown-mode
+               :body (or (plist-get item :description) "")))))
 
 (defun mevedel-tools-list-details ()
   "Show details for the tool row at point."
@@ -255,27 +262,19 @@
     (with-current-buffer data-buffer
       (call-interactively #'gptel-menu))))
 
-(defun mevedel-tools-list--help-text (&optional _context)
-  "Return help text for the tools cockpit."
-  (string-join
-   (list
-    "mevedel tools cockpit"
-    ""
-    "Keys"
-    (mevedel-cockpit-surface-key-help-text mevedel-tools-list--surface)
-    ""
-    "Rows"
-    "active    Native tools in the current payload"
-    "discoverable  Contracts through ToolSearch; calls through ToolCall"
-    "")
-   "\n"))
+(defun mevedel-tools-list--help-report (&optional _context)
+  "Return the complete cockpit help report."
+  (list :title "Tools help"
+        :sections (list (list :id 'keys :title "Keys"
+                              :body (mevedel-cockpit-surface-key-help-text mevedel-tools-list--surface))
+			(list :id 'rows :title "Rows" :body "active    Native tools in the current payload\ndiscoverable  Contracts through ToolSearch; calls through ToolCall"))))
 
 (defun mevedel-tools-list-help ()
   "Open tools cockpit help."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-tools-help-buffer-name
-   (mevedel-tools-list--help-text)))
+   (mevedel-tools-list--help-report)))
 
 (defun mevedel-tools-list-quit ()
   "Quit the tools cockpit and return to the main session cockpit."
@@ -296,10 +295,10 @@
     :collect mevedel-tools-list--collect
     :entry mevedel-tools-list--entry
     :header mevedel-tools-list--header-line
-    :details mevedel-tools-list--detail-text
+    :details mevedel-tools-list--detail-report
     :details-buffer "*mevedel tool details*"
     :help-buffer ,mevedel-tools-help-buffer-name
-    :help-function mevedel-tools-list--help-text
+    :help-function mevedel-tools-list--help-report
     :keys (("s" "Search tool contracts"
             mevedel-tools-list-search)
            ("G" "Open gptel menu from the owning data buffer"

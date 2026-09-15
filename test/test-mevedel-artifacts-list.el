@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
+
 (require 'mevedel-artifacts-list)
 (require 'mevedel-cockpit)
 (require 'mevedel-session-artifacts)
@@ -58,8 +63,8 @@
                        tabulated-list-entries))
               (let ((item (mevedel-cockpit-surface-selected)))
                 (should (string-match-p
-                         "Path: .*artifacts"
-                         (mevedel-artifacts-list--details item nil)))))))
+					"Path +.*artifacts"
+					(mevedel-report-test-text (mevedel-artifacts-list--details item nil))))))))
       (when-let* ((buffer (get-buffer mevedel-artifacts-list-buffer-name)))
         (kill-buffer buffer))
       (when (buffer-live-p view) (kill-buffer view))

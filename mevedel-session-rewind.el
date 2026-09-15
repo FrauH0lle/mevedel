@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (require 'cl-lib)
 
 (eval-when-compile
@@ -379,7 +381,7 @@ plan row can resolve the backup file.")
 
 (defvar mevedel-session-rewind--plan-buffer-map
   (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map special-mode-map)
+    (set-keymap-parent map mevedel-report-mode-map)
     (define-key map (kbd "d")
       #'mevedel-session-rewind--plan-row-diff)
     map)
@@ -464,12 +466,12 @@ entries are not attempted.  The user-visible report goes to
                  err-str  (error-message-string e))
            (throw 'failed nil)))))
     (with-current-buffer (get-buffer-create "*mevedel-restore-results*")
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (format "Restore results: %d/%d files done\n"
-                        succeeded total))
-        (when failed
-          (insert (format "Failed on %s: %s\n" failed err-str)))))
+      (mevedel-report-render
+       (list :title "Restore results" :identity session
+             :sections
+             (list (list :id 'result :title (if failed "Restore failed" "Restored files")
+                         :body (concat (format "Restore results: %d/%d files done\n" succeeded total)
+                                       (when failed (format "Failed on %s: %s\n" failed err-str))))))))
     (list :succeeded succeeded :failed failed
           :error err-str :total total)))
 
@@ -912,67 +914,75 @@ default -- when it is discarded with everything later."
          (staged (plist-get impact :staged-files))
          (discarded-prompts (plist-get impact :discarded-prompts))
          (cleared (plist-get impact :cleared-state)))
-    (with-current-buffer (get-buffer-create "*mevedel-rewind-impact*")
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (format "Rewind %s %s S%d T%d\n\n"
-                        (mevedel-session-name session)
-                        (if (eq (plist-get impact :boundary) 'after)
-                            "keeping"
-                          "before")
-                        (plist-get target :segment)
-                        (plist-get target :turn)))
-        (insert (format "Turns kept: %d\n"
-                        (plist-get impact :surviving-turns)))
-        (insert (format "Turns discarded: %d\n"
-                        (plist-get impact :discarded-turns)))
-        (insert (format "Captured files restored: %d\n" (length plan)))
-        (insert (format "Checkpoint coverage: %s\n"
-                        (if gaps
-                            (format "incomplete (%d known gap%s)"
-                                    (length gaps)
-                                    (if (= 1 (length gaps)) "" "s"))
-                          "no known gaps")))
-        (insert (format "External changes overwritten: %d\n"
-                        (plist-get impact :external-overwrites)))
-        (insert (format "Staged files left in the index: %d\n"
-                        (length staged)))
-        (insert (format "Child forks detached: %d\n"
-                        (plist-get impact :detached-children)))
-        (insert (format "Cleared live state: %s\n"
-                        (if cleared
-                            (string-join cleared ", ")
-                          "none")))
-        (insert (format "Redo: %s\n\n"
-                        (mevedel-session-rewind--redo-availability session)))
-        (when discarded-prompts
-          (insert "Discarded session events:\n")
-          (dolist (prompt discarded-prompts)
-            (insert (format "  S%d T%d  %s\n"
-                            (plist-get prompt :segment)
-                            (plist-get prompt :turn)
-                            (mevedel-session-rewind--prompt-label
-                             prompt))))
-          (insert "\n"))
-        (dolist (gap gaps)
-          (insert (format "gap       %s (%s)\n"
-                          (plist-get gap :path)
-                          (plist-get gap :reason))))
-        (dolist (entry plan)
-          (let ((start (point)))
-            (insert (format "%-9s %s%s\n"
-                            (plist-get entry :action)
-                            (plist-get entry :path)
-                            (if (member (plist-get entry :path) staged)
-                                " (staged index retained)"
-                              "")))
-            (put-text-property start (point)
-                               'mevedel-plan-entry entry))))
-      (special-mode)
-      (use-local-map mevedel-session-rewind--plan-buffer-map)
-      (setq-local mevedel-session-rewind--plan-buffer-session session)
-      (goto-char (point-min))
-      (display-buffer (current-buffer)))))
+    (let ((buffer
+           (mevedel-report-show
+            "*mevedel-rewind-impact*"
+            (list :title "Rewind impact" :identity session
+                  :subtitle (format "Rewind %s %s S%d T%d"
+                                    (mevedel-session-name session)
+                                    (if (eq (plist-get impact :boundary) 'after) "keeping" "before")
+                                    (plist-get target :segment) (plist-get target :turn))
+                  :sections
+                  (list
+                   (list :id 'impact :title "Consequences" :body (with-temp-buffer
+								   (insert (format "Turns kept: %d\n"
+										   (plist-get impact :surviving-turns)))
+								   (insert (format "Turns discarded: %d\n"
+										   (plist-get impact :discarded-turns)))
+								   (insert (format "Captured files restored: %d\n" (length plan)))
+								   (insert (format "Checkpoint coverage: %s\n"
+										   (if gaps
+										       (format "incomplete (%d known gap%s)"
+											       (length gaps)
+											       (if (= 1 (length gaps)) "" "s"))
+										     "no known gaps")))
+								   (insert (format "External changes overwritten: %d\n"
+										   (plist-get impact :external-overwrites)))
+								   (insert (format "Staged files left in the index: %d\n"
+										   (length staged)))
+								   (insert (format "Child forks detached: %d\n"
+										   (plist-get impact :detached-children)))
+								   (insert (format "Cleared live state: %s\n"
+										   (if cleared
+										       (string-join cleared ", ")
+										     "none")))
+								   (insert (format "Redo: %s\n\n"
+										   (mevedel-session-rewind--redo-availability session)))
+								   (buffer-string)))
+                   (list :id 'events :title "Discarded session events" :body (with-temp-buffer
+									       (when discarded-prompts
+										 (insert "Discarded session events:\n")
+										 (dolist (prompt discarded-prompts)
+										   (insert (format "  S%d T%d  %s\n"
+												   (plist-get prompt :segment)
+												   (plist-get prompt :turn)
+												   (mevedel-session-rewind--prompt-label
+												    prompt))))
+										 (insert "\n"))
+									       (unless discarded-prompts (insert "No session events discarded.\n"))
+									       (buffer-string)))
+                   (list :id 'files :title "File changes and coverage gaps" :body (with-temp-buffer
+										    (dolist (gap gaps)
+										      (insert (format "gap       %s (%s)\n"
+												      (plist-get gap :path)
+												      (plist-get gap :reason))))
+										    (dolist (entry plan)
+										      (let ((start (point)))
+											(insert (format "%-9s %s%s\n"
+													(plist-get entry :action)
+													(plist-get entry :path)
+													(if (member (plist-get entry :path) staged)
+													    " (staged index retained)"
+													  "")))
+											(put-text-property start (point)
+													   'mevedel-plan-entry entry)))
+										    (unless (or gaps plan) (insert "No captured file changes.\n"))
+										    (buffer-string))))) t)))
+      (with-current-buffer buffer
+        (use-local-map mevedel-session-rewind--plan-buffer-map)
+        (setq-local mevedel-session-rewind--plan-buffer-session session
+                    header-line-format "d inspect file diff · RET fold · TAB next heading · q close"))
+      buffer)))
 
 (defun mevedel-session-rewind-reduce-prompt-index
     (index picked-segment picked-cum-turn &optional before-turn)

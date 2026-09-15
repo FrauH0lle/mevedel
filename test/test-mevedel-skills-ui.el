@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -763,8 +768,7 @@ spanning lines")))
                  :name "visible"
                  :description "Visible description"
                  :source 'project))
-         called-area
-         message-text)
+			called-area)
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
@@ -772,15 +776,13 @@ spanning lines")))
             (setq mevedel--session session)
             (cl-letf (((symbol-function 'mevedel-menu-open)
                        (lambda (area)
-                         (setq called-area area)))
-                      ((symbol-function 'message)
-                       (lambda (fmt &rest args)
-                         (setq message-text (apply #'format fmt args)))))
+					(setq called-area area))))
               (mevedel-cmd--skills "list")
               (should (eq called-area 'skills))
               (mevedel-cmd--skills "help visible")
-              (should (string-match-p "Visible description"
-                                      message-text)))))
+			     (with-current-buffer "*mevedel skill details*"
+			       (should (derived-mode-p 'mevedel-report-mode))
+			       (should (string-match-p "Visible description" (buffer-string)))))))
       (mevedel-skills-test--cleanup-list)
       (delete-directory user-dir t)))
 
@@ -1039,7 +1041,7 @@ spanning lines")))
                    '("disabled" "visible" "plugin"
                      "Visible description")))))
 
-(mevedel-deftest mevedel-skills--skill-detail-text ()
+(mevedel-deftest mevedel-skills--skill-detail-report ()
   ,test
   (test)
   :doc "shows stored skill warnings in inspection details"
@@ -1048,7 +1050,7 @@ spanning lines")))
          (skill (mevedel-skill--create
                  :name "inspect" :description "Inspectable"
                  :source 'project :warnings (list warning)))
-         (details (mevedel-skills--skill-detail-text skill)))
+			(details (mevedel-report-test-text (mevedel-skills--skill-detail-report skill))))
     (should (string-match-p "Warnings:" details))
     (should (string-match-p (regexp-quote (concat "- " warning)) details)))
 
@@ -1056,7 +1058,7 @@ spanning lines")))
   (let* ((skill (mevedel-skill--create
                  :name "clean" :description "Clean"
                  :source 'project))
-         (details (mevedel-skills--skill-detail-text skill)))
+			(details (mevedel-report-test-text (mevedel-skills--skill-detail-report skill))))
     (should-not (string-match-p "Warnings:" details)))
 
   :doc "shows resolved, dormant, invalid, and transitively disabled dependencies"
@@ -1076,7 +1078,7 @@ spanning lines")))
          details)
     (setf (mevedel-session-skills session) (list parent child))
     (setq details
-          (mevedel-skills--skill-detail-text parent (list :session session)))
+			 (mevedel-report-test-text (mevedel-skills--skill-detail-report parent (list :session session))))
     (should (string-match-p "Required skills:" details))
     (should (string-match-p "child.*\[dormant\]" details))
     (should (string-match-p "Dependency errors:" details))

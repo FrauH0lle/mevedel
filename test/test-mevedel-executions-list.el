@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
+
 (require 'mevedel-cockpit)
 (require 'mevedel-execution)
 (require 'mevedel-executions-list)
@@ -72,11 +77,11 @@
                         (mevedel-cockpit-surface-header-line))))
               (should (string-match-p
                        ">>> ready"
-                       (mevedel-executions-list--details item nil)))
+				      (mevedel-report-test-text (mevedel-executions-list--details item nil))))
               (should-not
                (string-match-p
                 "Timeout:"
-                (mevedel-executions-list--details item nil)))))
+			       (mevedel-report-test-text (mevedel-executions-list--details item nil))))))
       (when-let* ((buffer (get-buffer mevedel-executions-list-buffer-name)))
         (kill-buffer buffer))
       (when (buffer-live-p view) (kill-buffer view))

@@ -78,7 +78,7 @@ arguments charged by the client, independently of provider-reported usage."
          (caller (current-buffer))
          (stream gptel-stream)
          (deadline (+ (float-time) 180))
-         settled timer investigation policy references system input admitted
+         settled timer investigation policy references system input admitted response-start
          (documents nil) (chunks nil) (output "")
          (round 0) (recorded-round -1)
          (usage (list :input-tokens 0 :cached-tokens 0 :output-tokens 0)))
@@ -247,12 +247,25 @@ arguments charged by the client, independently of provider-reported usage."
             (ensure-live)
             (with-current-buffer buffer
               (show (concat "# Admitted review evidence\n\n" input "\n\n# Model response\n\n"))
-              (setq buffer-read-only t)
+              (setq response-start (copy-marker (point-max))
+                    buffer-read-only t)
               (add-hook 'kill-buffer-hook (lambda () (finish 'aborted nil nil t)) nil t)
               (gptel-request input :buffer buffer :system system :stream stream :transforms nil
                              :fsm (machine) :callback #'provider)))
         (error (finish 'error (error-message-string err))))
       (list :buffer buffer :cancel (lambda () (finish 'aborted))
+            :report (lambda ()
+                      (list :title "Running consolidation" :subtitle "In progress"
+                            :identity buffer :navigator t :initial 'response
+                            :validate (lambda ()
+                                        (unless (and (buffer-live-p buffer) (live))
+                                          (user-error "Consolidation inspection source is no longer live")))
+                            :sections
+                            (list (list :id 'evidence :title "Admitted review evidence" :body input
+                                        :mode 'json-mode)
+                                  (list :id 'response :title "Model response" :mode 'markdown-mode
+                                        :body (with-current-buffer buffer
+                                                (buffer-substring-no-properties response-start (point-max)))))))
             :usage (lambda () (copy-sequence usage))))))
 
 (provide 'mevedel-memory-review)

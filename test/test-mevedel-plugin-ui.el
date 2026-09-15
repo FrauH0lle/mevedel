@@ -151,11 +151,11 @@
         (mevedel-plugins-list-details)))
     (with-current-buffer "*mevedel plugin details*"
       (let ((details (buffer-string)))
-        (should (string-match-p "Name:     demo" details))
-        (should (string-match-p "Version: 1.0" details))
-        (should (string-match-p "Events:   PreToolUse" details))
-        (should (string-match-p "Manifest:" details))
-        (should (string-match-p "Shadowed sources:" details))
+		       (should (string-match-p "Name +demo" details))
+		       (should (string-match-p "Version +1.0" details))
+		       (should (string-match-p "Events +PreToolUse" details))
+		       (should (string-match-p "Manifest" details))
+		       (should (string-match-p "Shadowed sources" details))
         (should (string-match-p "shadowed active:" details))
         (should (string-match-p
                  "Handlers: PreToolUse \\[Bash\\]: command echo row"

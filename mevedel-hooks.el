@@ -12,6 +12,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (require 'cl-lib)
 
 (require 'json)
@@ -2363,32 +2365,31 @@ display the dry-run result."
                 :handlers (mevedel-hooks--printable-value handlers)
                 :handler-count (length handlers))))
     (when interactive-p
-      (with-current-buffer (get-buffer-create "*mevedel hook dry-run*")
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert "mevedel hook dry-run\n\n")
-          (pp result (current-buffer))
-          (goto-char (point-min))
-          (view-mode 1))
-        (display-buffer (current-buffer))))
+      (mevedel-report-show
+       "*mevedel hook dry-run*"
+       (list :title "Hook dry-run" :identity session
+             :sections
+             (list (list :id 'match :title "Match"
+                         :body (mevedel-report-fields
+                                (list "Event" event)
+                                (list "Matcher target" (plist-get result :matcher-target))
+                                (list "Handlers" (plist-get result :handler-count))))
+                   (list :id 'record :title "Exact dry-run record"
+                         :body (pp-to-string result) :mode 'emacs-lisp-mode)))))
     result))
 
 ;;;###autoload
 (defun mevedel-hooks-list (&optional session)
   "Display effective hooks for SESSION or current buffer."
   (interactive)
-  (let* ((session (or session
-                      (and (boundp 'mevedel--session) mevedel--session)))
+  (let* ((session (or session (and (boundp 'mevedel--session) mevedel--session)))
          (workspace (and session (mevedel-session-workspace session)))
          (rules (mevedel-hooks-effective-rules session workspace)))
-    (with-current-buffer (get-buffer-create "*mevedel hooks*")
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert "Effective mevedel hooks\n\n")
-        (pp rules (current-buffer))
-        (goto-char (point-min))
-        (view-mode 1))
-      (display-buffer (current-buffer)))))
+    (mevedel-report-show
+     "*mevedel hooks*"
+     (list :title "Effective hooks" :identity session
+           :sections (list (list :id 'rules :title "Effective rule records"
+                                 :body (pp-to-string rules) :mode 'emacs-lisp-mode))))))
 
 (provide 'mevedel-hooks)
 ;;; mevedel-hooks.el ends here

@@ -4,6 +4,11 @@
 
 ;;; Code:
 
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
+
 (require 'ert)
 (require 'cl-lib)
 (require 'tabulated-list)
@@ -215,12 +220,12 @@ Return the row's tabulated id."
       (should (equal (list exact)
                      (mevedel-session-resource-grants session))))))
 
-(mevedel-deftest mevedel-permissions-list--help-text ()
+(mevedel-deftest mevedel-permissions-list--help-report ()
   ,test
   (test)
   :doc "documents the keys and what each row kind means"
-  (let ((text (mevedel-permissions-list--help-text)))
-    (should (string-match-p "mevedel permissions cockpit" text))
+		 (let ((text (mevedel-report-test-text (mevedel-permissions-list--help-report))))
+		   (should (string-match-p "Permissions help" text))
     (should (string-match-p "d +Revoke the selected authority" text))
     (should (string-match-p "q +Back to the main session cockpit" text))
     (dolist (needle '("operation" "network" "resource"
