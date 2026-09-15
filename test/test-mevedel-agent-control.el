@@ -1743,7 +1743,7 @@
          (parent-record
           (mevedel-agent-record--create
            :id "default--parent" :path "/root/parent" :activity 'running))
-         summary-callback summary-cancelled captured-source captured-focus
+         summary-callback summary-cancelled captured-source captured-focus conversation
          provider-callbacks (summary-calls 0) outcome cancel)
     (setf (mevedel-agent-invocation-agent-id parent-invocation)
           "default--parent"
@@ -1788,8 +1788,8 @@
                    :parent-tool-use-id "call_agent"
                    :on-invocation
                    (lambda (invocation)
-                     (with-current-buffer
-                         (mevedel-agent-invocation-buffer invocation)
+                     (setq conversation (mevedel-agent-invocation-buffer invocation))
+                     (with-current-buffer conversation
                        (put 'mevedel-agent-control-spawn 'test-context
                             (buffer-string))))))
             (should (equal "Frozen parent evidence" captured-source))
@@ -1867,12 +1867,11 @@
             (funcall cancel)
             (should-not summary-cancelled)))
       (put 'mevedel-agent-control-spawn 'test-context nil)
-      (when-let* ((record (plist-get outcome :record))
-                  (invocation (mevedel-agent-record-invocation record))
-                  (buffer (mevedel-agent-invocation-buffer invocation))
-                  ((buffer-live-p buffer)))
-        (with-current-buffer buffer (set-buffer-modified-p nil))
-        (kill-buffer buffer))
+      ;; Settlement clears the record's invocation; retain the created
+      ;; conversation directly so teardown cannot leak it into exit autosave.
+      (when (buffer-live-p conversation)
+        (with-current-buffer conversation (set-buffer-modified-p nil))
+        (kill-buffer conversation))
       (when (buffer-live-p parent) (kill-buffer parent))))
 
   :doc "defers role freezing until the effective request is installed"

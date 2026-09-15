@@ -125,13 +125,15 @@ Return the accepted outcome, or nil when another outcome already won."
     (let ((results
            (mevedel-session-control-fs-run-program
             (append
+             (list (list :op 'verify :path (mevedel-journal-claim--path token nil)
+                         :content (json-serialize (mevedel-journal-claim--record token))))
              (unless (eq status 'expired)
                (list (list :op 'before-time :path (plist-get token :directory)
                            :content (number-to-string (plist-get token :expires-at)))))
              (list (list :op 'create :path (mevedel-journal-claim--path token t)
                          :content (json-serialize record))))
             (plist-get token :directory))))
-      (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch))) results)
+      (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch absent))) results)
         (mapc #'mevedel-session-control-fs-program-value results)
         (plist-put record :status status)))))
 
@@ -166,10 +168,26 @@ admission claim; it must be future and no later than SECONDS from now."
                                  (format "%S" (list (current-time) (emacs-pid)
                                                     (system-name) (random))))
                          :expires-at (or deadline (+ now seconds)))))
-        (when (mevedel-session-control-fs-create-file
-               (mevedel-journal-claim--path token nil)
-               (json-serialize (mevedel-journal-claim--record token)))
-          token)))))
+        (let ((results
+               (mevedel-session-control-fs-run-program
+                (append
+                 (list (list :op 'verify-latest
+                             :path (file-name-concat directory
+                                                    (format "%020d.claim" (or (plist-get previous :generation) 0)))
+                             :content ".claim"))
+                 (when previous
+                   (list (list :op 'verify :path (mevedel-journal-claim--path previous nil)
+                               :content (json-serialize (mevedel-journal-claim--record previous)))
+                         (list :op 'verify :path (mevedel-journal-claim--path previous t)
+                               :content (json-serialize
+                                         (plist-put (copy-sequence outcome) :status
+                                                    (symbol-name (plist-get outcome :status)))))))
+                 (list (list :op 'create :path (mevedel-journal-claim--path token nil)
+                             :content (json-serialize (mevedel-journal-claim--record token)))))
+                directory)))
+          (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch absent))) results)
+            (mapc #'mevedel-session-control-fs-program-value results)
+            token))))))
 
 (defun mevedel-journal-claim-settle (token status payload)
   "Settle TOKEN with STATUS and a frozen string PAYLOAD.
@@ -182,6 +200,46 @@ successful completed outcome authorizes publication of its exact payload."
                (mevedel-journal-claim--read
                 (mevedel-journal-claim--path token nil) nil))
     (mevedel-journal-claim--finish token status payload)))
+
+(defun mevedel-journal-claim-prune (directory protected limit)
+  "Delete at most LIMIT obsolete settled claim pairs in DIRECTORY.
+PROTECTED lists generations still referenced by durable work.  Keep the newest
+claim as the numbering anchor and all attempts whose deadlines have not passed.
+Checks and deletion share the claim admission/settlement target lock."
+  (let* ((current (mevedel-journal-claim-current directory))
+         (head (or (plist-get current :generation) 0))
+         (now (mevedel-session-control-fs-target-time directory))
+         (names (mevedel-session-control-fs-list-directory
+                 directory "\\`[0-9]\\{20\\}\\.\\(?:claim\\|outcome\\)\\'"))
+         (generations (sort (delete-dups (mapcar (lambda (path) (string-to-number (file-name-base path))) names)) #'<))
+         (deleted 0))
+    (dolist (generation generations)
+      (when (and (< deleted limit) (< generation head) (not (memq generation protected)))
+        (let* ((token (list :directory directory :generation generation))
+               (claim-path (mevedel-journal-claim--path token nil))
+               (outcome-path (mevedel-journal-claim--path token t))
+               (claim (mevedel-journal-claim--read claim-path nil))
+               (outcome (mevedel-journal-claim--read outcome-path t)))
+          (when (and outcome (= generation (plist-get outcome :generation))
+                     (<= (plist-get outcome :expires-at) now)
+                     (or (null claim) (equal claim (mevedel-journal-claim--record outcome))))
+            (let ((results
+                   (mevedel-session-control-fs-run-program
+                    (append
+                     (list (list :op 'verify :path outcome-path
+                                 :content (json-serialize
+                                           (plist-put (copy-sequence outcome) :status
+                                                      (symbol-name (plist-get outcome :status))))))
+                     (if claim
+                         (list (list :op 'verify :path claim-path :content (json-serialize claim))
+                               (list :op 'delete-file :path claim-path))
+                       (list (list :op 'absent :path claim-path)))
+                     (list (list :op 'delete-file :path outcome-path)))
+                    directory)))
+              (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch absent))) results)
+                (mapc #'mevedel-session-control-fs-program-value results)
+                (cl-incf deleted)))))))
+    deleted))
 
 (provide 'mevedel-journal-claim)
 ;;; mevedel-journal-claim.el ends here

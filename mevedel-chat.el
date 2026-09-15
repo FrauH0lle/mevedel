@@ -109,7 +109,7 @@
 			 workspace request invocation))
 
 ;; `mevedel-journal-cleanup'
-(declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace))
+(declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace &optional force))
 (autoload 'mevedel-journal-cleanup-schedule "mevedel-journal-cleanup")
 
 ;; `mevedel-journal-process'

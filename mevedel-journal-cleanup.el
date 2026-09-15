@@ -16,6 +16,8 @@
 (require 'mevedel-journal-store)
 (require 'mevedel-structs)
 
+(autoload 'mevedel-journal-gc "mevedel-journal-gc")
+
 ;; `mevedel-memory-cleanup'
 (declare-function mevedel-memory-cleanup-entry "mevedel-memory-cleanup" (workspace entry entries))
 (autoload 'mevedel-memory-cleanup-entry "mevedel-memory-cleanup")
@@ -179,19 +181,32 @@ evidence."
          (file-name-concat root "state" "evidence-pins" (plist-get entry :id))
          "\\`[^.]"))))
 
-(defun mevedel-journal-cleanup--owned (workspace claim)
-  "Recover prior expiry and accept one bounded batch for WORKSPACE under CLAIM."
+(defun mevedel-journal-cleanup--owned (workspace claim &optional limit)
+  "Recover and accept expiry for WORKSPACE under CLAIM.
+Select at most LIMIT content groups (default 50), including recovery."
   (let* ((workspace-root (mevedel-workspace-root workspace))
          (root (mevedel-journal-store-directory workspace-root))
-         (deleted (mevedel-journal-cleanup-recover root))
-         (cutoff (- (mevedel-session-control-fs-target-time root)
-                    (* mevedel-journal-max-age-days 86400)))
-         (observed (mevedel-journal-store-entries workspace-root))
-         (unreviewed (mevedel-journal-index-unreviewed observed))
-         (entries nil))
+         (deleted 0)
+         (remaining (or limit 50))
+         observed unreviewed entries)
+    ;; Recovery consumes the same content budget as new work.  A manifest is
+    ;; indivisible: defer one that does not fit until the next idle batch.
+    (dolist (path (mevedel-session-control-fs-list-directory
+                  (file-name-concat root "state" "expiry")
+                  (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))
+      (unless (mevedel-session-control-fs-path-exists-p (concat path ".done"))
+        (let* ((manifest (mevedel-journal-cleanup--read root path))
+               (count (length (plist-get manifest :entries)))
+               (outcome (mevedel-journal-claim-outcome (plist-get manifest :token))))
+          (when (and (<= count remaining)
+                     (eq 'completed (plist-get outcome :status))
+                     (not (string-empty-p (plist-get outcome :payload))))
+            (cl-incf deleted (mevedel-journal-cleanup--apply root manifest))
+            (cl-decf remaining count)))))
+    (setq observed (mevedel-journal-store-entries workspace-root)
+          unreviewed (mevedel-journal-index-unreviewed observed))
     (dolist (entry (reverse observed))
-      (when (and (< (length entries) 50)
-                 (<= (float-time (date-to-time (plist-get entry :created))) cutoff))
+      (when (< (length entries) remaining)
         (pcase (plist-get entry :kind)
           ('digest
            (unless (or (memq entry unreviewed)
@@ -220,12 +235,11 @@ evidence."
 
 ;;;###autoload
 (defun mevedel-journal-cleanup-expired (workspace &optional force)
-  "Expire one batch of old WORKSPACE journal records, independently of sessions.
+  "Collect one batch of resolved WORKSPACE journal state.
 Throttle opportunities to once an hour unless FORCE is non-nil.  Live mutation
 or digest owners postpone cleanup.  No inference runs.  Return a deletion count
-or nil when disabled, busy, throttled, or unavailable."
-  (when (and (integerp mevedel-journal-max-age-days) (>= mevedel-journal-max-age-days 0)
-             workspace (mevedel-workspace-root workspace)
+or nil when busy, throttled, or unavailable."
+  (when (and workspace (mevedel-workspace-root workspace)
              (or force (null (mevedel-workspace-journal-cleanup-at workspace))
                  (>= (- (float-time) (mevedel-workspace-journal-cleanup-at workspace)) 3600)))
     (setf (mevedel-workspace-journal-cleanup-at workspace) (float-time))
@@ -246,7 +260,11 @@ or nil when disabled, busy, throttled, or unavailable."
                                        (mevedel-journal-store-claim-directory root 'consolidation) 120
                                        (plist-get claim :expires-at))))
                 (if (and claim digest consolidation)
-                    (mevedel-journal-cleanup--owned workspace claim)
+                    (let* ((collected (mevedel-journal-gc workspace claim))
+                           (deleted (mevedel-journal-cleanup--owned workspace claim (plist-get collected :remaining))))
+                      (when (> (+ (plist-get collected :progress) deleted) 0)
+                        (mevedel-journal-cleanup-schedule workspace t))
+                      deleted)
                   (when present (setf (mevedel-workspace-journal-cleanup-at workspace) nil))
                   nil))
             (setf (mevedel-workspace-journal-observation workspace) nil
@@ -258,14 +276,31 @@ or nil when disabled, busy, throttled, or unavailable."
        (message "mevedel: journal cleanup failed: %s" (error-message-string err))
        nil))))
 
+(defvar mevedel-journal-cleanup--inhibit-scheduling nil
+  "Non-nil suppresses idle cleanup during exit or isolated tests.")
+
+(defvar mevedel-journal-cleanup--pending (make-hash-table :test #'equal)
+  "Coalesced (TIMER . FORCE) cleanup requests keyed by workspace roots.")
+
 ;;;###autoload
-(defun mevedel-journal-cleanup-schedule (workspace)
-  "Run WORKSPACE expiry once its execution transport is idle."
-  (when mevedel-journal-max-age-days
-    (let ((root (mevedel-workspace-root workspace)))
-      (mevedel-transport-run-when-idle
-       (list 'journal-cleanup root) root
-       (lambda () (mevedel-journal-cleanup-expired workspace))))))
+(defun mevedel-journal-cleanup-schedule (workspace &optional force)
+  "Schedule WORKSPACE cleanup at idle, bypassing the hourly gate with FORCE."
+  (unless mevedel-journal-cleanup--inhibit-scheduling
+    (let* ((root (mevedel-workspace-root workspace))
+           (old (gethash root mevedel-journal-cleanup--pending)))
+      (setq force (or force (cdr old)))
+      (when (timerp (car old)) (cancel-timer (car old)))
+      (puthash
+       root
+       (cons (run-with-idle-timer
+        0.1 nil
+        (lambda ()
+          (remhash root mevedel-journal-cleanup--pending)
+          (unless mevedel-journal-cleanup--inhibit-scheduling
+            (mevedel-transport-run-when-idle
+             (list 'journal-cleanup root) root
+             (lambda () (mevedel-journal-cleanup-expired workspace force)))))) force)
+       mevedel-journal-cleanup--pending))))
 
 (provide 'mevedel-journal-cleanup)
 ;;; mevedel-journal-cleanup.el ends here

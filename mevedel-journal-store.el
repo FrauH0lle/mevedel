@@ -18,11 +18,19 @@
 
 (defcustom mevedel-journal-max-age-days 14
   "Age in days after which journal entries leave ordinary recall.
-Age uses the immutable entry creation timestamp.  Nil disables age expiry.
+Age uses the immutable entry creation timestamp.  Nil disables ordinary
+recall age filtering; storage cleanup is independent.
 Unfinished review, proposal and recovery dependencies may retain evidence
 beyond this period for inspection and processing.  Physical cleanup runs
 independently of session cleanup or capture and requires resolved dependencies."
   :type '(choice (const :tag "Disabled" nil) (integer :tag "Days"))
+  :group 'mevedel)
+
+(defcustom mevedel-memory-history-max-age-days 14
+  "Days to retain resolved memory evidence and checked undo history.
+The clock starts at the latest decision, or completion of a review without
+proposals.  Unresolved work and recovery dependencies remain protected."
+  :type 'natnum
   :group 'mevedel)
 
 (defun mevedel-journal-store-recall-p (entry &optional now)

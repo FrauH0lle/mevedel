@@ -47,7 +47,21 @@ and decision, preserving the original application as evidence.
 
 Ordinary journal recall defaults to 14 days and is independent of physical
 retention. Unreviewed digests and unresolved proposal/recovery dependencies remain
-stored after recall ends. Expiry accepts a hash-bound manifest before deletion,
+stored after recall ends. Fully reviewed public digests retire at idle once all
+proposals are terminal and references end, regardless of creation age. Private
+evidence and checked undo remain for `mevedel-memory-history-max-age-days`
+(default 14) after the latest terminal decision. No-action reviews use completion
+time; reversal restarts the window. The memory cockpit exposes Candidates,
+Memories, and History; confirmed topic deletion uses a structured `user` producer
+and the same accepted transaction/undo path without inference.
+
+Obsolete settled control pairs are pruned after their deadlines while preserving
+the newest generation and all retained references. Claim admission, settlement,
+and pruning share the target lock and verify the generation within it. Idle
+batches remove at most 200 pairs and 50 content groups, scheduling another batch
+only after progress. Minimal coverage and retirement identities remain.
+
+Expiry accepts a hash-bound manifest before deletion,
 hides expired entries before removing bytes, and deletes complete dependency
 groups. Later mutations finish accepted expiry before pinning new evidence.
 Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
@@ -244,3 +258,15 @@ contains the corresponding operational details.
   session. The journal namespace moved to `memory://journal/` without changing
   storage or granting curated-memory write permission; see
   [ADR 0104](0104-keep-resource-addresses-closed-and-capability-neutral.md).
+
+### 2026-09-16: resolved history and coordination cleanup
+
+Inspection of the live journal found roughly 450 mutation records and processed
+source notes still occupying the public journal. Creation-age cleanup conflated
+recall with review completion, and coordination outcomes had no collector. The
+replacement separates immediate processed-note retirement, a resolution-based
+14-day evidence/undo window, and dependency-aware bounded control collection.
+The previous age gate for processed notes is removed. Native generation-race
+tests and a 1,000-generation fixture exercise fencing and the 200-pair batch
+limit. Shared tables remain; stored memory inspection and user deletion reuse
+the existing checked write protocol.

@@ -137,7 +137,7 @@
                  (progn
                    (start :memory-only t)
                    (finish)
-                   (let ((mevedel-journal-max-age-days 0))
+                   (let ((mevedel-memory-history-max-age-days 0))
                      (cl-incf now 1)
                      (should (= 1 (mevedel-journal-cleanup-expired workspace))))
                    (should-not (mevedel-journal-store-entries root))

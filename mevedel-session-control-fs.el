@@ -265,6 +265,19 @@ before the operation ran."
    "        test \"$now\" -lt \"$deadline\" || exit 72\n"
    "      fi\n"
    "      ;;\n"
+   "    delete-empty-directory)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      rmdir -- \"$leaf\" 2>/dev/null || exit 72\n"
+   "      ;;\n"
+   "    verify-latest)\n"
+   "      suffix=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
+   "      test -n \"$suffix\" || exit 71\n"
+   "      for entry in ./*\"$suffix\"; do\n"
+   "        test ! -L \"$entry\" || exit 69\n"
+   "        test -e \"$entry\" || continue\n"
+   "        if [[ \"${entry#./}\" > \"$leaf\" ]]; then exit 72; fi\n"
+   "      done\n"
+   "      ;;\n"
    "    list)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
@@ -427,6 +440,7 @@ parent must not turn into a `Setting current directory' failure."
 (defconst mevedel-session-control-fs--program-verbs
   '((read . "read")
     (verify . "verify")
+    (verify-latest . "verify-latest")
     (absent . "absent")
     (before-time . "before-time")
     (write-mode . "write-mode")
@@ -439,6 +453,7 @@ parent must not turn into a `Setting current directory' failure."
     (directory-p . "directory")
     (delete-file . "delete-file")
     (delete-directory . "delete-directory")
+    (delete-empty-directory . "delete-empty-directory")
     (target-time . "clock")
     (list-directory . "list")
     (tree-size . "tree-size"))

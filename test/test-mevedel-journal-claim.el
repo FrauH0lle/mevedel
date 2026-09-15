@@ -140,6 +140,56 @@
           (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status))))
       (delete-directory directory t))))
 
+(mevedel-deftest mevedel-journal-claim-prune ()
+  ,test
+  (test)
+  :doc "prunes expired settled attempts while preserving referenced and newest claims"
+  (let ((directory (make-temp-file "mevedel-claim-prune-" t)))
+    (unwind-protect
+        (let* ((first (mevedel-journal-claim-acquire directory 3))
+               (_ (mevedel-journal-claim-settle first 'completed ""))
+               (second (mevedel-journal-claim-acquire directory 3))
+               (_ (mevedel-journal-claim-settle second 'completed "retained proof"))
+               (current (mevedel-journal-claim-acquire directory 120)))
+          (while (< (mevedel-session-control-fs-target-time directory)
+                    (plist-get second :expires-at))
+            (sleep-for 0.02))
+          (should (= 1 (mevedel-journal-claim-prune
+                        directory (list (plist-get second :generation)) 200)))
+          (should-not (mevedel-journal-claim-settle first 'completed "late"))
+          (should (equal "retained proof" (plist-get (mevedel-journal-claim-outcome second) :payload)))
+          (should (equal current (mevedel-journal-claim-current directory)))
+          (mevedel-journal-claim-settle current 'completed "")
+          (should (= 4 (plist-get (mevedel-journal-claim-acquire directory 120) :generation))))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-journal-claim-pruning-race ()
+  ,test
+  (test)
+  :doc "an acquirer paused before its locked check cannot reuse a pruned generation"
+  (let ((directory (make-temp-file "mevedel-claim-delayed-" t)))
+    (unwind-protect
+        (let* ((first (mevedel-journal-claim-acquire directory 3))
+               (_ (mevedel-journal-claim-settle first 'completed ""))
+               (run (symbol-function 'mevedel-session-control-fs-run-program))
+               paused winner)
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations &optional lock)
+                       (when (and (not paused) (eq 'verify-latest (plist-get (car operations) :op)))
+                         (setq paused t)
+                         (let ((second (mevedel-journal-claim-acquire directory 3)))
+                           (mevedel-journal-claim-settle second 'completed "")
+                           (while (< (mevedel-session-control-fs-target-time directory) (plist-get second :expires-at))
+                             (sleep-for 0.02))
+                           (setq winner (mevedel-journal-claim-acquire directory 120))
+                           (should (= 2 (mevedel-journal-claim-prune directory nil 200)))))
+                       (funcall run operations lock))))
+            (should-not (mevedel-journal-claim-acquire directory 120)))
+          (should (equal winner (mevedel-journal-claim-current directory)))
+          (should (= 1 (length (directory-files directory nil "\\.claim\\'"))))
+          (should (= 3 (plist-get winner :generation))))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-journal-claim--decode
   (:doc "preserves exact claim schemas and rejects malformed ownership or outcome records")
   (let ((record (list :generation 1 :owner (make-string 64 ?a) :expires-at 100)))
