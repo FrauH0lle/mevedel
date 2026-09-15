@@ -497,8 +497,7 @@ permission prompts.  A muted underline rather than a full link: in
 
 (defface mevedel-view-agent-running
   '((t :inherit (font-lock-escape-face bold)))
-  "Face for active running agent handle rows.
-This follows gptel-agent's own active-agent status styling."
+  "Face for active running agent handle rows."
   :group 'mevedel)
 
 (defface mevedel-view-handle-blocked

@@ -599,8 +599,8 @@
           (let ((entry (car (test-mevedel-telemetry--read
                              (mevedel-telemetry-path session)))))
             (should (eq 'reproduction-environment (plist-get entry :event)))
-            (should (equal "gptel-agent-head"
-                           (plist-get entry :gptel-agent-commit)))
+            (should (equal "gptel-head"
+                           (plist-get entry :gptel-commit)))
             (should (eq 'required (plist-get entry :sandbox-mode)))
             (should (equal "repo" (plist-get entry :git-head)))))
       (delete-directory root t))))

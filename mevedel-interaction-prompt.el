@@ -1,5 +1,9 @@
 ;;; mevedel-interaction-prompt.el -- Shared interaction prompts -*- lexical-binding: t -*-
 
+;; Copyright (C) 2025 Karthik Chikmagalur
+;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Background face selection adapted from gptel-agent-tools.el.
+
 ;;; Commentary:
 
 ;; Shared overlay lifecycle and visual primitives for user interactions.
@@ -10,10 +14,6 @@
 
 (eval-when-compile
   (require 'cl-lib))
-
-;; `gptel-agent-tools'
-(declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
-(autoload 'gptel-agent--block-bg "gptel-agent-tools")
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -232,8 +232,16 @@ FACE is inherited by the top and bottom rule lines."
           (propertize "\n" 'font-lock-face
                       `(:inherit ,face :underline t :extend t)))))
     (font-lock-append-text-property
-     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
+     0 (length body) 'font-lock-face (mevedel--prompt-block-face) body)
     body))
+
+(defun mevedel--prompt-block-face ()
+  "Return a background face for framed prompt content."
+  (cond
+   ((derived-mode-p 'org-mode) 'org-block)
+   ((derived-mode-p 'markdown-mode) 'markdown-code-face)
+   (t `(:background ,(face-attribute 'mode-line-inactive :background)
+         :extend t))))
 
 (defun mevedel--prompt-key (key)
   "Return propertized KEY for prompt key-help rows."

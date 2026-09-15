@@ -13,7 +13,6 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'gptel-agent-tools)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-chat)

@@ -130,7 +130,7 @@ ranking or a statistically reliable failure rate from two repetitions.
 ## Reproduction and evidence
 
 Base implementation: `0a1e5a4`. Experiment branch: `memory-scope-evaluation`.
-Emacs 31.1; installed gptel `20260906.334`, gptel-agent `20260824.106`.
+Emacs 31.1; installed gptel `20260906.334`.
 Codex models used reasoning effort `none`; Flash used its default. Backend
 snapshots came from the running configuration, were mode 0600, and were deleted
 after loading. Only synthetic evidence was sent to providers.

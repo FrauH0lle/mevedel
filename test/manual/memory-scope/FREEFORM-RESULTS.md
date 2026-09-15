@@ -113,7 +113,7 @@ historical locations, not downloadable repository artifacts.
   including the final files after each reader.
 
 Model settings and dependencies match the previous runs: Codex effort `none`,
-Flash default, Emacs 31.1, gptel 20260906.334 and gptel-agent 20260824.106.
+Flash default, Emacs 31.1, gptel 20260906.334.
 The adapter smoke test passed, including work-address isolation and absence of
 prescribed folders in the prompt. All 192 package source files compiled without
 warnings. Provider snapshots were deleted; evidence contains synthetic data only.

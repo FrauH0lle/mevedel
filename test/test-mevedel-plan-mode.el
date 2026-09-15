@@ -5,7 +5,6 @@
 ;;; Code:
 
 (require 'gptel-request)
-(require 'gptel-agent-tools)
 (require 'mevedel-chat)
 (require 'mevedel-menu)
 (require 'mevedel-plan)
@@ -363,7 +362,7 @@
                            model-update (plist-get options :update))))
                   ((symbol-function 'mevedel-plan-mode--read-worktree-branch)
                    (lambda (_entry) "plan/topic"))
-                  ((symbol-function 'gptel-agent--block-bg)
+                  ((symbol-function 'mevedel--prompt-block-face)
                    (lambda () 'mevedel-test-block-bg)))
           (mevedel-plan-mode--render-approval entry)
           (let ((body (plist-get descriptor :body))
@@ -488,7 +487,7 @@
                      (make-overlay (point-min) (point-min))))
                   ((symbol-function 'mevedel--prompt--settle)
                    (lambda (_overlay value) (setq outcome value)))
-                  ((symbol-function 'gptel-agent--block-bg)
+                  ((symbol-function 'mevedel--prompt-block-face)
                    (lambda () 'mevedel-test-block-bg)))
           (mevedel-plan-mode--render-approval entry)
           (should-error

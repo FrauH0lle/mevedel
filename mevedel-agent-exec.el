@@ -7,10 +7,6 @@
 ;; streaming callback contract.  `mevedel-agent-conversation' owns retained
 ;; buffers, transcript persistence, and live conversation metadata.
 ;;
-;; The extraction fixes a streaming-truncation bug present in the upstream
-;; `gptel-agent--task': that function's `(pred stringp)' branch fires its main
-;; callback on every streamed chunk and has no `t' branch, so gptel's
-;; stream-complete signal is silently dropped.
 ;; Since gptel's tool-call commit path locks in the first delivered value, the
 ;; parent agent only ever sees the first chunk of a sub-agent's final response.
 ;; The runner here accumulates on string chunks and fires exactly once on `t',
@@ -45,10 +41,8 @@
                   (msg &optional face))
 (declare-function gptel--update-tool-ask "ext:gptel" (fsm))
 (declare-function gptel--update-tool-call "ext:gptel" (fsm))
-(declare-function gptel-get-preset "ext:gptel" (name))
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-with-preset "ext:gptel" (name &rest body))
-(defvar gptel--tool-preview-alist)
 (defvar gptel--fsm-last)
 (defvar gptel-send--transitions)
 
@@ -90,11 +84,6 @@
 (defvar gptel-use-context)
 (defvar gptel-use-curl)
 (defvar gptel-use-tools)
-
-;; `gptel-agent-tools'
-(declare-function gptel-agent--confirm-overlay "ext:gptel-agent-tools"
-                  (from to &optional no-hide))
-(defvar gptel-agent-preset)
 
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-configure
@@ -207,32 +196,6 @@ Reads `gptel-fsm-info' and delegates to
   (when (and fsm (fboundp 'gptel-fsm-info))
     (mevedel-agent-exec--error-reason-from-info (gptel-fsm-info fsm))))
 
-(defun mevedel-agent-exec--task-preview-setup (arg-values _info)
-  "Tool-preview renderer for the Agent tool.
-
-Called by gptel during tool preview for each Agent call to format the
-call's (TYPE DESCRIPTION PROMPT) argument list inline.  ARG-VALUES is the
-positional argument list; the second plist is the tool call info, unused
-here.
-
-Delegates the confirmation-overlay wrapping to
-`gptel-agent--confirm-overlay' for now -- that helper is outside the
-sub-agent-runtime extraction scope and replacing it earns little."
-  (pcase-let ((from (point))
-              (`(,type ,desc ,prompt) arg-values))
-    (insert "("
-            (propertize "Agent " 'font-lock-face 'font-lock-keyword-face)
-            (propertize (prin1-to-string type)
-                        'font-lock-face 'font-lock-escape-face)
-            " " (propertize (prin1-to-string desc)
-                            'font-lock-face
-                            '(:inherit font-lock-constant-face :inherit bold))
-            "\n" (propertize (prin1-to-string prompt)
-                             'line-prefix "  "
-                             'wrap-prefix "  "
-                             'font-lock-face 'font-lock-constant-face)
-            ")\n\n")
-    (gptel-agent--confirm-overlay from (point) t)))
 
 
 ;;
@@ -336,7 +299,6 @@ the terminal event through the request callback's exactly-once retry gate."
 
 Same shape as `gptel-send--transitions': each entry is `(STATE FN ...)'
 where FN is called when the FSM transitions into (or out of) STATE.
-Modelled after the upstream `gptel-agent-request--handlers' table.
 
 Additions:
 
@@ -383,14 +345,6 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
            (when-let* ((agent (mevedel-agent-invocation-agent invocation)))
              (cdr (mevedel-agent-to-gptel-spec agent))))))
     (nconc (list :use-tools t :context nil)
-           (and gptel-agent-preset
-                (copy-sequence
-                 (cond
-                  ((symbolp gptel-agent-preset)
-                   (gptel-get-preset gptel-agent-preset))
-                  ((listp gptel-agent-preset) gptel-agent-preset)
-                  (t (error "Invalid `gptel-agent-preset': %S"
-                            gptel-agent-preset)))))
            agent-spec
            (list :include-reasoning gptel-include-reasoning))))
 
@@ -456,9 +410,7 @@ and compaction handlers can reach it at ordinary request boundaries.
 AGENT-BUFFER is the live per-invocation gptel buffer that holds the
 sub-agent's transcript.
 
-Callback contract. Unlike the upstream `gptel-agent--task', which fires
-MAIN-CB on every streamed chunk and drops gptel's end-of-stream t
-signal, this runner:
+Callback contract. This runner:
 
   - accumulates streamed string chunks into `partial';
   - fires MAIN-CB exactly once on the t branch, after the sub-agent turn has
@@ -755,17 +707,6 @@ partial-len=%d :tool-use=%S :stream=%S"
                       (format "Error: Task \"%s\" was aborted by the user. \
 %s could not finish."
                               description agent-type)))))))))))
-
-
-;;
-;;; Preview registration
-
-(with-eval-after-load 'gptel-agent-tools
-  ;; Override the upstream entry so the Agent tool's tool-call preview
-  ;; uses mevedel's renderer.  Upstream registers its version when
-  ;; gptel-agent-tools loads; we stamp on top afterwards.
-  (setf (alist-get "Agent" gptel--tool-preview-alist nil nil #'equal)
-        #'mevedel-agent-exec--task-preview-setup))
 
 
 (provide 'mevedel-agent-exec)

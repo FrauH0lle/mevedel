@@ -164,7 +164,7 @@ profile file larger and cost a little more per sample."
     :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
     :exit-status :failure-class :failure-stage :filesystem :first-byte-seen
     :fresh-visible-prompt-estimate
-    :git-head :goal-id :gptel-agent-commit :gptel-agent-file-hash
+    :git-head :goal-id
     :gptel-commit :gptel-file-hash :gptel-version :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-bytes :input-p :input-tokens :interaction-id :issue-count
@@ -694,7 +694,6 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
   (let* ((directory (mevedel-session-working-directory session))
          (git (and directory (mevedel-telemetry--git-snapshot directory)))
          (gptel (mevedel-telemetry--library-snapshot 'gptel))
-         (gptel-agent (mevedel-telemetry--library-snapshot 'gptel-agent))
          (sandbox (ignore-errors (mevedel-sandbox-probe))))
     (apply #'mevedel-telemetry-record
            session 'reproduction-environment
@@ -704,8 +703,6 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
            :gptel-version (and (boundp 'gptel-version) gptel-version)
            :gptel-file-hash (plist-get gptel :file-hash)
            :gptel-commit (plist-get gptel :git-head)
-           :gptel-agent-file-hash (plist-get gptel-agent :file-hash)
-           :gptel-agent-commit (plist-get gptel-agent :git-head)
            :sandbox-mode (mevedel-session-sandbox-mode session)
            :bubblewrap-available (and sandbox
                                        (plist-get sandbox :available))

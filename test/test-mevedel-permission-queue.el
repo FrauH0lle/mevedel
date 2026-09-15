@@ -1004,7 +1004,7 @@
             (org-mode)
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
-          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask))
                     ((symbol-function 'display-warning)
                      (lambda (_type message &optional _level _buffer-name)
@@ -1070,7 +1070,7 @@
             (org-mode)
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
-          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer data-buf
               (mevedel-permission--enqueue
@@ -1142,7 +1142,7 @@
           (mevedel-view--setup view-buf data-buf)
           (let ((mevedel-permission-rules nil)
                 (mevedel-permission-mode 'ask))
-            (cl-letf (((symbol-function 'gptel-agent--block-bg)
+            (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                        (lambda () 'ask)))
               (with-current-buffer data-buf
                 (dolist (path paths)
@@ -1242,7 +1242,7 @@
             (when hook-event
               (with-current-buffer data-buf
                 (add-hook hook-event hook nil t)))
-            (cl-letf (((symbol-function 'gptel-agent--block-bg)
+            (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                        (lambda () 'ask)))
               (with-current-buffer data-buf
                 (dolist (file (list first second unrelated))
@@ -1483,7 +1483,7 @@
                            (mevedel-view--setup view-buf data-buf)
                            (let ((mevedel-permission-rules nil)
                                  (mevedel-permission-guardian nil))
-                             (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                             (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                                         (lambda () 'ask)))
                                       (dotimes (index (if remember-p 4 1))
                                         (setq result nil)
@@ -1576,7 +1576,7 @@
           (mevedel-view--setup view-buf data-buf)
           (let ((mevedel-permission-rules nil)
                 (mevedel-permission-mode 'ask))
-            (cl-letf (((symbol-function 'gptel-agent--block-bg)
+            (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                        (lambda () 'ask)))
               (with-current-buffer data-buf
                 (dolist (path paths)
@@ -1709,7 +1709,7 @@
                         (mevedel-agent-invocation--create
                          :agent-id
                          "/root/verifier")))
-          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer agent-data
               (mevedel-permission--enqueue
@@ -1753,7 +1753,7 @@
                         (mevedel-agent-invocation--create
                          :agent-id
                          "/root/verifier")))
-          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask))
                     ((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
@@ -1982,7 +1982,7 @@
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
             (insert draft))
-          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer data-buf
               (mevedel-permission--enqueue

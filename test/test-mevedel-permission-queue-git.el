@@ -52,7 +52,7 @@
             (let ((mevedel-permission-rules nil)
                   (mevedel-permission-guardian nil)
                   (mevedel-protected-paths '(("**/.git/**" . read-only))))
-              (cl-letf (((symbol-function 'gptel-agent--block-bg) (lambda () 'ask)))
+              (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask)))
                 (dotimes (index 3)
                   (setq result nil)
                   (with-current-buffer data-buf
@@ -157,7 +157,7 @@
             (let ((mevedel-permission-rules nil)
                   (mevedel-permission-guardian nil)
                   (mevedel-protected-paths '(("**/.git/**" . read-only))))
-              (cl-letf (((symbol-function 'gptel-agent--block-bg) (lambda () 'ask)))
+              (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask)))
                 (dotimes (index 4)
                   (setq result nil)
                   (with-current-buffer data-buf

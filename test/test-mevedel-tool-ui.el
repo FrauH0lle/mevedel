@@ -552,8 +552,7 @@
             (setq-local gptel-backend (gptel-get-backend "Parent"))
             (setq-local gptel-model 'parent-model)
             (setq-local gptel-reasoning-effort 'low)
-            (let ((gptel-agent-preset nil)
-                  (mevedel-agents--specs nil)
+            (let ((mevedel-agents--specs nil)
                   (mevedel-model-tiers
                    '((role-tier :provider "Role:role-model" :effort medium)
                      (explicit-tier :provider "Explicit:explicit-model")))

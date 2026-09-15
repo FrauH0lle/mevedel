@@ -367,23 +367,20 @@ current source with `gptel-get-tool`, so a reconnect can replace its function
 without rewrapping when that contract is unchanged.  Contract drift fails the
 call and requires rewrapping.  Re-registering the same wrapped `(category,
 name)` replaces the prior mevedel wrapper, matching native tool registration.
-Wrapping is the default for gptel-agent's tools, with two reasons to register
-natively instead. A source that leaks resources cannot be wrapped, because
-only the owner of a call can release them; and a source whose advertised
-schema its own implementation does not honour cannot be wrapped either,
-because the frozen schema is the lie -- WebSearch is registered natively so
-mevedel stops offering the `count` argument the upstream callback hardcodes
-away. WebFetch is registered natively for the first reason: upstream serves
-YouTube URLs from the same handler and kills none of the buffers that path
-retrieves. The mevedel handler resolves the upstream asynchronous function
-through `gptel-get-tool` on every call, so upstream keeps owning the protocol,
-while mevedel owns the response buffers the call retrieves. `url-http` records
-the retrieval arguments in every response buffer it creates and carries them
-across redirects, and the upstream handler passes its callback among those
-arguments at every stage, so the handler's own continuation identifies exactly
-its buffers, including the one the watch-page redirect adds, and no buffer
-belonging to anything else. They are killed when the call settles, once; a
-call that never settles keeps its buffers.
+The Emacs introspection and web tools are native mevedel tools. Introspection
+uses Emacs source, documentation and Info APIs, with Orderless symbol matching.
+`variable_value` always asks for permission; `library_source` must resolve
+inside a local load-path directory.
+
+WebSearch uses the configured EWW search engine and returns up to five URLs
+and excerpts, with two searches active at a time. WebFetch renders readable
+HTML with EWW/SHR; YouTube URLs retrieve video descriptions and English captions.
+Every HTTP retrieval has a 30-second timeout, including its redirects. Each
+YouTube stage gets its own timeout. The retrieval owns its response buffers
+and timer, releases them before delivery, and delivers success or failure once.
+Malformed responses, network errors and timeouts return explicit tool failures.
+A caption failure retains any retrieved video description alongside the transcript
+error.
 
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and

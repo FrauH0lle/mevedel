@@ -5,14 +5,14 @@ tests, compiling, or committing. These are repository requirements.
 
 ## External dependencies
 
-- **gptel**, **gptel-agent**, **websocket**, **qrencode**, **Emacs >=31.1**,
+- **gptel**, **yaml**, **orderless**, **websocket**, **qrencode**, **Emacs >=31.1**,
   **org-mode**
 
 Eask dependency installs can get stale.
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:
 
 ```bash
-npx @emacs-eask/cli upgrade gptel gptel-agent
+npx @emacs-eask/cli upgrade gptel yaml orderless
 ```
 
 Provider experiments intended to represent the user's configured setup must
@@ -33,21 +33,20 @@ limits while mevedel retains its client-side guards. Preflight must exercise the
 configured backend type through the native request path; matching an expected
 payload from a substituted type does not establish configuration equivalence.
 
-## gptel and gptel-agent source rule
+## gptel source rule
 
-mevedel is tightly coupled to gptel and also depends on gptel-agent. Before
+mevedel is tightly coupled to gptel. Before
 implementing or changing behavior that touches prompts, requests, callbacks,
 tool calls, presets, buffers, transcripts, session flow, agents, or
-coordination, consult gptel and gptel-agent source and reuse their existing
+coordination, consult gptel source and reuse its existing
 APIs or patterns instead of duplicating them.
 
-Ensure the repositories are cloned:
+Ensure the repository is cloned:
 
 ```bash
 # First time
 mkdir -p .scratch/upstream
 git clone https://github.com/karthink/gptel .scratch/upstream/gptel
-git clone https://github.com/karthink/gptel-agent .scratch/upstream/gptel-agent
 ```
 
 Prefer a refreshed upstream checkout, because Eask dependency installs can get
@@ -56,7 +55,6 @@ stale:
 ```bash
 # Refresh before consulting
 git -C .scratch/upstream/gptel pull --ff-only
-git -C .scratch/upstream/gptel-agent pull --ff-only
 ```
 
 ## Development Commands

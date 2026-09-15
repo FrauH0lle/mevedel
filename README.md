@@ -35,8 +35,7 @@ Key features:
   determine what to send to the model in directives.
 - Can easily cycle through between instruction overlays across all buffers.
 - Retained asynchronous child agents plus focused explorer, verifier, and
-  reviewer workflows via
-  [gptel-agent](https://github.com/karthink/gptel-agent).
+  reviewer workflows using mevedel’s agent runtime.
 - Durable Goals (`/goal <objective>`) that keep one objective in every root
   turn and continue automatically while the session is idle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
@@ -65,8 +64,8 @@ Key features:
   `bash`, and refuses to run anywhere else; CI covers Linux only.
 - Emacs version 31.1 or higher
 - [gptel](https://github.com/karthink/gptel) 0.9.9.6 or higher
-- [gptel-agent](https://github.com/karthink/gptel-agent) 0.0.1 or higher for
-  multi-agent workflows
+- [yaml](https://github.com/zkry/yaml.el) 1.2.0 or higher for skill frontmatter
+- [orderless](https://github.com/oantolin/orderless) 1.1 or higher for Emacs symbol completion
 - [websocket](https://elpa.gnu.org/packages/websocket.html) 1.15 for
   browser collaboration (the self-hosted relay lives in `relay/`)
 - [ripgrep](https://github.com/BurntSushi/ripgrep) for search tools and `@file`
@@ -111,7 +110,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                    "tools")))
 
 (use-package mevedel
-  :after (gptel gptel-agent)
+  :after gptel
   :config
   (mevedel-install))
 ```
@@ -605,20 +604,19 @@ the agent), and `ToolSearch` (look up deferred tool schemas on demand)
 evaluation, confirmed in `ask` and `edits`, automatic in `full-auto`; supports
 `live` and `batch` modes, with optional UI preservation for live evaluation)
 
-**Web:** `WebSearch`, `WebFetch` (via
-[gptel-agent](https://github.com/karthink/gptel-agent))
+**Web:** `WebSearch`, `WebFetch` (native EWW/SHR retrieval, including
+YouTube descriptions and transcripts)
 
 **Skills:** `Skill` (invoke an active skill by name from the model side)
 
-The wrapped `gptel-agent` Emacs introspection tools are also available on
+The native Emacs introspection tools are also available on
 demand via the deferred-tool mechanism — they don't appear in the schema until
 the LLM searches for them through `ToolSearch`, keeping the default tool list
 short.
 
 ### Agents
 
-A set of sub-agents (powered by
-[gptel-agent](https://github.com/karthink/gptel-agent)) support delegated work.
+Mevedel’s retained sub-agents support delegated work through gptel requests.
 The model-facing `Agent` tool takes a lowercase `task_name`, a complete
 `message`, and an optional named `role`. It starts one retained child
 asynchronously and immediately returns its canonical path (for example

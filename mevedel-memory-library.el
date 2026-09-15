@@ -12,7 +12,7 @@
 (require 'yaml)
 
 (defun mevedel-memory-library--metadata (text)
-  "Read inert YAML metadata from bounded topic TEXT, as in gptel-agent."
+  "Read inert YAML metadata from bounded topic TEXT."
   (when (string-match "\\`---[ \t]*\n\\(\\(?:.\\|\n\\)*?\\)\n---[ \t]*\\(?:\n\\|\\'\\)" text)
     (yaml-parse-string (match-string 1 text) :object-type 'plist :object-key-type 'keyword)))
 

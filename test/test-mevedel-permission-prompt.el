@@ -283,14 +283,14 @@
   ,test
   (test)
   :doc "includes session allow by default"
-  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+  (cl-letf (((symbol-function 'mevedel--prompt-block-face)
              (lambda () 'ask)))
     (should (string-match-p
              "remember selected authority for session"
              (mevedel-permission--prompt-body "Body\n" nil))))
 
   :doc "suppresses session allow without suppressing session deny"
-  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+  (cl-letf (((symbol-function 'mevedel--prompt-block-face)
              (lambda () 'ask)))
     (let ((body (mevedel-permission--prompt-body "Body\n" nil t)))
       (should-not (string-match-p "remember selected authority for session" body))
@@ -329,7 +329,7 @@
     (let ((target (current-buffer))
           captured-body
           captured-keymap)
-      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+      (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                  (lambda () 'ask))
                 ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda (&optional _buffer) target))
@@ -354,7 +354,7 @@
   (with-temp-buffer
     (let ((target (current-buffer))
           captured-keymap)
-      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+      (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                  (lambda () 'ask))
                 ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda (&optional _buffer) target))
@@ -391,7 +391,7 @@
                      '(:mutation-p t) side-buffer))
               (setq parent-active t)
               (cl-letf
-                  (((symbol-function 'gptel-agent--block-bg)
+                  (((symbol-function 'mevedel--prompt-block-face)
                     (lambda () 'ask))
                    ((symbol-function 'mevedel--prompt--data-buffer)
                     (lambda (&optional _buffer) target))
@@ -420,7 +420,7 @@
       (cl-letf (((symbol-function
                   'mevedel-side-conversation-parent-active-p)
                  (lambda (&optional _buffer) t))
-                ((symbol-function 'gptel-agent--block-bg)
+                ((symbol-function 'mevedel--prompt-block-face)
                  (lambda () 'ask))
                 ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda (&optional _buffer) target))
@@ -504,7 +504,7 @@
     (let ((target (current-buffer))
           captured-body
           captured-keymap)
-      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+      (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                  (lambda () 'ask))
                 ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda (&optional _buffer) target))
@@ -837,6 +837,18 @@
                   (propertize (make-string 500 ?x)
                               'font-lock-face 'font-lock-string-face)
                   entry nil 400))))))
+
+(mevedel-deftest mevedel--prompt-block-face ()
+  ,test
+  (test)
+  :doc "uses the native code face of the prompt's major mode"
+  (with-temp-buffer
+    (org-mode)
+    (should (eq 'org-block (mevedel--prompt-block-face)))
+    (setq major-mode 'markdown-mode)
+    (should (eq 'markdown-code-face (mevedel--prompt-block-face)))
+    (fundamental-mode)
+    (should (plist-get (mevedel--prompt-block-face) :extend))))
 
 (provide 'test-mevedel-permission-prompt)
 

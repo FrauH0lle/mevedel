@@ -88,7 +88,7 @@
               (setq-local mevedel--session session)
               (setq-local temporary-file-directory root))
             (mevedel-view--setup view data)
-            (cl-letf (((symbol-function 'gptel-agent--block-bg) (lambda () 'ask)))
+            (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask)))
               (cl-labels
                   ((press (key)
                      (with-current-buffer view
@@ -232,7 +232,7 @@
               (setq-local mevedel--session session)
               (setq-local temporary-file-directory root))
             (mevedel-view--setup view data)
-            (cl-letf (((symbol-function 'gptel-agent--block-bg) (lambda () 'ask)))
+            (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask)))
               (with-current-buffer data
                 (dolist (request (list (list 'first first nil)
                                       (list 'network first t)

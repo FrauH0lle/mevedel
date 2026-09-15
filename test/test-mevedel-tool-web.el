@@ -2,9 +2,7 @@
 
 ;;; Commentary:
 
-;; WebSearch and WebFetch are both registered natively: WebSearch to own a
-;; schema whose upstream `count' argument the upstream callback ignores,
-;; WebFetch to own the response buffers of the upstream call.
+;; Native web tools, real HTTP retrieval, redirects, timeouts and cleanup.
 
 ;;; Code:
 
@@ -12,7 +10,6 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-tools)
 (require 'gptel-request)
-(require 'gptel-agent-tools)
 (require 'mevedel-view)
 (require 'mevedel-tool-web)
 (require 'mevedel-view-render)
@@ -24,20 +21,6 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
-
-
-;;
-;;; Helpers
-
-(defun test-mevedel-tool-web--response-buffer (name &optional continuation)
-  "Return a fake response buffer NAME retrieved for CONTINUATION.
-Records CONTINUATION the way `url-retrieve' records its callback
-arguments in a response buffer."
-  (let ((buffer (generate-new-buffer name)))
-    (when continuation
-      (with-current-buffer buffer
-        (setq-local url-callback-arguments (list continuation))))
-    buffer))
 
 
 ;;
@@ -53,7 +36,7 @@ arguments in a response buffer."
   ;; so offering the argument teaches the model a lie.
   (progn
     (mevedel-tool-web--register)
-    (let ((tool (mevedel-tool-get "WebSearch" "mevedel-gptel-agent")))
+    (let ((tool (mevedel-tool-get "WebSearch" "mevedel-web")))
       (should tool)
       (should (eq t (mevedel-tool-read-only-p tool)))
       (should (memq 'web (mevedel-tool-groups tool)))
@@ -65,7 +48,7 @@ arguments in a response buffer."
   :doc "registers WebFetch with max-result-size"
   (progn
     (mevedel-tool-web--register)
-    (let ((tool (mevedel-tool-get "WebFetch" "mevedel-gptel-agent")))
+    (let ((tool (mevedel-tool-get "WebFetch" "mevedel-web")))
       (should tool)
       (should (eq t (mevedel-tool-read-only-p tool)))
       (should (= 50000 (mevedel-tool-max-result-size tool)))))
@@ -73,7 +56,7 @@ arguments in a response buffer."
   :doc "WebFetch :get-domain extracts host from :url"
   (progn
     (mevedel-tool-web--register)
-    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-gptel-agent"))
+    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-web"))
            (fn (mevedel-tool-get-domain tool)))
       (should fn)
       (should (equal "example.com"
@@ -83,7 +66,7 @@ arguments in a response buffer."
   :doc "WebFetch :get-domain reads a YouTube host from :url"
   (progn
     (mevedel-tool-web--register)
-    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-gptel-agent"))
+    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-web"))
            (fn (mevedel-tool-get-domain tool)))
       (should fn)
       (should (equal "www.youtube.com"
@@ -97,21 +80,15 @@ arguments in a response buffer."
       (should (cl-every (lambda (tool) (mevedel-tool-read-only-p tool))
                         web-tools))))
 
-  :doc "registration leaves the upstream gptel-agent entries in place"
-  (progn
-    (mevedel-tool-web--register)
-    (should (gptel-get-tool '("gptel-agent" "WebSearch")))
-    (should (gptel-get-tool '("gptel-agent" "WebFetch"))))
-
   :doc "re-registering web tools replaces existing wrappers"
   (progn
     (mevedel-tool-web--register)
-    (let ((initial (mevedel-tool-get "WebSearch" "mevedel-gptel-agent")))
+    (let ((initial (mevedel-tool-get "WebSearch" "mevedel-web")))
       (mevedel-tool-web--register)
-      (let ((refreshed (mevedel-tool-get "WebSearch" "mevedel-gptel-agent")))
+      (let ((refreshed (mevedel-tool-get "WebSearch" "mevedel-web")))
         (should refreshed)
         (should-not (eq initial refreshed))
-        (should (mevedel-tool-get "WebFetch" "mevedel-gptel-agent"))))))
+        (should (mevedel-tool-get "WebFetch" "mevedel-web"))))))
 
 
 ;;
@@ -184,161 +161,328 @@ arguments in a response buffer."
 
 
 ;;
-;;; Response buffer ownership
+;;; HTTP behavior through the tool handler boundary
 
-(mevedel-deftest mevedel-tool-web--fetch ()
-  ,test
-  (test)
-  :doc "releases only the response buffers its own retrievals created"
-  (let* ((unrelated (test-mevedel-tool-web--response-buffer
-                     " *test-fetch-unrelated*"))
-         (foreign (test-mevedel-tool-web--response-buffer
-                   " *test-fetch-foreign*" #'ignore))
-         (owned nil)
-         (result nil))
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-                     (lambda ()
-                       (lambda (continuation _url)
-                         (setq owned
-                               (list (test-mevedel-tool-web--response-buffer
-                                      " *test-fetch-watch*" continuation)
-                                     (test-mevedel-tool-web--response-buffer
-                                      " *test-fetch-redirect*" continuation)
-                                     (test-mevedel-tool-web--response-buffer
-                                      " *test-fetch-caption*" continuation)))
-                         (funcall continuation "transcript")))))
-            (mevedel-tool-web--fetch
-             (lambda (value) (setq result value))
-             '(:url "https://www.youtube.com/watch?v=abc")))
-          (should (equal '(:result "transcript") result))
-          (should-not (cl-find-if #'buffer-live-p owned))
-          (should (buffer-live-p foreign))
-          (should (buffer-live-p unrelated)))
-      (dolist (buffer (cons unrelated (cons foreign owned)))
-        (when (buffer-live-p buffer) (kill-buffer buffer)))))
-  :doc "releases buffers when the call reports an error"
-  (let ((owned nil)
-        (result nil))
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-                     (lambda ()
-                       (lambda (continuation _url)
-                         (setq owned
-                               (test-mevedel-tool-web--response-buffer
-                                " *test-fetch-failed*" continuation))
-                         (funcall continuation
-                                  "Error fetching page: failed")))))
-            (mevedel-tool-web--fetch
-             (lambda (value) (setq result value))
-             '(:url "https://www.youtube.com/watch?v=abc")))
-          (should (string-prefix-p "Error fetching page"
-                                   (plist-get result :result)))
-          (should-not (buffer-live-p owned)))
-      (when (buffer-live-p owned) (kill-buffer owned))))
-  :doc "settles once when the handler calls back and then signals"
-  (let ((results nil))
-    (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-               (lambda ()
-                 (lambda (continuation _url)
-                   (funcall continuation "first")
-                   (error "Upstream failed after answering")))))
-      (mevedel-tool-web--fetch
-       (lambda (value) (push value results))
-       '(:url "https://www.youtube.com/watch?v=abc")))
-    (should (equal '((:result "first")) results)))
-  :doc "reports a synchronous upstream failure as an error result"
-  (let ((result nil))
-    (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-               (lambda () (lambda (_only-one-argument) nil))))
-      (mevedel-tool-web--fetch
-       (lambda (value) (setq result value))
-       '(:url "https://www.youtube.com/watch?v=abc")))
-    (should (string-prefix-p "Error: " (plist-get result :result))))
-  :doc "reports an unavailable upstream tool instead of calling nil"
-  (let ((result nil))
-    (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-               (lambda () nil)))
-      (mevedel-tool-web--fetch
-       (lambda (value) (setq result value))
-       '(:url "https://www.youtube.com/watch?v=abc")))
-    (should (string-match-p "unavailable" (plist-get result :result)))))
-
-(mevedel-deftest mevedel-tool-web--fetch-function ()
-  ,test
-  (test)
-  :doc "resolves the upstream handler only while it stays asynchronous"
-  (let* ((tool (gptel-get-tool '("gptel-agent" "WebFetch")))
-         (sync (and tool (gptel--copy-tool tool))))
-    (should (functionp (mevedel-tool-web--fetch-function)))
-    (setf (gptel-tool-async sync) nil)
-    (cl-letf (((symbol-function 'gptel-get-tool) (lambda (_path) sync)))
-      (should-not (mevedel-tool-web--fetch-function))))
-  :doc "url-http stamps retrieval arguments into the response buffer"
-  (let* ((server nil)
-         (port nil)
-         (continuation (lambda (&rest _) nil))
-         (buffer nil))
+(defun test-mevedel-tool-web--http (respond action)
+  "Run ACTION with a local server URL whose requests call RESPOND.
+RESPOND receives a request line and returns (STATUS HEADERS BODY), or nil
+to leave the request unanswered.  All server processes are cleaned up."
+  (let (server clients)
     (unwind-protect
         (progn
           (setq server
                 (make-network-process
-                 :name "mevedel-web-test-server" :server t :host 'local
-                 :service t :family 'ipv4 :noquery t
+                 :name "mevedel-web-test" :server t :host 'local :service t
+                 :family 'ipv4 :noquery t
+                 :log (lambda (_server client _message) (push client clients))
                  :filter
-                 (lambda (proc _string)
-                   (process-send-string
-                    proc "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
-                   (process-send-eof proc))))
-          (setq port (plist-get (process-contact server t) :service))
-          ;; Upstream passes its callback among the retrieval arguments,
-          ;; which is what makes it identify its own response buffers.
-          (setq buffer
-                (url-retrieve (format "http://127.0.0.1:%s/" port)
-                              #'ignore (list continuation) t))
-          (should (buffer-live-p buffer))
-          (should (with-current-buffer buffer
-                    (memq continuation
-                          (bound-and-true-p url-callback-arguments)))))
-      (when (buffer-live-p buffer)
-        (let ((kill-buffer-query-functions nil))
-          (kill-buffer buffer)))
-      (when (process-live-p server) (delete-process server)))))
+                 (lambda (process input)
+                   (let ((request (concat (process-get process 'request) input)))
+                     (process-put process 'request request)
+                     (when (and (string-match "\r\n\r\n" request)
+                                (not (process-get process 'answered)))
+                       (process-put process 'answered t)
+                       (when-let* ((reply (funcall respond (car (split-string request "\r\n")))))
+                         (pcase-let* ((`(,status ,headers ,body) reply)
+                                      (bytes (encode-coding-string body 'utf-8)))
+                           (process-send-string
+                            process (concat "HTTP/1.1 " status "\r\n"
+                                            "Connection: close\r\n"
+                                            headers
+                                            (format "Content-Length: %d\r\n\r\n" (length bytes))
+                                            bytes))
+                           (process-send-eof process))))))))
+          (let ((url-proxy-services nil)
+                (url-privacy-level 'paranoid))
+            (funcall action (format "http://127.0.0.1:%s"
+                                    (plist-get (process-contact server t) :service)))))
+      (dolist (process (cons server clients))
+        (when (process-live-p process) (delete-process process))))))
 
+(defun test-mevedel-tool-web--call (name args)
+  "Run registered web tool NAME with ARGS and await its handler result."
+  (let (results)
+    (mevedel-pipeline--step-handler
+     (list :tool (mevedel-tool-get name "mevedel-web") :args args :name name)
+     (lambda (result) (push result results))
+     (lambda (error) (ert-fail error)))
+    (let ((deadline (+ (float-time) 4)))
+      (while (and (not results) (< (float-time) deadline))
+        (accept-process-output nil 0.01)))
+    (should (= 1 (length results)))
+    (car results)))
 
-(mevedel-deftest mevedel-tool-web--fetch/pipeline
-  (:before-each (mevedel-tool-clear-registry)
-   :after-each (mevedel-tool-clear-registry))
+(mevedel-deftest mevedel-tool-web--fetch
+  (:before-each (mevedel-tool-web--register))
   ,test
   (test)
-  :doc "the registered tool returns its result through the handler step"
-  (let ((context nil))
-    (mevedel-tool-web--register)
-    (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-               (lambda () (lambda (callback _url) (funcall callback "shown")))))
-      (mevedel-pipeline--step-handler
-       (list :tool (mevedel-tool-get "WebFetch" "mevedel-gptel-agent")
-             :args '(:url "https://www.youtube.com/watch?v=abc")
-             :name "WebFetch")
-       (lambda (value) (setq context value))
-       #'ignore))
-    (should (equal "shown" (plist-get context :result)))
-    (should-not (eq 'error (plist-get context :status))))
-  :doc "an unresolvable upstream handler settles as an error result"
-  (let ((context nil))
-    (mevedel-tool-web--register)
-    (cl-letf (((symbol-function 'mevedel-tool-web--fetch-function)
-               (lambda () nil)))
-      (mevedel-pipeline--step-handler
-       (list :tool (mevedel-tool-get "WebFetch" "mevedel-gptel-agent")
-             :args '(:url "https://www.youtube.com/watch?v=abc")
-             :name "WebFetch")
-       (lambda (value) (setq context value))
-       #'ignore))
-    (should (string-match-p "unavailable" (plist-get context :result)))))
+  :doc "retrieves HTML through a real redirect and releases only owned buffers"
+  (let ((before (buffer-list))
+        (foreign (generate-new-buffer " *foreign-web-response*")))
+    (unwind-protect
+        (test-mevedel-tool-web--http
+         (lambda (request)
+           (if (string-match-p " /redirect " request)
+               '("302 Found" "Location: /page\r\n" "")
+             '("200 OK" "Content-Type: text/html; charset=utf-8\r\n"
+               "<html><body><p>Readable page text.</p></body></html>")))
+         (lambda (base)
+           (let ((result (test-mevedel-tool-web--call
+                          "WebFetch" (list :url (concat base "/redirect")))))
+             (should (string-match-p "Readable page text" (plist-get result :result)))
+             (should (eq 'success (plist-get result :handler-status))))
+           (should (buffer-live-p foreign))
+           (dolist (buffer (buffer-list))
+             (unless (memq buffer before)
+               (should-not (with-current-buffer buffer
+                             (bound-and-true-p url-callback-arguments)))))))
+      (kill-buffer foreign)))
 
+  :doc "HTTP failure becomes a canonical tool error"
+  (test-mevedel-tool-web--http
+   (lambda (_) '("500 Internal Server Error" "" "failed"))
+   (lambda (base)
+     (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
+       (should (eq 'error (plist-get result :handler-status)))
+       (should (string-prefix-p "Error:" (plist-get result :result))))))
+
+  :doc "a redirected request that never answers times out and releases buffers"
+  (let ((mevedel-tool-web--timeout 0.1) (before (buffer-list)))
+    (test-mevedel-tool-web--http
+     (lambda (request)
+       (when (string-match-p " /redirect " request)
+         '("302 Found" "Location: /hang\r\n" "")))
+     (lambda (base)
+       (let ((result (test-mevedel-tool-web--call
+                      "WebFetch" (list :url (concat base "/redirect")))))
+         (should (eq 'error (plist-get result :handler-status)))
+         (should (string-match-p "timed out" (plist-get result :result))))
+       (dolist (buffer (buffer-list))
+         (unless (memq buffer before)
+           (should-not (with-current-buffer buffer
+                         (bound-and-true-p url-callback-arguments)))))))))
+
+(mevedel-deftest mevedel-tool-web--retrieve ()
+  ,test
+  (test)
+  :doc "parse errors settle once and a late callback cannot reenter parsing"
+  (let (saved-callback saved-args results timer)
+    (test-mevedel-tool-web--http
+     (lambda (_) '("200 OK" "" "body"))
+     (lambda (base)
+       (let ((retrieve (symbol-function 'url-retrieve))
+             (schedule (symbol-function 'run-at-time)))
+         (cl-letf (((symbol-function 'url-retrieve)
+                    (lambda (url callback args &rest options)
+                      (setq saved-callback callback saved-args args)
+                      (apply retrieve url callback args options)))
+                   ((symbol-function 'run-at-time)
+                    (lambda (&rest args)
+                      (setq timer (apply schedule args)))))
+           (mevedel-tool-web--retrieve
+            base (lambda () (error "Malformed body"))
+            (lambda (value error) (push (list value error) results))))
+         (let ((deadline (+ (float-time) 4)))
+           (while (and (not results) (< (float-time) deadline))
+             (accept-process-output nil 0.01)))
+         (should (equal '((nil "Malformed body")) results))
+         (should-not (memq timer timer-list))
+         (with-temp-buffer (apply saved-callback nil saved-args))
+         (should (= 1 (length results)))))))
+
+  :doc "synchronous transport failure settles once and cancels its timer"
+  (let (results timer)
+    (let ((schedule (symbol-function 'run-at-time)))
+      (cl-letf (((symbol-function 'url-retrieve)
+                 (lambda (&rest _) (error "Transport failure")))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest args) (setq timer (apply schedule args)))))
+        (mevedel-tool-web--retrieve
+         "https://example.invalid/" #'ignore
+         (lambda (value error) (push (list value error) results)))))
+    (should (equal '((nil "Transport failure")) results))
+    (should-not (memq timer timer-list))))
+
+(mevedel-deftest mevedel-tool-web--websearch
+  (:before-each (mevedel-tool-web--register))
+  ,test
+  (test)
+  :doc "configured EWW search returns five links and excerpts through the pipeline"
+  (test-mevedel-tool-web--http
+   (lambda (request)
+     (should (string-search "/search?q=two%20words" request))
+     (list "200 OK" "Content-Type: text/html\r\n"
+           (concat "<html><body>"
+                   (mapconcat (lambda (n)
+                                (format "<p><a href=\"https://example.com/%d\">Title %d</a> Excerpt %d</p>" n n n))
+                              '(1 2 3 4 5 6) "")
+                   "</body></html>")))
+   (lambda (base)
+     (let* ((eww-search-prefix (concat base "/search?q="))
+            (result (test-mevedel-tool-web--call "WebSearch" '(:query "two words"))))
+       (should (string-match-p "https://example.com/1" (plist-get result :result)))
+       (should (string-match-p "Excerpt 5" (plist-get result :result)))
+       (should-not (string-match-p "example.com/6" (plist-get result :result)))
+       (should (zerop mevedel-tool-web--search-active))
+       (should-not mevedel-tool-web--search-queue)))))
+
+(mevedel-deftest mevedel-tool-web--start-searches ()
+  ,test
+  (test)
+  :doc "queued searches drain after timeouts with at most two active"
+  (let ((mevedel-tool-web--search-active 0)
+        (mevedel-tool-web--search-queue nil)
+        (mevedel-tool-web--timeout 0.1)
+        results requests)
+    (test-mevedel-tool-web--http
+     (lambda (request) (push request requests) nil)
+     (lambda (base)
+       (let ((eww-search-prefix (concat base "/?q=")))
+         (dotimes (_ 3)
+           (mevedel-tool-web--websearch
+            (lambda (result) (push result results)) '(:query "hang")))
+         (setq eww-search-prefix (concat base "/wrong?q="))
+         (should (= 2 mevedel-tool-web--search-active))
+         (should (= 1 (length mevedel-tool-web--search-queue)))
+         (let ((deadline (+ (float-time) 4)))
+           (while (and (< (length results) 3) (< (float-time) deadline))
+             (accept-process-output nil 0.01)))
+         (should (= 3 (length results)))
+         (should (= 3 (length requests)))
+         (should (cl-every (lambda (request)
+                             (string-prefix-p "GET /?q=hang " request)) requests))
+         (should (cl-every (lambda (result) (eq 'error (plist-get result :status))) results))
+         (should (zerop mevedel-tool-web--search-active))
+         (should-not mevedel-tool-web--search-queue))))))
+
+(mevedel-deftest mevedel-tool-web--yt-fetch
+  (:before-each (mevedel-tool-web--register))
+  ,test
+  (test)
+  :doc "all YouTube stages use HTTP ownership and render description with timestamps"
+  (let ((before (buffer-list)) requests)
+    (test-mevedel-tool-web--http
+     (lambda (request)
+       (push request requests)
+       (cond
+        ((string-prefix-p "GET /watch?" request)
+         '("302 Found" "Location: /watch-page\r\n" ""))
+        ((string-match-p "GET /watch-page" request)
+         '("200 OK" "" "{\"INNERTUBE_API_KEY\":\"key\"}"))
+        ((string-match-p "POST /youtubei/" request)
+         '("200 OK" "Content-Type: application/json\r\n"
+           "{\"videoDetails\":{\"shortDescription\":\"Video description\"},\"captions\":{\"playerCaptionsTracklistRenderer\":{\"captionTracks\":[{\"languageCode\":\"en\",\"baseUrl\":\"https://youtube.com/captions\"}]}}}"))
+        ((string-match-p "GET /captions" request)
+         '("200 OK" "" "<transcript><text start=\"0\">First line</text><text start=\"32\">Second line</text></transcript>"))
+        (t '("404 Not Found" "" "missing"))))
+     (lambda (base)
+       (let ((retrieve (symbol-function 'url-retrieve)))
+         (cl-letf (((symbol-function 'url-retrieve)
+                    (lambda (url &rest args)
+                      (apply retrieve
+                             (if (string-prefix-p base url) url
+                               (concat base (url-filename (url-generic-parse-url url)))) args))))
+           (let ((result (test-mevedel-tool-web--call
+                          "WebFetch" '(:url "https://youtube.com/watch?v=abc"))))
+             (should (eq 'success (plist-get result :handler-status)))
+             (should (string-match-p "Video description" (plist-get result :result)))
+             (should (string-match-p "\\[0:32\\]" (plist-get result :result)))
+             (should (string-match-p "Second line" (plist-get result :result))))))
+       (should (= 4 (length requests)))
+       (dolist (buffer (buffer-list))
+         (unless (memq buffer before)
+           (should-not (with-current-buffer buffer
+                         (bound-and-true-p url-callback-arguments)))))))))
+
+(mevedel-deftest mevedel-tool-web--yt-video-id ()
+  ,test
+  (test)
+  :doc "recognizes short and watch URLs and ignores ordinary pages"
+  (should (equal "abc" (mevedel-tool-web--yt-video-id "https://youtu.be/abc?t=1")))
+  (should (equal "abc" (mevedel-tool-web--yt-video-id "https://www.youtube.com/watch?v=abc&x=1")))
+  (should-not (mevedel-tool-web--yt-video-id "https://example.com/abc")))
+
+(mevedel-deftest mevedel-tool-web--yt-captions ()
+  ,test
+  (test)
+  :doc "missing captions retain the video description"
+  (let (result)
+    (mevedel-tool-web--yt-captions
+     (lambda (value error) (should-not error) (setq result value))
+     '(:videoDetails (:shortDescription "description")))
+    (should (string-match-p "description" result))
+    (should (string-match-p "No transcript available" result))))
+
+
+
+(mevedel-deftest mevedel-tool-web--yt-fetch/failures
+  (:before-each (mevedel-tool-web--register))
+  ,test
+  (test)
+  :doc "each YouTube stage settles errors, malformed replies and timeouts without leaks"
+  (dolist (stage '(watch metadata captions))
+    (dolist (failure '(http malformed timeout))
+      (let ((mevedel-tool-web--timeout 0.1)
+            (before (buffer-list))
+            (timers-before (copy-sequence timer-list))
+            (requests 0))
+        (ert-info ((format "%s/%s" stage failure))
+          (test-mevedel-tool-web--http
+           (lambda (request)
+             (cl-incf requests)
+             (let ((current (cond ((string-prefix-p "GET /watch?" request) 'watch)
+                                  ((string-prefix-p "POST /youtubei/" request) 'metadata)
+                                  (t 'captions))))
+               (if (eq current stage)
+                   (pcase failure
+                     ('http '("500 Internal Server Error" "" "failed"))
+                     ('malformed '("200 OK" "" "not valid content"))
+                     ('timeout nil))
+                 (pcase current
+                   ('watch '("200 OK" "" "{\"INNERTUBE_API_KEY\":\"key\"}"))
+                   ('metadata
+                    '("200 OK" ""
+                      "{\"videoDetails\":{\"shortDescription\":\"Saved description\"},\"captions\":{\"playerCaptionsTracklistRenderer\":{\"captionTracks\":[{\"languageCode\":\"en\",\"baseUrl\":\"https://youtube.com/captions\"}]}}}"))
+                   (_ '("200 OK" "" "<transcript/>"))))))
+           (lambda (base)
+             (let ((retrieve (symbol-function 'url-retrieve)))
+               (cl-letf (((symbol-function 'url-retrieve)
+                          (lambda (url &rest args)
+                            (apply retrieve (concat base (url-filename (url-generic-parse-url url))) args))))
+                 (let ((result (test-mevedel-tool-web--call
+                                "WebFetch" '(:url "https://youtube.com/watch?v=abc"))))
+                   (should (eq 'error (plist-get result :handler-status)))
+                   (should (string-match-p "Error" (plist-get result :result)))
+                   (when (eq stage 'captions)
+                     (should (string-match-p "Saved description" (plist-get result :result)))))))
+             (should (= requests (pcase stage ('watch 1) ('metadata 2) (_ 3))))
+             (dolist (buffer (buffer-list))
+               (unless (memq buffer before)
+                 (should-not (with-current-buffer buffer
+                               (bound-and-true-p url-callback-arguments)))))
+             (dolist (timer timer-list)
+               (should (memq timer timers-before))))))))))
+
+(mevedel-deftest mevedel-tool-web--yt-parse-captions ()
+  ,test
+  (test)
+  :doc "decodes caption entities before formatting timestamps"
+  (let* ((dom (mevedel-tool-web--yt-parse-captions
+               "<transcript><text start=\"5\">A &amp;amp; B</text></transcript>"))
+         (text (mevedel-tool-web--yt-format-captions dom)))
+    (should (string-match-p "A & B" text))
+    (should (string-prefix-p "[0:00]" text))))
+
+(mevedel-deftest mevedel-tool-web--yt-format-captions ()
+  ,test
+  (test)
+  :doc "groups captions into timestamped paragraphs and rejects other XML roots"
+  (should (equal "[0:00]\nFirst next\n\n[0:32]\nLast\n\n"
+                 (mevedel-tool-web--yt-format-captions
+                  '(transcript nil (text ((start . "0")) "First")
+                               (text ((start . "2")) "next")
+                               (text ((start . "32")) "Last")))))
+  (should-not (mevedel-tool-web--yt-format-captions '(html nil "bad"))))
 
 (provide 'test-mevedel-tool-web)
 ;;; test-mevedel-tool-web.el ends here

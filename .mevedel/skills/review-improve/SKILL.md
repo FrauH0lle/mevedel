@@ -28,7 +28,7 @@ Do not fundamentally change the implementation without the user's permission.
    user's stated commit intents and applicable maintained documentation, and
    explicitly report that no external spec was available.
 5. When the change touches gptel-coupled behavior named by repository guidance,
-   refresh and consult the current gptel and gptel-agent source before judging
+   refresh and consult the current gptel source before judging
    behavior.
 
 The review scope is the fixed point through the current working tree. On later

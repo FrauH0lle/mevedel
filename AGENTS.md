@@ -112,8 +112,8 @@ test structure, diagnostic handling, and compilation commands.
 - Run `npx @emacs-eask/cli clean elc` before tests, and compile without warnings
   before committing.
 - Before changing prompts, requests, callbacks, tool calls, presets, buffers,
-  transcripts, session flow, agents, or coordination, consult gptel and
-  gptel-agent source and reuse their APIs or patterns. Follow the development
+  transcripts, session flow, agents, or coordination, consult gptel
+  source and reuse its APIs or patterns. Follow the development
   guide's upstream-source procedure.
 
 For interactive commands, see [README.md](README.md#usage).
