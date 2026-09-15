@@ -45,6 +45,24 @@
     (should (= (marker-position mevedel-view--interaction-marker)
                (marker-position mevedel-view--input-marker))))
 
+  :doc "history inserted before a managed zone stays outside its bounds"
+  (dolist (zone '(status interaction progress))
+    (with-temp-buffer
+      (insert "> draft")
+      (mevedel-view-zone-test--setup-markers)
+      (mevedel-view-zone-reconcile
+       zone (point-min) (point-min)
+       (list (list :namespace zone :id 'test :body "Managed text")))
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (mevedel-view--call-with-render-boundaries-advancing
+         (lambda () (insert "New transcript\n"))))
+      (should (= (mevedel-view-zone-start zone)
+                 (1+ (length "New transcript\n"))))
+      (should (= (mevedel-view-zone-start zone)
+                 (plist-get (mevedel-view-zone-fragment-bounds zone 'test)
+                            :start)))))
+
   :doc "rejects unknown zones as programming errors"
   (with-temp-buffer
     (should-error

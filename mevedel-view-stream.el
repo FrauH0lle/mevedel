@@ -131,8 +131,8 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-frame-index 0
   "Current frame index for animated view buffer spinners.")
 
-(defvar-local mevedel-view--spinner-rendered-display-status nil
-  "Last textual status rendered in the request-progress fragment.")
+(defvar-local mevedel-view--spinner-rendered-state nil
+  "Last (STATUS PREFIX) rendered in the request-progress fragment.")
 
 (defvar-local mevedel-view--request-progress-suppressed nil
   "Non-nil means the request progress row must not be recreated.
@@ -279,29 +279,31 @@ the view has already inserted the in-flight markers."
 (defun mevedel-view--render-request-progress ()
   "Render the current request-progress row from buffer-local state."
   (when mevedel-view--spinner-status
-    (let ((display-status
-           (mevedel-view--spinner-display-status
-            mevedel-view--spinner-status)))
-      (unless (and (equal display-status
-                          mevedel-view--spinner-rendered-display-status)
+    (let* ((display-status
+            (mevedel-view--spinner-display-status
+             mevedel-view--spinner-status))
+           (render-state (list display-status
+                               (mevedel-view--request-progress-prefix))))
+      (unless (and (equal render-state
+                          mevedel-view--spinner-rendered-state)
                    (mevedel-view-zone-region 'progress))
         (let ((anchor (mevedel-view--request-progress-anchor)))
           (mevedel-view-zone-reconcile
            'progress anchor anchor
            (mevedel-view--request-progress-fragments
             mevedel-view--spinner-status display-status))
-          (setq mevedel-view--spinner-rendered-display-status
-                display-status))))))
+          (setq mevedel-view--spinner-rendered-state
+                render-state))))))
 
 (defun mevedel-view--clear-request-progress ()
   "Remove the fragment-managed request-progress row."
   (mevedel-view-zone-clear 'progress)
-  (setq mevedel-view--spinner-rendered-display-status nil))
+  (setq mevedel-view--spinner-rendered-state nil))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
   (mevedel-view-zone-forget 'progress)
-  (setq mevedel-view--spinner-rendered-display-status nil))
+  (setq mevedel-view--spinner-rendered-state nil))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.

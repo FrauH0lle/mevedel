@@ -354,6 +354,9 @@ use their rendered kind, agent id, body hash, and ordinal."
              (source (get-text-property pos 'mevedel-view-source))
              (collapsed (get-text-property pos 'mevedel-view-collapsed))
              (source-key (get-text-property pos 'mevedel-view-source-key))
+             (state-type (if (eq vtype 'tool-child)
+                             (or (cadr source-key) vtype)
+                           vtype))
              (mailbox-bounds
               (and (eq vtype 'mailbox-delivery)
                    (mevedel-view-disclosure--mailbox-bounds-at pos)))
@@ -363,15 +366,15 @@ use their rendered kind, agent id, body hash, and ordinal."
              (key
               (cond
                ((mevedel-view-disclosure--in-flight-source-p source)
-                (mevedel-view-disclosure-state-key source vtype source-key))
+                (mevedel-view-disclosure-state-key source state-type source-key))
                ((mevedel-view-disclosure--in-flight-key-p source-key)
-                (mevedel-view-disclosure-state-key source vtype source-key))
+                (mevedel-view-disclosure-state-key source state-type source-key))
                ((and (markerp (car-safe source))
                      (not (equal (nth 2 source-key)
                                  (mevedel-view-disclosure-source-start source))))
-                (mevedel-view-disclosure-state-key source vtype source-key))
+                (mevedel-view-disclosure-state-key source state-type source-key))
                (source-key)
-               ((mevedel-view-disclosure-state-key source vtype))
+               ((mevedel-view-disclosure-state-key source state-type))
                (mailbox-bounds
                 (mevedel-view-disclosure--mailbox-state-key
                  pos mailbox-counts)))))
@@ -412,6 +415,9 @@ knows the freshly rendered span was rewritten after insertion."
                                              'mevedel-view-force-expanded))
                          (source-key (get-text-property
                                       pos 'mevedel-view-source-key))
+                         (state-type (if (eq vtype 'tool-child)
+                                         (or (cadr source-key) vtype)
+                                       vtype))
                          (mailbox-bounds
                           (and (eq vtype 'mailbox-delivery)
                                (mevedel-view-disclosure--mailbox-bounds-at pos)))
@@ -419,19 +425,19 @@ knows the freshly rendered span was rewritten after insertion."
                           (cond
                            ((mevedel-view-disclosure--in-flight-source-p source)
                             (mevedel-view-disclosure-state-key
-                             source vtype source-key))
+                             source state-type source-key))
                            ((mevedel-view-disclosure--in-flight-key-p source-key)
                             (mevedel-view-disclosure-state-key
-                             source vtype source-key))
+                             source state-type source-key))
                            ((and (markerp (car-safe source))
                                  (not (equal
                                        (nth 2 source-key)
                                        (mevedel-view-disclosure-source-start
                                         source))))
                             (mevedel-view-disclosure-state-key
-                             source vtype source-key))
+                             source state-type source-key))
                            (source-key)
-                           ((mevedel-view-disclosure-state-key source vtype))
+                           ((mevedel-view-disclosure-state-key source state-type))
                            (mailbox-bounds
                             (mevedel-view-disclosure--mailbox-state-key
                              pos mailbox-counts)))))

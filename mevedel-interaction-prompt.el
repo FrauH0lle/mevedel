@@ -237,7 +237,8 @@ FACE is inherited by the top and bottom rule lines."
 
 (defun mevedel--prompt-key (key)
   "Return propertized KEY for prompt key-help rows."
-  (propertize key 'font-lock-face 'help-key-binding))
+  (propertize key 'font-lock-face 'help-key-binding
+              'mevedel-prompt-focus (equal key "RET")))
 
 (defun mevedel--prompt-attribution-line (origin)
   "Return a standard attribution line for canonical ORIGIN."
@@ -286,7 +287,7 @@ only owner-link guests."
             "\n\n"
             (propertize (format "%s\n\n" question) 'font-lock-face 'bold)
             (propertize "Keys: " 'font-lock-face 'help-key-binding)
-            (mevedel--prompt-key "a")
+            (mevedel--prompt-key "RET")
             " approve  "
             (mevedel--prompt-key "d")
             " deny  "

@@ -1932,6 +1932,8 @@ dependencies must either ride a text patch or clear
   (cond
    ((eq (plist-get rendering :vtype) 'request-failure)
     'mevedel-view-handle-error)
+   ((eq (plist-get rendering :vtype) 'tool-group)
+    'mevedel-view-tool-summary)
    ((memq (plist-get rendering :status)
           '(error failed blocked warning))
     'mevedel-view-tool-warning)
@@ -1948,7 +1950,8 @@ AGENT-PATH is stored on the label so it opens the retained transcript."
              (string-match (regexp-quote agent-path) line))
     (add-text-properties
      (match-beginning 0) (match-end 0)
-     `(keymap ,mevedel-view--agent-label-map
+     `(font-lock-face link
+       keymap ,mevedel-view--agent-label-map
        mouse-face highlight
        follow-link t
        help-echo "Open agent transcript"
@@ -1975,7 +1978,12 @@ Return nil when HEADER is not a `Tool: argument' style line."
   (let* ((header (or (plist-get rendering :header) "Tool"))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (status (plist-get rendering :agent-status))
-         (tool-status (plist-get rendering :status))
+         (tool-status
+          (if (eq (mevedel-execution-telemetry-sandbox-summary-class
+                   (plist-get rendering :sandbox-summary))
+                  'warning)
+              'warning
+            (plist-get rendering :status)))
          (agent-p (eq vtype 'agent-handle))
          (prompt-p (eq vtype 'prompt-summary))
          (marker (cond
@@ -2014,6 +2022,10 @@ Return nil when HEADER is not a `Tool: argument' style line."
                (mevedel-view--operation-line
                 marker marker-face header nil nil
                 (mevedel-view--rendering-header-face rendering)))))
+        (when (and (not (eq vtype 'tool-group))
+                   (memq tool-status '(error failed blocked warning)))
+          (put-text-property 0 (length line) 'font-lock-face
+                             'mevedel-view-tool-warning line))
         (if-let* ((agent-path (plist-get rendering :agent-path)))
             (mevedel-view--buttonize-agent-header-label line agent-path)
           line)))))
@@ -2239,7 +2251,7 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
 CHILD is one `:child-calls' entry.  The nested tool's own registered
 renderer produces the row, which is why a nested Grep gets Grep's header
 and `grep-mode' body without the compound tool formatting anything
-itself.  A reasoning child carries its prepared thinking rendering.  A
+itself.  Reasoning and mailbox children carry their prepared rendering.  A
 failed row renders expanded: its output is the reason the reader opened
 the block.
 
@@ -2254,7 +2266,7 @@ folding a run into a group does not lose the boundary it ran with."
          (failed (not (eq (plist-get child :status) 'success)))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
-          (if (eq (plist-get child :kind) 'reasoning)
+          (if (memq (plist-get child :kind) '(reasoning mailbox))
               (plist-get child :rendering)
             (or (and tool
                      (mevedel-view--invoke-renderer tool render-data args result))
@@ -2284,10 +2296,17 @@ folding a run into a group does not lose the boundary it ran with."
 
 (defun mevedel-view--child-call-state-key (child source)
   "Return the disclosure key for CHILD's row under SOURCE, or nil.
-The child id discriminates rows that share one block's coordinates."
-  (when-let* ((base (mevedel-view-disclosure-state-key source 'tool-child))
-              (id (plist-get child :id)))
-    (append base (list id))))
+Grouped transcript rows keep their standalone identity.  Compound-tool
+children use their id to discriminate one block's shared coordinates."
+  (if-let* ((own-source (plist-get child :source)))
+      (mevedel-view-disclosure-state-key
+       own-source (pcase (plist-get child :kind)
+                    ('reasoning 'thinking-summary)
+                    ('mailbox 'tool-child)
+                    (_ 'tool-summary)))
+    (when-let* ((base (mevedel-view-disclosure-state-key source 'tool-child))
+                (id (plist-get child :id)))
+      (append base (list id)))))
 
 (defun mevedel-view--child-call-prefixes (children)
   "Return one line prefix per entry in CHILDREN, or nil.
@@ -2326,10 +2345,14 @@ of SOURCE's coordinates because section bounds compare source identity
 with `eq', which is what separates one row from the next and from the
 body of the block that ran them."
   (when-let* ((rendering (mevedel-view--child-call-rendering child))
+              (source (or (plist-get child :source) source))
               (source (and (consp source) (cons (car source) (cdr source)))))
     (let* ((key (mevedel-view--child-call-state-key child source))
            (remembered (and (eq collapsed 'derive)
                             (mevedel-view-disclosure-state-for-key key)))
+           (mailbox-default-p
+            (and (plist-get rendering :mailbox-text)
+                 (eq collapsed 'derive) (not remembered)))
            (collapsed (cond
                        (remembered (cdr remembered))
                        ((eq collapsed 'derive)
@@ -2339,13 +2362,35 @@ body of the block that ran them."
            (mevedel-view--rendering-indent
             (concat mevedel-view--rendering-indent indent))
            (start (point)))
-      (if collapsed
-          (mevedel-view--render-collapsed-header rendering source)
-        (mevedel-view--render-expanded-body rendering source))
+      (if-let* ((text (plist-get rendering :mailbox-text)))
+          (let ((mevedel-view-mailbox-collapse-line-threshold
+                 (cond (mailbox-default-p
+                        mevedel-view-mailbox-collapse-line-threshold)
+                       (collapsed 0)
+                       (t most-positive-fixnum))))
+            (insert text "\n")
+            (mevedel-view--decorate-agent-result-blocks start (point))
+            (mevedel-view--decorate-agent-message-blocks start (point))
+            (when mailbox-default-p
+              (setq collapsed
+                    (get-text-property
+                     (or (text-property-any start (point)
+                                            'mevedel-view-type 'mailbox-delivery)
+                         start)
+                     'mevedel-view-collapsed)))
+            (add-text-properties
+             start (point)
+             `(mevedel-view-type tool-child
+                                 mevedel-view-source ,source
+                                 mevedel-view-collapsed ,collapsed))
+            (mevedel-view--apply-rendering-indent start (point)))
+        (if collapsed
+            (mevedel-view--render-collapsed-header rendering source)
+          (mevedel-view--render-expanded-body rendering source)))
       (add-text-properties start (point)
                            `(mevedel-view-tool-child ,child
-                             mevedel-view-child-indent ,indent
-                             mevedel-view-source-key ,key))
+                                                     mevedel-view-child-indent ,indent
+                                                     mevedel-view-source-key ,key))
       (mevedel-view-render-add-display-properties start (point) 'tool-child)
       (mevedel-view-disclosure-record-state-for-key key collapsed))))
 
@@ -4223,11 +4268,20 @@ hint.  Searches that region."
                       (card-id (gensym "mevedel-view-mailbox-")))
                   (insert "  ")
                   (insert (propertize
+                           (if (or bash-summary (eq kind 'agent-result))
+                               "✓ "
+                             "✉ ")
+                           'font-lock-face
+                           (if (or bash-summary (eq kind 'agent-result))
+                               'mevedel-view-tool-marker
+                             'mevedel-view-mailbox-header)
+                           'mevedel-view-mailbox t))
+                  (insert (propertize
                            (cond
-                            (bash-summary "✓ Bash completed · ")
-                            ((eq kind 'agent-result) "✓ Finished ")
-                            (t "✉ message "))
-                           'font-lock-face 'mevedel-view-attribution
+                            (bash-summary "Bash completed · ")
+                            ((eq kind 'agent-result) "Finished ")
+                            (t "message "))
+                           'font-lock-face 'mevedel-view-mailbox-header
                            'mevedel-view-mailbox t))
                   ;; The bash and result cards name their sender
                   ;; directly; only a plain message reads as "from
@@ -4994,8 +5048,19 @@ added when the text before point does not already end with a blank line
                           :body body
                           :body-mode 'markdown-mode)))))))
 
+(defun mevedel-view--mailbox-activity-entry (seg data-buf)
+  "Return the activity entry for mailbox SEG in DATA-BUF.
+Keep the canonical card text so grouped and standalone deliveries use
+one renderer, including execution summaries and sender links."
+  (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
+        :group-child
+        (list :kind 'mailbox :status 'success
+              :rendering
+              (list :mailbox-text
+                    (mevedel-view--user-turn-text (list seg) data-buf)))))
+
 (defun mevedel-view--tool-activity-entries (segments data-buf)
-  "Return ordered tool and reasoning entries for SEGMENTS in DATA-BUF."
+  "Return ordered tool, reasoning, and mailbox entries for SEGMENTS in DATA-BUF."
   (let (out thinking-group)
     (cl-labels
         ((flush-thinking
@@ -5007,13 +5072,15 @@ added when the text before point does not already end with a blank line
             (setq thinking-group nil))))
       (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
                     segments data-buf))
-        (if (eq (car seg) 'tool)
-            (progn
-              (flush-thinking)
-              (when-let* ((entry (mevedel-view--tool-segment-entry
-                                  seg data-buf)))
-                (push entry out)))
-          (push seg thinking-group)))
+        (pcase (car seg)
+          ('tool
+           (flush-thinking)
+           (when-let* ((entry (mevedel-view--tool-segment-entry seg data-buf)))
+             (push entry out)))
+          ('mailbox
+           (flush-thinking)
+           (push (mevedel-view--mailbox-activity-entry seg data-buf) out))
+          (_ (push seg thinking-group))))
       (flush-thinking))
     (nreverse out)))
 
@@ -5034,40 +5101,76 @@ added when the text before point does not already end with a blank line
           tool-entries))))
 
 (defun mevedel-view--render-tool-activity (segments data-buf)
-  "Render tool activity SEGMENTS from DATA-BUF in source order.
-Thinking segments are transparent when every tool row can form one folded
-group.  Otherwise tool and thinking runs retain their original order."
-  (if (cl-every
-       (lambda (seg)
-         (mevedel-view--tool-activity-tool-segment-p seg data-buf))
-       segments)
-      (mevedel-view--render-tool-group segments data-buf)
-    (let ((entries (mevedel-view--tool-activity-entries segments data-buf)))
-      (if (mevedel-view--tool-activity-groupable-p entries)
-          (let ((unit-start (point)))
-            (mevedel-view--insert-activity-rule-after-response)
-            (mevedel-view--insert-tool-group entries data-buf)
-            (mevedel-view--mark-live-render-unit
-             unit-start (cadr (car segments))))
-        (let (tool-group thinking-group)
-          (dolist (seg segments)
-            (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
-                (progn
-                  (when thinking-group
-                    (mevedel-view--flush-thinking-group
-                     thinking-group data-buf)
-                    (setq thinking-group nil))
-                  (push seg tool-group))
-              (when tool-group
-                (mevedel-view--render-tool-group
-                 (nreverse tool-group) data-buf)
-                (setq tool-group nil))
-              (push seg thinking-group)))
-          (when tool-group
-            (mevedel-view--render-tool-group
-             (nreverse tool-group) data-buf))
-          (mevedel-view--flush-thinking-group
-           thinking-group data-buf))))))
+  "Render activity SEGMENTS from DATA-BUF in source order.
+Special tool rows split otherwise groupable tool/reasoning runs.  Keep
+this activity mutable as one live unit until a response or other turn
+boundary arrives, so later tool calls can join the same group."
+  (let ((unit-start (point)))
+    (cl-labels
+        ((render-run (segments)
+           (if (cl-every
+                (lambda (seg)
+                  (mevedel-view--tool-activity-tool-segment-p seg data-buf))
+                segments)
+               (mevedel-view--render-tool-group segments data-buf)
+             (let ((entries (mevedel-view--tool-activity-entries segments data-buf)))
+               (if (mevedel-view--tool-activity-groupable-p entries)
+                   (progn
+                     (mevedel-view--insert-activity-rule-after-response)
+                     (mevedel-view--insert-tool-group entries data-buf))
+                 (let (tool-group thinking-group)
+                   (dolist (seg segments)
+                     (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
+                         (progn
+                           (when thinking-group
+                             (mevedel-view--flush-thinking-group
+                              thinking-group data-buf)
+                             (setq thinking-group nil))
+                           (push seg tool-group))
+                       (when tool-group
+                         (mevedel-view--render-tool-group
+                          (nreverse tool-group) data-buf)
+                         (setq tool-group nil))
+                       (if (eq (car seg) 'mailbox)
+                           (progn
+                             (mevedel-view--flush-thinking-group
+                              thinking-group data-buf)
+                             (setq thinking-group nil)
+                             (let* ((entry (mevedel-view--mailbox-activity-entry
+                                            seg data-buf))
+                                    (child (mevedel-view--tool-group-child
+                                            entry data-buf 0)))
+                               (mevedel-view--insert-child-call-block
+                                child (plist-get child :source) 'derive "")))
+                         (push seg thinking-group))))
+                   (when tool-group
+                     (mevedel-view--render-tool-group
+                      (nreverse tool-group) data-buf))
+                   (mevedel-view--flush-thinking-group
+                    thinking-group data-buf)))))))
+      (if (cl-every
+           (lambda (seg)
+             (mevedel-view--tool-activity-tool-segment-p seg data-buf))
+           segments)
+          (render-run segments)
+        (let (run special-run)
+          (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
+                        segments data-buf))
+            (let* ((entry (and (eq (car seg) 'tool)
+                               (mevedel-view--tool-segment-entry seg data-buf)))
+                   (special (and entry
+                                 (or (plist-get (plist-get entry :rendering)
+                                                :coalesce-key)
+                                     (not (mevedel-view--tool-group-entry-p
+                                           entry))))))
+              (when (and run (not (eq (and special t) special-run)))
+                (render-run (nreverse run))
+                (setq run nil))
+              (setq special-run (and special t))
+              (push seg run)))
+          (when run (render-run (nreverse run))))))
+    (mevedel-view--mark-live-render-unit
+     unit-start (cadr (car segments)))))
 
 (defun mevedel-view--render-assistant-turn
     (segments data-buf &optional variant-button directive continuation-p)
@@ -5156,17 +5259,15 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
           ('mailbox
            (mevedel-view--flush-thinking-group thinking-group data-buf)
            (setq thinking-group nil)
-           (when tool-group
-             (mevedel-view--render-tool-activity
-              (nreverse tool-group) data-buf)
-             (setq tool-group nil))
-           (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
-                 (text-start nil))
-             (mevedel-view--ensure-blank-line-before-response)
-             (setq text-start (point))
-             (insert text "\n")
-             (mevedel-view--decorate-agent-result-blocks text-start (point))
-             (mevedel-view--decorate-agent-message-blocks text-start (point))))
+           (if tool-group
+               (push seg tool-group)
+             (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
+                   (text-start nil))
+               (mevedel-view--ensure-blank-line-before-response)
+               (setq text-start (point))
+               (insert text "\n")
+               (mevedel-view--decorate-agent-result-blocks text-start (point))
+               (mevedel-view--decorate-agent-message-blocks text-start (point)))))
           ('user
            (let ((seg-start (cadr seg))
                  (seg-end (caddr seg)))
@@ -5296,14 +5397,16 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
 
 (defun mevedel-view--tool-group-header (children)
   "Return the one-line activity summary for grouped CHILDREN."
-  (let (names counts (thought-count 0))
+  (let (names counts (thought-count 0) (message-count 0))
     (dolist (child children)
-      (if (eq (plist-get child :kind) 'reasoning)
-          (cl-incf thought-count)
+      (cond
+       ((eq (plist-get child :kind) 'mailbox) (cl-incf message-count))
+       ((eq (plist-get child :kind) 'reasoning) (cl-incf thought-count))
+       (t
         (let ((name (or (plist-get child :tool) "Tool")))
           (unless (member name names)
             (push name names))
-          (cl-incf (alist-get name counts 0 nil #'equal)))))
+          (cl-incf (alist-get name counts 0 nil #'equal))))))
     (setq names (nreverse names))
     (let* ((parts
             (append
@@ -5318,6 +5421,11 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
                    ((= count 1) name)
                    (t (format "%s ×%d" name count)))))
               names)
+             (when (> message-count 0)
+               (list (format (if (= message-count 1)
+                                 "received %d message"
+                               "received %d messages")
+                             message-count)))
              (when (> thought-count 0)
                (list (format (if (= thought-count 1)
                                  "thought %d time"
@@ -5352,16 +5460,19 @@ resurrect rows the renderer suppressed."
                             (plist-get parsed :render-data))
                            :result (plist-get parsed :result)
                            :render-data (plist-get parsed :render-data))))))
-    (append (list :id (format "%d" index) :order index) child)))
+    (append (list :id (format "%d" index) :order index
+                  :source (mevedel-view-disclosure-source-range
+                           data-buf (plist-get entry :start)
+                           (plist-get entry :end)))
+            child)))
 
 (defun mevedel-view--tool-group-rendering (entries data-buf)
   "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
-The result reuses the compound-tool row machinery: each tool or reasoning
-occurrence is a `:child-calls' entry with its own disclosure state.  A run
-with any failed call, or any call whose sandbox disclosure is a warning,
-carries a warning marker but still renders collapsed: the marker says
-something went wrong, and the reader opens the group when they want to
-know what."
+The result reuses the compound-tool row machinery: each tool, reasoning
+occurrence, or delivery is a `:child-calls' entry with its own disclosure
+state.  Failed calls and warning-class sandbox disclosures mark the group
+without forcing it open: the reader can expand it to see what went wrong.
+A newly formed group keeps an already open child visible."
   (let* ((children
           (let ((index 0)
                 out)
@@ -5384,7 +5495,17 @@ know what."
             :expandable-p t
             :child-calls children
             :status (and failed-p 'warning)
-            :initially-collapsed-p t))))
+            ;; A new group must not hide a row the reader already opened.
+            ;; An explicit fold of the group itself still takes precedence.
+            :initially-collapsed-p
+            (not (cl-some
+                  (lambda (child)
+                    (when-let* ((state
+                                 (mevedel-view-disclosure-state-for-key
+                                  (mevedel-view--child-call-state-key
+                                   child (plist-get child :source)))))
+                      (not (cdr state))))
+                  children))))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
@@ -7040,7 +7161,10 @@ view chrome."
          :preserved-live-tail-len
          (and preserved-live-tail (length preserved-live-tail))
          :state (mevedel-view--debug-state data-buf))
-        (mevedel-view-disclosure-reset-state)
+        ;; Visible-state capture cannot see children of a folded group.
+        ;; Retain their identities while rebuilding the same transcript.
+        (when source-changed-p
+          (mevedel-view-disclosure-reset-state))
         (mevedel-view--full-rerender-reset
          data-buf session-data-buf historical-p agent-transcript-p)
         (let ((rendering

@@ -742,7 +742,8 @@ live zone text keeps its current bounds until reconciliation finishes."
                  (mevedel-view-zone--delete-stale-text zone nil)))
               nil)
           (unless region
-            (setq region (make-overlay start end (current-buffer) nil nil))
+            ;; History inserted at the boundary belongs before this zone.
+            (setq region (make-overlay start end (current-buffer) t nil))
             (overlay-put region 'mevedel-view-zone zone)
             (overlay-put region 'evaporate nil)
             (puthash zone region table))

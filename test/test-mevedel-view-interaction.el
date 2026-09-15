@@ -37,6 +37,101 @@
   "Return BYTES as an Emacs string of raw byte characters."
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
 
+(mevedel-deftest mevedel-view--interaction-sync-focus ()
+  ,test
+  (test)
+
+  :doc "RET settles a new prompt and restores a multiline composer after redraw"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (let (outcome)
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay
+         "Confirm" "Do the thing" "Proceed?" nil
+         (lambda (value) (setq outcome value))))
+      (with-current-buffer view-buf
+        (should (get-text-property (point) 'mevedel-prompt-focus))
+        (should (eq (key-binding (kbd "RET")) #'mevedel--approve-request))
+        (mevedel-view--interaction-rebuild)
+        (should (get-text-property (point) 'mevedel-prompt-focus))
+        (call-interactively (key-binding (kbd "RET")))
+        (should (eq outcome 'approve))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (= (window-point (selected-window)) (point)))
+        (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
+        (should-not mevedel-view--interaction-focus-return))))
+
+  :doc "permission approval returns to the saved composer position"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+    (let (outcome)
+      (with-current-buffer data-buf
+        (mevedel-permission--prompt-async-with-content
+         "Allow operation?\n" nil (lambda (value) (setq outcome value))))
+      (with-current-buffer view-buf
+        (should (get-text-property (point) 'mevedel-prompt-focus))
+        (call-interactively (key-binding (kbd "RET")))
+        (should (eq outcome 'allow-once))
+        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (should (equal (mevedel-view--input-text) "> draft\nnext")))))
+
+  :doc "Ask keeps focus through answer redraw and returns after submission"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+    (let (answer)
+      (with-current-buffer data-buf
+        (mevedel-tool-ask-ui-show
+         (lambda (value) (setq answer value))
+         [(:question "Run tests?" :options ["Yes" "No"])]))
+      (with-current-buffer view-buf
+        (should (get-text-property (point) 'mevedel-prompt-focus))
+        (call-interactively (key-binding (kbd "RET")))
+        (should-not answer)
+        (should (get-text-property (point) 'mevedel-prompt-focus))
+        (call-interactively (key-binding (kbd "C-c C-c")))
+        (should (string-match-p "A1: Yes" answer))
+        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (should (equal (mevedel-view--input-text) "> draft\nnext")))))
+
+  :doc "a prompt leaves a reader in history and never refocuses on redraw"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (goto-char (point-min))
+    (with-current-buffer data-buf
+      (mevedel--prompt-user-with-overlay
+       "Confirm" "Do the thing" "Proceed?" nil #'ignore))
+    (with-current-buffer view-buf
+      (should (= (point) (point-min)))
+      (goto-char (mevedel-view--input-start))
+      (mevedel-view--interaction-rebuild)
+      (should (= (point) (mevedel-view--input-start)))
+      (should-not mevedel-view--interaction-focus-return)
+      (mevedel--prompt-dismiss-all)))
+
+  :doc "cancel restores composer and a second prompt does not take existing focus"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (goto-char (mevedel-view--input-start))
+    (with-current-buffer data-buf
+      (mevedel--prompt-user-with-overlay
+       "First" "One" "Proceed?" nil #'ignore))
+    (let ((first (with-current-buffer view-buf
+                   (car mevedel--prompt-overlays))))
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay
+         "Second" "Two" "Proceed?" nil #'ignore))
+      (with-current-buffer view-buf
+        (should (eq first (mevedel--prompt--overlay-at-point
+                           'mevedel-user-request)))
+        (mevedel--prompt--settle first 'aborted)
+        (should (= (point) (mevedel-view--input-start)))
+        (should-not mevedel-view--interaction-focus-return)
+        (mevedel--prompt-dismiss-all)))))
+
 (mevedel-deftest mevedel-view-interaction-ownership ()
   ,test
   (test)

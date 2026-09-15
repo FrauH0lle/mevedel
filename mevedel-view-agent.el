@@ -910,25 +910,6 @@ buffer whether running or idle."
                       agent-path info parent-view)))
     (mevedel-view--display-agent-transcript-view agent-view)))
 
-(defun mevedel-view--agent-handle-paths-in-buffer ()
-  "Return canonical paths whose source-backed handles are present in the view."
-  (let (paths)
-    (save-excursion
-      (goto-char (point-min))
-      (while (< (point) (point-max))
-        (let ((path (and (not (mevedel-view--agent-status-region-position-p
-                               (point)))
-                         (get-text-property (point)
-                                            'mevedel-view-agent-handle-p)
-                         (get-text-property (point)
-                                            'mevedel-view-agent-path))))
-          (when (and path (not (member path paths)))
-            (push path paths)))
-        (goto-char (or (next-single-property-change
-                        (point) 'mevedel-view-agent-path nil (point-max))
-                       (point-max)))))
-    (nreverse paths)))
-
 (defun mevedel-view--agent-row-elapsed (inv entry)
   "Return elapsed seconds for INV or transcript ENTRY."
   (or (plist-get entry :elapsed)
@@ -962,18 +943,14 @@ buffer whether running or idle."
     (list :blocked blocked :running running)))
 
 (defun mevedel-view--agent-status-collect ()
-  "Collect aggregate agent status rows for agents without visible handles."
-  (let* ((session (mevedel-view--session))
-         (handle-paths (mevedel-view--agent-handle-paths-in-buffer))
-         ;; Inline handles are the primary UI for agent status and
-         ;; transcript opening.  The aggregate footer only covers
-         ;; agents that have no visible handle in the rendered turn.
-         rows)
+  "Collect aggregate status rows for every active agent."
+  (let ((session (mevedel-view--session))
+        rows)
     (dolist (pair (and session (mevedel-session-agent-registry session)))
       (let* ((path (car pair))
              (record (cdr pair))
              (status (mevedel-view--agent-record-status record)))
-        (when (and status (not (member path handle-paths)))
+        (when status
           (push (list :path path
                       :status status
                       :depth (mevedel-view--agent-path-depth path))
@@ -1228,6 +1205,9 @@ Return non-nil on success."
                            (plist-put (copy-sequence rendering)
                                       :initially-collapsed-p collapsed)
                            source)))
+          ;; Audit disclosures have their own source spans outside BOUNDS.
+          ;; Preserve those rows and their fold state when replacing the handle.
+          (setq rendering (plist-put rendering :hook-audits nil))
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
           (unwind-protect
@@ -1324,7 +1304,7 @@ the current live or persisted transcript and reports any unavailable source."
   (let* ((header (concat "from " agent-path))
          (s (copy-sequence header)))
     (add-text-properties 0 (length s)
-                         (list 'font-lock-face 'mevedel-view-attribution)
+                         (list 'font-lock-face 'mevedel-view-mailbox-header)
                          s)
     (let* ((from-prefix-len (length "from "))
            (id-end (length s))
@@ -1339,6 +1319,7 @@ the current live or persisted transcript and reports any unavailable source."
       (add-text-properties
        from-prefix-len id-end
        `(face link
+         font-lock-face link
          follow-link t
          mouse-face highlight
          keymap ,map

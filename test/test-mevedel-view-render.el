@@ -23,6 +23,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
+(require 'mevedel-tool-patch)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
@@ -2032,6 +2033,9 @@
       (should (get-text-property (point) 'mevedel-view-collapsed))
       (should-not (search-forward "new body must start collapsed"
                                   mevedel-view--input-marker t))
+      ;; Unmatched identities may remain for children hidden by group folds.
+      ;; An explicit transcript-source change discards the whole table.
+      (mevedel-view--full-rerender nil t)
       (should (= 0 (hash-table-count mevedel-view-disclosure--source-states)))))
 
   :doc "does not carry non-tool fold state to same-prefix rewritten data"
@@ -2743,7 +2747,149 @@
         (mevedel-view-render-live-update data-buf)
         (goto-char (point-min))
         (should (search-forward "Xirst paragraph"
-                                mevedel-view--input-marker t))))))
+                                mevedel-view--input-marker t)))))
+
+  :doc "streamed tool and reasoning events grow one group and preserve the draft"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (with-current-buffer view-buf
+        (mevedel-view-stream-begin-turn
+         mevedel-view--status-marker
+         (with-current-buffer data-buf (copy-marker (point-min))))
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 3)))
+      (dotimes (i 6)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n" i i)
+         `(tool . ,(format "call_%d" i)))
+        (with-current-buffer view-buf (mevedel-view-render-live-update data-buf))
+        (mevedel-view-test--insert-data
+         data-buf "#+begin_reasoning\nNext file\n#+end_reasoning\n" 'ignore)
+        (with-current-buffer view-buf
+          (mevedel-view-render-live-update data-buf)
+          (should (equal draft (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 3)))))
+      (with-current-buffer view-buf
+        (should (string-match-p "Read 6 files, thought 6 times" (buffer-string)))
+        (should-not (string-match-p "f0.el" (buffer-string)))
+        (mevedel-view--full-rerender)
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 3))))))
+
+  :doc "repair audits preserve expanded groups, child tools, cursor and window start"
+  (dolist (interleaved '(nil t))
+    (save-window-excursion
+      (mevedel-view-test--with-buffers
+        (dotimes (i 4)
+          (mevedel-view-test--insert-data
+           data-buf
+           (format "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n" i i)
+           `(tool . ,(format "call_%d" i)))
+          (when interleaved
+            (mevedel-view-test--insert-data
+             data-buf "#+begin_reasoning\nNext file\n#+end_reasoning\n" 'ignore)))
+        (with-current-buffer view-buf
+          (switch-to-buffer view-buf)
+          (mevedel-view-stream-begin-turn
+           mevedel-view--status-marker
+           (with-current-buffer data-buf (copy-marker (point-min))))
+          (mevedel-view-render-live-update data-buf)
+          (goto-char (point-min))
+          (search-forward "Read 4 files")
+          (mevedel-view-toggle-section)
+          (goto-char (point-min))
+          (search-forward "f0.el")
+          (mevedel-view-toggle-section)
+          (goto-char (point-min))
+          (search-forward "content 0")
+          (set-window-start nil (line-beginning-position) t)
+          ;; The audit arrives at the next tool boundary while the reader
+          ;; is inspecting an earlier expanded child of the activity group.
+          (mevedel-view-test--insert-data
+           data-buf "(:name \"Read\" :args (:file_path \"next.el\"))\n\nnext\n"
+           '(tool . "call-next"))
+          (mevedel-view-test--insert-data
+           data-buf
+           (mevedel-tool-repair-format-audit-block
+            'committed
+            '((:rule wrap-array-singleton :source generic
+                     :paths ((names)) :before string :after array)))
+           'ignore)
+          (dolist (refresh '(mevedel-view-render-live-update
+                             mevedel-view-render-live-update
+                             mevedel-view--full-rerender
+                             mevedel-view-render-live-update))
+            (if (eq refresh 'mevedel-view--full-rerender)
+                (funcall refresh)
+              (funcall refresh data-buf))
+            (should (string-match-p "Read 4 files" (buffer-string)))
+            (should (string-match-p "tool input repaired" (buffer-string)))
+            (should (equal "content 0"
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position))))
+            (should (= 9 (current-column)))
+            (should (= (window-point) (point)))
+            (should (= (window-start) (line-beginning-position))))))))
+
+  :doc "an audited child keeps its expansion and cursor when promoted out of a group"
+  (dolist (name '("Read" "ApplyPatch"))
+    (mevedel-view-test--with-buffers
+      (when (equal name "ApplyPatch")
+        (mevedel-tool-register
+         (mevedel-tool--create :name name :category "mevedel"
+                              :renderer #'mevedel-tool-patch--render)))
+      (dotimes (i 5)
+        (mevedel-view-test--insert-data
+         data-buf
+         (concat
+          "#+begin_tool
+"
+          (format "(:name %S :args (:file_path \"f%d.el\"))\n\ncontent %d\n"
+                  (if (= i 4) name "Read") i i)
+          (when (and (= i 4) (equal name "ApplyPatch"))
+            (mevedel-tool-render-data-format
+             '(:kind patch :applied 1 :total 1
+                     :files ((:path "f4.el" :kind update :added 1 :deleted 0
+                                    :diff "+content 4\n")))
+             "call_4"))
+          "#+end_tool
+")
+         `(tool . ,(format "call_%d" i))))
+      (with-current-buffer view-buf
+        (mevedel-view-stream-begin-turn
+         mevedel-view--status-marker
+         (with-current-buffer data-buf (copy-marker (point-min))))
+        (mevedel-view-render-live-update data-buf)
+        (goto-char (point-min))
+        (search-forward (if (equal name "Read") "Read 5 files" "ApplyPatch"))
+        (mevedel-view-toggle-section)
+        (goto-char (point-min))
+        (search-forward (if (equal name "Read") "f4.el" "ApplyPatch:"))
+        (mevedel-view-toggle-section)
+        (goto-char (point-min))
+        (search-forward "content 4")
+        (let ((column (current-column))
+              (line (buffer-substring-no-properties
+                     (line-beginning-position) (line-end-position))))
+          (mevedel-view-test--insert-data
+           data-buf
+           (mevedel-tool-repair-format-audit-block
+            'committed
+            '((:rule wrap-array-singleton :source generic
+                     :paths ((names)) :before string :after array)))
+           'ignore)
+          (dolist (refresh '(mevedel-view-render-live-update
+                             mevedel-view--full-rerender))
+            (if (eq refresh 'mevedel-view--full-rerender)
+                (funcall refresh)
+              (funcall refresh data-buf))
+            (should (string-match-p "Read 4 files" (buffer-string)))
+            (should (string-match-p "tool input repaired" (buffer-string)))
+            (should (= column (current-column)))
+            (should (equal line (buffer-substring-no-properties
+                                 (line-beginning-position) (line-end-position))))))))))
 
 (mevedel-deftest mevedel-view-render-invalidate-live-tail ()
   ,test
@@ -3810,7 +3956,31 @@
   (should (string-match-p
            "\\`  ! Bash:"
            (mevedel-view--rendering-header-line
-            '(:header "Bash: npx test" :status error)))))
+            '(:header "Bash: npx test" :status error))))
+
+  :doc "group warnings color only the marker; offending tool rows color the header"
+  (dolist (vtype '(tool-group tool-child tool-summary))
+    (let ((line (mevedel-view--rendering-header-line
+                 (list :vtype vtype :header "Bash: run tests (4 lines)"
+                       :status 'warning))))
+      (should (string-match "!" line))
+      (should (eq 'mevedel-view-tool-warning
+                  (get-text-property (match-beginning 0) 'font-lock-face line)))
+      (dolist (label '("Bash" "run tests" "4 lines"))
+        (should (string-match label line))
+        (should (eq (not (eq vtype 'tool-group))
+                    (eq 'mevedel-view-tool-warning
+                        (get-text-property (match-beginning 0)
+                                           'font-lock-face line)))))))
+
+  :doc "started agent paths are highlighted and clickable"
+  (let ((line (mevedel-view--rendering-header-line
+               '(:vtype agent-handle :header "Started /root/reviewer"
+                 :agent-path "/root/reviewer"))))
+    (should (string-match "/root/reviewer" line))
+    (should (eq 'link (get-text-property (match-beginning 0)
+                                       'font-lock-face line)))
+    (should (keymapp (get-text-property (match-beginning 0) 'keymap line)))))
 
 ;;; Rendering plist validation
 
@@ -5739,6 +5909,10 @@
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
       (goto-char (point-min))
+      (search-forward "message from ")
+      (should (eq 'mevedel-view-mailbox-header
+                  (get-text-property (- (point) (length "from "))
+                                     'font-lock-face)))
       (search-forward "hello")
       (should (invisible-p (match-beginning 0)))))
 
@@ -5804,6 +5978,14 @@
       ;; The sender used to be inserted bare, so it rendered in the
       ;; default face between two styled runs.
       (goto-char (point-min))
+      (search-forward "✓ Bash completed")
+      (should (eq 'mevedel-view-tool-marker
+                  (get-text-property (match-beginning 0) 'font-lock-face)))
+      (should (eq 'mevedel-view-mailbox-header
+                  (get-text-property (1- (point)) 'font-lock-face)))
+      (should (eq 'unspecified
+                  (face-attribute 'mevedel-view-mailbox-header :weight)))
+      (goto-char (point-min))
       (search-forward "Bash completed")
       (search-forward "exec-000001")
       (should (invisible-p (match-beginning 0)))
@@ -5811,7 +5993,7 @@
       (search-forward "Bash completed")
       (search-forward "/root")
       (goto-char (match-beginning 0))
-      (should (eq 'mevedel-view-attribution
+      (should (eq 'link
                   (get-text-property (point) 'font-lock-face)))
       (should (equal "/root"
                      (get-text-property (point) 'mevedel-view-agent-path)))))
@@ -5854,7 +6036,11 @@
       (let ((header-start (match-beginning 0)))
         (should-not (get-text-property header-start 'font-lock-face))
         (should (eq (get-text-property (+ header-start 2) 'font-lock-face)
-                    'mevedel-view-attribution)))
+                    'mevedel-view-tool-marker))
+        (should (eq (get-text-property (+ header-start 4) 'font-lock-face)
+                    'mevedel-view-mailbox-header))
+        (should (eq 'unspecified
+                    (face-attribute 'mevedel-view-mailbox-header :weight))))
       (goto-char (point-min))
       (search-forward "│")
       (should (eq (get-text-property
@@ -6525,6 +6711,39 @@
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "one\ntwo" text)))))))
 
+(mevedel-deftest mevedel-view--mailbox-activity-entry ()
+  ,test
+  (test)
+  :doc "execution deliveries reuse canonical summaries and the displayed line threshold"
+  (dolist (threshold '(0 1))
+    (mevedel-view-test--with-buffers
+      (let ((mevedel-view-mailbox-collapse-line-threshold threshold))
+        (mevedel-view-test--insert-data
+         data-buf
+         (concat "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+                 "raw output\nsecond line\n"
+                 "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
+                 "output_bytes=\"25\" output_lines=\"2\"/>\n</agent-message>\n")
+         nil)
+        (with-current-buffer view-buf
+          (let* ((inhibit-read-only t)
+                 (seg (with-current-buffer data-buf
+                        (list 'mailbox (point-min) (point-max))))
+                 (entry (mevedel-view--mailbox-activity-entry seg data-buf))
+                 (child (mevedel-view--tool-group-child entry data-buf 0)))
+            (goto-char mevedel-view--status-marker)
+            (let ((start (point)))
+              (mevedel-view--insert-child-call-block
+               child (plist-get child :source) 'derive "")
+              (goto-char start)
+              (search-forward "Bash completed")
+              (should (eq 'mevedel-view-mailbox-header
+                          (get-text-property (match-beginning 0) 'font-lock-face)))
+              (search-forward "exec-1")
+              (should (eq (= threshold 0)
+                          (and (invisible-p (match-beginning 0)) t)))
+              (should-not (string-match-p "raw output" (buffer-string))))))))))
+
 (mevedel-deftest mevedel-view--tool-group-header ()
   ,test
   (test)
@@ -6785,7 +7004,18 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p
                  "! Read 3 files, ran 1 command" text))
-        (should-not (string-match-p "Error: command failed" text)))))
+        (should-not (string-match-p "Error: command failed" text)))
+      (goto-char (point-min))
+      (search-forward "Read 3 files")
+      (should (eq 'mevedel-view-tool-summary
+                  (get-text-property (match-beginning 0) 'font-lock-face)))
+      (mevedel-view-toggle-section)
+      (search-forward "Bash:")
+      (should (eq 'mevedel-view-tool-warning
+                  (get-text-property (match-beginning 0) 'font-lock-face)))
+      (search-forward "false")
+      (should (eq 'mevedel-view-tool-warning
+                  (get-text-property (match-beginning 0) 'font-lock-face)))))
   :doc "a short run and a zero threshold keep individual rows"
   (let ((mevedel-view-tool-group-collapse-threshold 0))
     (mevedel-view-test--with-buffers
@@ -6804,7 +7034,123 @@
                      (point-min) mevedel-view--input-marker)))
           (should-not (string-match-p "Read 4 files" text))
           (should (string-match-p "Read: .*f0\\.el" text))
-          (should (string-match-p "Read: .*f3\\.el" text)))))))
+          (should (string-match-p "Read: .*f3\\.el" text))))))
+
+  :doc "delivered messages join tool groups and preserve expansion and cursor on refresh"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format "#+begin_tool\n(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n#+end_tool\n" i i)
+       `(tool . ,(format "call_%d" i)))
+      (when (= i 1)
+        (mevedel-view-test--insert-data
+         data-buf
+         "\n<agent-result sender=\"/root/reviewer\">\nReview complete.\nSecond line.\n</agent-result>\n"
+         nil)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "Read 4 files, received 1 message")
+      (mevedel-view-toggle-section)
+      (search-forward "Finished /root/reviewer")
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (mevedel-view-toggle-section)
+      (search-forward "Review complete.")
+      (should-not (invisible-p (match-beginning 0)))
+      (let ((column (current-column)))
+        (mevedel-view--full-rerender)
+        (should (= column (current-column)))
+        (should (looking-back "Review complete\\." (line-beginning-position)))
+        (should-not (invisible-p (point))))
+      (goto-char (point-min))
+      (search-forward "Read 4 files, received 1 message")
+      (mevedel-view-toggle-section)
+      (mevedel-view--full-rerender)
+      (should-not (string-match-p "Review complete" (buffer-string)))
+      (mevedel-view-toggle-section)
+      (search-forward "Review complete.")
+      (should-not (invisible-p (match-beginning 0)))))
+
+
+  :doc "live deliveries keep separate folds, composer draft, and reading position"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (mevedel-view-test--insert-composer-draft "> keep\ndraft" 3)
+      (mevedel-view-stream-begin-turn
+       mevedel-view--status-marker
+       (with-current-buffer data-buf (copy-marker (point-min))))
+      (dotimes (i 4)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "#+begin_tool\n(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n#+end_tool\n" i i)
+         `(tool . ,(format "call_%d" i))))
+      (mevedel-view-render-live-update data-buf)
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "\n<agent-result sender=\"/root/reviewer\">\nFirst delivery.\n</agent-result>\n"
+               "<agent-message sender=\"/root/explorer\">\nSecond delivery.\n</agent-message>\n")
+       nil)
+      (mevedel-view-render-live-update data-buf)
+      (should (equal "> keep\ndraft" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 3)))
+      (goto-char (point-min))
+      (search-forward "Read 4 files, received 2 messages")
+      (mevedel-view-toggle-section)
+      (search-forward "Finished /root/reviewer")
+      (should (eq 'link (get-text-property (1- (point)) 'font-lock-face)))
+      (mevedel-view-toggle-section)
+      (search-forward "First delivery.")
+      (let ((column (current-column)))
+        (set-window-start (selected-window) (point-min))
+        (mevedel-view-test--insert-data
+         data-buf
+         "#+begin_tool\n(:name \"Read\" :args (:file_path \"f4.el\"))\n\nlast\n#+end_tool\n"
+         '(tool . "call_4"))
+        (dolist (refresh '(mevedel-view-render-live-update
+                           mevedel-view--full-rerender))
+          (if (eq refresh 'mevedel-view--full-rerender)
+              (funcall refresh)
+            (funcall refresh data-buf))
+          (should (= column (current-column)))
+          (should (looking-back "First delivery\\." (line-beginning-position)))
+          (should-not (invisible-p (1- (point))))
+          (should (= (window-start) (point-min)))
+          (should (equal "> keep\ndraft" (mevedel-view--input-text)))))
+      (search-forward "Second delivery.")
+      (should (invisible-p (match-beginning 0)))))
+
+  :doc "forming a group keeps an already expanded delivery and its cursor visible"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_tool\n(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent\n#+end_tool\n"
+     '(tool . "call_0"))
+    (mevedel-view-test--insert-data
+     data-buf
+     "<agent-message sender=\"/root/reviewer\">\nReading this delivery.\n</agent-message>\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view-stream-begin-turn
+       mevedel-view--status-marker
+       (with-current-buffer data-buf (copy-marker (point-min))))
+      (mevedel-view-render-live-update data-buf)
+      (goto-char (point-min))
+      (search-forward "message from /root/reviewer")
+      (mevedel-view-toggle-section)
+      (search-forward "Reading this delivery.")
+      (let ((column (current-column)))
+        (dotimes (i 3)
+          (mevedel-view-test--insert-data
+           data-buf
+           (format "#+begin_tool\n(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent\n#+end_tool\n" (1+ i))
+           `(tool . ,(format "call_%d" (1+ i)))))
+        (mevedel-view-render-live-update data-buf)
+        (should (= column (current-column)))
+        (should (looking-back "Reading this delivery\\." (line-beginning-position)))
+        (should-not (invisible-p (1- (point))))))))
+
 
 (mevedel-deftest mevedel-view--insert-rendered-tool/preview-body ()
   ,test

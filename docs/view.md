@@ -102,12 +102,18 @@ pending rows normally, and terminal settlement renders the final state.
 Live updates preserve the main view's source-backed disclosure state. An
 incremental update or full-rerender fallback must not collapse response,
 reasoning, tool, or audit sections that the reader expanded.
+Grouped tool and reasoning rows use their own transcript source identity,
+so expansion and the reader's cursor survive a row moving out of a group
+when a late audit requires individual presentation.
 Rendered source ranges use data-buffer markers so a length-changing update to
 one tool's hidden render data cannot retarget an adjacent tool disclosure.
 
 Agent transcript views open only through explicit user action on an agent
 handle or status surface. Agent start, progress, and blocked events never
 create or focus an inspection window automatically.
+
+Agent status refreshes replace only the handle. Adjacent audit disclosures,
+including delivered system reminders, retain their rows and fold state.
 
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
@@ -194,6 +200,9 @@ starting a second timer.  Status and interaction zones remain independent of
 transcript parsing.  Reconciliation leaves an unchanged managed fragment in
 place, and spinner animation changes its frame display property without
 rewriting the textual progress row until elapsed or agent metadata changes.
+Progress spacing also reconciles when the preceding content changes. Managed
+zone boundaries advance past history inserted immediately before them, keeping
+status, interaction, and progress overlays outside the transcript.
 
 Spinner ticks, scheduled transcript flushes, and live tool-row refreshes
 are attention-gated (`mevedel-view--unattended-p`).  When every window
@@ -221,6 +230,10 @@ may indent further to express their hierarchy. Ordinary response prose and
 whole-turn headers or folds remain flush-left. Body insets are display-only,
 including on wrapped continuation lines, so copied disclosure content retains
 its authoritative text without presentation padding.
+Agent paths in launch handles and delivery cards use link highlighting.
+Delivery headers use `mevedel-view-mailbox-header`, a keyword face with no
+added bold weight. Completion checkmarks use the same success face as tool rows.
+
 Non-empty agent-message and agent-result mailbox bodies start collapsed by
 default; `mevedel-view-mailbox-collapse-line-threshold` can raise that
 threshold.
@@ -256,14 +269,24 @@ without a verb mapping — MCP tools included — appear as `NAME ×N`. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
-with it. Rows that demand individual presentation — agent handles, compound
-tools, rows carrying hook audits, rows their renderer wants expanded or
+with it. Delivered agent messages, agent results, and Bash completions inside
+an activity run join the same group as independently expandable cards;
+`received N messages` counts them separately from tools. Their sender links,
+execution summaries, and mailbox collapse threshold stay the same. A newly
+formed group stays open when one of its rows is already open, so grouping
+does not hide text the reader is inspecting. An explicit group fold wins over
+its children's states. Rows that demand individual presentation — agent
+handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
 compact, and coalesced rows — never fold into a group; they split the run
-around themselves. A sandbox disclosure does not split a run: the nested row
+around themselves, including runs interleaved with reasoning. An unfinished
+activity run remains mutable across streaming events so later calls can join
+its group. A sandbox disclosure does not split a run: the nested row
 carries the summary, so the line stays readable one level in. A group
 containing a failed call, or a call whose sandbox disclosure is a `warning`,
-keeps its warning marker but starts collapsed; a `note`-class disclosure
-leaves the group unmarked. Expanding a group rebuilds its rows from the
+highlights only the group's `!` marker; the summary text keeps its normal
+face. The offending tool's entire header is highlighted in the expanded
+group, including its argument and metadata. A `note`-class disclosure leaves
+the group unmarked. Expanding a group rebuilds its rows from the
 folded run alone: `mevedel-transcript-segments` expands its end bound to the
 containing property run, so the segment beginning where the run ended is
 dropped instead of being summarized as one more reasoning occurrence.
@@ -310,7 +333,9 @@ Terminology:
   history content, not status-zone content.
 - **Status zone**: session status chrome between `mevedel-view--status-marker`
   and `mevedel-view--interaction-marker`. Task, live-execution, and
-  aggregate-agent rows appear here.
+  aggregate-agent rows appear here. The agent roster lists every active agent,
+  even when its launch handle also appears earlier in the transcript. Opening
+  an agent transcript or folding history does not change roster membership.
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
   pending input and controls that require user response.
@@ -729,6 +754,11 @@ cleanup, weak request-registration bookkeeping, and standard prompt framing.
 Ask, permission, plan, and preview code retain their domain-specific
 descriptors and outcomes.
 
+When a prompt opens while the selected window's cursor is in the composer,
+focus moves to its `RET` key-help row. Closing that prompt restores the saved
+composer position. Redraws preserve prompt focus and the draft, including
+multiline drafts; new prompts leave readers in history and other windows alone.
+
 Current fragment namespaces:
 
 - `history-live`: pending tool live-tail rows in the history region, built
@@ -998,7 +1028,10 @@ data-buffer coordinates and stable source anchors, not view-buffer positions.
 Rerenders should capture
 and reapply collapse state, including temporary in-flight anchors that later
 settle, so expanded tool/response sections do not collapse again during
-live refreshes.
+live refreshes. Rebuilding the same transcript retains remembered states for
+children hidden inside folded groups; an explicit transcript-source change
+clears them. Source anchors prevent unmatched states from applying to rewritten
+content at the same position.
 `mevedel-view-render-settle` computes those keys with their durable
 post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before
 the stream clears the in-flight turn markers, and keys captured or stamped

@@ -85,6 +85,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position
 		  "mevedel-view-composer" nil)
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--session "mevedel-view-composer" nil)
 (defvar mevedel-view--prompt-hook-pending)
 
@@ -601,6 +602,40 @@ snapshot taken at registration."
         (mevedel-view--interaction-apply-overlay-properties
          overlay descriptor)))))
 
+(defvar-local mevedel-view--interaction-focus-return nil
+  "Temporary prompt focus as (ID WINDOW COMPOSER-OFFSET).")
+
+(defun mevedel-view--interaction-sync-focus (pairs)
+  "Focus new prompts in PAIRS and restore the composer when they close."
+  (when (and mevedel-view--interaction-focus-return
+             (not (assoc (car mevedel-view--interaction-focus-return) pairs)))
+    (pcase-let ((`(,_id ,window ,offset)
+                 mevedel-view--interaction-focus-return))
+      (setq mevedel-view--interaction-focus-return nil)
+      (when (and (window-live-p window)
+                 (eq (window-buffer window) (current-buffer)))
+        (set-window-point
+         window (min (point-max) (+ (mevedel-view--input-start) offset)))
+        (when (eq window (selected-window))
+          (goto-char (window-point window))))))
+  (dolist (pair pairs)
+    (when-let* ((overlay (gethash (car pair)
+                                 mevedel-view--interaction-overlays))
+                ((not (overlay-get overlay 'mevedel-focus-considered))))
+      (overlay-put overlay 'mevedel-focus-considered t)
+      (let ((window (selected-window)))
+        (when-let* (((not mevedel-view--interaction-focus-return))
+                    ((eq (window-buffer window) (current-buffer)))
+                    (input-start (mevedel-view--input-start))
+                    ((>= (window-point window) input-start))
+                    (position (text-property-any
+                               (overlay-start overlay) (overlay-end overlay)
+                               'mevedel-prompt-focus t)))
+          (setq mevedel-view--interaction-focus-return
+                (list (car pair) window (- (window-point window) input-start)))
+          (goto-char position)
+          (set-window-point window position))))))
+
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays."
   (unless mevedel-view--interaction-render-suppressed
@@ -625,7 +660,8 @@ snapshot taken at registration."
           (mevedel-view--interaction-sync-overlays pairs)
           (dolist (pair pairs)
             (when-let* ((after (plist-get (cdr pair) :after-render)))
-              (funcall after))))))))
+              (funcall after)))
+          (mevedel-view--interaction-sync-focus pairs))))))
 
 (defun mevedel-view--interaction-rebuild ()
   "Rebuild interaction-zone descriptors from live preview and queue state.
