@@ -276,7 +276,7 @@ layer or inspect the live process record.
 
 At profiler start and stop, telemetry records Git HEAD, dirty-file count,
 status hash, an exact dirty-content hash (tracked diff plus untracked
-file content hashes), loaded gptel and gptel-agent file hashes and repository
+file content hashes), loaded gptel file hash and repository
 commits, Emacs and system versions, configured sandbox mode, and Bubblewrap
 availability. File contents are not written to telemetry, and neither are
 arbitrary source paths. The explicit path exceptions are repository-local

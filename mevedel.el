@@ -5,8 +5,8 @@
 
 ;; Author: FrauH0lle
 ;; Version: 0.5.0
-;; Keywords: convenience, tools, llm, gptel, gptel-agent
-;; Package-Requires: ((emacs "31.1") (gptel "0.9.9.6") (gptel-agent "0.0.1") (websocket "1.15") (qrencode "1.4"))
+;; Keywords: convenience, tools, llm, gptel
+;; Package-Requires: ((emacs "31.1") (gptel "0.9.9.6") (yaml "1.2.0") (orderless "1.1") (websocket "1.15") (qrencode "1.4"))
 ;; URL: https://github.com/FrauH0lle/mevedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -42,7 +42,6 @@
   (require 'cl-lib))
 
 (require 'gptel)
-(require 'gptel-agent)
 
 (require 'mevedel-execution-target)
 (require 'mevedel-workspace)

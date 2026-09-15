@@ -5,7 +5,7 @@
          "Instructed LLM programmer/assistant")
 
 (website-url "https://github.com/FrauH0lle/mevedel")
-(keywords "convenience" "tools" "llm" "gptel" "gptel-agent")
+(keywords "convenience" "tools" "llm" "gptel")
 
 (package-file "mevedel.el")
 (files :defaults
@@ -36,7 +36,8 @@
 
 (depends-on "emacs" "31.1")
 (depends-on "gptel")
-(depends-on "gptel-agent")
+(depends-on "yaml")
+(depends-on "orderless")
 (depends-on "websocket")
 (depends-on "qrencode")
 

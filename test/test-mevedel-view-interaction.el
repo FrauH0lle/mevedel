@@ -6,7 +6,6 @@
 
 ;;; Code:
 
-(require 'gptel-agent-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -773,7 +772,7 @@
                                  :role "verifier"
                                  :description "Verify tracked diff"
                                  :calls 19))))
-                  ((symbol-function 'gptel-agent--block-bg)
+                  ((symbol-function 'mevedel--prompt-block-face)
                    (lambda () 'ask)))
           (mevedel-view--render-agent-status))
         (let (agent-pos separator-pos prompt-pos)
@@ -871,7 +870,7 @@
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
           (mevedel-view--start-spinner "Working..."))
-        (cl-letf (((symbol-function 'gptel-agent--block-bg)
+        (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                    (lambda () 'ask)))
           (with-current-buffer data-buf
             (dolist (path '("/tmp/one.el" "/tmp/two.el" "/tmp/three.el"))
@@ -1256,7 +1255,7 @@
                 (setq-local mevedel--agent-invocation inv)
                 (setq-local mevedel--view-buffer view-buf)
                 (mevedel-request-begin session))
-              (cl-letf (((symbol-function 'gptel-agent--block-bg)
+              (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                          (lambda () 'ask)))
                 (with-current-buffer agent-buf
                   (mevedel-permission--enqueue
@@ -1320,7 +1319,7 @@
                 (with-current-buffer view-buf
                   (should (gethash interaction-id
                                    mevedel-view--interaction-overlays))
-                  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                  (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                              (lambda () 'ask)))
                     (mevedel-view--full-rerender))
                   (should-not outcomes)

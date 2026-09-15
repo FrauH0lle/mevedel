@@ -101,6 +101,9 @@ The built-in role configurations are:
 - **reviewer**: retained leaf code-review agent used by `/review`. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
 
+Child request defaults come from the parent, the selected role and mevedel’s
+model policy. There is no separate global child-agent preset layer.
+
 The frozen role prompt owns read-only judgment and the report contract. It is
 restored before each request, independently of transcript compaction; no
 every-turn reminder repeats it. Direct tool rosters and shared permission
@@ -127,7 +130,7 @@ agent tree, capacity, and permission rules remain unchanged. Queued user
 messages steer the Goal before its next automatic continuation.
 
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
-invocation time. Registered buffer-locally via `gptel-agent--agents` per
+invocation time. Registered buffer-locally via `mevedel-agents--specs` per
 request (no caching). Each invocation gets a cloned reminder list with
 independent `last-fired`.
 

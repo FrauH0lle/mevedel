@@ -1,24 +1,26 @@
 ;;; mevedel-tool-web.el -- Web tool definitions -*- lexical-binding: t -*-
 
+;; Copyright (C) 2025 Karthik Chikmagalur
+;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Search, readability and YouTube handlers adapted from gptel-agent-tools.el.
+
 ;;; Commentary:
 
-;; Web tool registration: WebSearch and WebFetch.  Every call flows through
-;; the mevedel pipeline (permissions, result persistence, display) while the
-;; implementation stays in gptel-agent.  Both are adapted natively rather
-;; than wrapped: the upstream schemas and handlers do not survive wrapping
-;; unchanged (see each registration for why).
+;; Native WebSearch and WebFetch tools using EWW, SHR and url-retrieve.
+;; Every HTTP stage owns its timeout, response buffers and settlement.
+;; Tool calls retain the mevedel permission, persistence and display pipeline.
 
 ;;; Code:
 
-(require 'gptel-agent-tools)
+(require 'eww)
+(require 'url-http)
+(require 'cl-lib)
 
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
 ;; `gptel-request'
-(declare-function gptel-get-tool "ext:gptel-request" (path))
-(declare-function gptel-tool-async "ext:gptel-request" (tool))
-(declare-function gptel-tool-function "ext:gptel-request" (tool))
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--positional-to-plist
@@ -48,66 +50,283 @@
 
 
 ;;
-;;; Upstream handlers and response ownership
+;;; Request ownership
 
-(defun mevedel-tool-web--websearch-function ()
-  "Return the upstream asynchronous WebSearch handler, or nil.
-Returns nil when the tool is absent or has stopped being asynchronous,
-because this adapter calls it with a continuation."
-  (when-let* ((tool (gptel-get-tool '("gptel-agent" "WebSearch")))
-              ((gptel-tool-async tool)))
-    (gptel-tool-function tool)))
+(defvar mevedel-tool-web--timeout 30
+  "Maximum seconds for one retrieval, including redirects.")
 
-(defun mevedel-tool-web--websearch (callback query)
-  "Search the web for QUERY and deliver the result to CALLBACK."
-  (let ((search (or (mevedel-tool-web--websearch-function)
-                    (error "The upstream WebSearch tool is unavailable"))))
-    (funcall search callback query)))
+(defun mevedel-tool-web--retrieve (url parse callback)
+  "Retrieve URL, parse its body with PARSE, then call CALLBACK.
+CALLBACK receives (VALUE ERROR), where ERROR is nil on success or an
+error string.  Each retrieval owns its timer and response buffers,
+including redirects.  Cleanup precedes delivery, exactly once."
+  (let ((token (make-symbol "mevedel-web-request"))
+        buffer timer done)
+    (cl-labels
+        ((cleanup ()
+           (when timer (cancel-timer timer))
+           (let ((kill-buffer-query-functions nil))
+             (dolist (candidate (buffer-list))
+               (when (or (eq candidate buffer)
+                         (with-current-buffer candidate
+                           (memq token (bound-and-true-p url-callback-arguments))))
+                 (kill-buffer candidate)))))
+         (finish (value error)
+           (unless done
+             (setq done t)
+             (cleanup)
+             (funcall callback value error))))
+      (setq timer (run-at-time
+                   mevedel-tool-web--timeout nil
+                   (lambda ()
+                     (finish nil (format "Request timed out after %s seconds"
+                                         mevedel-tool-web--timeout)))))
+      (condition-case err
+          (let ((url-request-noninteractive t)
+                (inhibit-message t))
+            (setq buffer
+                  (url-retrieve
+                   url
+                   (lambda (status _token)
+                     (unless done
+                       (let ((parsed
+                              (condition-case err
+                                  (if (plist-get status :error)
+                                      (cons nil (format "%S" (plist-get status :error)))
+                                    (goto-char (point-min))
+                                    (if (bound-and-true-p url-http-end-of-headers)
+                                        (goto-char url-http-end-of-headers)
+                                      (unless (re-search-forward "\r?\n\r?\n" nil t)
+                                        (error "Response has no HTTP headers")))
+                                    (cons t (funcall parse)))
+                                (error (cons nil (error-message-string err))))))
+                         (if (car parsed)
+                             (finish (cdr parsed) nil)
+                           (finish nil (cdr parsed))))))
+                   (list token) t t))
+            ;; Some URL handlers call back before returning their buffer.
+            (cond (done (cleanup))
+                  ((not (buffer-live-p buffer))
+                   (finish nil "Retrieval did not create a response buffer"))))
+        (error (finish nil (error-message-string err)))))))
 
-(defun mevedel-tool-web--fetch-function ()
-  "Return the upstream asynchronous WebFetch handler, or nil.
-Returns nil when the tool is absent or has stopped being asynchronous,
-because this adapter calls it with a continuation."
-  (when-let* ((tool (gptel-get-tool '("gptel-agent" "WebFetch")))
-              ((gptel-tool-async tool)))
-    (gptel-tool-function tool)))
+(defun mevedel-tool-web--page-text ()
+  "Return readable text from the HTML response body at point."
+  (let ((dom (libxml-parse-html-region (point) (point-max))))
+    (with-temp-buffer
+      (let ((shr-use-fonts nil) (shr-width 80))
+        (shr-insert-document (or (eww-readable-dom dom) dom)))
+      (decode-coding-region (point-min) (point-max) 'utf-8)
+      (buffer-substring-no-properties (point-min) (point-max)))))
 
-(defun mevedel-tool-web--release-fetch-responses (continuation)
-  "Kill the response buffers retrieved for CONTINUATION.
-`url-http' records the retrieval arguments in every response buffer it
-creates and carries them across redirects, and the upstream handler passes
-its callback among those arguments at every stage, so CONTINUATION
-identifies exactly the buffers this call produced and nothing else."
-  (let ((kill-buffer-query-functions nil))
-    (dolist (buffer (buffer-list))
-      (when (with-current-buffer buffer
-              (memq continuation (bound-and-true-p url-callback-arguments)))
-        (kill-buffer buffer)))))
+
+;;
+;;; Search
+
+(defvar mevedel-tool-web--search-active 0
+  "Number of active web searches.")
+(defvar mevedel-tool-web--search-queue nil
+  "FIFO of pending (URL CALLBACK) searches.")
+
+(defun mevedel-tool-web--search-results ()
+  "Return the first five links and excerpts from a search response body."
+  (let ((dom (libxml-parse-html-region (point) (point-max))) results)
+    (with-temp-buffer
+      (let ((shr-use-fonts nil) (shr-width 80))
+        (shr-insert-document (or (eww-readable-dom dom) dom)))
+      (goto-char (point-min))
+      (while (and (not (eobp)) (< (length results) 5))
+        (let ((start (point)) (url (get-text-property (point) 'shr-url)))
+          (goto-char (or (next-single-property-change (point) 'shr-url)
+                         (point-max)))
+          (when url
+            (when (and (not (eobp)) (not (get-text-property (point) 'shr-url)))
+              (goto-char (or (next-single-property-change (point) 'shr-url)
+                             (point-max))))
+            (when-let* (((stringp url))
+                        (index (string-search "http" url)))
+              (push (concat (url-unhex-string (substring url index)) "\n\n"
+                            (string-trim (buffer-substring-no-properties start (point)))
+                            "\n\n----\n") results)))))
+      (apply #'concat (nreverse results)))))
+
+(defun mevedel-tool-web--start-searches ()
+  "Start queued searches while fewer than two retrievals are active."
+  (while (and mevedel-tool-web--search-queue
+              (< mevedel-tool-web--search-active 2))
+    (pcase-let ((`(,url ,callback) (pop mevedel-tool-web--search-queue)))
+      (cl-incf mevedel-tool-web--search-active)
+      (mevedel-tool-web--retrieve
+       url
+       #'mevedel-tool-web--search-results
+       (lambda (value error)
+         (cl-decf mevedel-tool-web--search-active)
+         (unwind-protect
+             (funcall callback (if error
+                                   (list :result (concat "Error: " error) :status 'error)
+                                 (list :result value)))
+           (mevedel-tool-web--start-searches)))))))
+
+(defun mevedel-tool-web--websearch (callback args)
+  "Search for the query in ARGS and deliver a handler result to CALLBACK."
+  (setq mevedel-tool-web--search-queue
+        (nconc mevedel-tool-web--search-queue
+               (list (list (concat eww-search-prefix
+                                   (url-hexify-string (plist-get args :query)))
+                           callback))))
+  (mevedel-tool-web--start-searches))
+
+
+;;
+;;; Page and YouTube retrieval
 
 (defun mevedel-tool-web--fetch (callback args)
-  "Fetch the URL in ARGS and call CALLBACK with the result.
+  "Fetch the URL in ARGS and deliver readable text to CALLBACK."
+  (let* ((url (plist-get args :url))
+         done
+         (finish (lambda (value error)
+                   (unless done
+                     (setq done t)
+                     (funcall callback
+                              (if error
+                                  (list :result (or value (concat "Error: " error)) :status 'error)
+                                (list :result value)))))))
+    (if-let* ((video-id (mevedel-tool-web--yt-video-id url)))
+        (mevedel-tool-web--yt-fetch finish video-id)
+      (mevedel-tool-web--retrieve url #'mevedel-tool-web--page-text finish))))
 
-For a YouTube URL the upstream handler retrieves the watch page, the
-metadata API, and the caption track, and kills none of those response
-buffers, so this adapter owns them: the buffers that carry its own
-continuation are killed once the call settles.  A call that never settles
-keeps its buffers."
-  (if-let* ((fn (mevedel-tool-web--fetch-function)))
-      (letrec ((settled nil)
-               (continuation
-                (lambda (result)
-                  (unless settled
-                    (setq settled t)
-                    (mevedel-tool-web--release-fetch-responses continuation)
-                    (funcall callback (list :result result))))))
-        (condition-case error
-            (funcall fn continuation (plist-get args :url))
-          (error
-           (funcall continuation
-                    (format "Error: %s" (error-message-string error))))))
-    (funcall callback
-             (list :result
-                   "Error: gptel-agent's WebFetch tool is unavailable"))))
+(defun mevedel-tool-web--yt-fetch (callback video-id)
+  "Fetch VIDEO-ID's description and captions, delivering to CALLBACK."
+  (mevedel-tool-web--retrieve
+   (format "https://youtube.com/watch?v=%s" video-id)
+   (lambda ()
+     (unless (re-search-forward "\"INNERTUBE_API_KEY\":\"\\([a-zA-Z0-9_-]+\\)" nil t)
+       (error "Could not extract YouTube API key"))
+     (match-string 1))
+   (lambda (api-key error)
+     (if error (funcall callback nil error)
+       (let ((url-request-method "POST")
+             (url-request-extra-headers
+              '(("Content-Type" . "application/json") ("Accept-Language" . "en-US")))
+             (url-request-data
+              (encode-coding-string
+               (json-encode
+                `((context . ((client . ((clientName . "ANDROID")
+                                        (clientVersion . "20.10.38")))))
+                  (videoId . ,video-id))) 'utf-8)))
+         (mevedel-tool-web--retrieve
+          (format "https://www.youtube.com/youtubei/v1/player?key=%s" api-key)
+          (lambda () (json-parse-buffer :object-type 'plist))
+          (lambda (metadata error)
+            (if error (funcall callback nil error)
+              ;; Metadata used POST; caption retrieval is always a fresh GET,
+              ;; even when a transport invokes its callback synchronously.
+              (let ((url-request-method "GET")
+                    (url-request-extra-headers nil)
+                    (url-request-data nil))
+                (condition-case err
+                    (mevedel-tool-web--yt-captions callback metadata)
+                  (error (funcall callback nil (error-message-string err)))))))))))))
+
+(defun mevedel-tool-web--yt-captions (callback metadata)
+  "Read captions from METADATA and deliver description/transcript to CALLBACK."
+  (let* ((description (or (map-nested-elt metadata '(:videoDetails :shortDescription))
+                          "No description available."))
+         (tracks (map-nested-elt metadata
+                                '(:captions :playerCaptionsTracklistRenderer :captionTracks)))
+         (english (seq-find
+                   (lambda (track)
+                     (string-prefix-p "en" (or (plist-get track :languageCode) "")))
+                   tracks))
+         (render (lambda (transcript)
+                   (format "# Description\n\n%s\n\n# Transcript\n\n%s"
+                           description transcript))))
+    (if (not english)
+        (funcall callback (funcall render (if tracks "No English transcript available."
+                                           "No transcript available.")) nil)
+      (mevedel-tool-web--retrieve
+       (replace-regexp-in-string "&fmt=srv3" "" (plist-get english :baseUrl))
+       (lambda ()
+         (or (mevedel-tool-web--yt-format-captions
+              (mevedel-tool-web--yt-parse-captions
+               (buffer-substring-no-properties (point) (point-max))))
+             (error "Could not parse YouTube transcript")))
+       (lambda (text error)
+         (funcall callback
+                  (funcall render (if error
+                                      (concat "Error fetching transcript: " error)
+                                    text))
+                  error))))))
+
+(defun mevedel-tool-web--yt-video-id (url)
+  "Return the video ID if URL is a YouTube video URL, nil otherwise."
+  (and (string-match
+        (rx bol (opt "http" (opt "s") "://")
+            (opt "www.") "youtu" (or ".be" "be.com") "/"
+            (opt "watch?v=")
+            (group (one-or-more (not (any "?&")))))
+        url)
+       (match-string 1 url)))
+
+(defun mevedel-tool-web--yt-parse-captions (xml-string)
+  "Parse YouTube caption XML-STRING and return DOM."
+  (with-temp-buffer
+    (insert xml-string)
+    (set-buffer-multibyte t)
+    (decode-coding-region (point-min) (point-max) 'utf-8)
+    (goto-char (point-min))
+    ;; Clean up the XML
+    (dolist (reps '(("\n" . " ")
+                    ("&amp;" . "&")
+                    ("&quot;" . "\"")
+                    ("&#39;" . "'")
+                    ("&lt;" . "<")
+                    ("&gt;" . ">")))
+      (save-excursion
+        (while (search-forward (car reps) nil t)
+          (replace-match (cdr reps) nil t))))
+    (libxml-parse-xml-region (point-min) (point-max))))
+
+(defun mevedel-tool-web--yt-format-captions (caption-dom &optional chunk-time)
+  "Format CAPTION-DOM as paragraphs with timestamps.
+
+CHUNK-TIME is the number of seconds per paragraph (default 30)."
+  (when (and (listp caption-dom)
+             (eq (car-safe caption-dom) 'transcript))
+    (let ((chunk-time (or chunk-time 30))
+          (result "")
+          (current-para "")
+          (para-start-time 0))
+      (dolist (elem (cddr caption-dom)) ;; Process each text element
+        (when (and (listp elem) (eq (car elem) 'text))
+          (let* ((attrs (cadr elem))
+                 (text (caddr elem))
+                 (start (string-to-number (cdr (assoc 'start attrs))))
+                 ;; Check if we've crossed into a new chunk-time boundary
+                 (should-chunk (and (> (abs (- start para-start-time)) 3)
+                                    (not (= (floor para-start-time chunk-time)
+                                            (floor start chunk-time))))))
+            (when (and should-chunk (> (length current-para) 0))
+              ;; Add completed paragraph
+              (setq result (concat result
+                                   (format "[%d:%02d]\n%s\n\n"
+                                           (floor para-start-time 60)
+                                           (mod para-start-time 60)
+                                           (string-trim current-para))))
+              (setq current-para "")
+              (setq para-start-time start))
+
+            (when text
+              (setq current-para (concat current-para " " text))))))
+
+      ;; Add final paragraph
+      (when (> (length current-para) 0)
+        (setq result (concat result
+                             (format "[%d:%02d]\n%s\n\n"
+                                     (floor para-start-time 60)
+                                     (mod para-start-time 60)
+                                     (string-trim current-para)))))
+      result)))
 
 
 ;;
@@ -162,12 +381,8 @@ why)."
 
 ;;;###autoload
 (defun mevedel-tool-web--register ()
-  "Register mevedel's web tools over gptel-agent's implementations."
+  "Register mevedel's native web tools."
 
-  ;; Registered natively rather than wrapped, because the upstream
-  ;; schema advertises a `count' argument its own callback hardcodes
-  ;; away; wrapping freezes that schema, so owning it here is the only
-  ;; way to stop promising the model an argument that does nothing.
   (mevedel-define-tool
     :name "WebSearch"
     :description "Search the web for the top results to a query."
@@ -177,15 +392,12 @@ why)."
     :args ((query string :required
                   "The natural language search query, can be multiple words."))
     :async-p t
-    :category "mevedel-gptel-agent"
+    :category "mevedel-web"
     :groups (web)
     :read-only-p t
     :render-transform #'mevedel-tool-web--render-transform
     :renderer #'mevedel-tool-web--render-search)
 
-  ;; Registered natively rather than wrapped, because the upstream handler
-  ;; leaks the response buffers a YouTube URL retrieves and only an owner
-  ;; of the call can release them.
   (mevedel-define-tool
     :name "WebFetch"
     :description "Fetch and read the contents of a URL."
@@ -194,7 +406,7 @@ why)."
     :handler #'mevedel-tool-web--fetch
     :args ((url string :required "The URL to fetch."))
     :async-p t
-    :category "mevedel-gptel-agent"
+    :category "mevedel-web"
     :groups (web)
     :read-only-p t
     :max-result-size 50000

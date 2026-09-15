@@ -2,13 +2,10 @@
 
 ;;; Commentary:
 
-;; Regression coverage for the extracted sub-agent runtime.
-;; The callback contract is the high-value surface: upstream
-;; `gptel-agent--task' fired its main callback on every streamed chunk
-;; and dropped gptel's `t' completion signal, so the parent's
-;; tool_result was frozen at the first chunk.  These tests pin the
-;; corrected contract: chunks accumulate, MAIN-CB fires exactly once on
-;; `t', and tool-use guards hold.
+;; Regression coverage for the extracted sub-agent runtime. The callback
+;; contract is the high-value surface. These tests pin the corrected contract:
+;; chunks accumulate, MAIN-CB fires exactly once on `t', and tool-use guards
+;; hold.
 
 ;;; Code:
 
@@ -376,33 +373,16 @@ fire-count and payload."
   ()
   ,test
   (test)
-  :doc "resolves a named gptel-agent preset"
-  (let ((gptel-agent-preset 'named-preset)
-        (gptel-include-reasoning 'ignore)
-        captured)
-    (cl-letf (((symbol-function 'gptel-get-preset)
-               (lambda (name)
-                 (setq captured name)
-                 '(:temperature 0.4))))
-      (let ((preset
-             (mevedel-agent-exec--request-preset "default" nil)))
-        (should (eq 'named-preset captured))
-        (should (eq t (plist-get preset :use-tools)))
-        (should (equal 0.4 (plist-get preset :temperature)))
-        (should (eq 'ignore (plist-get preset :include-reasoning))))))
+  :doc "default role keeps request defaults and inherited reasoning"
+  (let ((gptel-include-reasoning 'ignore))
+    (should (equal '(:use-tools t :context nil :include-reasoning ignore)
+                   (mevedel-agent-exec--request-preset "default" nil))))
 
-  :doc "copies an inline preset before adding request fields"
-  (let* ((inline '(:temperature 0.2))
-         (gptel-agent-preset inline)
-         (preset (mevedel-agent-exec--request-preset "default" nil)))
-    (should (equal '(:temperature 0.2) inline))
-    (should (equal 0.2 (plist-get preset :temperature))))
-
-  :doc "rejects an invalid preset value"
-  (let ((gptel-agent-preset 42))
-    (should-error
-     (mevedel-agent-exec--request-preset "default" nil)
-     :type 'error)))
+  :doc "named role contributes its own prompt and tools"
+  (let* ((agent (mevedel-agent--create :name "role" :system-prompt "Role prompt."))
+         (invocation (mevedel-agent-invocation-create agent))
+         (preset (mevedel-agent-exec--request-preset "role" invocation)))
+    (should (equal "Role prompt." (plist-get preset :system)))))
 
 (mevedel-deftest mevedel-agent-exec-request-snapshot
   ()
@@ -506,7 +486,6 @@ fire-count and payload."
            :tools '((:tool "Read"))
            :system-prompt "Frozen system."))
          (invocation (mevedel-agent-invocation-create agent))
-         (gptel-agent-preset nil)
          (gptel--num-messages-to-send 7)
          (gptel--schema '(:type object))
          (gptel-context '(("context.txt" . "parent context")))
@@ -562,7 +541,6 @@ fire-count and payload."
                      gptel-backend gptel-model
                      (mapconcat #'gptel-tool-name gptel-tools ",")))))
          (invocation (mevedel-agent-invocation-create agent))
-         (gptel-agent-preset '(:model preset-model))
          (gptel-tools
           (list (gptel-make-tool :name "Read" :function #'ignore
                                  :description "parent")))
@@ -591,7 +569,6 @@ fire-count and payload."
            :tools nil
            :system-prompt "Unused role prompt."))
          (invocation (mevedel-agent-invocation-create agent))
-         (gptel-agent-preset '(:model preset-model))
          (gptel-system-prompt
           (lambda ()
             (format "%d/%s" (cl-incf prompt-calls) gptel-model)))
@@ -680,8 +657,7 @@ fire-count and payload."
 		   (unwind-protect
 		       (progn
 			 (with-current-buffer parent-buf
-			   (let ((gptel-agent-preset '(:include-reasoning nil))
-				 (mevedel-agents--specs
+			   (let ((mevedel-agents--specs
 				  '(("explorer" :include-reasoning nil)))
 				 (gptel-include-reasoning t)
 				 (gptel-stream nil)
@@ -770,11 +746,9 @@ fire-count and payload."
 			captured-tools)
 		   (unwind-protect
 		       (progn
-			 (mevedel-tool-exec--register)
-			 (mevedel-tool-ui--register)
+			 (mevedel-tools-register)
 			 (with-current-buffer parent-buf
-			   (let ((gptel-agent-preset nil)
-				 (mevedel-agents--specs nil)
+			   (let ((mevedel-agents--specs nil)
 				 (gptel-include-reasoning nil)
 				 (gptel-stream nil)
 				 (gptel-backend nil)

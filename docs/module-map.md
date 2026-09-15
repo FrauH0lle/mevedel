@@ -197,7 +197,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-goal.el        UpdateGoal terminal-state tool and captured Goal authority checks
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
-  mevedel-tool-introspect.el  wraps gptel-agent introspection tools
+  mevedel-tool-introspect.el  native Emacs introspection tools
   mevedel-buddy.el            edit recording, diff assembly, review requests
   mevedel-buddy-note.el       ephemeral note overlays and their model tools
   mevedel-tools.el            complete tool registration + stable discovery catalog
