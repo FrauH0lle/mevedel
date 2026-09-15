@@ -778,25 +778,39 @@ opening an editable draft."
             (mevedel--prompt-announce overlay)))))))
 
 (defun mevedel-plan-mode--post-response (start end)
-  "Present a complete root-assistant proposal from START..END once."
+  "Present a complete root-assistant proposal from START..END once.
+Warn when a standalone delimiter is present but no nonblank plan is recognized."
   (when-let* ((session (mevedel-plan-mode--current-session))
-              ((mevedel-session-plan-mode session))
-              (plan (mevedel-plan-extract-proposed
-                     (mevedel-plan-mode--assistant-prose start end)))
-              (hash (mevedel-plan-hash plan)))
-    (let* ((proposal-id (list start end hash))
-           (metadata (mevedel-session-plan-metadata session)))
-      (unless (equal proposal-id (plist-get metadata :proposal-id))
-        (let ((selection (or (plist-get metadata :selection)
-                             (mevedel-plan-mode--default-selection session))))
-          (mevedel-plan-write-current plan session (current-buffer))
-          (mevedel-plan--metadata-put session :status 'proposed)
-          (mevedel-plan--metadata-put session :proposal-id proposal-id)
-          (mevedel-plan--metadata-put session :selection selection)
-          (mevedel-plan-approval-present
-           (mevedel-plan-mode--approval-entry
-            plan (current-buffer) session selection)
-           session))))))
+              ((mevedel-session-plan-mode session)))
+    (let* ((text (mevedel-plan-mode--assistant-prose start end))
+           (plan (mevedel-plan-extract-proposed text))
+           (case-fold-search nil))
+      (if (and plan (not (string-blank-p plan)))
+          (let* ((proposal-id (list start end (mevedel-plan-hash plan)))
+                 (metadata (mevedel-session-plan-metadata session)))
+            (unless (equal proposal-id (plist-get metadata :proposal-id))
+              (let ((selection
+                     (or (plist-get metadata :selection)
+                         (mevedel-plan-mode--default-selection session))))
+                (mevedel-plan-write-current plan session (current-buffer))
+                (mevedel-plan--metadata-put session :status 'proposed)
+                (mevedel-plan--metadata-put session :proposal-id proposal-id)
+                (mevedel-plan--metadata-put session :selection selection)
+                (mevedel-plan-approval-present
+                 (mevedel-plan-mode--approval-entry
+                  plan (current-buffer) session selection)
+                 session))))
+        ;; One standalone delimiter signals an attempted block.  In the
+        ;; glued-opening-tag case, its closing tag still occupies a line.
+        ;; An inline mention alone is not enough to diagnose a proposal.
+        (when (string-match-p "^[ \t]*</?proposed_plan>[ \t]*$" text)
+          (display-warning
+           'mevedel
+           (concat "Plan approval unavailable: no complete, nonblank proposal "
+                   "was recognized. Ask the assistant to resend the full plan "
+                   "with <proposed_plan> and </proposed_plan> each on its own "
+                   "line, without indentation. Plan mode remains active.")
+           :warning))))))
 
 (defun mevedel-plan-mode-restore-pending-approval
     (&optional session chat-buffer)
