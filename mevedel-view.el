@@ -475,6 +475,11 @@ permission prompts.  A muted underline rather than a full link: in
 `shadow' never rendered and the fragment read as loud as a real link."
   :group 'mevedel)
 
+(defface mevedel-view-mailbox-header
+  '((t :inherit font-lock-keyword-face))
+  "Face for delivered message and completion headers."
+  :group 'mevedel)
+
 (defface mevedel-view-mailbox-gutter
   '((t :inherit mevedel-view-tool-metadata))
   "Face for the gutter prefix on expanded mailbox deliveries."

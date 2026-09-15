@@ -45,18 +45,69 @@
 
 (mevedel-deftest mevedel-view--render-agent-status
   (:doc "renders agent status and nudges the session's collaboration room")
-  (with-temp-buffer
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create :name "status-nudge"))
           rendered notified)
-      (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-view--render-status)
-                 (lambda (&optional _) (setq rendered t)))
-                ((symbol-function
-                  'mevedel-collaboration-notify-agents-changed)
-                 (lambda (seen) (setq notified seen))))
-        (mevedel-view--render-agent-status))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--render-status)
+                   (lambda (&optional _) (setq rendered t)))
+                  ((symbol-function
+                    'mevedel-collaboration-notify-agents-changed)
+                   (lambda (seen) (setq notified seen))))
+          (mevedel-view--render-agent-status)))
       (should rendered)
-      (should (eq session notified)))))
+      (should (eq session notified))))
+
+  :doc "agent inspection and stream refresh preserve parent history, roster and cursor"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-view-agent-test--session))
+             (path "/root/inspected")
+             (agent-data (generate-new-buffer " *inspected-agent-data*"))
+             (record (mevedel-view-agent-test--record path 'running))
+             agent-view)
+        (unwind-protect
+            (progn
+              (setf (mevedel-agent-record-conversation-buffer record) agent-data
+                    (mevedel-session-agent-registry session) (list (cons path record)))
+              (with-current-buffer data-buf (setq-local mevedel--session session))
+              (with-current-buffer agent-data
+                (org-mode)
+                (setq-local mevedel--view-buffer view-buf)
+                (setq-local mevedel--session session)
+                (insert (propertize "Agent response\n" 'gptel 'response)))
+              (mevedel-view-test--insert-data data-buf "Parent response\n" 'response)
+              (with-current-buffer view-buf
+                (switch-to-buffer view-buf)
+                (mevedel-view--render-agent-status)
+                (mevedel-view-stream-begin-turn
+                 mevedel-view--status-marker
+                 (with-current-buffer data-buf (copy-marker (point-min))))
+                (goto-char (mevedel-view--input-start))
+                (insert "> quoted\nsecond line")
+                (goto-char (+ (mevedel-view--input-start) 3))
+                (mevedel-view-render-live-update data-buf)
+                (let ((before (buffer-substring-no-properties (point-min) (point-max))))
+                  (mevedel-view-open-agent-transcript path)
+                  (setq agent-view (window-buffer (selected-window)))
+                  (with-current-buffer agent-view
+                    (mevedel-view-close-agent-transcript))
+                  (should (equal before (buffer-substring-no-properties (point-min) (point-max)))))
+                (dolist (refresh '(mevedel-view--full-rerender
+                                   mevedel-view--render-agent-status
+                                   mevedel-view--spinner-tick))
+                  (funcall refresh)
+                  (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+                  (should (= (point) (+ (mevedel-view--input-start) 3)))
+                  (should (string-match-p "Parent response" (buffer-string)))
+                  (should (string-match-p "Running /root/inspected" (buffer-string))))))
+          (when (and (buffer-live-p agent-view) (not (eq agent-view view-buf)))
+            (kill-buffer agent-view))
+          (when (buffer-live-p agent-data) (kill-buffer agent-data)))))))
 
 (mevedel-deftest mevedel-view-agent--handle-badge
   (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
@@ -762,7 +813,7 @@
           (should (eq 'waiting (plist-get (cadr rows) :status)))
           (should (= 1 (plist-get (cadr rows) :depth)))))))
 
-  :doc "source-backed path handles suppress duplicate aggregate rows"
+  :doc "active agents remain listed when their launch handle is in history"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-view-agent-test--session))
            (path "/root/spec_review"))
@@ -777,7 +828,9 @@
           (insert (propertize "Started /root/spec_review"
                               'mevedel-view-agent-path path
                               'mevedel-view-agent-handle-p t)))
-        (should-not (mevedel-view--agent-status-collect))))))
+        (should (equal (list path)
+                       (mapcar (lambda (row) (plist-get row :path))
+                               (mevedel-view--agent-status-collect))))))))
 
 (mevedel-deftest mevedel-view-agent-status-fragment
   (:doc "renders canonical paths and preserves active composer drafts")

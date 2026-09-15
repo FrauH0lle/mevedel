@@ -1783,6 +1783,37 @@
 ;;
 ;;; Request progress
 
+(mevedel-deftest mevedel-view--render-request-progress ()
+  ,test
+  (test)
+  :doc "stream, full render and spinner ticks keep progress spacing and draft point"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--insert-data data-buf "Hello\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view-stream-begin-turn
+       mevedel-view--status-marker
+       (with-current-buffer data-buf (copy-marker (point-min))))
+      (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (mevedel-view-render-live-update data-buf)
+      (let ((row (save-excursion
+                   (goto-char (point-min))
+                   (search-forward "Working...")
+                   (line-number-at-pos))))
+        (dolist (refresh '(mevedel-view--full-rerender
+                           mevedel-view--spinner-tick
+                           mevedel-view--full-rerender))
+          (funcall refresh)
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 4)))
+          (save-excursion
+            (goto-char (point-min))
+            (search-forward "Working...")
+            (should (= row (line-number-at-pos)))))
+        (should (= (mevedel-view-zone-start 'progress)
+                   (plist-get (mevedel-view-zone-fragment-bounds
+                               'progress 'request)
+                              :start)))))))
+
 (mevedel-deftest mevedel-view--start-spinner ()
   ,test
   (test)

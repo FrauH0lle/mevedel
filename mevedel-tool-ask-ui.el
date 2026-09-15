@@ -151,7 +151,8 @@ deliberately not reused here."
   "Return KEY propertized as a key binding.
 Only the key itself carries `help-key-binding': facing the surrounding
 label too draws a box around the prose."
-  (propertize key 'font-lock-face 'help-key-binding))
+  (propertize key 'font-lock-face 'help-key-binding
+              'mevedel-prompt-focus (equal key "RET")))
 
 
 ;;
