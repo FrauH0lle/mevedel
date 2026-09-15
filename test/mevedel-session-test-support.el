@@ -240,7 +240,7 @@ publication."
            (list
             :session-id session-id
             :session-name "main"
-            :auto-name-pending nil
+            :naming-state 'explicit
             :workspace
             (list :type 'project
                   :workspace-id identity
@@ -314,7 +314,7 @@ publication."
          (list :version mevedel-session-codec-format-version
                :session-id "test-session"
                :session-name "x"
-               :auto-name-pending nil
+               :naming-state 'explicit
                :workspace '(:type project
                             :workspace-id
                             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

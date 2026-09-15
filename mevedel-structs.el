@@ -197,7 +197,7 @@ the table."
 Each chat buffer has exactly one session. Multiple sessions can share a
 workspace."
   name              ; readable display name, initially the session id
-  auto-name-pending ; non-nil until the first title attempt or explicit name
+  (naming-state 'explicit) ; `pending', `attempted', or user-owned `explicit'
   workspace         ; mevedel-workspace struct (shared by reference)
   (execution-target nil :read-only t) ; immutable filesystem/process authority
   authority-mode    ; `portable' for project sessions, `pid-lock' for file sessions
@@ -534,7 +534,7 @@ SESSION-ID supplies an already allocated identity; nil generates one."
                 (mevedel-workspace-root workspace))))))
     (mevedel-session--create
      :name (or name id)
-     :auto-name-pending (null name)
+     :naming-state (if name 'explicit 'pending)
      :session-id id
      :workspace workspace
      :execution-target target

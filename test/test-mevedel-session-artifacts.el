@@ -2530,10 +2530,16 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((buf (get-buffer "*test-data-buf*"))
+               (_baseline
+                (with-current-buffer buf
+                  (setq-local mevedel-compact-estimation--known-token-baseline
+                              (list :tokens 258387
+                                    :position (copy-marker (point-max))))))
                (new-path (mevedel-session-artifacts-start-fresh-segment
                           session buf :initial-text "### ")))
           (with-current-buffer buf
             (should new-path)
+            (should-not mevedel-compact-estimation--known-token-baseline)
             (should (= 2 (mevedel-session-current-segment session)))
             (should (file-exists-p new-path))
             (should (file-equal-p new-path buffer-file-name))
@@ -2701,6 +2707,37 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should (string-match-p "Pending prompt" (buffer-string)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
+
+(mevedel-deftest mevedel-session-artifacts-segment-summary-bounds ()
+  ,test
+  (test)
+  :doc "rejects summary markers inside a long conversation after metadata"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:END:\n" (make-string 140000 ?x)
+            "\n#+begin_summary\nQuoted summary\n#+end_summary\n")
+    (should-not (mevedel-session-artifacts-segment-summary-bounds)))
+  :doc "accepts leading summaries with whitespace and large property drawers"
+  (dolist (prefix (list "" " \t\n"
+                       (concat "\n:PROPERTIES:\n:VALUE: "
+                               (make-string 140000 ?x) "\n:END:\n\n")))
+    (with-temp-buffer
+      (insert prefix "#+begin_summary\nSummary\n#+end_summary\n")
+      (let* ((position (point))
+             (bounds (mevedel-session-artifacts-segment-summary-bounds)))
+        (should (= (point) position))
+        (should (= (plist-get bounds :begin) (1+ (length prefix))))
+        (should (equal (buffer-substring-no-properties
+                        (plist-get bounds :body-begin)
+                        (plist-get bounds :body-end))
+                       "Summary\n"))
+        (should (= (plist-get bounds :end) (1- (point-max)))))))
+  :doc "rejects missing delimiters and content after the first drawer"
+  (dolist (text '(":PROPERTIES:\n#+begin_summary\nSummary\n#+end_summary\n"
+                  "#+begin_summary\nSummary\n"
+                  ":PROPERTIES:\n:END:\nConversation\n:END:\n#+begin_summary\nSummary\n#+end_summary\n"))
+    (with-temp-buffer
+      (insert text)
+      (should-not (mevedel-session-artifacts-segment-summary-bounds)))))
 
 (mevedel-deftest mevedel-session-artifacts-summary-block ()
   ,test

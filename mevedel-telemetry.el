@@ -173,7 +173,7 @@ profile file larger and cost a little more per sample."
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :old-segment :omitted-count :origin :outcome
-    :output-bytes :output-limit :output-tokens :overlap-count :owner
+    :output-bytes :output-estimated-tokens :output-limit :output-tokens :overlap-count :owner
     :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode
     :permission-mode-base
     :permission-mode-effective :permission-via :preexisting-count :preparation-state
@@ -181,9 +181,11 @@ profile file larger and cost a little more per sample."
     :profile-file-names :prompt-chars :prompt-function :prompt-hash :proposed-count
     :protected-path-count :provider-context-model :provider-context-status
     :provider-context-tokens :provider-context-usage
-    :provider-context-window :provider-status :purpose :queue-depth
+    :provider-context-window :provider-error-code :provider-error-type
+    :provider-status :purpose :queue-depth
     :queue-depth-before :queue-duration-ms :read-only :reason
-    :reason-class :remaining-count :repair-count :report-bytes-total :report-file-names
+    :reason-class :reasoning-bytes :remaining-count :repair-count :reply-bytes
+    :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
     :restored :result-bytes :result-chars :retained :reviewed-count :roster-chars :rounds
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
@@ -192,7 +194,8 @@ profile file larger and cost a little more per sample."
     :system-configuration :target-model :target-origin :target-pressure
     :target-threshold :termination :test-scope :threshold :threshold-ms
     :timed-out :timeout-ms :token-source :tokens-after :tokens-before
-    :tokens-used :tool-name :tool-use-id :trigger :tty :turns-run :updated-file-count :via
+    :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
+    :trigger :tty :turns-run :updated-file-count :via
     :workload :yield-time-ms)
   "Metadata keys telemetry may persist.
 

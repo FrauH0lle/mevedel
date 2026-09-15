@@ -126,6 +126,29 @@
 (mevedel-deftest mevedel-journal-store-publish-digest ()
   ,test
   (test)
+  :doc "clear trigger round trips through public metadata without changing coverage or the first result"
+  (let* ((root (make-temp-file "mevedel-journal-clear-" t))
+         (metadata (plist-put (copy-tree mevedel-test-journal--metadata) :trigger 'clear)))
+    (unwind-protect
+        (let* ((entry (mevedel-journal-store-publish-digest
+                       root metadata mevedel-test-journal--body))
+               (file (plist-get entry :file)))
+          (should (eq 'clear (plist-get entry :trigger)))
+          (should (string-match-p "\ntrigger: clear\n" (plist-get entry :text)))
+          (should (equal entry (mevedel-journal-store-read root file)))
+          (should (equal (list entry) (mevedel-journal-store-entries root)))
+          (dolist (key '(:session-name :segment :source-revision :turns :turn-ids))
+            (should (equal (plist-get metadata key) (plist-get entry key))))
+          (should (equal (plist-get metadata :turn-ids) (mevedel-journal-store-covered-turns root)))
+          (should (equal entry (mevedel-journal-store-publish-digest
+                                root metadata (string-replace "tests passed" "later result"
+                                                              mevedel-test-journal--body))))
+          (should-error
+           (mevedel-journal-store--decode
+            (string-replace "trigger: clear" "trigger: manual" (plist-get entry :text)) file)
+           :type 'mevedel-journal-store-invalid))
+      (delete-directory root t)))
+
   :doc "publishes once, round trips metadata, and preserves the first result"
   (let ((root (make-temp-file "mevedel-journal-" t)))
     (unwind-protect

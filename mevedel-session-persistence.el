@@ -79,6 +79,9 @@
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
 
+;; `mevedel-agent-conversation'
+(autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
+
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-deserialize-registry "mevedel-agent-persistence" (raw))
 (declare-function mevedel-agent-persistence-restore-tree "mevedel-agent-persistence" (session root-buffer readonly-p))
@@ -1283,6 +1286,7 @@ Called opportunistically from the `mevedel' session chooser."
   "Buffer-local `kill-buffer-hook' that releases session mutation authority."
   (when (and (boundp 'mevedel--session)
              mevedel--session)
+    (mevedel-session-persistence-autosave-buffer (current-buffer))
     (when-let* ((dir (mevedel-session-save-path mevedel--session)))
       (mevedel-journal-capture-seal-and-schedule mevedel--session (current-buffer) 'session-end)
       (condition-case _
@@ -1291,14 +1295,86 @@ Called opportunistically from the `mevedel' session chooser."
 
 
 ;;
-;;; Save-failure indicator
+;;; Automatic persistence
 
 (defvar-local mevedel-session--save-failed nil
   "Non-nil when the most recent auto-save failed in this buffer.
-Set by the DONE-terminal autosave handler on any save error and
+Set by terminal and lifecycle auto-save handlers on any save error and
 cleared on the next successful save.  Surfaced by
 `mevedel-session-persistence-header-segment' so the user has a
 visible cue in addition to the `display-warning'.")
+
+(defun mevedel-session-persistence-autosave-buffer (buffer)
+  "Save BUFFER's owned conversation, containing and reporting save failures.
+Retained agents use their transcript writer.  Root buffers use session
+publication.  Views and read-only inspection buffers never write."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and (bound-and-true-p mevedel--session)
+                 (mevedel-session-workspace mevedel--session)
+                 (not (bound-and-true-p mevedel-session--read-only-mode))
+                 (not (bound-and-true-p mevedel-session--inspection-buffer-p))
+                 (or (bound-and-true-p mevedel--agent-invocation)
+                     (eq buffer (mevedel-session-root-buffer mevedel--session))))
+        (let ((inhibit-quit t))
+          (condition-case err
+              (let ((saved
+                     (if (bound-and-true-p mevedel--agent-invocation)
+                         (mevedel-agent-conversation-save
+                          mevedel--agent-invocation)
+                       (mevedel-session-artifacts-save
+                        mevedel--session buffer))))
+                (unless saved
+                  (error "Conversation was not saved"))
+                ;; Agent writes can be retained publication batches awaiting
+                ;; a sidecar commit.  A checkpoint must be visible on resume,
+                ;; even when the root transcript has not changed.
+                (when (and (bound-and-true-p mevedel--agent-invocation)
+                           (mevedel-session-codec-portable-authority-p
+                            mevedel--session))
+                  (let ((root (mevedel-session-root-buffer mevedel--session)))
+                    (if (mevedel-session-artifacts-artifact-present-p
+                         mevedel--session "session.meta.el" t)
+                        (mevedel-session-artifacts-publish-sidecar-state
+                         mevedel--session root)
+                      (unless (with-current-buffer root
+                                (mevedel-session-artifacts-save
+                                 mevedel--session root))
+                        (error "Agent checkpoint has no saved root")))))
+                (setq-local mevedel-session--save-failed nil)
+                (force-mode-line-update)
+                saved)
+            ((error quit)
+             (setq-local mevedel-session--save-failed t)
+             (force-mode-line-update)
+             (display-warning
+              'mevedel
+              (format "Could not auto-save %s: %s"
+                      (buffer-name buffer) (error-message-string err))
+              :warning)
+             nil)))))))
+
+(defun mevedel-session-persistence-autosave ()
+  "Checkpoint modified data buffers during Emacs auto-save.
+Defer target I/O until the transport is idle.  Each buffer saves
+independently, so a failed write does not prevent other conversations
+from being saved."
+  (dolist (buffer (buffer-list))
+    (when (and (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (bound-and-true-p mevedel--session))
+               (or (buffer-modified-p buffer)
+                   (buffer-local-value 'mevedel-session--save-failed buffer)
+                   (with-current-buffer buffer
+                     (and (eq buffer (mevedel-session-root-buffer
+                                      mevedel--session))
+                          (mevedel-session-publication-uncommitted-batches
+                           mevedel--session)))))
+      (mevedel-transport-run-when-idle
+       (list 'conversation-autosave buffer)
+       (buffer-local-value 'default-directory buffer)
+       (lambda ()
+         (mevedel-session-persistence-autosave-buffer buffer))))))
 
 (defun mevedel-session-persistence-header-segment ()
   "Return a header-line fragment summarising persistence state.
@@ -2705,7 +2781,7 @@ their directory.  Repoint DATA-BUF at the child after it commits."
               (setf (mevedel-session-save-path session) new-save-path
                     (mevedel-session-session-id session) new-id
                     (mevedel-session-name session) display-name
-                    (mevedel-session-auto-name-pending session) nil
+                    (mevedel-session-naming-state session) 'explicit
                     (mevedel-session-forked-from-session-id session) old-id
                     (mevedel-session-forked-from-turn session)
                     (mevedel-session-turn-count session))
@@ -2847,12 +2923,10 @@ uses portable authority, or the throttle has already fired."
 ;;
 ;;; Hook plumbing
 
-;; Per-completed-turn autosave lives as a DONE-state terminal handler
-;; installed by `mevedel-preset--build-handlers' (`mevedel-presets.el').
-;; That placement is necessary for the completed-turn contract: the
-;; handler fires only on success (not on abort/error), runs after the
-;; turn-count bump, and runs before `mevedel-request-end' clears the
-;; request struct (so `mevedel-request-file-snapshots' is still live).
+;;; Exit persistence
+
+;; Turn settlement saves success, error, and abort before request teardown,
+;; while request-local file-history checkpoints are still available.
 
 (defun mevedel-session-persistence--allow-emacs-exit-p ()
   "Return non-nil when every live session may exit safely."
@@ -2901,24 +2975,31 @@ that wrote them.  Best-effort: individual errors are swallowed so one
 bad buffer can't block exit."
   (let ((mevedel-journal-process--inhibit-scheduling t)
         (mevedel-memory-decision--inhibit-recovery t)
-        (mevedel-memory-pass--inhibit-scheduling t))
+        (mevedel-memory-pass--inhibit-scheduling t)
+        (inhibit-quit t))
     (when (featurep 'mevedel-journal-process)
-      (mevedel-journal-process-stop-all))
+      (ignore-errors (mevedel-journal-process-stop-all)))
     (when (featurep 'mevedel-memory-decision)
-      (mevedel-memory-decision-stop-recovery))
+      (ignore-errors (mevedel-memory-decision-stop-recovery)))
     (when (featurep 'mevedel-memory-pass)
-      (mevedel-memory-pass-stop-all))
+      (ignore-errors (mevedel-memory-pass-stop-all)))
     (when (fboundp 'mevedel-execution-teardown-all)
       (ignore-errors (mevedel-execution-teardown-all)))
+    ;; Agent buffers are deliberately rejected by the root writer.  Flush
+    ;; them through their owner before saving sidecars or releasing leases.
+    (dolist (buffer (buffer-list))
+      (when (and (buffer-live-p buffer)
+                 (boundp 'mevedel--agent-invocation)
+                 (with-current-buffer buffer
+                   (bound-and-true-p mevedel--agent-invocation)))
+        (mevedel-session-persistence-autosave-buffer buffer)))
     ;; A debounced agent-state save left in its window would be lost, and
     ;; registry mutations do not mark the root buffer modified, so the
     ;; modified-only save loop below cannot cover them.
     (maphash (lambda (session timer)
                (cancel-timer timer)
-               (ignore-errors
-                 (when-let* ((buffer (mevedel-session-root-buffer session))
-                             ((buffer-live-p buffer)))
-                   (mevedel-session-artifacts-save session buffer))))
+               (mevedel-session-persistence-autosave-buffer
+                (mevedel-session-root-buffer session)))
              mevedel-session-persistence--deferred-agent-saves)
     (clrhash mevedel-session-persistence--deferred-agent-saves)
     (let (lock-dirs)
@@ -2926,14 +3007,19 @@ bad buffer can't block exit."
         (when (buffer-live-p buf)
           (with-current-buffer buf
             (when (and (boundp 'mevedel--session)
-                       mevedel--session)
-              (when (buffer-modified-p)
-                (condition-case _
-                    (mevedel-session-artifacts-save mevedel--session buf)
-                  (error nil)))
+                       mevedel--session
+                       (not (bound-and-true-p mevedel--agent-invocation)))
+              (when (or (buffer-modified-p)
+                        mevedel-session--save-failed
+                        (mevedel-session-publication-uncommitted-batches
+                         mevedel--session))
+                (mevedel-session-persistence-autosave-buffer
+                 (mevedel-session-persistence-authoritative-buffer buf)))
               ;; Seal only the completed checkpoint, even if the exit save
               ;; above included an unfinished response.  Exit starts no model.
-              (mevedel-journal-capture-seal-and-schedule mevedel--session buf 'session-end)
+              (ignore-errors
+                (mevedel-journal-capture-seal-and-schedule
+                 mevedel--session buf 'session-end))
               ;; An unmodified buffer still owes its queued diagnostics: a
               ;; deferred remote flush never fires once Emacs is exiting.
               (ignore-errors
@@ -2960,6 +3046,7 @@ bad buffer can't block exit."
 ;; resume is the only command invoked).  Duplicate adds are no-ops by `add-hook'.
 (add-hook 'kill-emacs-query-functions
           #'mevedel-session-persistence--allow-emacs-exit-p)
+(add-hook 'auto-save-hook #'mevedel-session-persistence-autosave)
 (add-hook 'kill-emacs-hook #'mevedel-session-persistence--kill-emacs-hook)
 
 

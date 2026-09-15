@@ -18,6 +18,8 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - shared editing
   - use comments for sending selections to llm
 
+- check if gptel-agent is still required
+
 ## Request lifecycle
 
 ### Prevent system sleep during active requests

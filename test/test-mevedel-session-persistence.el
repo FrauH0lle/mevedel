@@ -395,6 +395,77 @@
 (mevedel-deftest mevedel-session-persistence--kill-emacs-hook (:quiet t)
   ,test
   (test)
+  :doc "flushes retained agent text before its idle save timer fires"
+  (dolist (type '(file project))
+    (let* ((root (make-temp-file "mevedel-exit-agent-" t))
+           (workspace
+            (if (eq type 'file)
+		(test-mevedel-session-persistence--make-file-workspace root)
+              (test-mevedel-session-persistence--make-workspace root)))
+           (session (mevedel-session-create "main" workspace))
+           (parent (generate-new-buffer " *exit-root*"))
+           (buffer (generate-new-buffer " *exit-agent*"))
+           (invocation (mevedel-agent-invocation--create
+			:agent-id "test-agent" :buffer buffer
+			:parent-session session :parent-data-buffer parent
+			:transcript-relative-path "agents/test.chat.org"))
+           (mevedel-agent-conversation-save-debounce 1000))
+      (unwind-protect
+          (progn
+            (with-current-buffer parent
+              (mevedel-chat-prepare-transcript-buffer)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace workspace)
+              (insert "Root prompt\n")
+              (mevedel-session-artifacts-save session parent))
+            (with-current-buffer buffer
+              (mevedel-chat-prepare-transcript-buffer)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--agent-invocation invocation)
+              (set-visited-file-name
+               (file-name-concat (mevedel-session-save-path session)
+				 "agents/test.chat.org") t t)
+              (insert "Agent prompt\n")
+              (should (mevedel-agent-conversation-save invocation)))
+            ;; Native auto-save must commit already written agent batches,
+            ;; even with neither transcript marked modified.
+            (cl-letf (((symbol-function 'buffer-list)
+                       (lambda (&optional _frame) (list parent buffer))))
+              (run-hooks 'auto-save-hook))
+            (should (string-search
+                     "Agent prompt"
+                     (mevedel-session-artifacts-read-artifact
+                      session "agents/test.chat.org" t)))
+            (with-current-buffer buffer
+              (goto-char (point-max))
+              (insert (propertize "Auto-saved agent answer\n" 'gptel 'response)))
+            (cl-letf (((symbol-function 'buffer-list)
+                       (lambda (&optional _frame) (list buffer))))
+              (run-hooks 'auto-save-hook))
+            (should (string-search
+                     "Auto-saved agent answer"
+                     (mevedel-session-artifacts-read-artifact
+                      session "agents/test.chat.org" t)))
+            (with-current-buffer buffer
+              (goto-char (point-max))
+              (insert (propertize "Partial agent answer\n" 'gptel 'response))
+              (mevedel-agent-conversation-save invocation t))
+            (cl-letf (((symbol-function 'buffer-list)
+                       (lambda (&optional _frame) (list parent buffer))))
+              (mevedel-session-persistence--kill-emacs-hook))
+            (should (string-search
+                     "Partial agent answer"
+                     (mevedel-session-artifacts-read-artifact
+                      session "agents/test.chat.org" t)))
+            (should-not
+             (mevedel-agent-invocation-transcript-save-timer invocation)))
+	(mevedel-agent-conversation--cancel-save invocation)
+	(with-current-buffer buffer
+          (set-buffer-modified-p nil)
+          (setq kill-buffer-hook nil))
+	(kill-buffer buffer)
+	(test-mevedel-session-persistence--release-and-kill parent session)
+	(delete-directory root t))))
   :doc "force-tears down executions before exit persistence"
   (let ((mevedel-workspace--registry nil)
         torn-down)
@@ -2631,7 +2702,7 @@
                       old-id (mevedel-session-session-id fixture-session)
                       old-save-path session-dir
                       buffer (generate-new-buffer " *save-as-lease*"))
-                (setf (mevedel-session-auto-name-pending session) t)
+                (setf (mevedel-session-naming-state session) 'pending)
                 (let* ((mevedel-session-durability--client-id owner-id)
                        (mevedel-session-durability--disclosed-targets
                         (make-hash-table :test #'equal))
@@ -2756,7 +2827,7 @@
                     (with-current-buffer buffer
                       (mevedel-save-session t))
                   (should target-probed)
-                  (should-not (mevedel-session-auto-name-pending session))
+                  (should (eq 'explicit (mevedel-session-naming-state session)))
                   (should competitor-blocked)
                   (should materialized)
                   (should-not copy-called)

@@ -14,7 +14,8 @@ The registry save does not save the root transcript, rebuild its prompt index,
 scan snapshots, or read the artifact folder. Portable publication overlays the
 sidecar while retaining other committed artifacts. A session without a committed
 sidecar waits for its next critical commit. Synchronous commit absorbs a pending
-save; active publication defers it; Emacs exit flushes pending registry saves.
+save; active publication defers it; Emacs exit flushes retained transcripts
+through their agent writer before pending registry saves and lease release.
 [Sessions](../sessions.md) owns the persistence and recovery contract.
 
 ## Rationale and consequences
@@ -54,3 +55,12 @@ All revisions belong to ADR 0112:
   10–14 MB base64 traffic per flush. Pinned append replaced complete-file
   read/rewrite while retaining parent and symlink proofs. The accepted tradeoff
   is a possibly torn diagnostic tail, not weaker critical publication.
+- **Exit transcript flush:** a regression test showed that exiting inside a
+  transcript's debounce window lost its latest text. The exit loop passed agent
+  buffers to the root writer, which deliberately rejects them. Exit now flushes
+  agent transcripts explicitly before root state and lease release; native Emacs
+  auto-save also checkpoints modified conversations through the correct writer.
+  Reading the immutable publication exposed a second gap: an agent write without
+  a sidecar commit remained invisible to resume. These checkpoints commit the
+  sidecar too, and root auto-save includes retained publication batches even
+  when no transcript buffer remains modified.

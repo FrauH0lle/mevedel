@@ -186,12 +186,45 @@
 			   (should (= failures 1))
 			   (setq state (mevedel-memory-investigation-create scope nil (lambda () t)
 									    (lambda (value) (setq reason value))))
-			   (dotimes (_ 20)
+			   (should (= 64 mevedel-memory-investigation--max-calls))
+			   (should (= 65536 mevedel-memory-investigation--max-bytes))
+			   (dotimes (_ 64)
 			     (mevedel-test-investigation--call state 'read '(:root "unknown" :path "a.md")))
+			   (should (= 64 (mevedel-memory-investigation-calls state)))
+			   (should-not (mevedel-memory-investigation-stopped state))
 			   (mevedel-memory-investigation-call state 'read nil (lambda (_) (ert-fail "Call beyond budget")))
-			   (should (equal reason "Tool call budget exhausted"))))
+			   (should (equal reason "Tool call budget exhausted"))
+			   (should (= 64 (mevedel-memory-investigation-calls state)))
+			   (should (mevedel-memory-investigation-stopped state))))
 		     (when state (mevedel-memory-investigation-stop state))
 		     (delete-directory directory t))))
+
+(mevedel-deftest mevedel-memory-investigation--deliver ()
+  ,test
+  (test)
+  :doc "accepts exactly 64 KiB of bounded results and rejects one more byte without charging it"
+  (let* ((delivered 0) (failures 0)
+         (state (mevedel-memory-investigation-create
+                 nil nil (lambda () t)
+                 (lambda (reason)
+                   (should (equal "Tool output budget exhausted" reason))
+                   (cl-incf failures)))))
+    (unwind-protect
+        (progn
+          (dotimes (_ 8)
+            (mevedel-memory-investigation--deliver
+             state (lambda (text) (should (= 8192 (string-bytes text))) (cl-incf delivered))
+             (make-string 8192 ?x)))
+          (should (= 8 delivered))
+          (should (= 65536 (mevedel-memory-investigation-bytes state)))
+          (should-not (mevedel-memory-investigation-stopped state))
+          (dotimes (_ 2)
+            (mevedel-memory-investigation--deliver
+             state (lambda (_) (ert-fail "Delivery beyond aggregate budget")) "x"))
+          (should (= 1 failures))
+          (should (= 65536 (mevedel-memory-investigation-bytes state)))
+          (should (mevedel-memory-investigation-stopped state)))
+      (mevedel-memory-investigation-stop state))))
 
 (mevedel-deftest mevedel-memory-investigation-tools ()
 		 ,test

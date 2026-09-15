@@ -13,7 +13,9 @@
 ;; `cl-defstruct' at compile time: `declare-function' supplies the
 ;; accessor but not the setter, and without the expander the form
 ;; compiles to a call to a function that does not exist.
-(eval-when-compile (require 'mevedel-structs))
+(eval-when-compile
+  (require 'gptel-request)
+  (require 'mevedel-structs))
 
 (eval-when-compile
   (require 'cl-lib)
@@ -21,6 +23,9 @@
 
 ;; Required for invocation accessors and `setf' expanders throughout.
 (require 'mevedel-agents)
+
+;; `cl-seq'
+(declare-function cl-some "cl-seq" (cl-pred cl-seq &rest cl-rest))
 
 ;; `gptel-request'
 (declare-function gptel-abort "ext:gptel-request" (buf))

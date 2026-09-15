@@ -829,8 +829,8 @@ also autosaves, and it reaches here from the same process sentinel."
               (lambda (machine)
                 (mevedel-goal-settle-failure machine status)))
         (and (eq status 'error)
-             (list #'mevedel--turn-record-request-failure
-                   #'mevedel--turn-autosave))
+             (list #'mevedel--turn-record-request-failure))
+        (list #'mevedel--turn-autosave)
         (list (lambda (machine)
                 (mevedel--run-turn-terminal-hook
                  machine 'StopFailure status)))

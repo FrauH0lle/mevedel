@@ -20,8 +20,11 @@ or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
 Successful completed-turn saves freeze one immutable evidence bundle and pin its
-source before marking it ready. Compaction or session-end sealing admits digest
-work without capturing incomplete responses. Stable fork-point identities define
+source before marking it ready. Compaction, clear, or session-end sealing admits
+digest work without capturing incomplete responses. Clear sealing uses selected
+pre-clear checkpoints, preserving their evidence and captured session title.
+Capture, seal, and public metadata admit the same closed trigger vocabulary;
+repeated sealing preserves the first trigger. Stable fork-point identities define
 coverage, so Rewind's repeated turn numbers cannot alias old work. Capture coverage
 survives public digest expiry. Digest inference uses frozen model policy without a
 live session or tools; accepted output is published before source pins are released.
@@ -155,6 +158,11 @@ contains the corresponding operational details.
 
 ### Capture, publication, and recovery
 
+- **Clear separates completed work without ending the session.** Its distinct
+  `clear` seal preserves that boundary in published metadata without depending on
+  a later compaction or close. The existing frozen-checkpoint and first-seal
+  rules retain the pre-clear title and evidence, while stable turn coverage
+  prevents repeated clear, compaction, or close from duplicating that work.
 - **Separate snapshot files could detach metadata from its notes after a crash.**
   One exclusively created descriptor/evidence/policy bundle replaced that
   interval. Source-local capture pins let session cleanup honor evidence without

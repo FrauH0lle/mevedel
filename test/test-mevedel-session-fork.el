@@ -1033,7 +1033,7 @@
                                (mevedel-session-session-id child)))
             (should (string= (mevedel-session-session-id child)
                              (mevedel-session-name child)))
-            (should (mevedel-session-auto-name-pending child))
+            (should (eq 'pending (mevedel-session-naming-state child)))
             (should (equal (mevedel-session-working-directory session)
                            (mevedel-session-working-directory child)))
             (should (eq 'conversation
@@ -1594,7 +1594,7 @@
                       (file-name-concat worktree "current.txt")))
                 (should (string= (mevedel-session-session-id child)
                                  (mevedel-session-name child)))
-                (should (mevedel-session-auto-name-pending child))
+                (should (eq 'pending (mevedel-session-naming-state child)))
                 (should (eq 'worktree
                             (mevedel-session-fork-type child)))
                 (should (equal source-root

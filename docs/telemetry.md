@@ -145,14 +145,43 @@ cancellation releases the fence and leaves the machine retryable.
   Auto completion also records `updated-file-count`, the distinct paths newly
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
-  Cancellation retains usage already reported, and late callbacks do not emit
-  another terminal event. Storage failures retain received usage too. Failure
-  classes are categorical; focus text, evidence, proposal bodies, credentials,
+  Terminal events and pass results retain `:output-bytes` (cumulative reply,
+  reasoning, and normalized tool-call bytes), `:output-estimated-tokens` (the cumulative
+  client estimate), and `:result-bytes` (current-round reply bytes, final at DONE),
+  separately from provider token counts. See the [accounting limits](memory.md#request-limits-and-settlement)
+  for raw and in-flight tool arguments excluded from these counters.
+  `:reasoning-bytes`, `:reply-bytes`, and `:tool-call-bytes` break down accounted
+  output into cumulative reasoning, replies across all rounds, and normalized
+  executable-name/argument JSON. `:tool-call-count` counts admitted investigation
+  calls; `:rounds` counts completed HTTP rounds independently of whether provider
+  token metadata was reported. These are numeric diagnostics, not retained
+  payloads. Budget failures carry
+  `:failure-class output-limit`, `:budget-kind` (`output-bytes`,
+  `output-estimated-tokens`, `output-tokens`, or `proposal-bytes`), and the numeric
+  failing threshold in `:output-limit`; the latter two fields are nil when no
+  budget failed. The review freezes its configurable cumulative limits at request
+  start (64,000 tokens and 262,144 accounted bytes by default). Investigation
+  permits 64 calls but still only 64 KiB of aggregate tool results, capped at
+  8 KiB each. The deadline remains 180 seconds. The final proposal parser has
+  an independent 32 KiB cap, diagnosed as `proposal-bytes` at DONE.
+  Cancellation retains diagnostics already observed, and late callbacks do not
+  emit another terminal event. Storage failures retain those diagnostics too,
+  with failure class `publication`. Failure classes are categorical; focus text,
+  evidence, proposal bodies, credentials,
   and arbitrary error messages are excluded. Unreported provider usage remains
   unknown, so these events do not establish a billing ceiling;
 - compaction threshold inputs, hook work, segment-save stages, publication,
   and total duration, plus context-summary purpose, provider/model/effort,
   outcome, and token usage without raw evidence, focus data, or generated text;
+- one terminal `session-naming` event per background title attempt: `renamed` on
+  success, otherwise `provider-error`, `aborted`, `invalid-response`, `timeout`,
+  `cancelled`, or `error`, each with a categorical `:error-class`. `cancelled`
+  covers an attempt the transport refused to schedule, and an attempt the user
+  ends by renaming the session or closing its root buffer records nothing.
+  Provider failures also carry `:provider-status` and, when the provider
+  structured its error, `:provider-error-type` and `:provider-error-code`;
+  provider message text is never recorded, so a refusal is attributable to its
+  class and code but not quotable from telemetry;
 - Agent summary preparation uses that same context-summary span; the parent
   handle stores only provider/model/effort metadata and never summary content;
 - skill-roster advertisement and model/user skill invocation outcomes; and

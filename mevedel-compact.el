@@ -293,6 +293,13 @@ turn never settles: the view goes on reporting a running request, the
 Stop hooks and the autosave never run, and queued pending inputs wait on
 a request that will never reach them."
   (when-let* ((info (and fsm (gptel-fsm-info fsm))))
+    ;; Before realization :data is a temporary prompt buffer.  Terminal
+    ;; gptel handlers expect a provider payload plist instead.
+    (when-let* ((data (plist-get info :data))
+                ((bufferp data)))
+      (when (buffer-live-p data)
+        (kill-buffer data))
+      (plist-put info :data nil))
     (gptel--update-status status 'error)
     (plist-put info :status (format "Compaction failed: %s" err))
     (plist-put info :error
@@ -400,6 +407,11 @@ set already stored on FSM's info plist."
     (with-current-buffer buffer
       (when-let* ((marker (plist-get info :position)))
         (set-marker marker (point-max) buffer))
+      ;; Rotation collapses the old stream markers to the buffer start.
+      ;; Let gptel initialize fresh insertion state after the compacted text.
+      (dolist (key '(:tracking-marker :reasoning-marker :tool-marker
+                     :reasoning-block))
+        (plist-put info key nil))
       (when-let* ((status-function (plist-get target :resume-status)))
         (funcall status-function target)))
     (mevedel--compact-rebuild-info-data-from-buffer fsm buffer)

@@ -88,8 +88,12 @@
 (autoload 'mevedel-compact "mevedel-compact")
 
 ;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-clear-baseline
+                  "mevedel-compact-estimation" ())
 (declare-function mevedel-compact-estimation-estimate-tokens
                   "mevedel-compact-estimation" ())
+(autoload 'mevedel-compact-estimation-clear-baseline
+  "mevedel-compact-estimation")
 (autoload 'mevedel-compact-estimation-estimate-tokens
   "mevedel-compact-estimation")
 
@@ -187,6 +191,10 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-start-fresh-segment
   "mevedel-session-artifacts")
+
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-cancel "mevedel-session-naming" ())
+(autoload 'mevedel-session-naming-cancel "mevedel-session-naming")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -463,7 +471,7 @@ Routes through the lifecycle-aware permission transition path."
         (mevedel-cmd--clear-trim-bare-prefix prefix))
       (mevedel-session-artifacts-start-fresh-segment
        mevedel--session (current-buffer)
-       :initial-text prefix)
+       :initial-text prefix :clear t)
       (mevedel--run-session-start-hooks "clear")
       (message "mevedel: started a fresh chat segment"))
      (t
@@ -472,7 +480,11 @@ Routes through the lifecycle-aware permission transition path."
           (erase-buffer)
           (insert prefix)
           (goto-char (point-max)))
+        (mevedel-compact-estimation-clear-baseline)
         (when (bound-and-true-p mevedel--session)
+          (mevedel-session-naming-cancel)
+          (unless (eq (mevedel-session-naming-state mevedel--session) 'explicit)
+            (setf (mevedel-session-naming-state mevedel--session) 'pending))
           (mevedel--run-session-start-hooks "clear"))
         (message "mevedel: cleared chat buffer"))))))
 

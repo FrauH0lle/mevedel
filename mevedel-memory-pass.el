@@ -208,10 +208,19 @@ Count distinct files only through this call's confirmed-write notification."
            (status (if (eq (plist-get result :outcome) 'aborted) 'cancelled 'failed))
            (reported (if-let* ((read-usage (plist-get (plist-get state :request) :usage)))
                          (funcall read-usage) result))
-           (usage (cl-loop for key in '(:input-tokens :cached-tokens :output-tokens)
-                           append (list key (or (plist-get result key) (plist-get reported key) 0))))
+           ;; Freeze diagnostics before storage can replace RESULT with an error.
+           ;; Cancellation has no review callback result, so use its live snapshot.
+           (usage (cl-loop for key in '(:input-tokens :cached-tokens :output-tokens
+                                       :output-bytes :output-estimated-tokens :result-bytes
+                                       :reasoning-bytes :reply-bytes :tool-call-bytes
+                                       :tool-call-count :rounds
+                                       :budget-kind :output-limit)
+                           append (list key (if (plist-member result key)
+                                                (plist-get result key)
+                                              (or (plist-get reported key)
+                                                  (unless (memq key '(:budget-kind :output-limit)) 0))))))
            (model (when (plist-get result :policy) (mevedel-model--provider-label (plist-get result :policy))))
-           (failure-class 'review)
+           (failure-class (if (plist-get usage :budget-kind) 'output-limit 'review))
            accepted entry recovery-error applied)
       (when (timerp (plist-get state :timer)) (cancel-timer (plist-get state :timer)))
       (plist-put state :timer nil)
@@ -289,8 +298,10 @@ Fence its outcome before aborting transport, making late callbacks harmless."
 (cl-defun mevedel-memory-pass-start (workspace callback &key (focus "") memory-only automatic)
           "Start one sessionless consolidation in WORKSPACE and return its state.
 CALLBACK receives one result with :outcome, published :entry, :remaining frozen
-backlog count, and optional :error/:recovery-required. FOCUS never consumes
-general coverage; MEMORY-ONLY permits an explicitly requested empty batch.
+backlog count, review usage and output-budget diagnostics, and optional
+:error/:recovery-required. Diagnostics survive cancellation and storage failure.
+FOCUS never consumes general coverage; MEMORY-ONLY permits an explicitly
+requested empty batch.
 AUTOMATIC checks time and count after ownership and publication recovery; it
 returns nil silently when busy or not due. Explicit calls bypass those gates.
 Invalid focus signals before starting. Later errors settle through CALLBACK.
