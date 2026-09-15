@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib))
+
 ;; `markdown-ts-mode'
 (declare-function markdown-ts-mode "ext:markdown-ts-mode" ())
 (defvar markdown-ts-enable-code-block-context-mode)
@@ -40,14 +42,17 @@ mode in a fresh buffer."
   ;; Binding it made every one of those calls print "Making
   ;; hack-local-variables-hook buffer-local while locally let-bound!", which
   ;; on a transcript full of shell blocks is thousands of lines of noise.
-  `(let ((change-major-mode-after-body-hook nil)
-         (after-change-major-mode-hook nil)
-         (enable-local-variables nil)
-         (font-lock-mode-hook nil)
-         (inhibit-message t)
-         (org-mode-hook nil))
-     (delay-mode-hooks
-       ,@body)))
+  ;; `diff-mode' installs a local `font-lock-mode-hook'.  Suppress the
+  ;; default hook without let-binding it in this buffer, so the mode can
+  ;; register its own hook without the same local-binding warning.
+  `(cl-letf (((default-value 'font-lock-mode-hook) nil))
+     (let ((change-major-mode-after-body-hook nil)
+           (after-change-major-mode-hook nil)
+           (enable-local-variables nil)
+           (inhibit-message t)
+           (org-mode-hook nil))
+       (delay-mode-hooks
+         ,@body))))
 
 (defmacro mevedel-view--with-render-temp-buffer (&rest body)
   "Run BODY in a temporary buffer with user mode hooks suppressed."
@@ -179,14 +184,16 @@ buffer's font-lock refontification cycles."
        (t
         (mevedel-view--promote-face-to-font-lock-face
          (mevedel-view--with-render-temp-buffer
-           (insert text)
+           ;; Some modes (notably `diff-mode') require a terminating
+           ;; newline to fontify the last line.  Exclude it from the result.
+           (insert text "\n")
            (funcall mode)
            ;; A mode that installs its `font-lock-defaults' after something
            ;; in its body has already called `font-lock-set-defaults' leaves
            ;; the buffer wired to the stale defaults and fontifies nothing.
            (setq font-lock-set-defaults nil)
            (font-lock-ensure)
-           (buffer-string)))))
+           (buffer-substring (point-min) (1- (point-max)))))))
     (error text)))
 
 (provide 'mevedel-view-fontify)
