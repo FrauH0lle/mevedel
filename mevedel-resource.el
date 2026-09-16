@@ -120,7 +120,9 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" ())
+(declare-function mevedel-library-source-directory "mevedel-utilities" (file))
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
+(autoload 'mevedel-library-source-directory "mevedel-utilities")
 
 (defconst mevedel-resource-supported-schemes
   '(work artifact skill agent history memory mcp mevedel)
@@ -145,11 +147,9 @@
   "Closed readable root keys accepted by `memory://' aliases.")
 
 (defvar mevedel-resource--source-dir
-  (file-name-directory
-   (file-truename
-    (or load-file-name buffer-file-name
-        (locate-library "mevedel-resource"))))
-  "Directory containing the loaded Mevedel resource implementation.")
+  (mevedel-library-source-directory
+   (or load-file-name buffer-file-name (locate-library "mevedel-resource")))
+  "Canonical package directory containing Mevedel's documentation.")
 
 (defvar mevedel-resource-current-attempts nil
   "Dynamically bound resource attempts for the active pipeline handler.

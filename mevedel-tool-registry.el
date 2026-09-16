@@ -34,26 +34,20 @@
                   "mevedel-utilities" (text width &optional ellipsis))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+(declare-function mevedel-library-source-directory "mevedel-utilities" (file))
 (autoload 'mevedel--truncate-display "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
+(autoload 'mevedel-library-source-directory "mevedel-utilities")
 
 
 ;;
 ;;; Source directory
 ;;
 ;; Captured at load time so that `mevedel-define-tool' can resolve
-;; :prompt-file paths at compile time.  Straight.el symlinks .el files
-;; into build/ but not data directories, so we resolve symlinks to find
-;; the real repo root where prompts/tools/ lives.
+;; :prompt-file paths at compile time, including symlinked installations.
 
 (defvar mevedel-tool-registry--source-dir
-  (let* ((lib (or load-file-name buffer-file-name))
-         ;; .elc is a real file in build/; the corresponding .el is a
-         ;; symlink back to the repo -- resolve that.
-         (el-file (if (string-suffix-p ".elc" lib)
-                      (substring lib 0 -1)
-                    lib)))
-    (file-name-directory (file-truename el-file)))
+  (mevedel-library-source-directory (or load-file-name buffer-file-name))
   "Directory containing the mevedel source files.
 Resolved through symlinks so data files (prompts/tools/, etc.) are reachable.")
 

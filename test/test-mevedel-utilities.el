@@ -30,6 +30,40 @@
         (throw 'found t)))
     nil))
 
+(mevedel-deftest mevedel-library-source-directory
+  (:doc "resolves source siblings without mistaking compiled build files for roots")
+  (let* ((root (make-temp-file "mevedel-library-layout-" t))
+         (source (file-name-concat root "source"))
+         (build (file-name-concat root "build"))
+         (el (file-name-concat source "fixture.el"))
+         (linked (file-name-concat build "fixture.el"))
+         (elc (file-name-concat build "fixture.elc")))
+    (unwind-protect
+        (progn
+          (make-directory source)
+          (make-directory build)
+          (with-temp-file el (insert ";; Source.\n"))
+          (with-temp-file elc (insert "compiled fixture\n"))
+          (should (equal (file-name-as-directory source)
+                         (mevedel-library-source-directory el)))
+          ;; A source-less installation keeps its own data root.
+          (should (equal (file-name-as-directory build)
+                         (mevedel-library-source-directory elc)))
+          (make-symbolic-link el linked)
+          (should (equal (file-name-as-directory source)
+                         (mevedel-library-source-directory linked)))
+          (should (equal (file-name-as-directory source)
+                         (mevedel-library-source-directory elc)))
+          ;; A dangling source link cannot redirect a usable compiled install.
+          (delete-file el)
+          (should (equal (file-name-as-directory build)
+                         (mevedel-library-source-directory elc)))
+          (delete-file linked)
+          (with-temp-file linked (insert ";; Co-located source.\n"))
+          (should (equal (file-name-as-directory build)
+                         (mevedel-library-source-directory elc))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel--plain-data-p ()
   ,test
   (test)

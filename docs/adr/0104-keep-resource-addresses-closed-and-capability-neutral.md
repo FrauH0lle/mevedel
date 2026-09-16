@@ -31,7 +31,10 @@ Explicit skill-origin aliases resolve to the current exact full-hash locator
 while preserving the authored alias in model-visible output. There is no
 unqualified name alias. `mevedel://` is always advertised and exposes installed
 Markdown documentation through Read, Glob and Grep. It does not expose source
-code or a mutation interface.
+code or a mutation interface. Its owner directory is resolved from an existing
+source sibling of the loaded bytecode, or from the loaded library itself when
+no source sibling is available. Resource descendants retain their containment
+checks; package-manager symlinks identify the owner, not exceptions for content.
 
 ## Rationale and alternatives
 
@@ -73,6 +76,11 @@ substitute for checking a settled operation's result.
 
 All revisions below refine ADR 0104's closed resolver decision.
 
+- **Compiled installation roots.** Straight's build tree contained regular
+  `.elc` files but symlinked source and documentation. Deriving the documentation
+  root from the bytecode made valid reads fail containment and discovery return
+  no files. Source-aware owner resolution, shared with prompt loading, replaced
+  bytecode-directory selection without weakening resource containment.
 - **Saved-history responsiveness.** The synchronous prototype blocked an
   independent graphical edit for 3.725 seconds at 100 portable sessions.
   Moving only the final search subprocess off the call stack could not address

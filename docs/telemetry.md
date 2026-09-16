@@ -283,9 +283,21 @@ layer or inspect the live process record.
 
 At profiler start and stop, telemetry records Git HEAD, dirty-file count,
 status hash, an exact dirty-content hash (tracked diff plus untracked
-file content hashes), loaded gptel file hash and repository
-commits, Emacs and system versions, configured sandbox mode, and Bubblewrap
-availability. File contents are not written to telemetry, and neither are
+file content hashes), loaded gptel artifact hash and checkout commit,
+Emacs and system versions, configured sandbox mode, and Bubblewrap
+availability. Library identity comes from Emacs's loaded-feature history, not
+the first matching library on the current `load-path`. The hash and snapshot
+byte count describe the loaded artifact's **current disk bytes**, including
+bytecode when an `.elc` was loaded; they do not reconstruct bytes from load time.
+For Git provenance only, an existing sibling `.el` of an `.elc` is preferred,
+then symlinks are resolved before searching for a repository. This can identify
+the source checkout behind a compiled build tree. Its commit is checkout
+provenance, **not proof that the source and compiled artifact are equivalent**.
+Without sibling source, Git lookup starts at the resolved artifact directory.
+Unloaded, unknown, or missing loaded artifacts have unavailable identity and
+provenance; another copy on `load-path` is never substituted. Missing Git or a
+repository leaves the commit unavailable without losing readable artifact
+identity. File contents are not written to telemetry, and neither are
 arbitrary source paths. The explicit path exceptions are repository-local
 Eask test names used for workload classification and `:artifacts-directory`,
 which locates the client-side profiler output.

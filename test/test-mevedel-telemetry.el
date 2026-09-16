@@ -574,11 +574,141 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry--library-snapshot
-  (:doc "identifies a loaded library by content and repository commit")
-  (let ((snapshot (mevedel-telemetry--library-snapshot 'mevedel-telemetry)))
-    (should (= 64 (length (plist-get snapshot :file-hash))))
-    (should (> (plist-get snapshot :file-bytes) 0))
-    (should (stringp (plist-get snapshot :git-head)))))
+  ()
+  (let* ((root (make-temp-file
+                (file-name-concat (expand-file-name "~")
+                                  "mevedel-telemetry-library-") t))
+         (default-directory (file-name-as-directory root))
+         (source-directory (file-name-concat root "checkout"))
+         (build-directory (file-name-concat root "build"))
+         (shadow-directory (file-name-concat root "shadow"))
+         (name "mevedel-telemetry-fixture.el")
+         (feature 'mevedel-telemetry-fixture)
+         (source (file-name-concat source-directory name))
+         (sibling (file-name-concat build-directory name))
+         (compiled (concat sibling "c"))
+         (shadow (file-name-concat shadow-directory name))
+         (load-history (copy-tree load-history))
+         (current-load-list nil)
+         (load-path (cons shadow-directory load-path))
+         head)
+    (unwind-protect
+        ;; Emacs deliberately permits lexical bindings of `features';
+        ;; `provide' needs a dynamic binding to keep fixture loads isolated.
+        (cl-progv '(features) (list (copy-sequence features))
+          (dolist (directory (list source-directory build-directory
+                                   shadow-directory))
+            (make-directory directory))
+          (with-temp-file source
+            (insert ";;; -*- lexical-binding: t -*-\n"
+                    "(provide 'mevedel-telemetry-fixture)\n"))
+          (with-temp-file shadow
+            (insert ";;; A different copy, never loaded.\n"
+                    "(provide 'mevedel-telemetry-fixture)\n"))
+          (copy-file source sibling)
+          ;; Compilation evaluates `provide', but is not a fixture load.
+          (let ((load-history (copy-tree load-history))
+                (current-load-list nil))
+            (cl-progv '(features) (list (copy-sequence features))
+              (should (byte-compile-file sibling))))
+          (delete-file sibling)
+          (make-symbolic-link source sibling)
+          (let ((default-directory (file-name-as-directory source-directory)))
+            (dolist (args '(("init" "--quiet")
+                            ("add" ".")
+                            ("-c" "user.name=Test"
+                             "-c" "user.email=test@example.invalid"
+                             "-c" "commit.gpgsign=false"
+                             "-c" "core.hooksPath=/dev/null"
+                             "commit" "--quiet" "-m" "fixture")))
+              (should (zerop (apply #'process-file "git" nil nil nil args))))
+            (setq head (string-trim
+                        (with-temp-buffer
+                          (should (zerop (process-file
+                                          "git" nil t nil "rev-parse" "HEAD")))
+                          (buffer-string)))))
+          (cl-labels
+              ((check-identity (file expected-head)
+                 (let ((snapshot (mevedel-telemetry--library-snapshot feature)))
+                   (should
+                    (equal (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert-file-contents-literally file)
+                             (secure-hash 'sha256 (current-buffer)))
+                           (plist-get snapshot :file-hash)))
+                   (should (= (file-attribute-size (file-attributes file))
+                              (plist-get snapshot :file-bytes)))
+                   (should (equal expected-head (plist-get snapshot :git-head))))))
+            ,test))
+      (delete-directory root t)))
+  (test)
+  :doc "identifies loaded source rather than a shadowing load-path copy"
+  (progn
+    (load source nil t t)
+    (should (equal source (symbol-file feature 'provide)))
+    (should (equal shadow (locate-library (symbol-name feature))))
+    (check-identity source head))
+
+  :doc "hashes loaded bytecode but finds Git through its sibling source symlink"
+  (progn
+    (load compiled nil t t)
+    (should (equal compiled (symbol-file feature 'provide)))
+    ;; The source checkout need not still match the compiled artifact.
+    (with-temp-file source
+      (insert ";;; Changed since compilation.\n"
+              "(provide 'mevedel-telemetry-fixture)\n"))
+    (check-identity compiled head))
+
+  :doc "finds Git provenance when Emacs abbreviates the checkout under home"
+  (progn
+    (load compiled nil t t)
+    (should (string-prefix-p "~/" (locate-dominating-file source-directory ".git")))
+    (check-identity compiled head))
+
+  :doc "retains bytecode identity when sibling source is absent"
+  (progn
+    (load compiled nil t t)
+    (delete-file sibling)
+    (check-identity compiled nil))
+
+  :doc "retains bytecode identity when the sibling source symlink is dangling"
+  (progn
+    (load compiled nil t t)
+    (delete-file source)
+    (check-identity compiled nil))
+
+  :doc "retains artifact identity when Git is unavailable"
+  (progn
+    (load compiled nil t t)
+    (let ((exec-path nil))
+      (check-identity compiled nil)))
+
+  :doc "does not substitute another copy for a deleted loaded artifact"
+  (progn
+    (load compiled nil t t)
+    (delete-file compiled)
+    (should-not (mevedel-telemetry--library-snapshot feature)))
+
+  :doc "does not identify a library that exists but was never loaded"
+  (progn
+    (should (locate-library (symbol-name feature)))
+    (should-not (featurep feature))
+    (should-not (mevedel-telemetry--library-snapshot feature)))
+
+  :doc "leaves unknown features and provided features without file history unavailable"
+  (progn
+    (should-not (mevedel-telemetry--library-snapshot
+                 'mevedel-telemetry-unknown-fixture))
+    (provide feature)
+    (should-not (symbol-file feature 'provide))
+    (should-not (mevedel-telemetry--library-snapshot feature)))
+
+  :doc "reports current disk bytes rather than bytes retained from load time"
+  (progn
+    (load source nil t t)
+    (with-temp-file source
+      (insert ";;; Replaced after loading.\n"))
+    (check-identity source head)))
 
 (mevedel-deftest mevedel-telemetry--record-environment
   (:doc "records safe repository, dependency, and sandbox identities")

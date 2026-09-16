@@ -76,16 +76,14 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
                   (&optional workspace working-directory execution-target))
+(declare-function mevedel-library-source-directory "mevedel-utilities" (file))
+(autoload 'mevedel-library-source-directory "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 (defvar mevedel-system--source-dir
-  (let* ((lib (or load-file-name buffer-file-name))
-         (el-file (if (and lib (string-suffix-p ".elc" lib))
-                      (substring lib 0 -1)
-                    lib)))
-    (file-name-directory (file-truename el-file)))
+  (mevedel-library-source-directory (or load-file-name buffer-file-name))
   "Directory containing the mevedel source files.")
 
 (defcustom mevedel-memory-dirs
