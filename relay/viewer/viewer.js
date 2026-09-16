@@ -736,9 +736,7 @@
 
   function addFiles(files) {
     const generation = attachmentGeneration;
-    const work = attachmentWork.then(
-      () => addFilesNow(files, generation),
-      () => addFilesNow(files, generation));
+    const work = attachmentWork.then(() => addFilesNow(files, generation));
     attachmentWork = work.catch(() => {});
     return work;
   }

@@ -155,7 +155,7 @@
     }
 
     function queuePush(operation) {
-      const work = pushWork.then(operation, operation);
+      const work = pushWork.then(operation);
       pushWork = work.catch(() => {});
       return work;
     }

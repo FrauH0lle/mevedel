@@ -214,6 +214,23 @@ async function testNotificationsModule() {
   await failed.notifications.dropPush();
   assert.equal(registrations.size, 0);
 
+  // A teardown send failure remains observable, but a queued setup still runs.
+  const retryFragment = 'retryroomroom123.room-secret-six';
+  storage.set(`mevedel-notify:${retryFragment}`, 'on');
+  const retry = make(retryFragment, async frame => {
+    if (frame.t === 'push-unsubscribe') throw new Error('send failed');
+    sent.push({fragment: retryFragment, frame});
+    return true;
+  });
+  const failedDrop = assert.rejects(retry.notifications.dropPush(), /send failed/);
+  const recoveredSync = retry.notifications.syncPush();
+  await failedDrop;
+  assert.equal(await recoveredSync, true);
+  assert.equal(retry.state.pushSubscribed, true);
+  // Teardown still releases local resources when publishing opt-out fails.
+  await assert.rejects(retry.notifications.dropPush(), /send failed/);
+  assert.equal(registrations.size, 0);
+
   const terminalFragment = 'terminalroomroom.room-secret-five';
   const subscribeAtTerminal = sent.filter(item =>
     item.frame.t === 'push-subscribe').length;

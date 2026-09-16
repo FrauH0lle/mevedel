@@ -98,9 +98,7 @@
     function send(frame) {
       const target = socket;
       const text = JSON.stringify(frame);
-      const work = outbound.then(
-        () => sendNow(text, target),
-        () => sendNow(text, target));
+      const work = outbound.then(() => sendNow(text, target));
       outbound = work.catch(() => {});
       return work;
     }
