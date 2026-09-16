@@ -269,6 +269,7 @@
                   "mevedel-turn" (&optional abort-plan-approval))
 (autoload 'mevedel-request-drain-cancellers "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
+(defvar mevedel--turn-settlements-pending)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -1139,7 +1140,10 @@ BUF defaults to the current buffer if not specified."
                       (mevedel-goal-updated-at goal)
                       (format-time-string "%FT%T%z")))
               (if (bound-and-true-p mevedel--current-request)
-		  (mevedel-request-end)
+			  ;; Terminal work still needs this reservation and its file
+			  ;; snapshots.  Abort stops producers, not durable settlement.
+			  (unless mevedel--turn-settlements-pending
+			    (mevedel-request-end))
 		;; A request can disappear without its own teardown -- a terminal
 		;; transition lost with the process that would have driven it.
 		;; `mevedel-request-end' is the only place that idles the root

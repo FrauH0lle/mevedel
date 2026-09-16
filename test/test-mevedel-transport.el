@@ -320,6 +320,99 @@
           (should (= 0 runs)))
       (mevedel-transport-cancel-pending)))
 
+  :doc "inline replacement fences the older same-key retry"
+  (let ((mevedel-transport-retry-seconds 60)
+        old-runs new-runs old-cancels old)
+    (unwind-protect
+        (progn
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'replace "/srv/project" (lambda () (setq old-runs t))
+             (lambda () (setq old-cancels t)))
+            (setq old (gethash 'replace mevedel-transport--pending)))
+          (mevedel-transport-run-when-idle
+           'replace "/srv/project" (lambda () (setq new-runs t)))
+          (should new-runs)
+          (should-not old-cancels)
+          (apply (timer--function old) (timer--args old))
+          (should-not old-runs)
+          (should-not (gethash 'replace mevedel-transport--pending)))
+      (when (timerp old) (cancel-timer old))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "cancelled retry cannot consume a replacement entry or its canceller"
+  (let ((mevedel-transport-retry-seconds 60)
+        (old-runs 0) (new-runs 0) (old-cancels 0) (new-cancels 0)
+        old replacement)
+    (unwind-protect
+        (progn
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'replace "/srv/project" (lambda () (cl-incf old-runs))
+             (lambda () (cl-incf old-cancels)))
+            (setq old (gethash 'replace mevedel-transport--pending))
+            (mevedel-transport-cancel-pending 'replace)
+            (mevedel-transport-run-when-idle
+             'replace "/srv/project" (lambda () (cl-incf new-runs))
+             (lambda () (cl-incf new-cancels)))
+            (setq replacement (gethash 'replace mevedel-transport--pending)))
+          (apply (timer--function old) (timer--args old))
+          (should (= 0 old-runs))
+          (should (eq replacement (gethash 'replace mevedel-transport--pending)))
+          (mevedel-transport-cancel-pending 'replace)
+          (apply (timer--function replacement) (timer--args replacement))
+          (should (= 0 new-runs))
+          (should (= 1 old-cancels))
+          (should (= 1 new-cancels)))
+      (dolist (timer (list old replacement))
+        (when (timerp timer) (cancel-timer timer)))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "cancellation fences a timer restored after exclusive transport use"
+  (let ((mevedel-transport-retry-seconds 60)
+        (runs 0) (cancels 0) timer)
+    (unwind-protect
+        (progn
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'suspended "/srv/project" (lambda () (cl-incf runs))
+             (lambda () (cl-incf cancels)))
+            (setq timer (gethash 'suspended mevedel-transport--pending)))
+          (mevedel-transport-with-exclusive-connection
+            (mevedel-transport-cancel-pending 'suspended))
+          (should (memq timer timer-list))
+          (apply (timer--function timer) (timer--args timer))
+          (should (= 0 runs))
+          (should (= 1 cancels))
+          (should-not (gethash 'suspended mevedel-transport--pending)))
+      (when (timerp timer) (cancel-timer timer))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "busy retry transfers ownership without losing its cancellation callback"
+  (let ((mevedel-transport-retry-seconds 60)
+        (runs 0) (cancels 0) old replacement)
+    (unwind-protect
+        (progn
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'retry "/srv/project" (lambda () (cl-incf runs))
+             (lambda () (cl-incf cancels)))
+            (setq old (gethash 'retry mevedel-transport--pending))
+            (cancel-timer old)
+            (apply (timer--function old) (timer--args old))
+            (setq replacement (gethash 'retry mevedel-transport--pending))
+            (should (timerp replacement))
+            (should-not (eq old replacement))
+            (apply (timer--function old) (timer--args old))
+            (should (eq replacement (gethash 'retry mevedel-transport--pending))))
+          (mevedel-transport-cancel-pending 'retry)
+          (apply (timer--function replacement) (timer--args replacement))
+          (should (= 0 runs))
+          (should (= 1 cancels)))
+      (dolist (timer (list old replacement))
+        (when (timerp timer) (cancel-timer timer)))
+      (mevedel-transport-cancel-pending)))
+
   :doc "notifies queued work once when cancellation prevents its thunk"
   (let ((runs 0)
         (cancels 0)
@@ -337,6 +430,54 @@
           (mevedel-transport-cancel-pending 'cancel-callback)
           (should (= 0 runs))
           (should (= 1 cancels)))
+      (mevedel-transport-cancel-pending))))
+
+(mevedel-deftest mevedel-transport-cancel-pending ()
+  ,test
+  (test)
+  :doc "bulk cancellation does not erase work scheduled by a canceller"
+  (let ((mevedel-transport-retry-seconds 60)
+        (old-cancels 0) (new-cancels 0) old replacement)
+    (unwind-protect
+        (let ((mevedel-transport--depth 1))
+          (mevedel-transport-run-when-idle
+           'replace "/srv/project" #'ignore
+           (lambda ()
+             (cl-incf old-cancels)
+             (mevedel-transport-run-when-idle
+              'replace "/srv/project" #'ignore
+              (lambda () (cl-incf new-cancels)))
+             (setq replacement (gethash 'replace mevedel-transport--pending))))
+          (setq old (gethash 'replace mevedel-transport--pending))
+          (mevedel-transport-cancel-pending)
+          (should (= 1 old-cancels))
+          (should (eq replacement (gethash 'replace mevedel-transport--pending)))
+          (apply (timer--function old) (timer--args old))
+          (should (eq replacement (gethash 'replace mevedel-transport--pending)))
+          (mevedel-transport-cancel-pending 'replace)
+          (should (= 1 new-cancels))
+          (should-not (gethash 'replace mevedel-transport--pending)))
+      (dolist (timer (list old replacement))
+        (when (timerp timer) (cancel-timer timer)))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "teardown fences an already delivered retry after reinstall"
+  (let ((mevedel-transport-retry-seconds 60)
+        (runs 0) (cancels 0) timer)
+    (unwind-protect
+        (progn
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'teardown "/srv/project" (lambda () (cl-incf runs))
+             (lambda () (cl-incf cancels)))
+            (setq timer (gethash 'teardown mevedel-transport--pending)))
+          (mevedel-transport-uninstall)
+          (mevedel-transport-install)
+          (apply (timer--function timer) (timer--args timer))
+          (should (= 0 runs))
+          (should (= 1 cancels)))
+      (when (timerp timer) (cancel-timer timer))
+      (mevedel-transport-install)
       (mevedel-transport-cancel-pending))))
 
 (mevedel-deftest mevedel-transport-schedule-idle ()

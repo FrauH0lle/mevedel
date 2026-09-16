@@ -245,11 +245,14 @@ they can be activated without duplicating or losing the deferred work."
        (timer-activate timer)))
    mevedel-transport--pending))
 
-(defun mevedel-transport--retry (key path thunk on-cancel)
-  "Re-attempt KEY's THUNK for PATH, preserving ON-CANCEL."
-  (remhash key mevedel-transport--pending)
-  (remhash key mevedel-transport--pending-cancellers)
-  (mevedel-transport-run-when-idle key path thunk on-cancel))
+(defun mevedel-transport--retry (timer key path thunk on-cancel)
+  "Re-attempt KEY's THUNK for PATH only while TIMER owns the pending entry.
+Preserve ON-CANCEL when the retry must wait again.  A cancelled timer can
+still be delivered after a suspended timer list is restored."
+  (when (eq timer (gethash key mevedel-transport--pending))
+    (remhash key mevedel-transport--pending)
+    (remhash key mevedel-transport--pending-cancellers)
+    (mevedel-transport-run-when-idle key path thunk on-cancel)))
 
 (defun mevedel-transport-run-when-idle (key path thunk &optional on-cancel)
   "Call THUNK once no remote operation for PATH is in flight.
@@ -263,14 +266,19 @@ transport drops late work and returns nil."
   (when mevedel-transport--enabled-p
     (if (mevedel-transport-busy-p path)
         (unless (gethash key mevedel-transport--pending)
-          (puthash key
-                   (run-at-time mevedel-transport-retry-seconds nil
-                                #'mevedel-transport--retry key path thunk
-                                on-cancel)
-                   mevedel-transport--pending)
+          (let ((timer (timer-create)))
+            (timer-set-time timer (time-add nil mevedel-transport-retry-seconds))
+            (timer-set-function timer #'mevedel-transport--retry
+                                (list timer key path thunk on-cancel))
+            (timer-activate timer)
+            (puthash key timer mevedel-transport--pending))
           (when on-cancel
             (puthash key on-cancel
                      mevedel-transport--pending-cancellers)))
+      ;; An idle call fulfills the coalesced work with its current thunk.
+      ;; Retire the old timer without notifying cancellation: the work runs.
+      (when-let* ((timer (gethash key mevedel-transport--pending)))
+        (when (timerp timer) (cancel-timer timer)))
       (remhash key mevedel-transport--pending)
       (remhash key mevedel-transport--pending-cancellers)
       (funcall thunk))
@@ -327,14 +335,18 @@ PATH-OF-KEY maps a TABLE key to its transport PATH; it defaults to identity."
                      (gethash key mevedel-transport--pending-cancellers)))
           (remhash key mevedel-transport--pending-cancellers)
           (ignore-errors (funcall on-cancel))))
-    (maphash (lambda (_key timer)
-               (when (timerp timer) (cancel-timer timer)))
-             mevedel-transport--pending)
-    (clrhash mevedel-transport--pending)
-    (maphash (lambda (_key on-cancel)
-               (ignore-errors (funcall on-cancel)))
-             mevedel-transport--pending-cancellers)
-    (clrhash mevedel-transport--pending-cancellers)))
+    (let (cancellers)
+      (maphash (lambda (_key timer)
+                 (when (timerp timer) (cancel-timer timer)))
+               mevedel-transport--pending)
+      (maphash (lambda (_key on-cancel) (push on-cancel cancellers))
+               mevedel-transport--pending-cancellers)
+      ;; Retire the entire batch before callbacks can schedule replacement
+      ;; work, including a new canceller under the same key.
+      (clrhash mevedel-transport--pending)
+      (clrhash mevedel-transport--pending-cancellers)
+      (dolist (on-cancel cancellers)
+        (ignore-errors (funcall on-cancel))))))
 
 (mevedel-transport-install)
 

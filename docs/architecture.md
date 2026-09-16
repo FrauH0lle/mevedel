@@ -318,6 +318,13 @@ repeatedly (turn completion, activation, buffer kill) arm one coalesced
 opportunity per key through `mevedel-transport-schedule-idle`, which the
 journal processor, the memory pass, and memory recovery share.
 
+Deferred transport retries execute and remove entries only while their exact
+timer still owns the coalescing key. An inline same-key call retires the pending
+timer before running current work. This identity check also rejects cancelled
+timers delivered after TRAMP restores a suspended timer list. Bulk cancellation
+retires its batch before invoking cleanup callbacks, so reentrantly scheduled
+replacement work keeps its own pending entry and cancellation callback.
+
 `mevedel-session-durability.el` owns portable project lease and storage
 primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
 `mevedel-session-transfer.el` owns cooperative control-transfer records, and
@@ -482,13 +489,21 @@ sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle
 
 `mevedel-turn.el` owns top-level request admission, identity, cancellation, and
 the single completion boundary. The ordinary gptel `DONE` state and awaited
-fork-skill workflows call it after response hooks, while error and abort
-terminals retain their separate no-save/no-follow-up behavior. If teardown
-lost the request before a terminal transition arrived, the machine's request
-identity keys a degraded settlement. The data buffer remains busy and cannot
-admit another turn or transfer its lease until that settlement finishes.
-Transport cancellation releases the fence and clears the machine's stamp so
-a later terminal transition can retry it.
+fork-skill workflows call it after response hooks. Error and abort terminals
+also save partial responses and file checkpoints before teardown, but do not
+dispatch successful-turn follow-ups. Final-patch generation and deferred
+settlement retain a nested admission fence until their continuations finish;
+abort stops producers without discarding a reservation still needed for durable
+settlement. If teardown lost the request before a terminal transition arrived,
+the machine's request identity keys a degraded settlement. Transport cancellation
+releases the settlement fence and clears the machine's settlement stamp so a
+later terminal transition can retry it.
+
+Terminal continuations settle once and recheck request and session ownership
+between lifecycle steps. Old patch and directive-attempt evidence remains tied
+to the captured request; an obsolete continuation cannot replace current patch
+presentation, clear a newer directive, restore its permissions, or end its
+request. Response-end markers bound delayed directive capture to the old answer.
 
 Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
 The pre-tool hook preserves raw JSON distinctions, validates the call as-is,

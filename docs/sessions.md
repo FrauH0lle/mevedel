@@ -152,6 +152,14 @@ Error and abort settlement also save before request teardown, preserving partial
 responses and request-local file checkpoints. `mevedel-abort` additionally saves
 from cleanup that runs even if cancellation signals an error or quit.
 
+When remote work defers final-patch generation or settlement, the data buffer
+remains busy until that terminal continuation completes or is cancelled. Abort
+stops the provider but preserves the request reservation and file snapshots
+needed by already pending settlement. The pending holds nest and release on
+failure as well as success. Repeated or obsolete callbacks cannot tear down a
+replacement request; captured patch and directive-attempt evidence belongs to
+the old request, not the new request's active presentation.
+
 Emacs's native `auto-save-hook` checkpoints modified root and retained-agent data
 buffers through their respective persistence writers. It follows Emacs's normal
 auto-save scheduling and defers remote writes until transport is idle. Failed

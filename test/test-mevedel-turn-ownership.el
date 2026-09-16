@@ -1,0 +1,321 @@
+;;; test-mevedel-turn-ownership.el --- Deferred terminal ownership -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; Deterministic terminal continuation races, with real session publication.
+
+;;; Code:
+
+(require 'mevedel)
+(require 'mevedel-presets)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+(defmacro mevedel-turn-ownership-test--with-session (&rest body)
+  "Run BODY with an isolated session, buffer, request and FSM."
+  (declare (indent 0) (debug t))
+  `(let* ((root (make-temp-file "mevedel-turn-ownership-" t))
+          (workspace (mevedel-workspace-get-or-create
+                      'project root root "ownership"))
+          (_identity (mevedel-workspace-identity-ensure root))
+          (session (mevedel-session-create "main" workspace))
+          (buffer (generate-new-buffer " *turn-ownership*"))
+          request fsm)
+     (unwind-protect
+         (with-current-buffer buffer
+           (org-mode)
+           (setq-local default-directory (file-name-as-directory root)
+                       mevedel--session session)
+           (setf (mevedel-session-root-buffer session) buffer)
+           (setq request (mevedel-request-begin session)
+                 fsm (gptel-make-fsm
+                      :info (list :buffer buffer
+                                  :mevedel-request-id
+                                  (mevedel-request-id request))))
+           (setf (mevedel-request-fsm request) fsm)
+           (insert "Old response must remain durable.\n")
+           ,@body)
+       (mevedel-transport-cancel-pending)
+       (when (buffer-live-p buffer) (kill-buffer buffer))
+       (mevedel-workspace-clear-registry)
+       (delete-directory root t))))
+
+(mevedel-deftest mevedel-request-begin-ownership (:quiet t)
+  ,test
+  (test)
+  :doc "reentrant admission from a canceller survives the outer admission"
+  (mevedel-turn-ownership-test--with-session
+    (let (replacement replacement-cancelled)
+      (mevedel-request-push-canceller
+       request
+       (lambda ()
+         (setq replacement (mevedel-request-begin session))
+         (mevedel-request-push-canceller
+          replacement (lambda () (setq replacement-cancelled t)))))
+      (should-error (mevedel-request-begin session) :type 'user-error)
+      (should (mevedel-request-p replacement))
+      (should (eq replacement mevedel--current-request))
+      (should-not replacement-cancelled)
+      (should (eq 'running (mevedel-session-agent-root-activity session)))
+      (should-not mevedel--turn-settlements-pending)
+      (mevedel-request-end)
+      (should replacement-cancelled)
+      (should-not mevedel--current-request)))
+
+  :doc "reentrant admission during readiness or authority checks is not cancelled"
+  (dolist (check '(mevedel-request-assert-target-ready
+                   mevedel-session-artifacts-assert-mutation-authority))
+    (mevedel-turn-ownership-test--with-session
+      (let ((original (symbol-function check))
+            entered replacement replacement-cancelled)
+        (cl-letf (((symbol-function check)
+                   (lambda (&rest args)
+                     (prog1 (apply original args)
+                       (unless entered
+                         (setq entered t
+                               replacement (mevedel-request-begin session))
+                         (mevedel-request-push-canceller
+                          replacement
+                          (lambda () (setq replacement-cancelled t))))))))
+          (should-error (mevedel-request-begin session) :type 'user-error))
+        (should (mevedel-request-p replacement))
+        (should (eq replacement mevedel--current-request))
+        (should-not replacement-cancelled)
+        (mevedel-request-end))))
+
+  :doc "admission rechecks a settlement hold acquired during cancellation"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-push-canceller request (lambda () (mevedel--turn-hold fsm)))
+    (should-error (mevedel-request-begin session) :type 'user-error)
+    (should-not mevedel--current-request)
+    (should (memq fsm mevedel--turn-settlements-pending))
+    (mevedel--turn-release fsm)
+    (should-not mevedel--turn-settlements-pending)
+    (should (mevedel-request-p (mevedel-request-begin session)))
+    (mevedel-request-end)))
+
+(mevedel-deftest mevedel--defer-turn-steps-ownership (:quiet t)
+  ,test
+  (test)
+  :doc "abort retains the terminal reservation until its real publication completes"
+  (dolist (outcome '(success error aborted))
+    (mevedel-turn-ownership-test--with-session
+      (let (resume)
+        (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                   (lambda (_key _path thunk &optional _cancel)
+                     (setq resume thunk) t)))
+          (if (eq outcome 'success)
+              (mevedel--complete-turn fsm)
+            (mevedel--fail-turn fsm outcome)))
+        (should (functionp resume))
+        (mevedel-abort buffer)
+        (should (mevedel-turn-busy-p buffer))
+        (should-error (mevedel-request-begin session) :type 'user-error)
+        (should (eq request mevedel--current-request))
+        (funcall resume)
+        (should-not (mevedel-turn-busy-p buffer))
+        (with-temp-buffer
+          (insert-file-contents
+           (mevedel-session-artifacts-segment-path
+            (mevedel-session-save-path session)
+            (mevedel-session-current-segment session)))
+          (should (search-forward "Old response must remain durable." nil t)))
+        (let ((replacement (mevedel-request-begin session)))
+          (funcall resume)
+          (should (eq replacement mevedel--current-request))
+          (mevedel-request-end)))))
+
+  :doc "replacement during a publication cannot be ended by the outer continuation"
+  (mevedel-turn-ownership-test--with-session
+    (let ((replacement (mevedel-request--create
+                        :id "replacement" :session session :turn 2
+                        :origin "/root" :file-snapshots (make-hash-table)))
+          (save (symbol-function 'mevedel--turn-autosave)))
+      (cl-letf (((symbol-function 'mevedel--turn-autosave)
+                 (lambda (machine)
+                   (funcall save machine)
+                   ;; Inject the reentrant replacement at the publication seam.
+                   (setq mevedel--current-request replacement
+                         mevedel--implementation-permission-mode-saved '(ask))
+                   (setf (mevedel-session-permission-mode session) 'full-auto))))
+        (mevedel--complete-turn fsm))
+      (should (eq replacement mevedel--current-request))
+      (should (eq 'full-auto (mevedel-session-permission-mode session)))
+      (should (equal '(ask) mevedel--implementation-permission-mode-saved))
+      (should-not mevedel--turn-settlements-pending)
+      (should (file-exists-p
+               (mevedel-session-artifacts-segment-path
+                (mevedel-session-save-path session)
+                (mevedel-session-current-segment session))))))
+
+  :doc "transport cancellation releases success and failure admission exactly once"
+  (dolist (outcome '(success error aborted))
+    (mevedel-turn-ownership-test--with-session
+      (let (cancel resume)
+        (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                   (lambda (_key _path thunk &optional on-cancel)
+                     (setq resume thunk cancel on-cancel) t)))
+          (if (eq outcome 'success)
+              (mevedel--complete-turn fsm)
+            (mevedel--fail-turn fsm outcome)))
+        (should (functionp cancel))
+        (funcall cancel)
+        (should-not (mevedel-turn-busy-p buffer))
+        (let ((replacement (mevedel-request-begin session)))
+          (funcall cancel)
+          (funcall resume)
+          (should (eq replacement mevedel--current-request)))))))
+
+(mevedel-deftest mevedel-preset--apply-final-patch-ownership (:quiet t)
+  ,test
+  (test)
+  :doc "late final patch retains its captured patch without replacing current presentation"
+  (mevedel-turn-ownership-test--with-session
+    (let ((remote (mevedel-workspace--create
+                   :type 'project :id "/mevedelmock:host:/srv/p/"
+                   :root "/mevedelmock:host:/srv/p/" :name "p"))
+          (replacement (mevedel-request--create :id "new" :session session))
+          resume generated displayed (continued 0))
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path thunk &optional _cancel) (setq resume thunk) t))
+                ((symbol-function 'mevedel--generate-final-patch)
+                 (lambda (_workspace captured)
+                   (setq generated captured) "old diff\n"))
+                ((symbol-function 'mevedel--replace-patch-buffer)
+                 (lambda (_) (setq displayed t))))
+        (mevedel-preset--apply-final-patch
+         fsm buffer remote request (lambda (_) (cl-incf continued)))
+        (setq mevedel--current-request replacement)
+        (funcall resume)
+        (funcall resume)
+        (should (eq request generated))
+        (should (equal "old diff\n" (plist-get (gptel-fsm-info fsm) :mevedel-directive-patch)))
+        (should-not displayed)
+        (should (= 1 continued))
+        (should (eq replacement mevedel--current-request)))))
+
+  :doc "cancelled final patch releases its hold after durable abort settlement"
+  (mevedel-turn-ownership-test--with-session
+    (let ((remote (mevedel-workspace--create
+                   :type 'project :id "/mevedelmock:host:/srv/p/"
+                   :root "/mevedelmock:host:/srv/p/" :name "p"))
+          resume cancel settle generated callbacks)
+      (setf (gptel-fsm-state fsm) 'DONE
+            (gptel-fsm-info fsm)
+            (plist-put (gptel-fsm-info fsm) :mevedel-request-callback
+                       (lambda (status _machine) (push status callbacks))))
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (key _path thunk &optional on-cancel)
+                   (if (eq (car key) 'final-patch)
+                       (setq resume thunk cancel on-cancel)
+                     (setq settle thunk))
+                   t))
+                ((symbol-function 'mevedel--generate-final-patch)
+                 (lambda (&rest _) (setq generated t) "unwanted")))
+        (mevedel-preset--apply-final-patch
+         fsm buffer remote request #'mevedel-preset--settle-terminal)
+        (mevedel-abort buffer)
+        (should (eq request mevedel--current-request))
+        (should-error (mevedel-request-begin session) :type 'user-error)
+        (funcall cancel)
+        (should (functionp settle))
+        (should (equal '(abort) callbacks))
+        (should (memq fsm mevedel--turn-settlements-pending)))
+      (funcall settle)
+      (should-not mevedel--turn-settlements-pending)
+      (should-not mevedel--current-request)
+      (with-temp-buffer
+        (insert-file-contents
+         (mevedel-session-artifacts-segment-path
+          (mevedel-session-save-path session)
+          (mevedel-session-current-segment session)))
+        (should (search-forward "Old response must remain durable." nil t)))
+      (let ((replacement (mevedel-request-begin session)))
+        (funcall cancel)
+        (funcall resume)
+        (should-not generated)
+        (should (equal '(abort) callbacks))
+        (should (eq replacement mevedel--current-request)))))
+
+  :doc "patch generation error still publishes the old response and releases admission"
+  (mevedel-turn-ownership-test--with-session
+    (setf (gptel-fsm-state fsm) 'DONE)
+    (cl-letf (((symbol-function 'mevedel--generate-final-patch)
+               (lambda (&rest _) (error "Injected patch failure"))))
+      (mevedel-preset--apply-final-patch
+       fsm buffer workspace request #'mevedel-preset--settle-terminal))
+    (should-not mevedel--turn-settlements-pending)
+    (should-not mevedel--current-request)
+    (with-temp-buffer
+      (insert-file-contents
+       (mevedel-session-artifacts-segment-path
+        (mevedel-session-save-path session)
+        (mevedel-session-current-segment session)))
+      (should (search-forward "Old response must remain durable." nil t)))
+    (should (mevedel-request-p (mevedel-request-begin session)))
+    (mevedel-request-end)))
+
+(mevedel-deftest mevedel--process-directive-ownership (:quiet t)
+  ,test
+  (test)
+  :doc "obsolete directive completion archives only its response and preserves the new turn"
+  (let* ((root (make-temp-file "mevedel-directive-ownership-" t))
+         (file (file-name-concat root "sample.txt"))
+         (source (find-file-noselect file))
+         chat machine called)
+    (unwind-protect
+        (with-current-buffer source
+          (insert "alpha\n")
+          (save-buffer)
+          (let ((directive (mevedel--create-directive-in
+                            source (point-min) (1- (point-max)) nil "Change alpha.")))
+            (overlay-put directive 'mevedel-directive-action 'implement)
+            (cl-letf (((symbol-function 'save-some-buffers) #'ignore)
+                      ((symbol-function 'display-buffer) #'ignore)
+                      ((symbol-function 'gptel--apply-preset) #'ignore)
+                      ((symbol-function 'gptel-request)
+                       (lambda (_prompt &rest args)
+                         (setq chat (plist-get args :buffer)
+                               machine (plist-get args :fsm))
+                         (setf (gptel-fsm-info machine)
+                               (list :buffer chat :position (plist-get args :position)))
+                         machine)))
+              (mevedel--process-directive
+               directive '(:system "test") #'mevedel--implement-directive-prompt
+               (lambda (&rest _) (setq called t)))
+              (with-current-buffer chat
+                (goto-char (point-max))
+                (insert "Old answer.\n")
+                (setf (gptel-fsm-info machine)
+                      (plist-put (gptel-fsm-info machine) :mevedel-response-end
+                                 (copy-marker (point-max) nil)))
+                (let* ((replacement (mevedel-request--create
+                                     :id "new-directive" :session mevedel--session))
+                       (record (mevedel--directive-record directive)))
+                  (setq mevedel--current-request replacement
+                        mevedel--current-directive-uuid "new-directive"
+                        mevedel--directive-read-only-request-p t)
+                  (insert "NEW TURN MUST NOT ENTER OLD RESULT\n")
+                  (funcall (plist-get (gptel-fsm-info machine) :mevedel-request-callback)
+                           nil machine)
+                  (should (eq replacement mevedel--current-request))
+                  (should (equal "new-directive" mevedel--current-directive-uuid))
+                  (should mevedel--directive-read-only-request-p)
+                  (should-not called)
+                  (let ((attempt (car (mevedel-directive-attempts record))))
+                    (should (string-match-p "Old answer" (mevedel-directive-attempt-result attempt)))
+                    (should-not (string-match-p "NEW TURN" (mevedel-directive-attempt-result attempt)))))))))
+      (when (buffer-live-p chat)
+        (let ((view (buffer-local-value 'mevedel--view-buffer chat)))
+          (when (buffer-live-p view) (kill-buffer view)))
+        (kill-buffer chat))
+      (when (buffer-live-p source) (kill-buffer source))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(provide 'test-mevedel-turn-ownership)
+;;; test-mevedel-turn-ownership.el ends here

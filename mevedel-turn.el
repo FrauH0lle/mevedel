@@ -14,6 +14,9 @@
 (require 'mevedel-structs)
 (require 'mevedel-transport)
 
+(eval-when-compile
+  (require 'gptel-request))
+
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (cl-x) t)
 (defvar gptel-backend)
@@ -285,16 +288,30 @@ only call sites that may invoke cancellers."
   "Create a new request for SESSION, guarding against stale requests.
 
 If `mevedel--current-request' is already set, log a warning and replace
-it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
-the new request struct."
-  (when mevedel--turn-settlements-pending
-    (user-error "Turn settlement is still pending"))
-  (mevedel-request-assert-target-ready session)
-  (mevedel-session-artifacts-assert-mutation-authority
-   session (current-buffer))
+it.  Signal instead if yielding checks or cancellation callbacks transfer
+ownership or start deferred settlement.  Optional DIRECTIVE-UUID sets the
+directive being processed.  Return the new request struct."
+  (let ((entry-request mevedel--current-request))
+    (when mevedel--turn-settlements-pending
+      (user-error "Turn settlement is still pending"))
+    (mevedel-request-assert-target-ready session)
+    (mevedel-session-artifacts-assert-mutation-authority
+     session (current-buffer))
+    ;; Target checks can yield before stale-request teardown.  A request
+    ;; admitted there is not the stale request this caller came to replace.
+    (unless (eq entry-request mevedel--current-request)
+      (user-error "Request ownership changed during admission checks"))
+    (when mevedel--turn-settlements-pending
+      (user-error "Turn settlement is still pending")))
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")
     (mevedel-request-end t))
+  ;; Teardown invokes cancellers, which can admit another request or begin
+  ;; deferred terminal work.  The outer admission must not replace either.
+  (when mevedel--turn-settlements-pending
+    (user-error "Turn settlement is still pending"))
+  (when mevedel--current-request
+    (user-error "Another request was admitted during cancellation"))
   (let* ((origin (mevedel-current-origin))
          (id (format "request-%s-%s"
                      (format-time-string "%Y%m%dT%H%M%S")
@@ -368,11 +385,14 @@ is returned here."
          :origin (mevedel-request-origin request)
          :abort-plan-approval (and abort-plan-approval t)))
       (mevedel-request-cancel request abort-plan-approval)
-      (when (equal (mevedel-request-origin request) "/root")
-        (setf (mevedel-session-agent-root-activity
-               (mevedel-request-session request))
-              'idle)))
-    (setq mevedel--current-request nil)))
+      ;; Cancelling interactions invokes callbacks; do not erase a request
+      ;; installed by one of them while the old teardown was on the stack.
+      (when (eq request mevedel--current-request)
+        (when (equal (mevedel-request-origin request) "/root")
+          (setf (mevedel-session-agent-root-activity
+                 (mevedel-request-session request))
+                'idle))
+        (setq mevedel--current-request nil)))))
 
 
 ;;
@@ -599,9 +619,11 @@ Signal when the request is missing or its reservation is not the next turn."
                 (mevedel-view--interaction-rebuild)))))))))
 
 (defun mevedel--run-turn-steps (fsm steps)
-  "Run FSM through STEPS without allowing one failure to skip the rest."
+  "Run FSM through STEPS while it still owns the buffer's terminal work.
+Recheck between steps: publication and hooks can dispatch other callbacks."
   (dolist (step steps)
-    (funcall (mevedel--safe-fsm-handler step) fsm)))
+    (when (mevedel--turn-current-p fsm)
+      (funcall (mevedel--safe-fsm-handler step) fsm))))
 
 (defun mevedel--turn-buffer (fsm)
   "Return FSM's live chat buffer, or nil."
@@ -610,26 +632,92 @@ Signal when the request is missing or its reservation is not the next turn."
               ((buffer-live-p buffer)))
     buffer))
 
+(defun mevedel--turn-current-p (fsm)
+  "Return non-nil unless FSM's buffer or request has been replaced.
+An empty request slot permits lost-turn settlement and post-teardown steps.
+Sessionless machines have no buffer ownership to check."
+  (let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+         (buffer (plist-get info :buffer)))
+    (or (null buffer)
+        (and (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (and (or (not (plist-member info :mevedel-settlement-session))
+                        (eq mevedel--session
+                            (plist-get info :mevedel-settlement-session)))
+                    (or (null mevedel--current-request)
+                        (equal (plist-get info :mevedel-request-id)
+                               (mevedel-request-id mevedel--current-request)))))))))
+
+(defun mevedel--turn-hold (fsm)
+  "Fence admission while FSM owns a terminal continuation.
+Holds nest across final-patch generation and deferred durable settlement."
+  (when-let* ((buffer (mevedel--turn-buffer fsm)))
+    (with-current-buffer buffer
+      (let ((info (gptel-fsm-info fsm)))
+        (unless (plist-member info :mevedel-settlement-session)
+          (setq info (plist-put info :mevedel-settlement-session mevedel--session)))
+        (when (and mevedel--current-request
+                   (equal (plist-get info :mevedel-request-id)
+                          (mevedel-request-id mevedel--current-request)))
+          (setq info (plist-put info :mevedel-request mevedel--current-request)))
+        (setf (gptel-fsm-info fsm)
+              (plist-put info :mevedel-settlement-holds
+                         (1+ (or (plist-get info :mevedel-settlement-holds) 0)))))
+      (cl-pushnew fsm mevedel--turn-settlements-pending :test #'eq))))
+
+(defun mevedel--turn-release (fsm)
+  "Release one of FSM's terminal continuation holds."
+  (let* ((info (gptel-fsm-info fsm))
+         (remaining (max 0 (1- (or (plist-get info :mevedel-settlement-holds) 0)))))
+    (setf (gptel-fsm-info fsm)
+          (plist-put info :mevedel-settlement-holds remaining))
+    (when (zerop remaining)
+      (when-let* ((buffer (mevedel--turn-buffer fsm)))
+        (with-current-buffer buffer
+          (setq mevedel--turn-settlements-pending
+                (delq fsm mevedel--turn-settlements-pending)))))))
+
 (defun mevedel--defer-turn-steps (fsm steps &optional on-cancel)
   "Run FSM through STEPS once no remote operation is in flight.
-
-Each step re-derives its own buffer from FSM, so waiting costs the chain no
-context.  Settlement keeps the request open until the chain finishes, so a
-Goal continuation or a user send still observes the workflow as busy while
-this waits.  ON-CANCEL runs if transport teardown cancels the queued chain."
+Keep admission fenced through publication, even when abort stops the provider.
+ON-CANCEL runs on transport cancellation; otherwise perform local teardown.
+Both closures settle once and release their own hold, including on errors."
   (let* ((info (gptel-fsm-info fsm))
          (request-id (plist-get info :mevedel-request-id))
-         (buffer (mevedel--turn-buffer fsm)))
+         (buffer (mevedel--turn-buffer fsm))
+         finished)
     (unless request-id
       (error "Cannot defer turn without a request identity"))
-    (unless
-        (mevedel-transport-run-when-idle
-         (list 'turn-settlement request-id)
-         (and buffer (buffer-local-value 'default-directory buffer))
-         (lambda () (mevedel--run-turn-steps fsm steps))
-         on-cancel)
-      (when on-cancel
-        (funcall on-cancel)))))
+    (mevedel--turn-hold fsm)
+    (let ((cancel
+           (lambda ()
+             (unless finished
+               (setq finished t)
+               (unwind-protect
+                   (when (mevedel--turn-current-p fsm)
+                     (if on-cancel
+                         (funcall on-cancel)
+                       (mevedel--run-turn-steps
+                        fsm '(mevedel--turn-restore-permission-mode
+                              mevedel--turn-end-request))))
+                 (setf (gptel-fsm-info fsm)
+                       (plist-put (gptel-fsm-info fsm) :mevedel-turn-settled nil))
+                 (mevedel--turn-release fsm))))))
+      (condition-case err
+          (unless
+              (mevedel-transport-run-when-idle
+               (list 'turn-settlement request-id)
+               (and buffer (buffer-local-value 'default-directory buffer))
+               (lambda ()
+                 (unless finished
+                   (setq finished t)
+                   (unwind-protect (mevedel--run-turn-steps fsm steps)
+                     (mevedel--turn-release fsm))))
+               cancel)
+            (funcall cancel))
+        ((error quit)
+         (funcall cancel)
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel--turn-publication-pending-p (fsm)
   "Return non-nil when FSM's session has failed critical publication."
@@ -724,9 +812,7 @@ lost teardown never recorded, the autosave that publishes the
 transcript, the StopFailure hook, the permission-mode restore, and
 idling the root roster that only `mevedel-request-end' would otherwise
 touch.  The buffer remains busy until this deferred chain finishes."
-  (when-let* ((buffer (mevedel--turn-buffer fsm)))
-    (with-current-buffer buffer
-      (cl-pushnew fsm mevedel--turn-settlements-pending :test #'eq)))
+  (mevedel--turn-stamp-settled fsm)
   (mevedel--defer-turn-steps
    fsm
    (list #'mevedel--turn-record-lost-settlement
@@ -737,27 +823,16 @@ touch.  The buffer remains busy until this deferred chain finishes."
          (lambda (machine)
            (when-let* ((buffer (mevedel--turn-buffer machine)))
              (with-current-buffer buffer
-               (unwind-protect
-                   (when (bound-and-true-p mevedel--session)
-                     (setf (mevedel-session-agent-root-activity
-                            mevedel--session)
-                           'idle))
-                 (setq mevedel--turn-settlements-pending
-                       (delq machine
-                             mevedel--turn-settlements-pending)))))))
+               (when (bound-and-true-p mevedel--session)
+                 (setf (mevedel-session-agent-root-activity mevedel--session)
+                       'idle))))))
    (lambda ()
      (mevedel--turn-restore-permission-mode fsm)
      (when-let* ((buffer (mevedel--turn-buffer fsm)))
        (with-current-buffer buffer
          (when (bound-and-true-p mevedel--session)
            (setf (mevedel-session-agent-root-activity mevedel--session)
-                 'idle))
-         (setq mevedel--turn-settlements-pending
-               (delq fsm mevedel--turn-settlements-pending))))
-     (when-let* ((stamp (memq :mevedel-turn-settled
-                              (gptel-fsm-info fsm))))
-       (setcar (cdr stamp) nil))))
-  (mevedel--turn-stamp-settled fsm))
+                 'idle)))))))
 
 (defun mevedel--complete-turn (fsm)
   "Run the canonical successful top-level turn transaction for FSM.
