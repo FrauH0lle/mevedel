@@ -1142,6 +1142,62 @@
 ;;
 ;;; Working directory sessions
 
+(mevedel-deftest mevedel--active-chat-buffer
+  (:doc "prefers direct context and falls back to the workspace's most recent root")
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'project :id "active" :root "/tmp/" :name "active"))
+         (other-workspace (mevedel-workspace--create
+                           :type 'project :id "other" :root "/tmp/" :name "other"))
+         (session (mevedel-session--create :name "same" :workspace workspace))
+         (first (generate-new-buffer " *active-first*"))
+         (second (generate-new-buffer " *active-second*"))
+         (view (generate-new-buffer " *active-view*"))
+         (agent (generate-new-buffer " *active-agent*"))
+         (other (generate-new-buffer " *active-other*"))
+         (transient (generate-new-buffer " *active-transient*"))
+         (invocation (mevedel-agent-invocation--create :parent-data-buffer first)))
+    (unwind-protect
+        (progn
+          (dolist (buffer (list first second view agent))
+            (with-current-buffer buffer (setq-local mevedel--session session)))
+          (with-current-buffer view (setq-local mevedel--data-buffer first))
+          (with-current-buffer agent
+            (setq-local mevedel--agent-invocation invocation))
+          (with-current-buffer other
+            (setq-local mevedel--session
+                        (mevedel-session--create :workspace other-workspace)))
+          (with-current-buffer transient
+            (setq-local mevedel--session
+                        (mevedel-session--create :workspace workspace
+                                                :audit-session session)))
+          (dolist (roots (list (list second first) (list first second)))
+            (cl-letf (((symbol-function 'buffer-list)
+                       (lambda (&optional _frame)
+                         (append (list other agent view transient) roots)))
+                      ((symbol-function 'mevedel-workspace)
+                       (lambda (&optional _buffer) workspace)))
+              (with-temp-buffer
+                (should (eq (car roots) (mevedel--active-chat-buffer workspace)))
+                (should (eq (car roots) (mevedel--active-chat-buffer))))
+              (dolist (buffer (list first view agent))
+                (with-current-buffer buffer
+                  (should (eq first (mevedel--active-chat-buffer workspace)))))))
+          (kill-buffer first)
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _frame)
+                       (list agent view other transient second))))
+            (with-current-buffer agent
+              (should (eq second (mevedel--active-chat-buffer workspace)))))
+          (kill-buffer second)
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _frame) (list agent view other transient))))
+            (with-current-buffer agent
+              (should-not (mevedel--active-chat-buffer workspace)))
+            (with-temp-buffer
+              (should-not (mevedel--active-chat-buffer workspace)))))
+      (dolist (buffer (list first second view agent other transient))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel--display-chat-buffer
   ()
   ,test
