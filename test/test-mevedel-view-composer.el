@@ -1062,8 +1062,9 @@
               (goto-char (+ (mevedel-view--input-start) 3))
               (cl-letf
                   (((symbol-function
-                     'mevedel-session-fork-conversation-fork)
-                    (lambda (buffer fork-target)
+                     'mevedel-session-fork-create)
+                    (lambda (buffer fork-target type)
+                      (should (eq type 'conversation))
                       (push (list 'materialized buffer fork-target) events)
                       child-data))
                    ((symbol-function 'mevedel-view--submit-planned-input)
@@ -1106,7 +1107,7 @@
         (let ((before (mevedel-view--composer-snapshot session)))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-fork-conversation-fork)
+                 'mevedel-session-fork-create)
                 (lambda (&rest _) (error "materialization failed"))))
             (should-error (mevedel-view-send)
                           :type 'error))
@@ -1138,7 +1139,7 @@
         (let ((before (mevedel-view--composer-snapshot session)))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-fork-worktree-fork)
+                 'mevedel-session-fork-create)
                 (lambda (&rest _) (error "staging failed"))))
             (should-error (mevedel-view-send)))
           (should (eq reservation
@@ -1161,7 +1162,7 @@
             (((symbol-function 'mevedel-skills-plan-user-input)
               (lambda (&rest _) (user-error "Invalid skill syntax")))
              ((symbol-function
-               'mevedel-session-fork-conversation-fork)
+               'mevedel-session-fork-create)
               (lambda (&rest _)
                 (setq materialized t))))
           (should-error (mevedel-view-send)
@@ -1193,18 +1194,14 @@
               (insert "continue here")
               (cl-letf
                   (((symbol-function
-                     'mevedel-session-fork-worktree-fork)
-                    (lambda (buffer fork-target)
-                      (setq called (list buffer fork-target))
+                     'mevedel-session-fork-create)
+                    (lambda (buffer fork-target type)
+                      (setq called (list buffer fork-target type))
                       child-data))
-                   ((symbol-function
-                     'mevedel-session-fork-conversation-fork)
-                    (lambda (&rest _)
-                      (ert-fail "Conversation materializer called")))
                    ((symbol-function 'mevedel-view--submit-planned-input)
                     #'ignore))
                 (mevedel-view-send)))
-            (should (equal (list data-buf target) called)))
+            (should (equal (list data-buf target 'worktree) called)))
         (dolist (buffer (list child-view child-data))
           (when (buffer-live-p buffer)
             (with-current-buffer buffer

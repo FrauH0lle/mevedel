@@ -224,16 +224,13 @@
   "mevedel-session-artifacts")
 
 ;; `mevedel-session-fork'
-(declare-function mevedel-session-fork-conversation-fork
-                  "mevedel-session-fork" (buffer target))
+(declare-function mevedel-session-fork-create
+                  "mevedel-session-fork" (buffer target type))
 (declare-function mevedel-session-fork-retarget-worktree-path
                   "mevedel-session-fork" (session path))
-(declare-function mevedel-session-fork-worktree-fork
-                  "mevedel-session-fork" (buffer target))
-(autoload 'mevedel-session-fork-conversation-fork "mevedel-session-fork")
+(autoload 'mevedel-session-fork-create "mevedel-session-fork")
 (autoload 'mevedel-session-fork-retarget-worktree-path
   "mevedel-session-fork")
-(autoload 'mevedel-session-fork-worktree-fork "mevedel-session-fork")
 
 ;; `mevedel-session-naming'
 (declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
@@ -2082,16 +2079,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
            (plist-get snapshot :dropped-file-grants)
            :test #'equal))
          (child-data
-          (progn
-            (pcase fork-type
-              ('conversation
-               (mevedel-session-fork-conversation-fork
-                source-data target))
-              ('worktree
-               (mevedel-session-fork-worktree-fork
-                source-data target))
-              (_
-               (error "Unknown session fork type: %S" fork-type)))))
+          (mevedel-session-fork-create source-data target fork-type))
          (child-view
           (buffer-local-value 'mevedel--view-buffer child-data))
          (child-session

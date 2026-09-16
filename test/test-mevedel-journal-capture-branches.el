@@ -55,7 +55,7 @@
             child-buffer child)
        (unwind-protect
            (save-window-excursion
-             (setq child-buffer (mevedel-session-fork-conversation-fork buffer target)
+             (setq child-buffer (mevedel-session-fork-create buffer target 'conversation)
                    child (buffer-local-value 'mevedel--session child-buffer))
              (should-not (equal (mevedel-session-session-id child) (mevedel-session-session-id session)))
              (should-not (mevedel-journal-pins-present-p (mevedel-session-save-path child)))

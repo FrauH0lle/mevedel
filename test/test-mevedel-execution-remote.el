@@ -1390,7 +1390,7 @@ connection charges for, so the program path is proved here too."
       (mevedel-session-artifacts-save session buffer))
     (setq reservation (mevedel-worktree-fork-reservation session))
     (setq target (plist-put target :worktree-reservation reservation))
-    (setq child (mevedel-session-fork-worktree-fork buffer target))
+    (setq child (mevedel-session-fork-create buffer target 'worktree))
     (should (buffer-live-p child))
     (let ((child-session (buffer-local-value 'mevedel--session child))
           (child-directory

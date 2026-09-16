@@ -1262,6 +1262,11 @@ restart before the first child request can drop the report detail while the
 durable provenance facts remain available for regeneration. Failure outside
 Git never falls back to Conversation Fork.
 
+`mevedel-session-fork-create` owns admission, staging, publication, and cleanup
+for both fork types. Worktree creation and restoration are conditional steps
+inside that transaction, with failures retaining the created Git artifacts and
+reporting their cleanup command.
+
 The common fork projection copies current model, preset, effort, mode,
 permission, skill, reminder, and hook configuration into independent
 child-owned values. Prompt indexes, file snapshots, skill history, historical
