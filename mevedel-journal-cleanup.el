@@ -18,6 +18,10 @@
 
 (autoload 'mevedel-journal-gc "mevedel-journal-gc")
 
+;; `mevedel-state-cleanup'
+(declare-function mevedel-state-cleanup "mevedel-state-cleanup" (workspace))
+(autoload 'mevedel-state-cleanup "mevedel-state-cleanup")
+
 ;; `mevedel-memory-cleanup'
 (declare-function mevedel-memory-cleanup-entry "mevedel-memory-cleanup" (workspace entry entries))
 (autoload 'mevedel-memory-cleanup-entry "mevedel-memory-cleanup")
@@ -48,13 +52,13 @@
                      (and (hash-table-p record) (= 2 (hash-table-count record))
                           (stringp (gethash "file" record))
                           (mevedel-journal-store-id-p (gethash "sha256" record)))) private)
-         (let ((required (append (list (format "state/passes/%s/accepted.el" id) (format "state/passes/%s/prepared.el" id))
-                                 (mapcar (lambda (record) (format "state/decisions/%s.el" (gethash "id" record))) related)))
+         (let ((required (append (list (format "passes/%s/accepted.el" id) (format "passes/%s/prepared.el" id))
+                                 (mapcar (lambda (record) (format "decisions/%s.el" (gethash "id" record))) related)))
                (paths (mapcar (lambda (record) (gethash "file" record)) private)))
            (and (= (length paths) (length (delete-dups (copy-sequence paths))))
                 (cl-every (lambda (path) (member path paths)) required)
                 (cl-every (lambda (path) (or (member path required)
-                                           (string-match-p (concat "\\`state/writes/" mevedel-journal-store-hash-regexp "\\.el\\'") path))) paths))))))
+                                           (string-match-p (concat "\\`writes/" mevedel-journal-store-hash-regexp "\\.el\\'") path))) paths))))))
 
 (defun mevedel-journal-cleanup--read (root path)
   "Read a bounded immutable expiry manifest at PATH under journal ROOT."
@@ -113,14 +117,14 @@ An accepted manifest remains recoverable after its owner expires."
       (if (mevedel-session-control-fs-path-exists-p done)
           (unless (equal hash (mevedel-session-control-fs-read-file done))
             (error "Invalid journal expiry completion"))
-        (mevedel-session-control-fs-make-directory (file-name-concat root "state" "expired") t)
+        (mevedel-session-control-fs-make-directory (file-name-concat (mevedel-journal-store-state-directory root) "expired") t)
         (seq-doseq (entry (plist-get manifest :entries))
           (let* ((file (gethash "file" entry))
                  (expected (gethash "sha256" entry))
                  (capture (and (equal (gethash "kind" entry) "digest")
-                               (file-name-concat root "state" "captures" (gethash "id" entry)))))
+                               (file-name-concat (mevedel-journal-store-state-directory root) "captures" (gethash "id" entry)))))
             (when (equal (gethash "kind" entry) "consolidation")
-              (let ((retired (file-name-concat root "state" "retired-passes" (gethash "id" entry)))
+              (let ((retired (file-name-concat (mevedel-journal-store-state-directory root) "retired-passes" (gethash "id" entry)))
                     (record (json-serialize (list :sha256 expected :scope (gethash "scope" entry)
                                                   :created (substring file 0 20)))))
                 (mevedel-session-control-fs-make-directory (file-name-directory retired) t)
@@ -143,7 +147,8 @@ An accepted manifest remains recoverable after its owner expires."
             (when (and capture (mevedel-session-control-fs-path-exists-p (file-name-concat capture "retired")))
               (mevedel-session-control-fs-delete-directory capture))
             (seq-doseq (record (gethash "private" entry))
-              (let ((path (file-name-concat root (gethash "file" record))))
+              (let ((path (file-name-concat (mevedel-journal-store-state-directory root)
+                                            (gethash "file" record))))
                 (condition-case nil
                     (let ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ (* 4 1024 1024)))))
                       (unless (equal (gethash "sha256" record) (secure-hash 'sha256 text))
@@ -159,7 +164,7 @@ An accepted manifest remains recoverable after its owner expires."
 This only prevents reuse of expired private state; it never authorizes deletion."
   (unless (mevedel-journal-store-id-p id) (error "Invalid memory pass identity"))
   (mevedel-session-control-fs-path-exists-p
-   (file-name-concat (mevedel-journal-store-directory workspace-root) "state" "retired-passes" id)))
+   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory workspace-root)) "retired-passes" id)))
 
 (defun mevedel-journal-cleanup-recover (root)
   "Finish accepted expiry manifests under journal ROOT before new mutations.
@@ -167,18 +172,18 @@ Callers must hold journal mutation ownership while selecting subsequent
 evidence."
   (let ((deleted 0))
     (dolist (path (mevedel-session-control-fs-list-directory
-                  (file-name-concat root "state" "expiry")
+                  (file-name-concat (mevedel-journal-store-state-directory root) "expiry")
                   (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))
       (cl-incf deleted (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))))
     deleted))
 
 (defun mevedel-journal-cleanup--protected-p (root entry)
   "Return non-nil when ENTRY retains pending capture or pinned review evidence."
-  (let ((capture (file-name-concat root "state" "captures" (plist-get entry :capture-id))))
+  (let ((capture (file-name-concat (mevedel-journal-store-state-directory root) "captures" (plist-get entry :capture-id))))
     (or (and (mevedel-session-control-fs-path-exists-p capture)
              (not (mevedel-session-control-fs-path-exists-p (file-name-concat capture "retired"))))
         (mevedel-session-control-fs-list-directory
-         (file-name-concat root "state" "evidence-pins" (plist-get entry :id))
+         (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins" (plist-get entry :id))
          "\\`[^.]"))))
 
 (defun mevedel-journal-cleanup--owned (workspace claim &optional limit)
@@ -192,7 +197,7 @@ Select at most LIMIT content groups (default 50), including recovery."
     ;; Recovery consumes the same content budget as new work.  A manifest is
     ;; indivisible: defer one that does not fit until the next idle batch.
     (dolist (path (mevedel-session-control-fs-list-directory
-                  (file-name-concat root "state" "expiry")
+                  (file-name-concat (mevedel-journal-store-state-directory root) "expiry")
                   (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))
       (unless (mevedel-session-control-fs-path-exists-p (concat path ".done"))
         (let* ((manifest (mevedel-journal-cleanup--read root path))
@@ -218,7 +223,7 @@ Select at most LIMIT content groups (default 50), including recovery."
            (when-let* ((candidate (mevedel-memory-cleanup-entry workspace entry observed)))
              (push candidate entries))))))
     (when entries
-      (let* ((directory (file-name-concat root "state" "expiry"))
+      (let* ((directory (file-name-concat (mevedel-journal-store-state-directory root) "expiry"))
              (path (file-name-concat directory (concat (plist-get claim :owner) ".json")))
              (text (json-serialize
                     (append (mevedel-journal-claim--record claim)
@@ -243,9 +248,12 @@ or nil when busy, throttled, or unavailable."
              (or force (null (mevedel-workspace-journal-cleanup-at workspace))
                  (>= (- (float-time) (mevedel-workspace-journal-cleanup-at workspace)) 3600)))
     (setf (mevedel-workspace-journal-cleanup-at workspace) (float-time))
+    (mevedel-state-cleanup workspace)
     (condition-case err
         (let* ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
-               (present (mevedel-session-control-fs-directory-p root))
+               (present (or (mevedel-session-control-fs-directory-p
+                             (mevedel-journal-store-state-directory root))
+                            (mevedel-session-control-fs-directory-p root)))
                (claim (and present
                            (mevedel-journal-claim-acquire (mevedel-journal-store-claim-directory root 'mutation) 120)))
                digest consolidation)

@@ -633,6 +633,36 @@ workspace-owned `.mevedel/shared/` for working notes and handoffs across session
 with agent-chosen filenames and folders. See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
 
+## Generated workspace state
+
+`.mevedel/state/` contains internal journal records (`journal/`), target write
+coordination (`memory-write/`), clipboard images (`media/`), Git evidence packages
+(`review-packages/`), workspace telemetry (`diagnostics/`), and plugin runtime data
+(`plugin-data/`). The common parent is ignored by Git. This is persistent state,
+not a disposable cache: journal recovery and target write coordination retain
+their own cleanup rules, and plugins own their runtime data.
+
+The hourly idle cleanup opportunity also collects generated clipboard/guest PNGs
+and review packages older than seven days, up to 100 deletions per run. A complete
+target-side ripgrep search of `.mevedel/` retains files mentioned in saved
+conversations, historical publication snapshots, input history, memory, journal,
+and other retained state. The artifact and diagnostics directories themselves
+are excluded. Live buffers, input rings, drafts, and gptel file contexts also
+retain files. References are conservative basename matches; unrelated mentions
+can retain a file. References outside managed workspace state are not tracked.
+Foreign session ownership, linked candidate directories, or an incomplete search
+postpone collection. Unknown filenames and files over 32 MiB are retained; a
+file changed since selection is skipped. Cleanup runs even without public journal
+entries and never calls a model.
+
+Workspace diagnostics rotate when an append would exceed 10 MiB, retaining the
+current file and one archive. See [telemetry](telemetry.md).
+
+Public journal entries, curated memory, sessions (including session media and
+diagnostics), shared working files, input history, identity, and configuration
+remain outside this directory. `mevedel-workspace-state-dir` continues to name
+the `.mevedel/` configuration and data root.
+
 ## Persistent memory
 
 Memory indexes are read from configured `.mevedel/memory/` and

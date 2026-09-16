@@ -38,7 +38,7 @@ The workspace journal is a deliberate exception: `.mevedel/journal/` is
 generated, uncurated evidence and runtime control state, not a portable
 agent-authored resource. It has no `.agents/journal/` counterpart and no
 global root. Its immutable public records are separate from private
-`state/` records. See [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
+`.mevedel/state/journal/` records. See [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
 
 Skill discovery uses the same local-before-global and `.mevedel/`-before-
 `.agents/` order for ordinary resource roots, followed by bundled skills and

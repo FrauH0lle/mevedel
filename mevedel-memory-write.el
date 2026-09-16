@@ -24,11 +24,24 @@
 
 (defun mevedel-memory-write--directory (workspace)
   "Return WORKSPACE's private write-intent directory."
-  (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace)) "state" "writes"))
+  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "writes"))
+
+(defun mevedel-memory-write-control-directory (directory)
+  "Return shared write coordination for the original physical DIRECTORY.
+Standard .mevedel/memory roots use their sibling state/memory-write.
+Other memory and instruction roots use .mevedel/state/memory-write/root
+inside that root.  The location never depends on the calling workspace."
+  (let* ((directory (directory-file-name directory))
+         (parent (file-name-directory directory)))
+    (if (and (equal (file-name-nondirectory directory) "memory")
+             (equal (file-name-nondirectory (directory-file-name parent)) ".mevedel"))
+        (file-name-concat parent "state" "memory-write")
+      (file-name-concat directory ".mevedel" "state" "memory-write" "root"))))
 
 (defun mevedel-memory-write--target (scope root)
   "Return the coordination directory at original ROOT in SCOPE."
-  (file-name-concat (plist-get (mevedel-memory-scope--root scope root) :dir) ".mevedel-memory-write"))
+  (mevedel-memory-write-control-directory
+   (plist-get (mevedel-memory-scope--root scope root) :dir)))
 
 (defun mevedel-memory-write-call (scope root function &optional intent)
   "Call FUNCTION with exclusive target ownership for original ROOT in SCOPE.

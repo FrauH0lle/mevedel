@@ -57,7 +57,7 @@
                                    :created "2000-01-01T00:00:00Z" :model "provider:model"
                                    :focus "" :digests (list (plist-get digest :id))
                                    :proposals nil :references nil))))
-          (let ((pins (file-name-concat (mevedel-journal-store-directory root) "state" "evidence-pins" (plist-get digest :id))))
+          (let ((pins (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "evidence-pins" (plist-get digest :id))))
             (make-directory pins t)
             (write-region "Another review still needs this note" nil (file-name-concat pins "review.pin") nil 'silent))
           (mevedel-test-journal-cleanup--entry root "expired")
@@ -124,9 +124,9 @@
                (pinned (mevedel-test-journal-cleanup--entry root "pinned"))
                (retired (mevedel-test-journal-cleanup--entry root "retired"))
                (source (file-name-concat root "source-session"))
-               (capture (file-name-concat directory "state" "captures" (plist-get retired :capture-id)))
-               (pin-directory (file-name-concat directory "state" "evidence-pins" (plist-get pinned :id))))
-          (make-directory (file-name-concat directory "state" "captures" (plist-get pending :capture-id)) t)
+               (capture (file-name-concat (mevedel-journal-store-state-directory directory) "captures" (plist-get retired :capture-id)))
+               (pin-directory (file-name-concat (mevedel-journal-store-state-directory directory) "evidence-pins" (plist-get pinned :id))))
+          (make-directory (file-name-concat (mevedel-journal-store-state-directory directory) "captures" (plist-get pending :capture-id)) t)
           (mevedel-journal-pins-retain source (plist-get pending :capture-id) nil)
           (make-directory pin-directory t)
           (write-region "pending proposal evidence" nil (file-name-concat pin-directory "proposal.json") nil 'silent)
@@ -165,7 +165,7 @@
           (dolist (scope '("mutation" "digest-run"))
             (let* ((entry (mevedel-test-journal-cleanup--entry root scope))
                    (claim (mevedel-journal-claim-acquire
-                           (file-name-concat (mevedel-journal-store-directory root) "state" scope) 120))
+                           (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) scope) 120))
                    (mevedel-journal-max-age-days 365))
               (should-not (mevedel-journal-cleanup-expired workspace t))
               (should (mevedel-journal-store-read root (plist-get entry :file)))
@@ -194,9 +194,9 @@
               (should-not (mevedel-journal-cleanup-expired workspace))))
           (should (file-exists-p path))
           (should-not (mevedel-test-journal-cleanup--digests root))
-          (let* ((claim (mevedel-journal-claim-current (file-name-concat directory "state" "mutation")))
+          (let* ((claim (mevedel-journal-claim-current (file-name-concat (mevedel-journal-store-state-directory directory) "mutation")))
                  (manifest (mevedel-journal-cleanup--read
-                            directory (file-name-concat directory "state" "expiry"
+                            directory (file-name-concat (mevedel-journal-store-state-directory directory) "expiry"
                                                         (concat (plist-get claim :owner) ".json")))))
             (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time)
                        (lambda (_path) (1+ (plist-get claim :expires-at)))))
@@ -215,7 +215,7 @@
          (workspace (mevedel-workspace--create :root root))
          (entry (mevedel-test-journal-cleanup--entry root "fenced"))
          (directory (mevedel-journal-store-directory root))
-         (scope (file-name-concat directory "state" "mutation"))
+         (scope (file-name-concat (mevedel-journal-store-state-directory directory) "mutation"))
          (claim (mevedel-journal-claim-acquire scope 120))
          (mevedel-journal-max-age-days 365)
          successor)
@@ -232,14 +232,14 @@
           (setq successor (mevedel-journal-claim-acquire scope 120))
           (should successor)
           (let ((manifest (mevedel-journal-cleanup--read
-                           directory (file-name-concat directory "state" "expiry"
+                           directory (file-name-concat (mevedel-journal-store-state-directory directory) "expiry"
                                                        (concat (plist-get claim :owner) ".json")))))
             (should-not (mevedel-journal-claim-settle claim 'completed (plist-get manifest :hash)))
             (should (= 0 (mevedel-journal-cleanup--apply directory manifest)))
             (should (mevedel-journal-store-read root (plist-get entry :file))))
           (mevedel-journal-claim-settle successor 'completed "")
           (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
-          (should-not (file-exists-p (file-name-concat directory "state" "expiry"
+          (should-not (file-exists-p (file-name-concat (mevedel-journal-store-state-directory directory) "expiry"
                                                      (concat (plist-get claim :owner) ".json")))))
       (delete-directory root t)))
 
@@ -285,7 +285,7 @@
                        (lambda (&rest _) (error "Injected interruption before application"))))
               (should-not (mevedel-journal-cleanup-expired workspace))))
           (let* ((job (car (mevedel-session-control-fs-list-directory
-                           (file-name-concat directory "state" "expiry") "\\.json\\'")))
+                           (file-name-concat (mevedel-journal-store-state-directory directory) "expiry") "\\.json\\'")))
                  (object (json-parse-string (mevedel-session-control-fs-read-file job))))
             (puthash "sha256" (make-string 64 ?0)
                      (aref (gethash "entries" object) 0))

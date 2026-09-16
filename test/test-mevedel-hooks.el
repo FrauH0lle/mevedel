@@ -158,7 +158,7 @@
          (remote-root (format "/mevedelmock:%s:%s/" (system-name) local-root))
          (plugin-root (file-name-concat remote-root "plugin/"))
          (plugin-data
-          (file-name-concat remote-root ".mevedel/plugin-data/demo/"))
+          (file-name-concat remote-root ".mevedel/state/plugin-data/demo/"))
          (target (mevedel-execution-target-create remote-root))
          (session
           (mevedel-session--create :name "main" :execution-target target)))
@@ -183,7 +183,7 @@
             (should
              (member
               (concat "MEVEDEL_PLUGIN_DATA=" local-root
-                      "/.mevedel/plugin-data/demo/")
+                      "/.mevedel/state/plugin-data/demo/")
               environment))
             (should (file-directory-p plugin-data))))
       (delete-directory local-root t))))
@@ -920,7 +920,7 @@
             (should (equal plugin-root
                            (plist-get plugin-handler :source-root)))
             (should (equal (file-name-concat root ".mevedel"
-                                             "plugin-data" "demo")
+                                             "state" "plugin-data" "demo")
                            (plist-get plugin-handler :plugin-data)))
             (should (= 7 (plist-get plugin-handler :timeout)))
             (should (equal "plugin status"
@@ -2240,7 +2240,7 @@
             (should
              (equal
               (concat project-plugin-local-root "|"
-                      (file-name-concat root ".mevedel" "plugin-data"
+                      (file-name-concat root ".mevedel" "state" "plugin-data"
                                         "target-demo"))
               (file-text
                (file-name-concat project-plugin-local-root
@@ -2336,7 +2336,7 @@
          (session (mevedel-hooks-test--session root))
          (workspace (mevedel-session-workspace session))
          (data-dir (file-name-concat root ".mevedel"
-                                     "plugin-data" "demo"))
+                                     "state" "plugin-data" "demo"))
          (env-command
           (mevedel-hooks-test--emacs-command
            "(princ (format \"{\\\"systemMessage\\\":\\\"%s|%s|%s|%s|%s|%s\\\"}\" (getenv \"PLUGIN_ROOT\") (getenv \"CLAUDE_PLUGIN_ROOT\") (getenv \"PLUGIN_DATA\") (getenv \"CLAUDE_PLUGIN_DATA\") (getenv \"MEVEDEL_PLUGIN_ROOT\") (getenv \"MEVEDEL_PLUGIN_DATA\")))")))

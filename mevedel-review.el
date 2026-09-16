@@ -581,7 +581,7 @@ CWD is used for git merge-base resolution."
 (defun mevedel-review--package-directory (cwd)
   "Return review package directory for CWD."
   (file-name-concat (mevedel-review--repo-root cwd)
-                    ".mevedel" "review-packages"))
+                    ".mevedel" "state" "review-packages"))
 
 (defun mevedel-review--target-native-path (cwd path)
   "Return PATH in CWD's target-native path domain."

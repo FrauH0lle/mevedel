@@ -1216,7 +1216,7 @@ the braced `@file:{...}` form. Directory drops are ignored.
 
 `C-y` in the composer first tries to save a clipboard image, using the
 first available platform clipboard command, into
-`<workspace-root>/.mevedel/media/clipboard-YYYYmmdd-HHMMSS.png`. When an
+`<workspace-root>/.mevedel/state/media/clipboard-YYYYmmdd-HHMMSS.png`. When an
 image is saved, the view inserts it as an `@file` mention instead of
 yanking text. If no clipboard image is available, normal `yank` behavior
 is used.

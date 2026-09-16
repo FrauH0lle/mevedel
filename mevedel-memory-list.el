@@ -78,7 +78,7 @@
          (writes (mevedel-memory-write-list workspace)) last-pass seen rows)
     ;; Accepted private state remains inspectable if public publication failed.
     (dolist (directory (mevedel-session-control-fs-list-directory
-                        (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace)) "state" "passes")
+                        (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes")
                         mevedel-journal-store-id-regexp))
       (when (mevedel-session-control-fs-path-exists-p (file-name-concat directory "accepted.el"))
         (push (list :kind 'consolidation :pass-id (file-name-nondirectory (directory-file-name directory))) entries)))

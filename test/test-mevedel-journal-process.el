@@ -57,7 +57,7 @@
                (funcall (car callbacks) "Late replacement" nil)
                (with-temp-buffer
                  (insert-file-contents
-                  (file-name-concat root ".mevedel" "diagnostics" "telemetry-log.el"))
+                  (file-name-concat root ".mevedel" "state" "diagnostics" "telemetry-log.el"))
                  (goto-char (point-min))
                  (let ((event (read (current-buffer))))
                    (should (eq 'journal-digest-written (plist-get event :event)))
@@ -97,7 +97,7 @@
          (with-temp-buffer
            (insert-file-contents
             (file-name-concat (mevedel-workspace-root workspace)
-                              ".mevedel" "diagnostics" "telemetry-log.el"))
+                              ".mevedel" "state" "diagnostics" "telemetry-log.el"))
            (goto-char (point-min))
            (dotimes (attempt 3)
              (let ((event (read (current-buffer))))
@@ -134,7 +134,7 @@
             (calls 0))
        (cl-letf (((symbol-function 'gptel-request)
                   (lambda (_prompt &rest args)
-                    (make-directory blocked)
+                    (make-directory blocked t)
                     (cl-incf calls)
                     (funcall (plist-get args :callback) mevedel-test-journal-process--digest nil))))
          (let* ((state (mevedel-journal-process-next workspace))
@@ -419,7 +419,7 @@
      (let* ((workspace (mevedel-session-workspace session))
             (id (plist-get (car (mevedel-journal-capture-seal session buffer 'session-end)) :id))
             (claim (mevedel-journal-claim-acquire
-                    (file-name-concat (mevedel-journal-process--key workspace) "state" "digest-run") 120)))
+                    (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-process--key workspace)) "digest-run") 120)))
        (unwind-protect
            (progn
              (should-error (mevedel-journal-process-discard workspace id) :type 'user-error)

@@ -43,11 +43,11 @@
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-control-fs'
-(declare-function mevedel-session-control-fs-append-file "mevedel-session-control-fs"
-                  (path content &optional coding-system))
+(declare-function mevedel-session-control-fs-append-rotating "mevedel-session-control-fs"
+                  (path content max-bytes))
 (declare-function mevedel-session-control-fs-make-directory "mevedel-session-control-fs"
                   (path &optional parents))
-(autoload 'mevedel-session-control-fs-append-file "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-append-rotating "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-make-directory "mevedel-session-control-fs")
 
 ;; `mevedel-session-persistence'
@@ -492,12 +492,12 @@ Failures are diagnostic only and never alter the background operation."
   (when (and mevedel-telemetry-enabled workspace)
     (condition-case err
         (let* ((directory (file-name-concat (mevedel-workspace-root workspace)
-                                          ".mevedel" "diagnostics"))
+                                          ".mevedel" "state" "diagnostics"))
                (entry (mevedel-telemetry--envelope nil event props)))
           (mevedel-session-control-fs-make-directory directory t)
-          (mevedel-session-control-fs-append-file
+          (mevedel-session-control-fs-append-rotating
            (file-name-concat directory mevedel-telemetry-file-name)
-           (mevedel-telemetry--entry-text entry))
+           (mevedel-telemetry--entry-text entry) (* 10 1024 1024))
           entry)
       (error
        (message "mevedel: workspace telemetry failed: %s" (error-message-string err))

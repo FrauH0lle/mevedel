@@ -646,12 +646,12 @@
     (should (equal (file-name-as-directory (expand-file-name root))
                    (mevedel-plugins-plugin-root "demo")))
     (should (equal (file-name-concat workspace-root ".mevedel"
-                                     "plugin-data" "demo")
+                                     "state" "plugin-data" "demo")
                    (mevedel-plugins-plugin-data-dir "demo" workspace))))
   (let* ((root "~/mevedel-plugins-ws/")
          (workspace (mevedel-plugins-test--workspace root)))
     (should (equal (file-name-concat (expand-file-name root) ".mevedel"
-                                     "plugin-data" "demo")
+                                     "state" "plugin-data" "demo")
                    (mevedel-plugins-plugin-data-dir "demo" workspace)))))
 (provide 'test-mevedel-plugin-registry)
 ;;; test-mevedel-plugin-registry.el ends here

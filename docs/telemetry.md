@@ -14,10 +14,17 @@ process-relative elapsed milliseconds, a process-local sequence number, the
 session and turn, and any current preset and Goal identity.
 
 Sessionless background work uses the same envelope and privacy filter at
-`WORKSPACE/.mevedel/diagnostics/telemetry-log.el`, through target-native control
+`WORKSPACE/.mevedel/state/diagnostics/telemetry-log.el`, through target-native control
 operations on local and TRAMP workspaces. It has no session identity or Goal
 and does not manufacture a conversation. It follows the same enable switch;
 disabled telemetry creates no diagnostic state.
+
+Workspace appends rotate before `telemetry-log.el` exceeds 10 MiB, keeping one
+`telemetry-log.el.1` archive. Cooperating writers share a target directory lock.
+The next rotation replaces the old archive. An already oversized log is trimmed
+to its last complete lines within 10 MiB on rotation; a single oversized event
+is rejected with the ordinary telemetry failure diagnostic. No age timer is
+needed. Session telemetry keeps its existing session-owned lifetime.
 
 On Linux, elapsed milliseconds and span durations use the kernel monotonic
 clock exposed by `/proc/uptime`. Other systems fall back to process-relative

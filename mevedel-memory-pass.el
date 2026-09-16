@@ -63,8 +63,7 @@ malformed retirement marker stops automatic admission for inspection."
                  (string-empty-p (plist-get entry :focus)))
         (setq latest (max (or latest 0) (float-time (date-to-time (plist-get entry :created)))))))
     (dolist (path (mevedel-session-control-fs-list-directory
-                  (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace))
-                                    "state" "retired-passes")
+                  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "retired-passes")
                   mevedel-journal-store-id-regexp))
       (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix 513))
              (record (json-parse-string text))
@@ -359,7 +358,7 @@ No request recursively drains a remaining backlog."
                       (plist-put state :timer
                                  (run-at-time
                                   (max 0 (- (plist-get claim :expires-at)
-                                            (mevedel-session-control-fs-target-time key))) nil
+                                            (mevedel-session-control-fs-target-time (plist-get claim :directory)))) nil
                                   (lambda ()
                                     (unwind-protect
                                         (mevedel-memory-pass--finish state '(:outcome error :error "Memory pass timed out"))

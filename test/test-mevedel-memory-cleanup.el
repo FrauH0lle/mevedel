@@ -165,7 +165,7 @@
     (should-error (mevedel-memory-store-read workspace (plist-get prepared :id)))
     (let ((record (json-parse-string
                    (mevedel-session-control-fs-read-file
-                    (file-name-concat (mevedel-journal-store-directory root) "state" "retired-passes" (plist-get prepared :id))))))
+                    (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "retired-passes" (plist-get prepared :id))))))
       (should (equal "general" (gethash "scope" record)))
       (should (equal (plist-get review :created) (gethash "created" record))))
     (should-not (mevedel-memory-list--collect (list :workspace workspace))))
@@ -174,7 +174,7 @@
     (publish nil nil "SECRET focus")
     (should (= 1 (mevedel-journal-cleanup-expired workspace)))
     (let* ((text (mevedel-session-control-fs-read-file
-                  (file-name-concat (mevedel-journal-store-directory root) "state" "retired-passes" (plist-get prepared :id))))
+                  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "retired-passes" (plist-get prepared :id))))
            (record (json-parse-string text)))
       (should (equal "focused" (gethash "scope" record)))
       (should (equal (plist-get review :created) (gethash "created" record)))
@@ -288,7 +288,7 @@
     (publish)
     (mevedel-journal-cleanup-expired workspace)
     (let* ((journal (mevedel-journal-store-directory root))
-           (path (car (mevedel-session-control-fs-list-directory (file-name-concat journal "state" "expiry") "\\.json\\'")))
+           (path (car (mevedel-session-control-fs-list-directory (file-name-concat (mevedel-journal-store-state-directory journal) "expiry") "\\.json\\'")))
            (manifest (json-parse-string (mevedel-session-control-fs-read-file path)))
            (private (gethash "private" (aref (gethash "entries" manifest) 0))))
       (puthash "file" "../outside.el" (aref private 0))

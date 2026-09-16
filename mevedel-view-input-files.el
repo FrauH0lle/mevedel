@@ -209,7 +209,7 @@ handler advertises `dnd-multiple-handler'."
     (unless workspace
       (user-error "No active session for clipboard image"))
     (let ((dir (file-name-concat (mevedel-workspace-state-dir workspace)
-                                 "media")))
+                                 "state" "media")))
       (make-directory dir t)
       (mevedel-workspace-ensure-generated-state-ignored workspace)
       dir)))
@@ -226,7 +226,7 @@ handler advertises `dnd-multiple-handler'."
     path))
 
 (defun mevedel-view--save-clipboard-image (&optional no-error)
-  "Save a clipboard image under `.mevedel/media/'.
+  "Save a clipboard image under `.mevedel/state/media/'.
 Return the saved image path.  When NO-ERROR is non-nil, return nil
 instead of signaling when no image is available."
   (condition-case err

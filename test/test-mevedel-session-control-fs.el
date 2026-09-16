@@ -13,6 +13,33 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-session-control-fs-append-rotating ()
+  (let* ((root (make-temp-file "mevedel-control-fs-" t))
+         (path (file-name-concat root "diagnostic.el"))
+         (archive (concat path ".1")))
+    (unwind-protect
+        (progn
+          (mevedel-session-control-fs-append-rotating path "aa\n" 6)
+          (mevedel-session-control-fs-append-rotating path "bb\n" 6)
+          (should-not (file-exists-p archive))
+          (mevedel-session-control-fs-append-rotating path "cc\n" 6)
+          (should (equal "aa\nbb\n" (mevedel-session-control-fs-read-file archive)))
+          (should (equal "cc\n" (mevedel-session-control-fs-read-file path)))
+          (mevedel-session-control-fs-append-rotating path "ddd\n" 6)
+          (should (equal "cc\n" (mevedel-session-control-fs-read-file archive)))
+          (should-error (mevedel-session-control-fs-append-rotating path "too large\n" 6))
+          (should (equal "ddd\n" (mevedel-session-control-fs-read-file path)))
+          (mevedel-session-control-fs-write-file path "old\nold\nnew\n")
+          (mevedel-session-control-fs-append-rotating path "ok\n" 6)
+          (should (equal "new\n" (mevedel-session-control-fs-read-file archive)))
+          (should (equal "ok\n" (mevedel-session-control-fs-read-file path)))
+          (delete-file archive)
+          (make-symbolic-link path archive)
+          (should-error (mevedel-session-control-fs-append-rotating path "x\n" 6))
+          (should (equal "ok\n" (mevedel-session-control-fs-read-file path)))
+          (should-not (directory-files root nil "\\`.mevedel-control-fs-")))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs-operations
   (:doc "round trips UTF-8 content and distinguishes creation conflicts")
   (let* ((root (make-temp-file "mevedel-control-fs-" t))

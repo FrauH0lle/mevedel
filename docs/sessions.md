@@ -1359,8 +1359,7 @@ repository's common exclude file. The generated entries are:
 - `/.mevedel/sessions/`
 - `/.mevedel/tool-results/`
 - `/.mevedel/input-history.el`
-- `/.mevedel/media/`
-- `/.mevedel/plugin-data/`
+- `/.mevedel/state/`
 
 ### Locking
 

@@ -189,7 +189,7 @@ Plugin command hooks receive compatibility environment variables:
 - `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `MEVEDEL_PLUGIN_ROOT` point at
   the plugin root.
 - `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `MEVEDEL_PLUGIN_DATA` point at
-  `<workspace>/.mevedel/plugin-data/<plugin-name>` and are created before
+  `<workspace>/.mevedel/state/plugin-data/<plugin-name>` and are created before
   the command starts.
 
 For a project plugin on a remote target, all six values use target-native

@@ -189,6 +189,8 @@ completed-review and proposal-decision records, and
 outcomes. Completed-turn capture and sealing are connected to session
 lifecycle. Background generation and accepted-result recovery run from
 lifecycle opportunities and workspace activation recovers abandoned checkpoints.
+Public entries live in `.mevedel/journal/`; private bookkeeping and recovery
+evidence live in `.mevedel/state/journal/`.
 `memory://journal/` supports ordinary Read, Glob, and Grep over validated published
 records, with cached composer completion and request-time roster availability.
 The main conversation receives a bounded recent-digest map as retained context.
@@ -379,11 +381,11 @@ from reviving evidence already committed for expiry. The prepared record retains
 the original scope, complete digest bodies, source fingerprints, and focus.
 Focus must fit the public record's 4 KiB bound before inference begins.
 
-Private records live in `state/passes/<pass-id>/prepared.el` and `accepted.el`.
+Private records live in `.mevedel/state/journal/passes/<pass-id>/prepared.el` and `accepted.el`.
 They use bounded durable Lisp data, preserving literal byte strings in captured
 before-state; each record is limited to 4 MiB. Reading disables evaluation and
 circular-reader syntax. Evidence pins live under
-`state/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
+`.mevedel/state/journal/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
 hash. These records are internal storage, outside `memory://journal/`; displaying their
 memory bodies still requires the original scope's authority checks.
 
@@ -471,7 +473,7 @@ new memory is correct.
 rewriting the completed review. It acquires workspace ownership and checks the
 proposal's original target authority. A repeated rejection returns the same
 terminal decision, including its original reason. The reason is optional and
-limited to 4 KiB. Private `state/decisions/<decision-id>.el` records retain the
+limited to 4 KiB. Private `.mevedel/state/journal/decisions/<decision-id>.el` records retain the
 claim, exact public metadata, and optional write-intent identity. Their hash is accepted before publication,
 so a later client can recover a rejection after the owner stops.
 
@@ -514,8 +516,11 @@ synchronization rolls back before propagating a quit.
 `mevedel-memory-decision-apply` acquires the workspace claim and an independent
 claim at the original target root. It checks all captured dependencies, including
 unchanged indexes, before applying. Full before/after states live in private
-`state/writes/<intent-id>.el` records. A hash-only marker under the target's
-`.mevedel-memory-write/pending/` is durable before curated writes. An unresolved
+`.mevedel/state/journal/writes/<intent-id>.el` records. Standard `.mevedel/memory/`
+roots keep a hash-only marker in the sibling `state/memory-write/pending/` before
+curated writes. Other memory and instruction roots use
+`ROOT/.mevedel/state/memory-write/root/pending/`. Coordination belongs to the
+original target, independently of the calling workspace. An unresolved
 marker blocks other workspaces at that root even after the original claim
 expires. Coordination files are excluded from consolidation memory and source
 scopes; inventory does not descend into their directory.
@@ -880,7 +885,7 @@ memory files are never deleted by journal expiry. Readers skip retired history
 even when an interrupted deletion leaves only a private write intent behind.
 Prompt and cockpit observations are invalidated after cleanup.
 
-Private `state/` directories serve separate purposes:
+Private `.mevedel/state/journal/` directories serve separate purposes:
 
 | Directory | Purpose and retention |
 | --- | --- |

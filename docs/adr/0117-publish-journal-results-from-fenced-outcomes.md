@@ -45,6 +45,15 @@ marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
 
+Private journal records live at `.mevedel/state/journal/`, alongside other
+generated workspace state; public journal entries stay at `.mevedel/journal/`.
+Standard `.mevedel/memory/` roots coordinate through their sibling
+`state/memory-write/`. Other memory and instruction roots use
+`ROOT/.mevedel/state/memory-write/root/`. These locations depend only on the
+original target, so separate workspaces still share ownership. The `root/`
+child keeps workspace instruction claims separate from its standard memory
+claims. Memory inventory and proposal paths exclude nested `.mevedel/` state.
+
 Ordinary journal recall defaults to 14 days and is independent of physical
 retention. Unreviewed digests and unresolved proposal/recovery dependencies remain
 stored after recall ends. Fully reviewed public digests retire at idle once all
@@ -270,3 +279,21 @@ The previous age gate for processed notes is removed. Native generation-race
 tests and a 1,000-generation fixture exercise fencing and the 200-pair batch
 limit. Shared tables remain; stored memory inspection and user deletion reuse
 the existing checked write protocol.
+
+
+### 2026-09-16: collect generated workspace state
+
+The former `journal/state/` and `memory/.mevedel-memory-write/` locations mixed
+internal bookkeeping with browsable evidence and curated topics. Grouping them
+under `.mevedel/state/` makes their ownership explicit and supplies one generated
+state ignore entry. This changes storage paths and private expiry-manifest paths;
+old persisted control records are not read or automatically migrated. Public
+journal retrieval and its domain-specific retention rules remain unchanged.
+
+The state inventory also exposed missing cleanup owners for generated media,
+review packages, and workspace diagnostics. The hourly idle opportunity now
+collects old unreferenced generated artifacts after a complete retained-state
+search; foreign session owners and uncertain reads postpone it. Workspace
+diagnostics use size-based rotation with one archive. These policies do not
+expire recovery evidence or plugin-owned data. See the current
+[storage and retention contract](../architecture.md#generated-workspace-state).

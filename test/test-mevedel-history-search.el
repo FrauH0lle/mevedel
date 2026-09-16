@@ -597,8 +597,8 @@
                        (apply native-rewrite args))))
                    (let* ((first (car (sort (copy-sequence sources)
                                            (lambda (one two)
-                                             (string< (mevedel-session-session-id (car one))
-                                                      (mevedel-session-session-id (car two)))))))
+                                             (string< (mevedel-session-save-path (car one))
+                                                      (mevedel-session-save-path (car two)))))))
                           (index (substring (mevedel-session-name (car first)) 6))
                           (text (plist-get
                                 (test-mevedel-history-search--query

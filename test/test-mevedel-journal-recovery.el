@@ -50,7 +50,7 @@
      (mevedel-test-journal-capture--turn session buffer "Request" "Result")
      (let* ((workspace (mevedel-session-workspace session))
             (capture (car (mevedel-journal-capture-list workspace)))
-            (admission (file-name-concat (mevedel-journal-process--key workspace) "state" "digest-run")))
+            (admission (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-process--key workspace)) "digest-run")))
        (let ((mevedel-journal-enabled nil))
          (should-not (mevedel-journal-recovery-run workspace)))
        (should-not (file-exists-p admission))

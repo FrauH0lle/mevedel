@@ -200,6 +200,34 @@ before the operation ran."
    ;; trailing line.  Acceptable: append serves single-writer
    ;; line-oriented diagnostic streams never read at resume; upgrade to
    ;; write-to-temp + cat-merge if a consumer ever parses strictly.
+   "    append-rotating)\n"
+   "      test ! -L \"$leaf\" && test ! -L \"$leaf.1\" || exit 69\n"
+   "      test ! -e \"$leaf\" || test -f \"$leaf\" || exit 69\n"
+   "      test ! -e \"$leaf.1\" || test -f \"$leaf.1\" || exit 69\n"
+   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
+   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
+   "      printf '%s' \"$payload\" | base64 -d >\"$temporary\" || exit 66\n"
+   "      IFS= read -r limit <\"$temporary\" || exit 66\n"
+   "      [[ \"$limit\" =~ ^[1-9][0-9]*$ ]] || exit 66\n"
+   "      size=$(stat -c %s -- \"$temporary\") || exit 67\n"
+   "      incoming=$((size - ${#limit} - 1))\n"
+   "      test \"$incoming\" -le \"$limit\" || exit 67\n"
+   "      size=0\n"
+   "      if test -f \"$leaf\"; then size=$(stat -c %s -- \"$leaf\") || exit 67; fi\n"
+   "      if test $((size + incoming)) -gt \"$limit\"; then\n"
+   ;; Trim a pre-existing oversized log on first rotation, dropping the
+   ;; partial first line.  Normal rotations preserve complete records.
+   "        if test \"$size\" -gt \"$limit\"; then\n"
+   "          (set -o pipefail; tail -c \"$limit\" -- \"$leaf\" | sed '1d' >\"$leaf.1\") || exit 67\n"
+   "          : >\"$leaf\" || exit 67\n"
+   "        else\n"
+   "          mv -fT -- \"$leaf\" \"$leaf.1\" || exit 67\n"
+   "        fi\n"
+   "      fi\n"
+   "      tail -n +2 -- \"$temporary\" >>\"$leaf\" || exit 67\n"
+   "      rm -f -- \"$temporary\"\n"
+   "      trap - EXIT\n"
+   "      ;;\n"
    "    append)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      exec 8>>\"$leaf\" || exit 67\n"
@@ -447,6 +475,7 @@ parent must not turn into a `Setting current directory' failure."
     (verify-mode . "verify-mode")
     (write . "write")
     (append . "append")
+    (append-rotating . "append-rotating")
     (create . "create")
     (make-directory . "mkdir")
     (path-exists-p . "probe")
@@ -941,6 +970,19 @@ CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes.
 Unlike `write', append works in place: a crash mid-operation can leave a
 torn trailing line, which its diagnostic-stream consumers tolerate."
   (mevedel-session-control-fs--run-1 'append path content coding-system)
+  t)
+
+(defun mevedel-session-control-fs-append-rotating (path content max-bytes)
+  "Append UTF-8 CONTENT to PATH, retaining one bounded PATH.1 archive.
+Rotate before exceeding MAX-BYTES.  Reject an oversized single entry.
+The pinned parent directory lock serializes cooperating diagnostic writers."
+  (unless (and (integerp max-bytes) (> max-bytes 0))
+    (error "Diagnostic byte limit must be positive"))
+  (mevedel-session-control-fs-program-value
+   (car (mevedel-session-control-fs-run-program
+         (list (list :op 'append-rotating :path path
+                     :content (concat (number-to-string max-bytes) "\n" content)))
+         (directory-file-name (file-name-directory path)))))
   t)
 
 (defun mevedel-session-control-fs-create-file

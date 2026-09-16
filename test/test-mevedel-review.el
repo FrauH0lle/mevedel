@@ -116,10 +116,10 @@
   (test)
   :doc "removes the transport prefix from model-facing review paths"
   (should
-   (equal "/srv/project/.mevedel/review-packages/review.md"
+   (equal "/srv/project/.mevedel/state/review-packages/review.md"
           (mevedel-review--target-native-path
            "/ssh:user@host:/srv/project/"
-           "/ssh:user@host:/srv/project/.mevedel/review-packages/review.md")))
+           "/ssh:user@host:/srv/project/.mevedel/state/review-packages/review.md")))
   :doc "preserves local review paths"
   (should
    (equal "/tmp/project/review.md"
@@ -200,7 +200,7 @@
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-review-package-" t)))
          (package-file (file-name-concat root ".mevedel"
-                                         "review-packages"
+                                         "state" "review-packages"
                                          "range.diff")))
     (unwind-protect
         (progn
@@ -320,6 +320,9 @@
                         root '(:type uncommitted)))
                 (second (mevedel-review--write-package
                          root '(:type uncommitted))))
+            (should (equal (file-name-directory first)
+                           (file-name-as-directory
+                            (file-name-concat root ".mevedel" "state" "review-packages"))))
             (should-not (equal first second))
             (should (file-exists-p first))
             (should (file-exists-p second)))
