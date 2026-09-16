@@ -302,6 +302,28 @@
           (mevedel-collaboration--handle-artifact-get
            room 1 (list :reqId 8 :id "tool-1"))
           (should-not sent)
+          ;; Empty files still carry metadata and one final empty chunk.
+          (write-region "" nil path nil 'silent)
+          (setq now (+ now 2.0) sent nil)
+          (mevedel-collaboration--handle-artifact-get
+           room 1 (list :reqId 12 :id "tool-1"))
+          (should (equal '((1 :t "artifact" :reqId 12 :id "tool-1"
+                             :name "mockup.html" :mime "text/html"
+                             :size 0 :data "" :final t))
+                         sent))
+          ;; A failed write stops a multi-chunk transfer immediately.
+          (write-region content nil path nil 'silent)
+          (setq now (+ now 2.0) sent nil)
+          (let ((mevedel-collaboration--max-frame-json-bytes 600))
+            (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                       (lambda (_transport peer frame)
+                         (push (cons peer frame) sent)
+                         nil)))
+              (mevedel-collaboration--handle-artifact-get
+               room 1 (list :reqId 13 :id "tool-1"))))
+          (should (= 1 (length sent)))
+          (should (eq :json-false (plist-get (cdar sent) :final)))
+          (should (= 600 (string-bytes (json-encode (cdar sent)))))
           ;; The read itself is capped at max+1, which is the authoritative
           ;; overflow check even if the file changes after containment.
           (setq now (+ now 2.0) sent nil)

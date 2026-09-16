@@ -75,17 +75,6 @@
      (append (plist-get room :records)
              (plist-get guest :agent-artifacts)))))
 
-(defun mevedel-collaboration--artifact-frame-overhead (req-id record size)
-  "Return encoded artifact-frame overhead for REQ-ID, RECORD, and SIZE."
-  (string-bytes
-   (json-encode
-    (list :t "artifact" :reqId req-id
-          :id (plist-get record :id)
-          :name (plist-get record :artifact)
-          :mime (mevedel-collaboration--artifact-mime
-                 (plist-get record :artifact))
-          :size size :data "" :final :json-false))))
-
 (defun mevedel-collaboration--artifact-refuse (room peer req-id message)
   "Send guest PEER a bounded artifact refusal for REQ-ID in ROOM."
   (mevedel-collaboration--transport-send
@@ -140,21 +129,24 @@
                       "Artifact too large to send (%d MB); open it on the host"
                       (/ size 1024 1024)))
                   (let* ((data (base64-encode-string content t))
+                         (meta
+                          (list :t "artifact" :reqId req-id
+                                :id (plist-get record :id)
+                                :name (plist-get record :artifact)
+                                :mime (mevedel-collaboration--artifact-mime
+                                       (plist-get record :artifact))
+                                :size size))
+                         ;; Budget the metadata actually sent, with the longer
+                         ;; non-final marker and an empty data string.
                          (overhead
-                          (mevedel-collaboration--artifact-frame-overhead
-                           req-id record size))
+                          (string-bytes
+                           (json-encode
+                            (append meta '(:data "" :final :json-false)))))
                          (chunk
                           (max
                            1
                            (- mevedel-collaboration--max-frame-json-bytes
                               overhead)))
-                         (meta
-                          (list
-                           :id (plist-get record :id)
-                           :name (plist-get record :artifact)
-                           :mime (mevedel-collaboration--artifact-mime
-                                  (plist-get record :artifact))
-                           :size size))
                          (total (length data))
                          (start 0)
                          (sent t)
@@ -166,7 +158,6 @@
                               (mevedel-collaboration--transport-send
                                transport peer
                                (append
-                                (list :t "artifact" :reqId req-id)
                                 meta
                                 (list :data (substring data start end)
                                       :final (if done t :json-false))))
