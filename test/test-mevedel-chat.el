@@ -146,6 +146,38 @@
 (mevedel-deftest mevedel-install (:quiet t)
   ,test
   (test)
+  :doc "makes the focus callback callable before the first view opens"
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory)
+            nil t nil "--batch" "-Q" "--eval"
+            (prin1-to-string
+             `(progn
+                (setq load-path ',load-path)
+                (require 'ert)
+                (require 'mevedel)
+                (let ((after-focus-change-function #'ignore))
+                  (cl-letf (((symbol-function 'message)
+                             (lambda (format-string &rest args)
+                               (should
+                                (member
+                                 (apply #'format format-string args)
+                                 '("mevedel installed successfully"
+                                   "mevedel uninstalled successfully"))))))
+                    (dotimes (_ 2)
+                      (unwind-protect
+                          (progn
+                            (mevedel-install)
+                            (should-not
+                             (eq after-focus-change-function #'ignore))
+                            (funcall after-focus-change-function))
+                        (mevedel-uninstall))
+                      (should (eq after-focus-change-function #'ignore))
+                      (funcall after-focus-change-function)))))))))
+      (ert-info ((buffer-string))
+        (should (equal 0 status))
+        (should (equal "" (buffer-string))))))
   :doc "restores focus-driven view resumption after uninstall and reinstall"
   (let ((after-focus-change-function #'ignore)
         (gptel--known-tools (copy-tree gptel--known-tools))

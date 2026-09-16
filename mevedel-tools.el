@@ -16,6 +16,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(eval-when-compile
+  (require 'gptel-request))
 (require 'mevedel-tool-registry)
 
 (require 'mevedel-structs)

@@ -842,6 +842,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		     (mevedel--submitted-subdirectives directive)))
                execution-session-id
                reserved-turn
+               reserved-request
                response-start
                settled-p
                (callback-fn
@@ -849,6 +850,14 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		  (unless settled-p
 		    (setq settled-p t)
 		    (let* ((info (gptel-fsm-info fsm))
+			           (current-p
+			            (lambda ()
+			              (and (buffer-live-p chat-buffer)
+			                   (eq reserved-request
+			                       (buffer-local-value
+			                        'mevedel--current-request chat-buffer)))))
+			           (response-end (plist-get info :mevedel-response-end))
+			           (prior-state (mevedel-directive-state record))
 			   (outcome (cond ((eq err 'abort) 'aborted)
 					  (err 'error)
 					  (t 'success)))
@@ -859,7 +868,11 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 				  (format "%s" err))
                               (with-current-buffer chat-buffer
 				(buffer-substring-no-properties
-				 response-start (point-max)))))
+					 response-start
+					 (if (and (markerp response-end)
+					          (eq (marker-buffer response-end) chat-buffer))
+					     response-end
+					   (point-max))))))
 			   (turn reserved-turn)
 			   (checkpoint
 			    (list :session-id execution-session-id :turn turn))
@@ -870,22 +883,30 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 			    (mevedel--record-directive-terminal-activity
 			     record action directive-text prompt result outcome
 			     checkpoint info options submitted-subdirectives)))
+                      ;; Retain the old attempt, but do not reset the status
+                      ;; of a replacement request operating on this record.
+                      (unless (funcall current-p)
+                        (setf (mevedel-directive-state record) prior-state))
                       (with-current-buffer chat-buffer
 			(let ((inhibit-read-only t))
-			  (goto-char (point-max))
+				  (goto-char (if (and (markerp response-end)
+				                       (eq (marker-buffer response-end) chat-buffer))
+				                  response-end (point-max)))
 			  (mevedel--insert-directive-turn-end
 			   directive-uuid turn action outcome
 			   (car activity) (cdr activity)))
-			(setq mevedel--current-directive-uuid nil
-                              mevedel--directive-read-only-request-p nil))
-                      (mevedel--settle-directive-presentation
-                       live-directive record workspace implementation-p
-                       submitted-subdirectives err)
-                      (mevedel--reconcile-directive-sources workspace)
+				(when (funcall current-p)
+				  (setq mevedel--current-directive-uuid nil
+	                                mevedel--directive-read-only-request-p nil)))
+	                      (when (funcall current-p)
+	                        (mevedel--settle-directive-presentation
+	                         live-directive record workspace implementation-p
+	                         submitted-subdirectives err)
+	                        (mevedel--reconcile-directive-sources workspace))
                       (unwind-protect
-			  (when callback
+				  (when (and callback (funcall current-p))
 			    (funcall callback err fsm))
-			(when (buffer-live-p transient-buffer)
+				(when (and (funcall current-p) (buffer-live-p transient-buffer))
 			  (when (overlay-buffer directive)
 			    (mevedel--remove-directive-presentation directive))
 			  (kill-buffer transient-buffer))))))))
@@ -953,6 +974,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	     (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))
 	    (mevedel-request-begin mevedel--session directive-uuid)
 	    (setq cleanup-request-reserved-p t)
+		    (setq reserved-request mevedel--current-request)
 	    (setq reserved-turn (mevedel-request-turn mevedel--current-request))
 	    (setq cleanup-turn-start (copy-marker (point-max) nil))
 	    (setq response-start

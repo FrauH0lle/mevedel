@@ -1538,6 +1538,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
           (mevedel-reminders--handle-inject fsm)
           (should (= 1 (length (plist-get data :messages))))
+          (should (equal '("/root/worker")
+                         (plist-get (gptel-fsm-info fsm)
+                                    :mevedel-agent-child-paths)))
           (let ((content
                  (plist-get (aref (plist-get data :messages) 0) :content)))
             (should (string-match-p "Direct child agents:" content))
@@ -1555,6 +1558,11 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (mevedel-tools--handle-agent-roster-inject fsm)
           (mevedel-reminders--handle-inject fsm)
           (should (= 2 (length (plist-get data :messages))))
+          (should (equal '("/root/explore" "/root/worker")
+                         (sort (copy-sequence
+                                (plist-get (gptel-fsm-info fsm)
+                                           :mevedel-agent-child-paths))
+                               #'string<)))
           (should
            (string-match-p
             "/root/explore.*explorer"

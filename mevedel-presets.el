@@ -135,6 +135,9 @@
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
 (declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
 (declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
+(declare-function mevedel--turn-current-p "mevedel-turn" (fsm))
+(declare-function mevedel--turn-hold "mevedel-turn" (fsm))
+(declare-function mevedel--turn-release "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
 
@@ -608,42 +611,60 @@ REQUEST is captured here, while the turn is still live, and handed to the
 generator.  Deferring moved that work past the point where settlement
 clears `mevedel--current-request\', so a deferred generator that re-read
 the buffer-local would find nil and signal."
+  (mevedel--turn-hold fsm)
   (let* ((continuation (or continuation #'ignore))
          (root (ignore-errors (mevedel-workspace-root workspace)))
+         finished
          (generate
           (lambda ()
-            (unwind-protect
-                (funcall
-                 (mevedel--safe-fsm-handler
-                  (lambda (_machine)
-                    (when (buffer-live-p chat-buffer)
-                      (let ((patch (with-current-buffer chat-buffer
-                                     (mevedel--generate-final-patch
-                                      workspace request))))
-                        (setf (gptel-fsm-info fsm)
-                              (plist-put (gptel-fsm-info fsm)
-                                         :mevedel-directive-patch patch))
-                        (when (and patch (> (length patch) 0))
-                          (mevedel--replace-patch-buffer patch))))))
-                 fsm)
-              (funcall continuation fsm)))))
-    (if (and root
-             (file-remote-p root)
-             (mevedel-transport-busy-p root)
-             (mevedel-transport-run-when-idle
-              (list 'final-patch (buffer-name chat-buffer)) root generate
-              (lambda ()
-                (mevedel-preset--settle-terminal fsm t))))
-        t
-      (funcall generate))))
+            (unless finished
+              (setq finished t)
+              (unwind-protect
+                  (unwind-protect
+                      (funcall
+                       (mevedel--safe-fsm-handler
+                        (lambda (_machine)
+                          (when (buffer-live-p chat-buffer)
+                            (let ((patch (with-current-buffer chat-buffer
+                                           (mevedel--generate-final-patch
+                                            workspace request))))
+                              ;; Captured evidence belongs to the old request;
+                              ;; presentation belongs only to the current one.
+                              (setf (gptel-fsm-info fsm)
+                                    (plist-put (gptel-fsm-info fsm)
+                                               :mevedel-directive-patch patch))
+                              (when (and (mevedel--turn-current-p fsm)
+                                         patch (> (length patch) 0))
+                                (mevedel--replace-patch-buffer patch))))))
+                       fsm)
+                    (funcall continuation fsm))
+                (mevedel--turn-release fsm)))))
+         (cancel
+          (lambda ()
+            (unless finished
+              (setq finished t)
+              (unwind-protect (mevedel-preset--settle-terminal fsm t)
+                (mevedel--turn-release fsm))))))
+    (condition-case err
+        (if (and root (file-remote-p root) (mevedel-transport-busy-p root))
+            (unless (mevedel-transport-run-when-idle
+                     (list 'final-patch fsm) root generate cancel)
+              (funcall cancel))
+          (funcall generate))
+      ((error quit)
+       (funcall cancel)
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-preset--settle-terminal (fsm &optional cancelled-p)
   "Invoke FSM's request callback, then settle its terminal state.
 When CANCELLED-P is non-nil, report an abort regardless of FSM's old state."
   (when-let* ((info (gptel-fsm-info fsm))
+              ((not (plist-get info :mevedel-terminal-callback-called)))
               (request-callback
                (plist-get info :mevedel-request-callback))
               ((functionp request-callback)))
+    (setf (gptel-fsm-info fsm)
+          (plist-put info :mevedel-terminal-callback-called t))
     (funcall
      (mevedel--safe-fsm-handler
       (lambda (machine)
@@ -663,8 +684,18 @@ When CANCELLED-P is non-nil, report an abort regardless of FSM's old state."
 
 (defun mevedel-preset--terminal-handler (fsm)
   "Generate FSM's patch before callback invocation and settlement."
-  (mevedel-preset--final-patch-handler
-   fsm #'mevedel-preset--settle-terminal))
+  (let ((info (gptel-fsm-info fsm)))
+    (unless (plist-get info :mevedel-terminal-started)
+      (setq info (plist-put info :mevedel-terminal-started t))
+      (when-let* ((buffer (plist-get info :buffer))
+                  ((buffer-live-p buffer)))
+        (setq info
+              (plist-put info :mevedel-response-end
+                         (with-current-buffer buffer
+                           (copy-marker (point-max) nil)))))
+      (setf (gptel-fsm-info fsm) info)
+      (mevedel-preset--final-patch-handler
+       fsm #'mevedel-preset--settle-terminal))))
 
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.
@@ -722,7 +753,9 @@ alist with mevedel-specific handlers added:
                                 (plist-put
                                  info :mevedel-request-id
                                  (mevedel-request-id
-                                  mevedel--current-request)))
+                                  mevedel--current-request))
+                                (plist-put info :mevedel-request
+                                           mevedel--current-request))
                               (mevedel-goal-capture-request fsm)
                               ;; Drain pending stash from user skill
                               ;; invocation.

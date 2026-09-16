@@ -183,7 +183,6 @@
       (should (< pos gate-pos))))
 
   :doc "installs immutable read-only denial rules on discussion requests"
-  (mevedel-tools-register)
   (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "read-only" :root "/tmp"
                      :name "read-only"))
@@ -194,6 +193,7 @@
            `((WAIT ,#'gptel--handle-wait) (DONE) (ERRS) (ABRT))))
          (begin-handler (car (cdr (assq 'WAIT handlers))))
          (fsm (gptel-make-fsm :info (list :buffer buffer))))
+    (mevedel-tools-register)
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session
@@ -1164,6 +1164,7 @@
 
   :doc "stores agent-scoped hooks and normalizes Stop"
   (progn
+    (mevedel-tools-register)
     (mevedel-define-agent hook-agent
       :description "With hooks"
       :tools (read)
