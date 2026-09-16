@@ -47,13 +47,13 @@
       if (!transcript) return;
       const follow = atLiveEdge();
       const renderer = window.mevedelTranscriptRenderer;
-      const saved = new Map([...transcript.children].map(turn =>
-        [turn.dataset.recordId, renderer.captureDisclosures(turn)]));
+      const previous = new Map([...transcript.children].map(turn =>
+        [turn.dataset.recordId, turn]));
       transcript.replaceChildren();
       records.forEach(record => {
         if (!record || typeof record.id !== 'string') return;
-        const turn = renderer.renderRecord(record, directiveLabel, openArtifact);
-        renderer.restoreDisclosures(turn, saved.get(record.id));
+        const turn = renderer.renderRecord(
+          record, directiveLabel, openArtifact, previous.get(record.id));
         transcript.append(turn);
       });
       if (records.length === 0) {

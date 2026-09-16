@@ -27,8 +27,7 @@ assert.equal(first.disclosures.get('root').open, false);
 assert.equal(first.disclosures.get('root/attachment:artifact').open, false);
 first.disclosures.get('root').open = true;
 first.disclosures.get('root/attachment:artifact').open = true;
-const next = renderer.renderRecord(record);
-renderer.restoreDisclosures(next, renderer.captureDisclosures(first));
+const next = renderer.renderRecord(record, undefined, undefined, first);
 assert.equal(next.disclosures.get('root').open, true);
 assert.equal(next.disclosures.get('root/attachment:artifact').open, true);
 
@@ -42,8 +41,18 @@ const tree = renderer.renderRecord(script);
 assert.match(textOf(tree), /Parallel/);
 assert.equal(tree.disclosures.get('root/env/2').open, true);
 tree.disclosures.get('root/env/2').open = false;
-const refresh = renderer.renderRecord(script);
-renderer.restoreDisclosures(refresh, renderer.captureDisclosures(tree));
+const refresh = renderer.renderRecord(script, undefined, undefined, tree);
 assert.equal(refresh.disclosures.get('root/env/2').open, false);
 assert.match(textOf(refresh), /Returned/);
+// A replaced child keeps its explicit closed state, while a newly arriving
+// sibling uses the host's default. Removed disclosures do not leak back in.
+const changed = {...script, presentation: {...script.presentation, children: [
+  {...script.presentation.children[1], body: 'Recovered'},
+  {id: 'new', name: 'Read', body: 'New result', collapsed: false},
+]}};
+const changedTurn = renderer.renderRecord(changed, undefined, undefined, refresh);
+assert.equal(changedTurn.disclosures.get('root/env/2').open, false);
+assert.equal(changedTurn.disclosures.get('root/new').open, true);
+assert.equal(changedTurn.disclosures.has('root/env/1'), false);
+assert.match(textOf(changedTurn), /Recovered/);
 console.log('Tool presentation renderer passed');

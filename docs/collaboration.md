@@ -190,6 +190,11 @@ the room. Failed enqueue removes the files just created for it.
 
 ## Transcript, agent, and task projection
 
+The shared browser renderer owns disclosure continuity when rebuilding a record.
+Main transcript updates, reconnect snapshots, and polled agent transcripts pass
+the previous record element to it, so explicit expansion and collapse survive
+while new nested disclosures use the host's defaults.
+
 The browser is an observer of the canonical data buffer plus, for full
 links, a remote input source. It receives visible user and assistant text
 and tool records whose start and settlement state are explicitly published,
