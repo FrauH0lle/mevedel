@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -277,6 +278,7 @@ func (rl *relay) handleHostControl(id string, rm *room, data []byte) {
 		rl.mu.Unlock()
 		return
 	}
+	var subscriptions map[string]string
 	switch control.Type {
 	case "push-subscribe":
 		_, live := rm.guests[control.Peer]
@@ -289,7 +291,6 @@ func (rl *relay) handleHostControl(id string, rm *room, data []byte) {
 				endpoint: control.Endpoint, peer: control.Peer, active: control.Active,
 			}
 		}
-		rl.mu.Unlock()
 	case "push-state":
 		if guestIDPattern.MatchString(control.GuestID) {
 			if subscription, ok := rm.subscriptions[control.GuestID]; ok {
@@ -298,35 +299,24 @@ func (rl *relay) handleHostControl(id string, rm *room, data []byte) {
 				rm.subscriptions[control.GuestID] = subscription
 			}
 		}
-		rl.mu.Unlock()
 	case "push-unsubscribe":
 		if guestIDPattern.MatchString(control.GuestID) {
 			delete(rm.subscriptions, control.GuestID)
 		}
-		rl.mu.Unlock()
 	case "push":
-		subscriptions := make(map[string]string, len(rm.subscriptions))
-		if len(control.GuestIDs) == 0 {
-			for guestID, subscription := range rm.subscriptions {
-				if !subscription.active {
-					subscriptions[guestID] = subscription.endpoint
-				}
-			}
-		} else {
-			for _, guestID := range control.GuestIDs {
-				if guestIDPattern.MatchString(guestID) {
-					if subscription := rm.subscriptions[guestID]; subscription.endpoint != "" && !subscription.active {
-						subscriptions[guestID] = subscription.endpoint
-					}
-				}
+		subscriptions = make(map[string]string, len(rm.subscriptions))
+		for guestID, subscription := range rm.subscriptions {
+			selected := len(control.GuestIDs) == 0 ||
+				(guestIDPattern.MatchString(guestID) && slices.Contains(control.GuestIDs, guestID))
+			if selected && !subscription.active {
+				subscriptions[guestID] = subscription.endpoint
 			}
 		}
-		rl.mu.Unlock()
-		for guestID, endpoint := range subscriptions {
-			go rl.sendPush(id, rm, guestID, endpoint)
-		}
-	default:
-		rl.mu.Unlock()
+	}
+	rl.mu.Unlock()
+	// Snapshot routing under the lock; network I/O never owns the room lock.
+	for guestID, endpoint := range subscriptions {
+		go rl.sendPush(id, rm, guestID, endpoint)
 	}
 }
 
