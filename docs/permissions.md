@@ -230,9 +230,25 @@ TRAMP alias reuses its authority. Paths under the target's home directory are
 written abbreviated as `~/...` and expanded against the current target at
 load, so the file can be committed and shared between machines whose home
 directories differ. A target-incarnation change never rewrites this file; only
-session-scoped exact grants are revoked. The user-global `permissions.el` remains in
-the client-local `mevedel-user-dir`; it is merged at runtime and is never copied
-to the target or into a portable session. Project-store replacement is atomic
+session-scoped exact grants are revoked. Both global and project stores belong
+to the session's execution target:
+
+| Session | Global store | Project store |
+| --- | --- | --- |
+| Local | `mevedel-user-dir/permissions.el` (default `~/.mevedel/permissions.el`) | `PROJECT/.mevedel/permissions.el` |
+| TRAMP | Target user's `~/.mevedel/permissions.el` | Target's `PROJECT/.mevedel/permissions.el` |
+
+Both stores contribute `:rules` and `:resource-grants`. Global and project
+rules share the persistent rule bucket and its ordinary matching precedence;
+explicit denies still win. Resource grants are additive, retaining their read
+or write access and exact or recursive extent. Paths in either store refer to
+the execution target, including `~` and filesystem requirements in command
+profiles. Durable files use native paths, without client-specific TRAMP prefixes.
+Local `mevedel-user-dir` customization does not relocate remote stores.
+
+A remote session does not inherit the client's global file, even if its target
+global file is missing or unavailable. Global authority is read at runtime,
+not copied into a project or portable session. Store replacement is atomic
 and descriptor-pinned; a symlink in the state path or at `permissions.el`
 fails closed before any linked target is changed.
 
@@ -266,10 +282,18 @@ and a remembered execution profile's row lists its child grants after the
 pattern. Neither kind
 adds workspace roots or authorizes Bash/Eval code. Revoking the grant restores
 the underlying
-workspace/protected-path restriction. Session-side paths use the same
-target-native codec as workspace authority, while another client's global
-rules are recomputed locally on resume. Invocation-only authority is consumed
+workspace/protected-path restriction unless another entry still grants access.
+Session-side paths use the same target-native codec as persistent authority;
+resume reloads the target's global and project stores. Invocation-only authority is consumed
 by the approved call and is not stored.
+
+The permissions cockpit shows `session`, `workspace`, and `global` entries,
+including their backing store in the details. Refresh reads current stores.
+Revoking a global entry edits the target user's global file and affects every
+project using it; revoking a workspace entry edits only that project's file.
+Identical entries in different scopes remain separate and independently
+revocable. Global entries are authored explicitly: prompt-based remembering
+continues to write only session or workspace authority.
 
 The permission card keeps the original request visible. Press `g` to select
 the exact resource or an existing containing directory tree, including a higher

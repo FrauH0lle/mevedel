@@ -571,42 +571,43 @@ additive child permissions are available only to batch Eval"
       (mevedel-tool-exec-permission--remembered-additional-profile
        "Bash" "make report"
        `(:session ,session :buckets ((:session ,@rules)))))))
-  :doc "uses a portable project store as effective network and cache authority"
-  (let* ((tmp-dir (make-temp-file "mevedel-profile-store-" t))
-         (user-home (file-name-concat tmp-dir "home"))
-         (mevedel-user-dir (file-name-concat tmp-dir "global"))
-         (workspace
-          (mevedel-workspace--create
-           :type 'project :id "profile" :root tmp-dir :name "profile"))
-         (session
-          (mevedel-session--create
-           :name "profile" :workspace workspace))
-         (file (mevedel-permission-persistence-file workspace)))
-    (unwind-protect
-        (let ((process-environment
-               (cons (concat "HOME=" user-home) process-environment)))
-          (make-directory (file-name-directory file) t)
-          (with-temp-file file
-            (pp '(:rules
-                  (("Bash" :pattern "npx @emacs-eask/cli *"
-                    :network t
-                    :file-system ((:path "~/.npm" :access write))
-                    :action allow))
-                  :resource-grants ((:path "~/.npm" :access write)))
-                (current-buffer)))
-          (let* ((context
-                  `(:session ,session :workspace ,workspace
-                             :buckets
-                             ((:persistent
-                               ,@(mevedel-permission-persistence-load-rules
-                                  workspace)))))
-                 (path (expand-file-name "~/.npm")))
-            (should
-             (equal
-              `(:network t :file-system ((:path ,path :access write)))
-              (mevedel-tool-exec-permission--remembered-additional-profile
-               "Bash" "npx @emacs-eask/cli test" context)))))
-      (delete-directory tmp-dir t))))
+  :doc "uses either target store as effective network and cache authority"
+  (dolist (scope '(global workspace))
+    (let* ((tmp-dir (make-temp-file "mevedel-profile-store-" t))
+           (user-home (file-name-concat tmp-dir "home"))
+           (mevedel-user-dir (file-name-concat tmp-dir "global"))
+           (workspace
+            (mevedel-workspace--create
+             :type 'project :id "profile" :root tmp-dir :name "profile"))
+           (session
+            (mevedel-session--create
+             :name "profile" :workspace workspace))
+           (file (mevedel-permission-persistence-file workspace scope)))
+      (unwind-protect
+          (let ((process-environment
+		 (cons (concat "HOME=" user-home) process-environment)))
+            (make-directory (file-name-directory file) t)
+            (with-temp-file file
+              (pp '(:rules
+                    (("Bash" :pattern "npx @emacs-eask/cli *"
+                      :network t
+                      :file-system ((:path "~/.npm" :access write))
+                      :action allow))
+                    :resource-grants ((:path "~/.npm" :access write)))
+                  (current-buffer)))
+            (let* ((context
+                    `(:session ,session :workspace ,workspace
+                               :buckets
+                               ((:persistent
+				 ,@(mevedel-permission-persistence-load-rules
+                                    workspace)))))
+                   (path (expand-file-name "~/.npm")))
+              (should
+               (equal
+		`(:network t :file-system ((:path ,path :access write)))
+		(mevedel-tool-exec-permission--remembered-additional-profile
+		 "Bash" "npx @emacs-eask/cli test" context)))))
+	(delete-directory tmp-dir t)))))
 
 (mevedel-deftest mevedel-tool-exec-permission--apply-remembered-authority ()
   ,test
@@ -2874,7 +2875,7 @@ default Bash keeps bare dot inspection automatic"
          (workspace
           (mevedel-workspace--create
            :type 'project :id "bash-prompt" :root root :name "bash-prompt"))
-         (file (mevedel-permission-persistence-file workspace)))
+         (file (mevedel-permission-persistence-file workspace 'workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)

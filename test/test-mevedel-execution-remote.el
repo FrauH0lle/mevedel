@@ -17,6 +17,7 @@
 (require 'mevedel-hooks)
 (require 'mevedel-overlays)
 (require 'mevedel-permissions)
+(require 'mevedel-permissions-list)
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
 (require 'mevedel-skills-core)
@@ -2510,6 +2511,83 @@ work in flight genuinely unprovable rather than merely finished."
         (delete-directory external-root t))
       (when (file-exists-p root)
         (delete-directory root t)))))
+
+(mevedel-deftest mevedel-real-remote-global-permissions
+  (:quiet t :tags (external remote))
+  (let* ((base (test-mevedel-execution-remote--real-root ,variable ,method))
+         (root (test-mevedel-execution-remote--real-temp-directory
+                base "mevedel-global-permissions-" t))
+         (mevedel-user-dir (make-temp-file "mevedel-client-permissions-" t))
+         (session (test-mevedel-execution--session root))
+         (workspace (mevedel-session-workspace session))
+         (target (mevedel-session-execution-target session))
+         (buffer (generate-new-buffer " *global-permissions-owner*"))
+         global-file global-created global-dir-created)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session default-directory root)
+          (should (eq 'ready (plist-get
+                              (mevedel-execution-target-probe target t 'off)
+                              :status)))
+          (setq global-file (mevedel-permission-persistence-file workspace 'global))
+          ;; This journey uses disposable target accounts, never overwrites
+          ;; an existing user configuration, and removes its own file on exit.
+          (when (file-exists-p global-file)
+            (ert-skip "Global permission journey requires an empty target store"))
+          (setq global-dir-created (not (file-directory-p
+                                        (file-name-directory global-file))))
+          (make-directory (file-name-directory global-file) t)
+          (should (mevedel-session-durability-lease-acquire
+                   (mevedel-session-save-path session) "main" session))
+          (mevedel-permission-persistence-write-store
+           (file-name-concat mevedel-user-dir "permissions.el")
+           '(:rules (("Read" :action deny)) :resource-grants nil))
+          (setq global-created t)
+          (let* ((path (mevedel-execution-target-expand-path target "~/.npm"))
+                 (grant (list :path path :access 'write :recursive t))
+                 (rule '("Bash" :pattern "echo *" :action allow))
+                 (store (list :rules (list rule) :resource-grants (list grant)))
+                 (context (list :view-buffer buffer :data-buffer buffer
+                                :session session :workspace workspace)))
+            (mevedel-permission-persistence-write-store global-file store target)
+            (mevedel-permission-persistence-save-resource-grant
+             workspace path 'write t)
+            (mevedel-permission-validate-persistent-stores workspace)
+            (should (equal (list rule)
+                           (mevedel-permission-persistence-load-rules workspace)))
+            (should (equal (list grant grant)
+                           (mevedel-permission-persistence-load-resource-grants
+                            workspace)))
+            (save-window-excursion
+              (with-current-buffer (mevedel-permissions-list-open context)
+                (dolist (kind '("operation" "resource"))
+                  (goto-char (point-min))
+                  (while (not (or (eobp)
+                                  (when-let* ((entry (tabulated-list-get-entry)))
+                                    (and (equal (aref entry 0) "global")
+                                         (equal (aref entry 1) kind)))))
+                    (forward-line 1))
+                  (should-not (eobp))
+                  (mevedel-permissions-list-revoke))))
+            (should (equal '(:rules nil :resource-grants nil)
+                           (mevedel-permission-persistent-authority workspace 'global)))
+            (should (equal (list grant)
+                           (mevedel-permission-persistence-load-resource-grants
+                            workspace)))))
+      (when-let* ((cockpit (get-buffer mevedel-permissions-list-buffer-name)))
+        (kill-buffer cockpit))
+      (when global-created (delete-file global-file))
+      (when global-dir-created (delete-directory (file-name-directory global-file)))
+      (mevedel-session-durability-lease-release
+       (mevedel-session-save-path session) session)
+      (kill-buffer buffer)
+      (delete-directory root t)
+      (delete-directory mevedel-user-dir t)))
+  (variable method)
+  :doc "loads and revokes the SSH target's global authority through the cockpit"
+  "MEVEDEL_TEST_SSH_ROOT" 'ssh
+  :doc "loads and revokes the Podman target's global authority through the cockpit"
+  "MEVEDEL_TEST_PODMAN_ROOT" 'podman)
 
 (mevedel-deftest mevedel-real-remote-acceptance
   (:quiet t :tags (external remote))

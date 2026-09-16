@@ -1005,7 +1005,11 @@
                       (progn
                         (cl-letf
                             (((symbol-function 'mevedel--probe-session-target)
-                              (lambda (&rest _) (setq probed t)))
+                              (lambda (session &optional refresh)
+                                (setq probed t)
+                                (mevedel-execution-target-probe
+                                 (mevedel-session-execution-target session)
+                                 refresh 'off)))
                              ((symbol-function
                                'mevedel--run-session-start-hooks)
                               (lambda (&rest _) (setq started t)))

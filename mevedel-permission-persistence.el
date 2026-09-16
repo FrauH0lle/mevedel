@@ -64,6 +64,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-publication-active-p
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -90,10 +92,21 @@
 ;;
 ;;; Persistent rule storage
 
-(defun mevedel-permission-persistence-file (workspace)
-  "Return the path to WORKSPACE's persistent permission rules file."
-  (file-name-concat (mevedel-workspace-state-dir workspace)
-                     "permissions.el"))
+(defun mevedel-permission-persistence-file (workspace scope)
+  "Return WORKSPACE's permission file for SCOPE, `global' or `workspace'.
+Remote global stores belong to the target user.  Local global stores
+honor `mevedel-user-dir'."
+  (pcase scope
+    ('workspace
+     (file-name-concat (mevedel-workspace-state-dir workspace)
+                       "permissions.el"))
+    ('global
+     (let ((target (mevedel-permission--workspace-target workspace)))
+       (if (mevedel-execution-target-remote-p target)
+           (mevedel-execution-target-expand-path
+            target "~/.mevedel/permissions.el")
+         (file-name-concat mevedel-user-dir "permissions.el"))))
+    (_ (error "Invalid permission scope: %S" scope))))
 
 (defun mevedel-permission--valid-plist-p (plist allowed required)
   "Return non-nil when PLIST has unique ALLOWED keys including REQUIRED."
@@ -379,7 +392,9 @@ TARGET restores portable target paths when non-nil."
 (defun mevedel-permission-persistence-editable-store (file &optional target)
   "Return FILE's valid store, a new store, or signal on invalid contents.
 TARGET restores portable target paths when non-nil."
-  (let ((result (mevedel-permission--store-file-status file target)))
+  (when (mevedel-transport-busy-p file)
+    (user-error "Execution target is busy; retry the permission change when idle"))
+  (let ((result (mevedel-permission--read-store-file-uncached file target)))
     (pcase (plist-get result :status)
       ('valid (plist-get result :store))
       ('missing (list :rules nil :resource-grants nil))
@@ -399,16 +414,12 @@ TARGET restores portable target paths when non-nil."
 
 Reads past `mevedel-permission--store-cache\' and replaces its snapshot."
   (let ((target (mevedel-permission--workspace-target workspace)))
-    (dolist (entry
-             (list (cons (file-name-concat mevedel-user-dir "permissions.el")
-                         nil)
-                   (cons (mevedel-permission-persistence-file workspace)
-                         target)))
-      (let* ((file (car entry))
+    (dolist (scope '(global workspace))
+      (let* ((file (mevedel-permission-persistence-file workspace scope))
              (result (mevedel-permission--read-store-file-uncached
-                      file (cdr entry)))
+                      file target))
              (status (plist-get result :status)))
-        (puthash (mevedel-permission--store-cache-key file (cdr entry))
+        (puthash (mevedel-permission--store-cache-key file target)
                  result mevedel-permission--store-cache)
         (when (eq status 'invalid)
           (mevedel--warn-once
@@ -418,16 +429,29 @@ Reads past `mevedel-permission--store-cache\' and replaces its snapshot."
            file (plist-get result :reason)))))))
 
 (defun mevedel-permission-persistence-refresh
-    (workspace continuation &optional on-cancel)
+    (workspace continuation &optional on-cancel on-error)
   "Refresh WORKSPACE permission stores, then call CONTINUATION.
 
 Remote refresh waits for an idle transport.  ON-CANCEL runs instead when
-queued work is cancelled before it starts."
-  (let* ((file (mevedel-permission-persistence-file workspace))
+queued work is cancelled before it starts or its owner buffer dies.
+ON-ERROR receives a refresh error instead of leaving deferred work unsettled."
+  (let* ((file (mevedel-permission-persistence-file workspace 'workspace))
+         (buffer (current-buffer))
          (refresh
           (lambda ()
-            (mevedel-permission-validate-persistent-stores workspace)
-            (funcall continuation))))
+            (if (buffer-live-p buffer)
+                (with-current-buffer buffer
+                  (when (condition-case err
+                            (progn
+                              (mevedel-permission-validate-persistent-stores workspace)
+                              t)
+                          (error
+                           (if on-error
+                               (funcall on-error err)
+                             (signal (car err) (cdr err)))
+                           nil))
+                    (funcall continuation)))
+              (when on-cancel (funcall on-cancel))))))
     (if (mevedel-transport-busy-p file)
         (or (mevedel-transport-run-when-idle
              (list 'permission-store-refresh (gensym))
@@ -460,6 +484,8 @@ queued work is cancelled before it starts."
                              (buffer-local-value 'mevedel--session data-buf))))
           (unless session
             (user-error "Remote permission changes require a live session"))
+          (when (mevedel-session-publication-active-p session)
+            (user-error "Permission changes cannot be queued during publication"))
           (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
       (mevedel-session-control-fs-make-directory
@@ -472,30 +498,27 @@ queued work is cancelled before it starts."
 (defun mevedel-permission-persistence-load-rules (workspace)
   "Load persistent permission rules for WORKSPACE.
 
-Loads rules from both the global directory (`mevedel-user-dir') and the
-project directory (WORKSPACE's .mevedel/).  Global rules are loaded
-first, project rules appended after so they take precedence.
+Both global and workspace stores belong to the execution target.
+Global rules precede workspace rules in the merged persistent bucket;
+the ordinary rule matcher determines precedence.
 
 Returns a merged list in `mevedel-permission-rules' format."
-  (let ((global-file (file-name-concat mevedel-user-dir "permissions.el"))
-        (project-file (mevedel-permission-persistence-file workspace))
-        (target (mevedel-permission--workspace-target workspace)))
-    (append (plist-get (mevedel-permission--read-store-file global-file) :rules)
-            (plist-get (mevedel-permission--read-store-file project-file target)
-                       :rules))))
+  (append (plist-get (mevedel-permission-persistent-authority workspace 'global)
+                    :rules)
+          (plist-get (mevedel-permission-persistent-authority workspace 'workspace)
+                    :rules)))
 
 (defun mevedel-permission-persistence-load-resource-grants (workspace)
-  "Load resource grants persisted for WORKSPACE."
-  (plist-get
-   (mevedel-permission--read-store-file
-    (mevedel-permission-persistence-file workspace)
-    (mevedel-permission--workspace-target workspace))
-   :resource-grants))
+  "Load global and workspace resource grants for WORKSPACE's target."
+  (append (plist-get (mevedel-permission-persistent-authority workspace 'global)
+                    :resource-grants)
+          (plist-get (mevedel-permission-persistent-authority workspace 'workspace)
+                    :resource-grants)))
 
-(defun mevedel-permission-persistent-authority (workspace)
-  "Return WORKSPACE's remembered rules and resource grants."
+(defun mevedel-permission-persistent-authority (workspace scope)
+  "Return WORKSPACE's rules and grants from SCOPE's store only."
   (or (mevedel-permission--read-store-file
-       (mevedel-permission-persistence-file workspace)
+       (mevedel-permission-persistence-file workspace scope)
        (mevedel-permission--workspace-target workspace))
       '(:rules nil :resource-grants nil)))
 
@@ -511,7 +534,7 @@ qualified by any specifier (`:path', `:pattern', `:domain', `:name').
 NETWORK and FILE-SYSTEM record matching additive execution authority.
 SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
 is created if it does not exist."
-  (let* ((file (mevedel-permission-persistence-file workspace))
+  (let* ((file (mevedel-permission-persistence-file workspace 'workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
          (existing (plist-get store :rules))
@@ -532,7 +555,7 @@ is created if it does not exist."
     (workspace path access &optional recursive)
   "Persist PATH ACCESS for WORKSPACE.
 RECURSIVE non-nil covers PATH and all descendants."
-  (let* ((file (mevedel-permission-persistence-file workspace))
+  (let* ((file (mevedel-permission-persistence-file workspace 'workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
          (grant (mevedel-permission-rules-resource-grant path access recursive))
@@ -544,9 +567,9 @@ RECURSIVE non-nil covers PATH and all descendants."
     grant))
 
 (defun mevedel-permission-remove-persistent-resource-grant
-    (workspace path access &optional recursive)
-  "Revoke WORKSPACE's PATH ACCESS resource grant with RECURSIVE scope."
-  (let* ((file (mevedel-permission-persistence-file workspace))
+    (workspace scope path access &optional recursive)
+  "Revoke PATH ACCESS with RECURSIVE extent from WORKSPACE's SCOPE store."
+  (let* ((file (mevedel-permission-persistence-file workspace scope))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
          (grant (mevedel-permission-rules-resource-grant path access recursive)))
@@ -559,9 +582,9 @@ RECURSIVE non-nil covers PATH and all descendants."
                            (plist-get store :resource-grants))))
        target))))
 
-(defun mevedel-permission-remove-persistent-rule (workspace rule)
-  "Revoke exact permission RULE from WORKSPACE."
-  (let* ((file (mevedel-permission-persistence-file workspace))
+(defun mevedel-permission-remove-persistent-rule (workspace scope rule)
+  "Revoke exact permission RULE from WORKSPACE's SCOPE store."
+  (let* ((file (mevedel-permission-persistence-file workspace scope))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target)))
     (when (file-exists-p file)

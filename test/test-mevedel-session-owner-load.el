@@ -19,6 +19,7 @@
          (file-name-as-directory
           (file-name-directory (locate-library "mevedel"))))
         (emacs (expand-file-name invocation-name invocation-directory))
+        (gptel-root (file-name-directory (locate-library "gptel-request")))
         (cases
          '((facade
             (progn
@@ -116,7 +117,7 @@
           (should
            (= 0
               (call-process emacs nil t nil
-                            "--batch" "-Q" "-L" root
+                            "--batch" "-Q" "-L" root "-L" gptel-root
                             "--eval" (prin1-to-string (cadr case)))))
           (should (string-empty-p (string-trim (buffer-string)))))))))
 

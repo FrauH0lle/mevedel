@@ -141,6 +141,65 @@ Return the row's tabulated id."
 (mevedel-deftest mevedel-permissions-list-revoke ()
   ,test
   (test)
+  :doc "shows global entries and revokes only their backing store"
+  (mevedel-permissions-list-test--with-buffers
+    (let* ((global-file (mevedel-permission-persistence-file workspace 'global))
+           (rule '("Bash" :pattern "echo *" :action allow))
+           (grant '(:path "/tmp/global-tree" :access read :recursive t))
+           (store (list :rules (list rule) :resource-grants (list grant))))
+      (mevedel-permission-persistence-write-store global-file store)
+      (mevedel-permission-persistence-write-store
+       (mevedel-permission-persistence-file workspace 'workspace) store)
+      (with-current-buffer (mevedel-permissions-list-test--open context)
+        (should (= 4 (length tabulated-list-entries)))
+        (dolist (kind '("operation" "resource"))
+          (goto-char (point-min))
+          (while (not (or (eobp)
+                          (when-let* ((entry (tabulated-list-get-entry)))
+                            (and (equal (aref entry 0) "global")
+                                 (equal (aref entry 1) kind)))))
+            (forward-line 1))
+          (should-not (eobp))
+          (let ((item (mevedel-cockpit-surface-selected)))
+            (should (string-match-p
+                     (regexp-quote global-file)
+                     (mevedel-report-test-text
+                      (mevedel-permissions-list--details item context)))))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-permissions-list-revoke)))
+        (should (= 2 (length tabulated-list-entries))))
+      (should (equal '(:rules nil :resource-grants nil)
+                     (mevedel-permission-persistent-authority workspace 'global)))
+      (should (equal store (mevedel-permission-persistent-authority
+                            workspace 'workspace)))))
+  :doc "refuses revocation through a symlinked global file"
+  (mevedel-permissions-list-test--with-buffers
+    (let* ((file (mevedel-permission-persistence-file workspace 'global))
+           (outside (file-name-concat mevedel-user-dir "outside.el"))
+           (store '(:rules (("Read" :action allow)) :resource-grants nil)))
+      (mevedel-permission-persistence-write-store outside store)
+      (make-symbolic-link outside file)
+      (with-current-buffer (mevedel-permissions-list-test--open context)
+        (mevedel-permissions-list-test--row "operation")
+        (should-error (mevedel-permissions-list-revoke)))
+      (should (file-symlink-p file))
+      (should (equal store (plist-get
+                           (mevedel-permission--read-store-file-uncached outside)
+                           :store)))))
+  :doc "failed global replacement leaves authority intact and reports no success"
+  (mevedel-permissions-list-test--with-buffers
+    (let* ((file (mevedel-permission-persistence-file workspace 'global))
+           (store '(:rules (("Read" :action allow)) :resource-grants nil))
+           captured)
+      (mevedel-permission-persistence-write-store file store)
+      (with-current-buffer (mevedel-permissions-list-test--open context)
+        (mevedel-permissions-list-test--row "operation")
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-write-file)
+                   (lambda (&rest _) (error "Injected replacement failure"))))
+          (mevedel-test--with-captured-messages captured
+            (should-error (mevedel-permissions-list-revoke)))))
+      (should-not (string-match-p "revoked" (format "%s" captured)))
+      (should (equal store (mevedel-permission-persistent-authority workspace 'global)))))
   :doc "revokes a session network rule without touching its siblings"
   (mevedel-permissions-list-test--with-buffers
     (let ((operation '("Bash" :pattern "npx test*" :action allow))
@@ -170,7 +229,7 @@ Return the row's tabulated id."
         (mevedel-permissions-list-test--row "resource")
         (mevedel-test--with-captured-messages nil
           (mevedel-permissions-list-revoke)))
-      (let ((authority (mevedel-permission-persistent-authority workspace)))
+      (let ((authority (mevedel-permission-persistent-authority workspace 'workspace)))
         (should (equal (list network) (plist-get authority :rules)))
         (should-not (plist-get authority :resource-grants)))))
 
@@ -229,7 +288,7 @@ Return the row's tabulated id."
     (should (string-match-p "d +Revoke the selected authority" text))
     (should (string-match-p "q +Back to the main session cockpit" text))
     (dolist (needle '("operation" "network" "resource"
-                      "session" "workspace"))
+                      "session" "workspace" "global"))
       (should (string-match-p needle text)))))
 
 (provide 'test-mevedel-permissions-list)

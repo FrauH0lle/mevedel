@@ -24,6 +24,32 @@
 ;;
 ;;; Persistent rule storage
 
+(mevedel-deftest mevedel-permission-persistence-file ()
+  ,test
+  (test)
+  :doc "selects local global and workspace stores without conflating their scopes"
+  (let ((mevedel-user-dir "/tmp/mevedel-global/")
+        (ws (mevedel-workspace--create :type 'project :root "/tmp/project/")))
+    (should (equal "/tmp/mevedel-global/permissions.el"
+                   (mevedel-permission-persistence-file ws 'global)))
+    (should (equal "/tmp/project/.mevedel/permissions.el"
+                   (mevedel-permission-persistence-file ws 'workspace)))
+    (should-error (mevedel-permission-persistence-file ws 'other)))
+  :doc "remote global discovery requires target home and never falls back locally"
+  (let* ((mevedel-user-dir "/tmp/client-global/")
+         (ws (mevedel-workspace--create
+              :type 'project :root "/ssh:dev@target:/srv/project/"))
+         (target (mevedel-execution-target-create (mevedel-workspace-root ws)))
+         (session (mevedel-session--create :workspace ws :execution-target target)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should-error (mevedel-permission-persistence-file ws 'global)
+                    :type 'mevedel-execution-target-error)
+      (setf (mevedel-execution-target-environment target)
+            '(("HOME" . "/home/dev")))
+      (should (equal "/ssh:dev@target:/home/dev/.mevedel/permissions.el"
+                     (mevedel-permission-persistence-file ws 'global))))))
+
 (mevedel-deftest mevedel-permission-serialize-authority ()
   ,test
   (test)
@@ -249,15 +275,21 @@
             (should (equal (nth 1 rules) '("*" :path "/tmp/*" :action allow)))
             (should (equal (nth 2 rules) '("Edit" :path "~/proj/*" :action allow)))))
       (delete-directory tmp-dir t)))
-  :doc "rebinds project paths through the live target but keeps global paths local"
+  :doc "loads both stores from the target and ignores client global rules"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (global-dir (file-name-concat tmp-dir "global/"))
          (project-dir (file-name-concat tmp-dir "project/"))
+         (target-home (file-name-concat tmp-dir "target-home"))
          (mevedel-user-dir global-dir))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp '("alias-a" "alias-b")
           (make-directory (file-name-concat project-dir ".mevedel") t)
           (make-directory global-dir t)
+          (make-directory (file-name-concat target-home ".mevedel") t)
+          (with-temp-file (file-name-concat target-home ".mevedel/permissions.el")
+            (pp '(:rules (("Read" :path "~/private/**" :action allow))
+                  :resource-grants ((:path "~/.npm" :access write :recursive t)))
+                (current-buffer)))
           (with-temp-file (file-name-concat global-dir "permissions.el")
             (pp '(:rules (("Read" :path "/home/client/private/**"
                            :action allow))
@@ -277,16 +309,21 @@
                            :name "test" :workspace workspace
                            :execution-target target)))
             (setf (mevedel-execution-target-environment target)
-                  '(("HOME" . "/home/dev")))
+                  `(("HOME" . ,target-home)))
             (with-temp-buffer
               (setq-local mevedel--session session)
               (should
                (equal
-                `(("Read" :path "/home/client/private/**" :action allow)
+                `(("Read" :path ,(format "/mevedelmock:alias-b:%s/private/**" target-home)
+                          :action allow)
                   ("Read" :path
                    ,(format "/mevedelmock:alias-b:/srv/shared/**")
                    :action allow))
-                (mevedel-permission-persistence-load-rules workspace))))))
+                (mevedel-permission-persistence-load-rules workspace)))
+              (should
+               (equal `((:path ,(format "/mevedelmock:alias-b:%s/.npm" target-home)
+                         :access write :recursive t))
+                      (mevedel-permission-persistence-load-resource-grants workspace))))))
       (delete-directory tmp-dir t)))
   :doc "deduplicates exact persistent rules"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
@@ -341,7 +378,7 @@
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws)))
+         (file (mevedel-permission-persistence-file ws 'workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)
@@ -362,7 +399,7 @@
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws)))
+         (file (mevedel-permission-persistence-file ws 'workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)
@@ -421,7 +458,7 @@
                        :resource-grants
                        (mevedel-permission-persistence-load-resource-grants
                         ws))))
-          (mevedel-permission-remove-persistent-resource-grant ws path 'read)
+          (mevedel-permission-remove-persistent-resource-grant ws 'workspace path 'read)
           (should-not
            (mevedel-permission-persistence-load-resource-grants ws))
           (should (equal '(("Read" :action allow))
@@ -442,12 +479,40 @@
 (mevedel-deftest mevedel-permission-persistence-load-resource-grants ()
   ,test
   (test)
+  :doc "merges global grants with workspace grants without widening extent or access"
+  (let* ((dir (make-temp-file "mevedel-global-grants-" t))
+         (mevedel-user-dir (file-name-concat dir "user"))
+         (ws (mevedel-workspace--create :type 'project :root dir))
+         (global (mevedel-permission-persistence-file ws 'global))
+         (exact (file-name-concat dir "exact"))
+         (tree (file-name-concat dir "tree"))
+         (local (file-name-concat dir "local")))
+    (unwind-protect
+        (progn
+          (mevedel-permission-persistence-write-store
+           global `(:rules nil :resource-grants
+                    ((:path ,exact :access read)
+                     (:path ,tree :access write :recursive t))))
+          (mevedel-permission-persistence-save-resource-grant ws local 'read)
+          (let ((grants (mevedel-permission-persistence-load-resource-grants ws)))
+            (should (= 3 (length grants)))
+            (should (mevedel-permission-rules-resource-granted-p exact 'read grants))
+            (should-not (mevedel-permission-rules-resource-granted-p exact 'write grants))
+            (should-not (mevedel-permission-rules-resource-granted-p
+                         (file-name-concat exact "child") 'read grants))
+            (should (mevedel-permission-rules-resource-granted-p
+                     (file-name-concat tree "child") 'write grants))
+            (should (mevedel-permission-rules-resource-granted-p local 'read grants)))
+          (should (= 2 (length (plist-get
+                               (mevedel-permission-persistent-authority ws 'global)
+                               :resource-grants)))))
+      (delete-directory dir t)))
   :doc "an invalid grant makes the editable store fail closed"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws)))
+         (file (mevedel-permission-persistence-file ws 'workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)
@@ -469,7 +534,7 @@
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws)))
+         (file (mevedel-permission-persistence-file ws 'workspace)))
     (unwind-protect
         (let ((process-environment
                (cons (concat "HOME=" user-home) process-environment)))
@@ -500,7 +565,7 @@
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws)))
+         (file (mevedel-permission-persistence-file ws 'workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)
@@ -532,7 +597,7 @@
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws)))
+         (file (mevedel-permission-persistence-file ws 'workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)
@@ -549,38 +614,76 @@
   ,test
   (test)
   :doc "warns once per invalid file version and stays quiet for missing stores"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
-         (ws (mevedel-workspace--create
-              :type 'project :id "test" :root tmp-dir
-              :name "test" :file-cache nil))
-         (file (mevedel-permission-persistence-file ws))
-         (mevedel--warn-once-table (make-hash-table :test #'equal))
-         warnings)
-    (unwind-protect
-        (cl-letf (((symbol-function 'display-warning)
-                   (lambda (&rest args) (push args warnings))))
-          (mevedel-permission-validate-persistent-stores ws)
-          (should-not warnings)
-          (make-directory (file-name-directory file) t)
-          (with-temp-file file
-            (insert "(:rules malformed :resource-grants nil)"))
-          (mevedel-permission-validate-persistent-stores ws)
-          (mevedel-permission-validate-persistent-stores ws)
-          (should (= 1 (length warnings)))
-          (with-temp-file file
-            (insert "(:rules nil :resource-grants malformed)"))
-          (set-file-times file (time-add (current-time) 1))
-          (mevedel-permission-validate-persistent-stores ws)
-          (should (= 2 (length warnings)))
-          (should (string-match-p
-                   "(:rules (\\.\\.\\.) :resource-grants (\\.\\.\\.))"
-                   (cadar warnings))))
-      (delete-directory tmp-dir t))))
+  (dolist (scope '(global workspace))
+    (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+           (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+           (ws (mevedel-workspace--create
+		:type 'project :id "test" :root tmp-dir
+		:name "test" :file-cache nil))
+           (file (mevedel-permission-persistence-file ws scope))
+           (mevedel--warn-once-table (make-hash-table :test #'equal))
+           warnings)
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest args) (push args warnings))))
+		   (mevedel-permission-validate-persistent-stores ws)
+		   (should-not warnings)
+		   (make-directory (file-name-directory file) t)
+		   (with-temp-file file
+		     (insert "(:rules malformed :resource-grants nil)"))
+		   (mevedel-permission-validate-persistent-stores ws)
+		   (mevedel-permission-validate-persistent-stores ws)
+		   (should (= 1 (length warnings)))
+		   (with-temp-file file
+		     (insert "(:rules nil :resource-grants malformed)"))
+		   (set-file-times file (time-add (current-time) 1))
+		   (mevedel-permission-validate-persistent-stores ws)
+		   (should (= 2 (length warnings)))
+		   (should (string-match-p
+			    "(:rules (\\.\\.\\.) :resource-grants (\\.\\.\\.))"
+			    (cadar warnings))))
+	(delete-directory tmp-dir t)))))
 
 (mevedel-deftest mevedel-permission-persistence-refresh ()
   ,test
   (test)
+  :doc "deferred refresh retains the originating target and cancels a dead owner"
+  (let* ((dir (make-temp-file "mevedel-refresh-owner-" t))
+         (home (file-name-concat dir "home"))
+         (owner (generate-new-buffer " *permission-refresh-owner*"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :root (format "/mevedelmock:owner:%s/" dir)))
+         (target (mevedel-execution-target-create (mevedel-workspace-root workspace)))
+         (session (mevedel-session--create :workspace workspace :execution-target target))
+         deferred observed cancelled)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("owner")
+          (setf (mevedel-execution-target-environment target) `(("HOME" . ,home)))
+          (make-directory (file-name-concat home ".mevedel") t)
+          (write-region "(:rules ((\"Read\" :action deny)) :resource-grants nil)"
+                        nil (file-name-concat home ".mevedel/permissions.el") nil 'silent)
+          (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
+                    ((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (_key _path thunk &optional _on-cancel)
+                       (setq deferred thunk) t)))
+            (with-current-buffer owner
+              (setq-local mevedel--session session)
+              (mevedel-permission-persistence-refresh
+               workspace
+               (lambda ()
+                 (setq observed (list (current-buffer)
+                                      (mevedel-permission-persistence-load-rules workspace))))
+               (lambda () (setq cancelled t)))))
+          ;; The transport timer may fire while an unrelated buffer is current.
+          (with-temp-buffer (funcall deferred))
+          (should (equal (list owner '(("Read" :action deny))) observed))
+          (setq observed nil)
+          (kill-buffer owner)
+          (funcall deferred)
+          (should cancelled)
+          (should-not observed))
+      (when (buffer-live-p owner) (kill-buffer owner))
+      (delete-directory dir t)))
   :doc "waits for an idle remote transport before refreshing authority"
   (let ((workspace (mevedel-workspace--create
                     :type 'project :id "remote"
@@ -602,6 +705,22 @@
       (funcall deferred)
       (should refreshed)
       (should continued)))
+
+  :doc "delivers deferred target discovery errors without leaving a tool pending"
+  (let ((workspace (mevedel-workspace--create
+                    :type 'project :root "/ssh:dev@target:/srv/project/"))
+        deferred continued failure)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (_key _path thunk &optional _on-cancel)
+                 (setq deferred thunk) t)))
+      (mevedel-permission-persistence-refresh
+       workspace (lambda () (setq continued t)) nil
+       (lambda (err) (setq failure err)))
+      ;; No live target environment: global HOME discovery must fail closed.
+      (funcall deferred)
+      (should (eq 'mevedel-execution-target-error (car failure)))
+      (should-not continued)))
 
   :doc "fails closed when deferred refresh cannot be queued"
   (let ((workspace (mevedel-workspace--create
@@ -658,7 +777,7 @@
                     (:path ,path :access read :recursive t))
                   (mevedel-permission-persistence-load-resource-grants ws)))
           (mevedel-permission-remove-persistent-resource-grant
-           ws path 'read t)
+           ws 'workspace path 'read t)
           (should
            (equal `((:path ,path :access read))
                   (mevedel-permission-persistence-load-resource-grants ws))))
@@ -769,6 +888,72 @@
                        :status))))
       (clrhash mevedel-permission--store-cache)
       (delete-directory dir t))))
+
+(mevedel-deftest mevedel-permission-remove-persistent-rule ()
+  ,test
+  (test)
+  :doc "global revocation preserves workspace duplicates and later external edits"
+  (let* ((dir (make-temp-file "mevedel-global-revoke-" t))
+         (mevedel-user-dir (file-name-concat dir "user"))
+         (ws (mevedel-workspace--create :type 'project :root dir))
+         (file (mevedel-permission-persistence-file ws 'global))
+         (rule '("Bash" :pattern "echo *" :action allow))
+         (other '("Bash" :pattern "pwd" :action allow)))
+    (unwind-protect
+        (progn
+          (mevedel-permission-persistence-write-store
+           file (list :rules (list rule) :resource-grants nil))
+          (mevedel-permission-persistence-save-rule
+           ws "Bash" 'allow nil :spec-key :pattern :spec-value "echo *")
+          (mevedel-permission-validate-persistent-stores ws)
+          ;; A separate editor adds a rule after the cockpit's snapshot.
+          (with-temp-file file
+            (prin1 (list :rules (list rule other) :resource-grants nil)
+                   (current-buffer)))
+          (mevedel-permission-remove-persistent-rule ws 'global rule)
+          (should (equal (list other)
+                         (plist-get (mevedel-permission-persistent-authority
+                                     ws 'global) :rules)))
+          (should (equal (list rule)
+                         (plist-get (mevedel-permission-persistent-authority
+                                     ws 'workspace) :rules))))
+      (delete-directory dir t))))
+
+(mevedel-deftest mevedel-permission-persistence-editable-store ()
+  ,test
+  (test)
+  :doc "refuses an invalid external edit even when the old cached store was valid"
+  (let ((file (make-temp-file "mevedel-editable-store-")))
+    (unwind-protect
+        (progn
+          (write-region "(:rules nil :resource-grants nil)" nil file nil 'silent)
+          (should (mevedel-permission--read-store-file file))
+          (write-region "(:rules malformed :resource-grants nil)" nil file nil 'silent)
+          (should-error (mevedel-permission-persistence-editable-store file)
+                        :type 'user-error))
+      (delete-file file)))
+  :doc "refuses reentrant reads during a busy target operation"
+  (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (_) t))
+            ((symbol-function 'mevedel-permission--read-store-file-uncached)
+             (lambda (&rest _) (ert-fail "Read a busy target"))))
+    (should-error (mevedel-permission-persistence-editable-store
+                   "/ssh:dev@target:/home/dev/.mevedel/permissions.el")
+                  :type 'user-error)))
+
+(mevedel-deftest mevedel-permission-persistence-write-store ()
+  ,test
+  (test)
+  :doc "rejects a remote change before it can be queued as apparent success"
+  (let ((session (mevedel-session--create :publication-active-p t)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-publish-text)
+                 (lambda (&rest _) (ert-fail "Queued a permission change"))))
+        (should-error
+         (mevedel-permission-persistence-write-store
+          "/ssh:dev@target:/home/dev/.mevedel/permissions.el"
+          '(:rules nil :resource-grants nil))
+         :type 'user-error)))))
 
 (provide 'test-mevedel-permission-persistence)
 ;;; test-mevedel-permission-persistence.el ends here
