@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -217,7 +218,7 @@
           (setq sent (nreverse sent))
           (should (> (length sent) 1))
           (dolist (entry sent)
-            (should (<= (string-bytes (mevedel-collaboration--json-string
+            (should (<= (string-bytes (json-encode
                                        (cdr entry)))
                         250)))
           (let ((frame (cdr (car sent))))

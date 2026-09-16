@@ -13,6 +13,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'json)
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--base64url-decode
                   "mevedel-collaboration" (string))
@@ -78,8 +80,6 @@
                   "mevedel-collaboration-projection" (data-buffer))
 (declare-function mevedel-collaboration--json-record
                   "mevedel-collaboration-projection" (record))
-(declare-function mevedel-collaboration--json-string
-                  "mevedel-collaboration-projection" (object))
 (defvar mevedel-collaboration--protocol-version)
 
 ;; `mevedel-collaboration-task'
@@ -173,7 +173,7 @@ chunk that turns out not to be the last one cannot overflow.  A JSON array
 adds one separator per record after the first, which is what the record
 sizes alone never accounted for."
   (string-bytes
-   (mevedel-collaboration--json-string
+   (json-encode
     (list :t "snapshot-chunk"
           :records (vconcat nil)
           :final :json-false))))
@@ -193,7 +193,7 @@ frame costs before its records; it defaults to the snapshot frame's."
     (dolist (record records)
       (let* ((json (mevedel-collaboration--json-record record))
              (bytes (string-bytes
-                     (mevedel-collaboration--json-string json))))
+                     (json-encode json))))
         (unless (> (+ overhead bytes) limit)
           ;; One separator for every record after the first in the chunk.
           (when (and current

@@ -9,6 +9,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -247,7 +248,7 @@ relay's room plist."
                       key
                       (mevedel-collaboration--seal
                        key
-                       (mevedel-collaboration--frame-encode frame))))))
+                       (json-encode frame))))))
       (should (equal "record" (plist-get roundtrip :t)))
       (should (equal "a" (plist-get (plist-get roundtrip :record) :id))))))
 

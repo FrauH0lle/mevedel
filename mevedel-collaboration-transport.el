@@ -24,9 +24,6 @@
 
 (require 'json)
 
-;; `json'
-(declare-function json-encode "json" (object))
-
 ;; `websocket'
 (declare-function make-websocket-frame "websocket"
                   (&rest args))
@@ -125,12 +122,6 @@ come out of the same budget.")
 
 (defconst mevedel-collaboration--max-control-bytes 4096
   "Encoded bytes one unencrypted relay control may carry.")
-
-(defun mevedel-collaboration--frame-encode (frame)
-  "Serialize FRAME as a JSON string.
-FRAME is a plist with keyword keys; nested values may be the alist
-shapes the projection already produces, which `json-encode' accepts."
-  (json-encode frame))
 
 (defun mevedel-collaboration--frame-decode (text)
   "Parse JSON TEXT into a plist frame, or nil when malformed."
@@ -344,7 +335,7 @@ one by closing the connection it arrived on -- which for the host means
 the relay collects the room, ending the session for every guest."
   (when (mevedel-collaboration--transport-open-p transport)
     (condition-case nil
-        (let ((encoded (mevedel-collaboration--frame-encode frame)))
+        (let ((encoded (json-encode frame)))
           (when (<= (string-bytes encoded)
                     mevedel-collaboration--max-frame-json-bytes)
             (websocket-send
@@ -370,7 +361,7 @@ Controls carry notification routing metadata only, never session data.
 Return non-nil when the bounded JSON object was written."
   (when (mevedel-collaboration--transport-open-p transport)
     (condition-case nil
-        (let ((encoded (mevedel-collaboration--frame-encode control)))
+        (let ((encoded (json-encode control)))
           (when (<= (string-bytes encoded)
                     mevedel-collaboration--max-control-bytes)
             (websocket-send-text (plist-get transport :ws) encoded)

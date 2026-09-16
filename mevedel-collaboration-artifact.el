@@ -11,6 +11,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'json)
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
@@ -30,10 +32,6 @@
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--request-id-p
                   "mevedel-collaboration-guest" (value))
-
-;; `mevedel-collaboration-projection'
-(declare-function mevedel-collaboration--json-string
-                  "mevedel-collaboration-projection" (object))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
@@ -80,7 +78,7 @@
 (defun mevedel-collaboration--artifact-frame-overhead (req-id record size)
   "Return encoded artifact-frame overhead for REQ-ID, RECORD, and SIZE."
   (string-bytes
-   (mevedel-collaboration--json-string
+   (json-encode
     (list :t "artifact" :reqId req-id
           :id (plist-get record :id)
           :name (plist-get record :artifact)

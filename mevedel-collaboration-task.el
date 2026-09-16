@@ -7,13 +7,11 @@
 
 ;;; Code:
 
+(require 'json)
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--broadcast
                   "mevedel-collaboration" (room frame))
-
-;; `mevedel-collaboration-projection'
-(declare-function mevedel-collaboration--json-string
-                  "mevedel-collaboration-projection" (object))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-tasks "mevedel-structs" (session))
@@ -81,7 +79,7 @@ Prefer in-progress tasks, then pending tasks, then recent completions."
                               :omittedActive next-omitted-active)))
             ;; ponytail: task writes are sparse; optimize prefix encoding only
             ;; if publication profiling makes this bounded O(n^2) loop visible.
-            (if (<= (string-bytes (mevedel-collaboration--json-string frame))
+            (if (<= (string-bytes (json-encode frame))
                     mevedel-collaboration--task-frame-max-bytes)
                 (setq rows next-rows
                       omitted next-omitted

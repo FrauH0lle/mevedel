@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -62,12 +63,12 @@
                                         (list running pending recent)))
                 :total 4 :completed 2 :omitted 1 :omittedActive 0))
          (mevedel-collaboration--task-frame-max-bytes
-          (string-bytes (mevedel-collaboration--json-string expected)))
+          (string-bytes (json-encode expected)))
          (frame (mevedel-collaboration--tasks-frame room)))
     (should (equal expected frame))
     (should (< mevedel-collaboration--task-frame-max-bytes
                mevedel-collaboration--max-frame-json-bytes))
-    (should (<= (string-bytes (mevedel-collaboration--json-string frame))
+    (should (<= (string-bytes (json-encode frame))
                 mevedel-collaboration--task-frame-max-bytes)))
 
   :doc "reports an active task that cannot fit"
@@ -83,7 +84,7 @@
          (expected (list :t "tasks" :tasks [] :total 2 :completed 0
                          :omitted 2 :omittedActive 2))
          (mevedel-collaboration--task-frame-max-bytes
-          (string-bytes (mevedel-collaboration--json-string expected))))
+          (string-bytes (json-encode expected))))
     (should (equal expected (mevedel-collaboration--tasks-frame room)))))
 
 (mevedel-deftest mevedel-collaboration--publish-tasks

@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -288,7 +289,7 @@
                       (plist-get (cdr (car sent)) :final)))
           (should (eq t (plist-get (cdr (car (last sent))) :final)))
           (dolist (entry sent)
-            (should (<= (string-bytes (mevedel-collaboration--json-string
+            (should (<= (string-bytes (json-encode
                                        (cdr entry)))
                         600)))
           (should (equal content

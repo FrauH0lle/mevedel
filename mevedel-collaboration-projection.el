@@ -7,9 +7,6 @@
 
 ;;; Code:
 
-;; `json'
-(declare-function json-encode "json" (object))
-
 ;; `mevedel-collaboration-artifact-projection'
 (declare-function mevedel-collaboration--artifact-fields
                   "mevedel-collaboration-artifact-projection" (render-data))
@@ -48,7 +45,6 @@
 (declare-function mevedel-view--visible-response-text
                   "mevedel-view-render" (text))
 
-(require 'json)
 (require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
@@ -175,10 +171,6 @@ an artifact only by its record id, never by a filesystem path."
                     (plist-get record key))
               out)))
     (nreverse out)))
-
-(defun mevedel-collaboration--json-string (object)
-  "Encode OBJECT as compact JSON text."
-  (json-encode object))
 
 
 ;;
