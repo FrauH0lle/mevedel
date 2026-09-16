@@ -73,9 +73,9 @@ The optional `:file-system' qualifier records child-process grants as
 `((:path ABSOLUTE-PATH :access ACCESS [:recursive t]) ...)', where ACCESS
 is `read' or `write'.  Grant paths are literal; `*', `**', and `?' carry
 no glob meaning there.  `:recursive t' extends a grant from the exact
-path to the directory and everything beneath it.  A matching direct
-resource grant must also exist before a path is reopened; a recursive
-requirement is met only by a recursive direct grant containing it.
+path to the directory and everything beneath it.  A direct user allow
+rule authorizes these grants only for matching executions; no separate
+resource grant is needed, and unrelated tools gain no authority.
 
 The optional :sandbox-permissions qualifier currently accepts
 `require-escalated'.  Such rules participate only in full execution

@@ -15,6 +15,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-resource)
+(require 'mevedel-tool-exec-permission)
 (require 'mevedel-journal-pins)
 (require 'mevedel-journal-test-support
          (file-name-concat
@@ -1822,7 +1823,7 @@
                          ((:path "/tmp/external-input" :access read))
                          :action allow)))
                 (setf (mevedel-session-resource-grants session)
-                      '((:path "/tmp/external-input" :access read)))
+                      '((:path "/tmp/independent-input" :access read)))
                 (with-current-buffer buf
                   (org-mode)
                   (insert "Hi\n")
@@ -1846,9 +1847,16 @@
                      mevedel--session)))
                   (should
                    (equal
-                    '((:path "/tmp/external-input" :access read))
-                    (mevedel-session-resource-grants
-                     mevedel--session)))))
+                    '((:path "/tmp/independent-input" :access read))
+                    (mevedel-session-resource-grants mevedel--session)))
+                  (should
+                   (equal
+                    '(:level additive :additional-permissions
+                      (:network t :file-system
+                       ((:path "/tmp/external-input" :access read))))
+                    (mevedel-tool-exec-permission-effective-sandbox-request
+                     '(:command "npx test") "Bash" "npx test" nil
+                     `(:session ,mevedel--session :workspace ,workspace))))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

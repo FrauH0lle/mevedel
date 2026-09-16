@@ -109,7 +109,7 @@ An execution profile's remembered child grants follow the pattern."
                      (plist-get plist :name)
                      "*")
                  (when-let* ((grants (plist-get plist :file-system)))
-                   (format " [%s]"
+                   (format " [with command: %s]"
                            (mapconcat
                             (lambda (grant)
                               (format "%s %s" (plist-get grant :access)

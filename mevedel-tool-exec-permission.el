@@ -541,17 +541,6 @@ PERMISSION-CONTEXT supplies the session execution target."
      'deny)
    via))
 
-(defun mevedel-tool-exec-permission--filesystem-resource-granted-p
-    (grant permission-context)
-  "Return non-nil when PERMISSION-CONTEXT already authorizes GRANT."
-  (let* ((session (plist-get permission-context :session))
-         (grants
-          (append (plist-get permission-context :resource-grants)
-                  (and session (mevedel-session-resource-grants session)))))
-    (mevedel-permission-rules-resource-granted-p
-     (plist-get grant :path) (plist-get grant :access) grants
-     (plist-get grant :recursive))))
-
 (defun mevedel-tool-exec-permission--filesystem-resource-rule-action
     (tool-name grant permission-context)
   "Return the authoritative `deny' or `ask' rule for TOOL-NAME's GRANT."
@@ -625,21 +614,8 @@ PERMISSION-CONTEXT supplies the session execution target."
           (setq candidates
                 (append candidates
                         (plist-get (cdr rule) :file-system))))))
-    (let ((grants
-           (mevedel-tool-exec-permission--direct-resource-grants permission-context)))
-      (mevedel-tool-exec-permission--additional-profile
-       network
-       (cl-remove-if-not
-        (lambda (candidate)
-          (mevedel-permission-rules-resource-granted-p
-           (plist-get candidate :path)
-           (plist-get candidate :access)
-           grants
-           (plist-get candidate :recursive)))
-        (plist-get
-         (mevedel-tool-exec-permission--merge-additional-profiles
-          (list :file-system candidates))
-         :file-system))))))
+    (mevedel-tool-exec-permission--merge-additional-profiles
+     (mevedel-tool-exec-permission--additional-profile network candidates))))
 
 (defun mevedel-tool-exec-permission-effective-sandbox-request
     (args tool-name operation &optional eval-mode permission-context)
@@ -671,6 +647,17 @@ remembered direct user authority."
     (tool-name request permission-context)
   "Classify TOOL-NAME's additive REQUEST under PERMISSION-CONTEXT."
   (let* ((requested (plist-get request :additional-permissions))
+         ;; Only stored direct profiles contribute authority.  The requested
+         ;; additions themselves are untrusted until the user approves them.
+         (profile
+          (and (stringp (plist-get request :operation-pattern))
+               (mevedel-tool-exec-permission--remembered-additional-profile
+                tool-name (plist-get request :operation-pattern)
+                permission-context)))
+         (grants
+          (append (mevedel-tool-exec-permission--direct-resource-grants
+                   permission-context)
+                  (plist-get profile :file-system)))
          (network (eq t (plist-get requested :network)))
          (network-action
           (and network
@@ -699,8 +686,9 @@ remembered direct user authority."
          ((eq action 'deny)
           (setq deny-via 'sandbox-filesystem))
          ((and (not (eq action 'ask))
-               (mevedel-tool-exec-permission--filesystem-resource-granted-p
-                grant permission-context))
+               (mevedel-permission-rules-resource-granted-p
+                (plist-get grant :path) (plist-get grant :access) grants
+                (plist-get grant :recursive)))
           (push grant granted-grants))
          (t (push grant missing-grants)))))
     (list
@@ -753,7 +741,8 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
                (and (plist-get copy :reusable-operation-p)
                     (plist-get requested :network)
                     '(:network t))
-               (and (plist-get requested :file-system)
+               (and (plist-get copy :reusable-operation-p)
+                    (plist-get requested :file-system)
                     (list :file-system
                           (copy-tree
                            (plist-get requested :file-system)))))))
@@ -799,7 +788,7 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
          :spec-key :pattern :spec-value pattern
          :network (plist-get profile :network)
          :file-system (plist-get profile :file-system)))
-      (dolist (grant (plist-get selection :file-system))
+      (dolist (grant (plist-get selection :resource-grants))
         (let ((path (plist-get grant :path))
               (access (plist-get grant :access)))
           (mevedel-permission--apply-prompt-result
