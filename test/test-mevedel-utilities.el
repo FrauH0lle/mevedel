@@ -64,6 +64,20 @@
                          (mevedel-library-source-directory elc))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel--diagnostic-value
+  (:doc "copies nested data and preserves diagnostic keyword normalization")
+  (let ((value (list :duplicate 1 :duplicate 2 :tail)))
+    (should (equal '(:duplicate 2 :tail nil)
+                   (mevedel--diagnostic-value value)))
+    (should (equal '(:duplicate 1 :duplicate 2 :tail) value))))
+
+(mevedel-deftest mevedel--diagnostic-entry-text
+  (:doc "prints a complete readable line despite ambient print limits")
+  (let ((print-length 1) (print-level 1) (print-quoted nil))
+    (should (equal "(:nested (a b c) :quoted 'value)\n"
+                   (mevedel--diagnostic-entry-text
+                    '(:nested (a b c) :quoted (quote value)))))))
+
 (mevedel-deftest mevedel--plain-data-p ()
   ,test
   (test)

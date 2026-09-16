@@ -40,6 +40,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-utilities'
+(declare-function mevedel--diagnostic-entry-text "mevedel-utilities" (entry))
+(autoload 'mevedel--diagnostic-entry-text "mevedel-utilities")
+
 
 ;;
 ;;; Customization
@@ -74,42 +78,6 @@
   (when-let* ((target (mevedel-session-execution-target session)))
     (mevedel-execution-target-remote-p target)))
 
-(defun mevedel-permission-log--printable-value (value)
-  "Return a disk-log-safe representation of VALUE."
-  (cond
-   ((or (null value)
-        (keywordp value)
-        (symbolp value)
-        (stringp value)
-        (numberp value))
-    value)
-   ((and (listp value) (keywordp (car-safe value)))
-    (let (out)
-      (while value
-        (let ((key (pop value))
-              (val (pop value)))
-          (setq out
-                (plist-put out key
-                           (mevedel-permission-log--printable-value val)))))
-      out))
-   ((consp value)
-    (cons (mevedel-permission-log--printable-value (car value))
-          (mevedel-permission-log--printable-value (cdr value))))
-   ((vectorp value)
-    (vconcat (mapcar #'mevedel-permission-log--printable-value
-                     (append value nil))))
-   (t
-   (format "%S" value))))
-
-(defun mevedel-permission-log--entry-text (entry)
-  "Return sanitized permission log ENTRY in its durable line format."
-  (let ((print-length nil)
-        (print-level nil)
-        (print-quoted t))
-    (concat
-     (prin1-to-string (mevedel-permission-log--printable-value entry))
-     "\n")))
-
 (defun mevedel-permission-log--persist-content (session content)
   "Append serialized permission log CONTENT for SESSION."
   (when-let* ((file (and mevedel-permission-log-enabled
@@ -129,7 +97,7 @@
 (defun mevedel-permission-log--persist (session entry)
   "Append sanitized permission log ENTRY to SESSION's persistent log."
   (mevedel-permission-log--persist-content
-   session (mevedel-permission-log--entry-text entry)))
+   session (mevedel--diagnostic-entry-text entry)))
 
 (defun mevedel-permission-log-flush (session)
   "Persist SESSION's queued permission diagnostics, retaining failures."
@@ -137,7 +105,7 @@
     (let ((pending (mevedel-session-permission-log-pending session)))
       (if (and pending (mevedel-permission-log--remote-p session))
           (when (mevedel-permission-log--persist-content
-                 session (mapconcat #'mevedel-permission-log--entry-text
+                 session (mapconcat #'mevedel--diagnostic-entry-text
                                     pending ""))
             (setf (mevedel-session-permission-log-pending session) nil))
         (let (remaining)

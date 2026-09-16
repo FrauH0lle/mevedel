@@ -598,7 +598,9 @@ sessions append when each entry is recorded; remote process callbacks enqueue
 and the next successful session settlement publishes the append atomically.
 Bounded entries created before the session has a save path are backfilled when
 it first materializes.  Non-readable runtime values such as closures are
-converted to printable strings before writing.  The in-memory log remains
+converted to printable strings before writing. Hook and permission logs share
+the diagnostic value/line codec in `mevedel-utilities.el`; their append, queue,
+and failure policies remain owned by each log.  The in-memory log remains
 capped by `mevedel-hooks-log-limit`; the persistent file is append-only for the
 session.  A failed append warns, remains queued, and retries after the next
 successful session save.
