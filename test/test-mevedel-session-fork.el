@@ -982,7 +982,7 @@
       (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-session-fork-conversation-fork ()
+(mevedel-deftest mevedel-session-fork-create/conversation ()
   ,test
   (test)
   :doc "publishes an independent child without changing Source files or state"
@@ -1024,9 +1024,9 @@
                ((symbol-function 'mevedel-model-apply-session-policy)
                 #'ignore))
             (setq child-buffer
-                  (mevedel-session-fork-conversation-fork
+                  (mevedel-session-fork-create
                    (plist-get fixture :buffer)
-                   '(:fork-point-id "fixture-fork"))))
+                   '(:fork-point-id "fixture-fork") (quote conversation))))
           (should (buffer-live-p child-buffer))
           (should (equal '("fork") lifecycle-sources))
           (should (buffer-local-value 'mevedel--session child-buffer))
@@ -1107,6 +1107,44 @@
         (when (buffer-live-p child-buffer)
           (kill-buffer child-buffer)))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
+
+(mevedel-deftest mevedel-session-fork-create/cleanup
+  (:doc "cleans staging and preserves the source on errors and nonlocal exits")
+  (dolist (escape '(error throw))
+    (let ((fixture (test-mevedel-session-persistence--make-fork-ready))
+          staging-buffer)
+      (unwind-protect
+          (let* ((session (plist-get fixture :session))
+                 (source-state (mevedel-session-codec-serialize session))
+                 (sessions-dir (mevedel-session-artifacts-sessions-dir
+                                (mevedel-session-workspace session)))
+                 (before (directory-files sessions-dir)))
+            (cl-letf (((symbol-function 'mevedel-session-rewind-load-rewind-target)
+                       (lambda (_source buffer _target)
+                         (setq staging-buffer buffer)
+                         (if (eq escape 'error)
+                             (error "Injected fork load failure")
+                           (throw 'fork-cancel 'cancelled)))))
+              (if (eq escape 'error)
+                  (should-error
+                   (mevedel-session-fork-create
+                    (plist-get fixture :buffer)
+                    '(:fork-point-id "fixture-fork") (quote conversation)))
+                (should (eq 'cancelled
+                            (catch 'fork-cancel
+                              (mevedel-session-fork-create
+                               (plist-get fixture :buffer)
+                               '(:fork-point-id "fixture-fork") (quote conversation)))))))
+            (should staging-buffer)
+            (should-not (buffer-live-p staging-buffer))
+            (should (equal before (directory-files sessions-dir)))
+            (should (equal source-state (mevedel-session-codec-serialize session)))
+            (should (equal (plist-get fixture :parent-sidecar-text)
+                           (mevedel-session-artifacts--file-text
+                            (mevedel-session-artifacts-sidecar-path
+                             (plist-get fixture :parent-path))))))
+        (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))))
 
 
 (mevedel-deftest mevedel-session-fork--retarget-worktree-state ()
@@ -1510,7 +1548,7 @@
     (should (string-match-p "Uncaptured files retain" body))))
 
 
-(mevedel-deftest mevedel-session-fork-worktree-fork ()
+(mevedel-deftest mevedel-session-fork-create/worktree ()
   ,test
   (test)
   :doc "publishes captured repository state in an isolated linked worktree"
@@ -1588,9 +1626,9 @@
                    ((symbol-function 'mevedel-model-apply-session-policy)
                     #'ignore))
                 (setq child-buffer
-                      (mevedel-session-fork-worktree-fork
+                      (mevedel-session-fork-create
                        (plist-get fixture :buffer)
-                       '(:fork-point-id "fixture-fork"))))
+                       '(:fork-point-id "fixture-fork") (quote worktree))))
               (should (buffer-live-p child-buffer))
               (should (equal '("fork") lifecycle-sources))
               (let* ((child
@@ -1720,8 +1758,8 @@
                         (lambda (&rest _)
                           (error "Injected staging failure"))))
                     (should-error
-                     (mevedel-session-fork-worktree-fork
-                      (plist-get fixture :buffer) target)))))
+                     (mevedel-session-fork-create
+                      (plist-get fixture :buffer) target (quote worktree))))))
             (should (file-directory-p directory))
             (should
              (string-match-p
@@ -1742,8 +1780,8 @@
                     (ert-fail "Retry allocated another reservation"))))
               (let ((retry-error
                      (should-error
-                      (mevedel-session-fork-worktree-fork
-                       (plist-get fixture :buffer) target)
+                      (mevedel-session-fork-create
+                       (plist-get fixture :buffer) target (quote worktree))
                       :type 'user-error)))
                 (should (string-match-p
                          (regexp-quote branch)
