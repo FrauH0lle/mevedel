@@ -809,22 +809,38 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 
 
 (defun mevedel-permission-invalidate-target-grants (session)
-  "Revoke SESSION's exact authority after target replacement.
+  "Revoke SESSION's filesystem authority after target replacement.
 
 Only session-scoped authority is bound to a target incarnation: the exact
-and dropped-file grants, and the frozen copy a running request holds.
+and dropped-file grants, command profile paths, and the frozen copy a
+running request holds.  Command and network approvals remain effective.
 The workspace store in `.mevedel/permissions.el' is deliberate, durable
 configuration shared through version control between machines, so a
 reboot or a different host must leave it alone; a grant there that does
 not apply on this target simply matches nothing."
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
-  (setf (mevedel-session-resource-grants session) nil
-        (mevedel-session-dropped-file-grants session) nil
-        (mevedel-session-active-dropped-file-grants session) nil)
-  (when-let* ((data-buffer (mevedel-permission-mode-data-buffer)))
-    (with-current-buffer data-buffer
-      (setq-local mevedel-permission--frozen-resource-grants nil)))
+  (cl-labels
+      ((without-filesystem (rules)
+         (mapcar
+          (lambda (rule)
+            (if (eq (plist-get (cdr rule) :action) 'allow)
+                (cons (car rule)
+                      (cl-loop for (key value) on (cdr rule) by #'cddr
+                               unless (eq key :file-system)
+                               append (list key value)))
+              rule))
+          rules)))
+    (setf (mevedel-session-resource-grants session) nil
+          (mevedel-session-dropped-file-grants session) nil
+          (mevedel-session-active-dropped-file-grants session) nil
+          (mevedel-session-permission-rules session)
+          (without-filesystem (mevedel-session-permission-rules session)))
+    (when-let* ((data-buffer (mevedel-permission-mode-data-buffer)))
+      (with-current-buffer data-buffer
+        (setq-local mevedel-permission--frozen-resource-grants nil
+                    mevedel-permission--frozen-persistent-rules
+                    (without-filesystem mevedel-permission--frozen-persistent-rules)))))
   t)
 
 

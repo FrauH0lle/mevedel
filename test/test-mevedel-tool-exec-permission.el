@@ -145,6 +145,29 @@
 (mevedel-deftest mevedel-tool-exec-permission-reevaluate ()
   ,test
   (test)
+  :doc "queued calls recheck command profiles and independent grants separately"
+  (let* ((grant '(:path "/tmp/profile-cache" :access write :recursive t))
+         (operation '("Bash" :pattern "make:*" :action allow))
+         (profile `("Bash" :pattern "make test" :file-system (,grant) :action allow))
+         (entry `(:kind sandbox :tool-name "Bash" :detail "make test"
+                  :sandbox-permissions additive
+                  :requested-additional-permissions (:file-system (,grant))))
+         (mevedel-permission-guardian nil))
+    (dolist (case (list (list (list operation profile) nil 'allow)
+                       (list (list operation) nil 'ask)
+                       (list (list operation) (list grant) 'allow)
+                       (list (list operation profile
+                                   '("Bash" :path "/tmp/profile-cache" :action deny))
+                             nil 'deny)
+                       (list (list operation profile
+                                   '("Bash" :path "/tmp/profile-cache" :action ask))
+                             nil 'ask)))
+      (should
+       (eq (nth 2 case)
+           (mevedel-tool-exec-permission-reevaluate
+            entry `(:tool-name "Bash" :mode ask
+                    :buckets ((:session ,@(car case)))
+                    :resource-grants ,(nth 1 case)))))))
   :doc "ordinary operation authority cannot clear full escalation"
   (let ((mevedel-permission-rules nil))
     (should
@@ -519,7 +542,7 @@ additive child permissions are available only to batch Eval"
 (mevedel-deftest mevedel-tool-exec-permission--remembered-additional-profile ()
   ,test
   (test)
-  :doc "resolves matching direct rules whose exact grants remain sufficient"
+  :doc "resolves matching direct profiles without separate resource grants"
   (let* ((path "/tmp/mevedel-remembered")
          (profile `((:path ,path :access write)))
          (rules
@@ -528,49 +551,20 @@ additive child permissions are available only to batch Eval"
          (session
           (mevedel-session--create
            :authority-mode 'pid-lock
-           :name "remembered" :resource-grants profile)))
+           :name "remembered" :resource-grants nil)))
     (should
      (equal
       `(:network t :file-system ,profile)
       (mevedel-tool-exec-permission--remembered-additional-profile
        "Bash" "make report"
        `(:session ,session :buckets ((:session ,@rules)))))))
-  :doc "an exact direct grant does not satisfy a recursive requirement"
-  (let* ((path "/tmp/mevedel-tree")
-         (rules
-          `(("Bash" :pattern "make:*"
-             :file-system ((:path ,path :access read :recursive t))
-             :action allow)))
-         (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "remembered"
-           :resource-grants `((:path ,path :access read)))))
-    (should-not
-     (mevedel-tool-exec-permission--remembered-additional-profile
-      "Bash" "make report"
-      `(:session ,session :buckets ((:session ,@rules))))))
-  :doc "a recursive direct grant satisfies matching and descendant requirements"
-  (let* ((path "/tmp/mevedel-tree")
-         (grant `(:path ,path :access read :recursive t))
-         (rules
-          `(("Bash" :pattern "make:*"
-             :file-system ((:path ,path :access read :recursive t)
-                           (:path ,(file-name-concat path "sub/file")
-                            :access read))
-             :action allow)))
-         (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "remembered" :resource-grants (list grant))))
+  :doc "recursive profiles authorize their own extent without a companion grant"
+  (let* ((grant '(:path "/tmp/mevedel-tree" :access read :recursive t))
+         (rule `("Bash" :pattern "make:*" :file-system (,grant) :action allow)))
     (should
-     (equal
-      `(:file-system ((:path ,path :access read :recursive t)
-                      (:path ,(file-name-concat path "sub/file")
-                       :access read)))
-      (mevedel-tool-exec-permission--remembered-additional-profile
-       "Bash" "make report"
-       `(:session ,session :buckets ((:session ,@rules)))))))
+     (equal `(:file-system (,grant))
+            (mevedel-tool-exec-permission--remembered-additional-profile
+             "Bash" "make report" `(:buckets ((:session ,rule)) :resource-grants nil)))))
   :doc "uses either target store as effective network and cache authority"
   (dolist (scope '(global workspace))
     (let* ((tmp-dir (make-temp-file "mevedel-profile-store-" t))
@@ -593,7 +587,7 @@ additive child permissions are available only to batch Eval"
                       :network t
                       :file-system ((:path "~/.npm" :access write))
                       :action allow))
-                    :resource-grants ((:path "~/.npm" :access write)))
+                    :resource-grants nil)
                   (current-buffer)))
             (let* ((context
                     `(:session ,session :workspace ,workspace
@@ -606,12 +600,47 @@ additive child permissions are available only to batch Eval"
                (equal
 		`(:network t :file-system ((:path ,path :access write)))
 		(mevedel-tool-exec-permission--remembered-additional-profile
-		 "Bash" "npx @emacs-eask/cli test" context)))))
+		 "Bash" "npx @emacs-eask/cli test" context)))
+              ;; An external edit must revoke the mount for the next call.
+              (with-temp-file file
+                (pp '(:rules (("Bash" :pattern "npx @emacs-eask/cli *" :action allow))
+                      :resource-grants nil)
+                    (current-buffer)))
+              (mevedel-permission-persistence-refresh workspace #'ignore)
+              (should
+               (equal '(:level use-default :additional-permissions nil)
+                      (mevedel-tool-exec-permission-effective-sandbox-request
+                       '(:command "npx @emacs-eask/cli test")
+                       "Bash" "npx @emacs-eask/cli test" nil
+                       `(:session ,session :workspace ,workspace))))))
 	(delete-directory tmp-dir t)))))
 
 (mevedel-deftest mevedel-tool-exec-permission--apply-remembered-authority ()
   ,test
   (test)
+  :doc "saves command paths and independent paths without duplicating authority"
+  (let* ((command-grant '(:path "/tmp/command-cache" :access write :recursive t))
+         (independent '(:path "/tmp/shared-input" :access read))
+         (session (mevedel-session--create :authority-mode 'pid-lock :name "scopes"))
+         (request
+          `(:operation-pattern "make report" :remember-patterns ("make:*")
+            :remember-cell ((:operation t :file-system (,command-grant)
+                            :resource-grants (,independent))))))
+    (mevedel-tool-exec-permission--apply-remembered-authority
+     'allow-session "Bash" request session nil)
+    (should (equal (list independent) (mevedel-session-resource-grants session)))
+    (should (equal (list command-grant)
+                   (plist-get (cdar (mevedel-session-permission-rules session))
+                              :file-system))))
+  :doc "independent paths can be remembered without authorizing any command"
+  (let* ((grant '(:path "/tmp/shared-input" :access read))
+         (session (mevedel-session--create :authority-mode 'pid-lock :name "independent"))
+         (request `(:operation-pattern "make report" :remember-patterns ("make:*")
+                    :remember-cell ((:resource-grants (,grant))))))
+    (mevedel-tool-exec-permission--apply-remembered-authority
+     'allow-session "Bash" request session nil)
+    (should (equal (list grant) (mevedel-session-resource-grants session)))
+    (should-not (mevedel-session-permission-rules session)))
   :doc "binds a compound command profile to the complete workload"
   (let* ((command "pwd && package fetch dependencies")
          (session (mevedel-session--create :authority-mode 'pid-lock :name "compound"))
@@ -678,35 +707,16 @@ additive child permissions are available only to batch Eval"
                   :additional_permissions (:file_system (:write [,path]))
                   :justification "Write the report?")
        "Bash" "npx test" nil context))))
-  :doc "reattaches an exact path only while its resource grant is sufficient"
+  :doc "reattaches profile paths independently of unrelated resource grants"
   (let* ((path "/tmp/mevedel-input")
          (profile `((:path ,path :access write)))
-         (rules
-          `(("Bash" :pattern "make:*" :file-system ,profile
-             :action allow)))
-         (read-session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "read"
-           :resource-grants `((:path ,path :access read))))
-         (write-session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "write"
-           :resource-grants `((:path ,path :access write)))))
-    (should
-     (equal
-      '(:level use-default :additional-permissions nil)
-      (mevedel-tool-exec-permission-effective-sandbox-request
-       '(:command "make build") "Bash" "make build" nil
-       `(:session ,read-session :buckets ((:session ,@rules))))))
-    (should
-     (equal
-      `(:level additive
-               :additional-permissions (:file-system ,profile))
-      (mevedel-tool-exec-permission-effective-sandbox-request
-       '(:command "make build") "Bash" "make build" nil
-       `(:session ,write-session :buckets ((:session ,@rules)))))))
+         (rule `("Bash" :pattern "make:*" :file-system ,profile :action allow)))
+    (dolist (grants (list nil `((:path ,path :access read))))
+      (should
+       (equal `(:level additive :additional-permissions (:file-system ,profile))
+              (mevedel-tool-exec-permission-effective-sandbox-request
+               '(:command "make build") "Bash" "make build" nil
+               `(:resource-grants ,grants :buckets ((:session ,rule))))))))
   :doc "unions matching direct profiles and keeps the strongest path access"
   (let* ((path "/tmp/mevedel-output")
          (rules
@@ -775,6 +785,23 @@ additive child permissions are available only to batch Eval"
 (mevedel-deftest mevedel-tool-exec-permission--additional-authority-state ()
   ,test
   (test)
+  :doc "a command profile authorizes its paths without independent grants"
+  (dolist (tool '("Bash" "Eval"))
+    (let* ((grant '(:path "/tmp/command-cache" :access write :recursive t))
+           (request `(:operation-pattern "operation"
+                      :additional-permissions (:file-system (,grant))))
+           (rule `(,tool :pattern "operation" :file-system (,grant) :action allow)))
+      (dolist (bucket '(:session :persistent :defcustom))
+        (let ((state (mevedel-tool-exec-permission--additional-authority-state
+                      tool request `(:buckets ((,bucket ,rule)) :resource-grants nil))))
+          (should-not (plist-get state :missing))
+          (should (equal `(:file-system (,grant)) (plist-get state :granted)))))
+      (dolist (bucket '(:invocation :request))
+        (should
+         (plist-get
+          (mevedel-tool-exec-permission--additional-authority-state
+           tool request `(:buckets ((,bucket ,rule)) :resource-grants nil))
+          :missing)))))
   :doc "existing read plus requested write leaves only write unresolved"
   (let* ((read '(:path "/tmp/external" :access read))
          (write '(:path "/tmp/external" :access write))
@@ -1174,9 +1201,13 @@ an ungranted exact filesystem path still prompts and stores session authority"
           (should (equal path (plist-get entry :resource-path)))
           (should (eq 'read (plist-get entry :resource-access)))
           (should (eq 'allow outcome))
+          (should-not (mevedel-session-resource-grants session))
           (should
            (member `(:path ,path :access read)
-                   (mevedel-session-resource-grants session))))
+                   (plist-get
+                    (mevedel-tool-exec-permission--remembered-additional-profile
+                     "Bash" (format "cat %s" path) `(:session ,session))
+                    :file-system))))
       (delete-directory root t)))
   :doc "session resource approval:
 the complete requested path profile is selected by default"
@@ -1215,9 +1246,13 @@ the complete requested path profile is selected by default"
                                :resource-grants nil))
              (lambda (result) (setq outcome result))))
           (should (eq 'allow outcome))
+          (should-not (mevedel-session-resource-grants session))
           (should
            (member `(:path ,path :access read)
-                   (mevedel-session-resource-grants session))))
+                   (plist-get
+                    (mevedel-tool-exec-permission--remembered-additional-profile
+                     "Bash" (format "cat %s" path) `(:session ,session))
+                    :file-system))))
       (delete-directory root t)))
   :doc "pregranted protected resource:
 an exact session grant skips only the filesystem prompt"
@@ -1253,7 +1288,7 @@ an exact session grant skips only the filesystem prompt"
           (should (eq 'allow outcome)))
       (delete-directory root t)))
   :doc "target replacement:
-the durable Bash rule survives but its exact profile requires a fresh grant"
+the session command survives but its filesystem profile requires fresh approval"
   (let* ((root (make-temp-file "mevedel-bash-incarnation-" t))
          (path (file-name-concat root "cache"))
          (workspace (mevedel-workspace--create :type 'file :root root))

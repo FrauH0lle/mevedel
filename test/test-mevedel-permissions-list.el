@@ -98,7 +98,7 @@ Return the row's tabulated id."
     (setf (mevedel-session-permission-rules session)
           '(("Bash" :pattern "npm test" :action allow
              :file-system ((:path "/tmp/cache" :access write :recursive t)))))
-    (should (equal "npm test [write /tmp/cache (recursive)]"
+    (should (equal "npm test [with command: write /tmp/cache (recursive)]"
                    (plist-get (car (mevedel-permissions-list--collect context))
                               :spec))))
 

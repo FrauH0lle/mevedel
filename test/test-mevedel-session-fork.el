@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
+(require 'mevedel-tool-exec-permission)
 
 
 (mevedel-deftest mevedel-session-fork-clone-session
@@ -264,7 +265,7 @@
                         "test-backend:test-model"
                         (mevedel-session-reasoning-effort session) 'high
                         (mevedel-session-resource-grants session)
-                        '((:path "/tmp/source-only" :access read))
+                        '((:path "/tmp/independent-only" :access read))
                         (mevedel-session-reminders session)
                         (list source-reminder)
                         (mevedel-session-pending-reminders session)
@@ -327,6 +328,12 @@
                       ((:path "/tmp/source-only" :access read))
                       :action allow))
                    (mevedel-session-permission-rules child)))
+          (should
+           (equal
+            '(:level additive :additional-permissions
+              (:network t :file-system ((:path "/tmp/source-only" :access read))))
+            (mevedel-tool-exec-permission-effective-sandbox-request
+             '(:command "npx test") "Bash" "npx test" nil `(:session ,child))))
           (should-not (eq (mevedel-session-permission-rules session)
                           (mevedel-session-permission-rules child)))
           (should-not (eq (mevedel-session-resource-grants session)

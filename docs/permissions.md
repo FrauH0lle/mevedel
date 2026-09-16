@@ -55,9 +55,11 @@ review. Protected or outside-root paths still require resource authority before
 the review appears, and explicit allow/ask/deny rules retain their precedence.
 
 For a tool with a command checker, command authority and filesystem resource
-authority are layered: both must allow. A command rule cannot authorize its
-path, and a resource grant cannot authorize its command. Native `:path` rules
-remain direct tool authorization, but cannot bypass a protected path's
+authority are layered: both must allow. A plain command allow cannot authorize its
+path, and a resource grant cannot authorize its command. A matching direct
+command rule with `:file-system` supplies both operation and scoped filesystem
+authority for that execution. Native `:path` rules remain direct tool
+authorization, but cannot bypass a protected path's
 resource-grant requirement.
 
 Hook integration sits around this chain:
@@ -171,7 +173,7 @@ Compound commands keep generalized operation rules for their segments but
 store the profile against the complete compound command, preventing one
 segment from inheriting another segment's capability.
 Filesystem entries are `(:path PATH :access read-or-write [:recursive t])`
-requirements. `PATH` is either absolute or home-relative with `~`/`~/`; stored
+grants. `PATH` is either absolute or home-relative with `~`/`~/`; stored
 home-relative paths expand in the execution target. Grant paths are literal —
 `*`, `**`, and `?` carry no glob meaning; `:recursive t` extends an entry from
 the exact path to the directory and all its descendants, present and future.
@@ -179,10 +181,11 @@ Project and session stores
 encode exact paths and absolute path rules without a client-specific TRAMP
 prefix, then qualify them through the currently opened matching target. A
 foreign target prefix invalidates the stored authority instead of being
-reinterpreted. Entries become effective only while an equally strong direct
-resource grant still exists: a recursive requirement is met only by a
-recursive direct grant containing it, while a recursive direct grant also
-satisfies an exact requirement for any descendant. Multiple matching profiles
+reinterpreted. Entries in a direct allow rule authorize their own filesystem
+access for matching executions. They need no companion `:resource-grants` entry
+and do not grant native tools or unrelated commands access. Independent resource
+grants remain sufficient for explicitly requested access, but are not
+automatically attached to every child. Multiple matching profiles
 are unioned, with write dominating read for the same path and scope; exact and
 recursive entries on the same path stay distinct. Only session, persistent,
 and defcustom rules can contribute a reusable profile. Invocation- and
@@ -221,7 +224,16 @@ The prompt offers allow/deny choices for the invocation, session, or persistent
 workspace scope. When one Bash or batch-Eval call needs both operation and
 additive authority, one card presents the complete request. Session and
 workspace approval default to remembering the complete selected profile;
-command, network, and individual path toggles can narrow it before approval.
+command and network toggles can narrow it before approval. For each path,
+`p` offers **With this command**, **Independent path access**, or **Do not
+remember**. Command scope is the default for reusable commands; independent
+access is an explicit choice and is stored only in `:resource-grants`. Commands
+that cannot be remembered offer independent path access or no remembering,
+with neither path authority nor command authority selected by default.
+Selecting command-scoped paths enables command remembering. Turning command
+remembering off clears its path and network selections, without converting them
+to independent grants. Independent selections remain unchanged. The `g` extent
+selector preserves each path's remembering scope.
 The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
 `:resource-grants`. It lives with the project on its execution target and stores
@@ -230,7 +242,9 @@ TRAMP alias reuses its authority. Paths under the target's home directory are
 written abbreviated as `~/...` and expanded against the current target at
 load, so the file can be committed and shared between machines whose home
 directories differ. A target-incarnation change never rewrites this file; only
-session-scoped exact grants are revoked. Both global and project stores belong
+session filesystem grants, including paths embedded in command profiles, are
+revoked. Command and network approvals survive; invalidated frozen filesystem
+authority is cleared as well. Both global and project stores belong
 to the session's execution target:
 
 | Session | Global store | Project store |
@@ -624,9 +638,10 @@ mounts, without merging their separate identities in the authority store.
 
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
-invocation, session, and persistent approvals use the same resource-grant
-store as native filesystem tools. Reusable approval also records those
-requirements in the matching operation profile. The card's `g` selection can
+invocation approval applies only to the current child. Reusable approval
+stores each selected path either in the matching operation profile or as an
+independent resource grant shared with native filesystem tools. It never
+creates both entries implicitly. The card's `g` selection can
 broaden a requested file or directory to a containing tree. Both the current
 child and a selected remembered profile receive that explicit extent. Narrowing
 the remembering toggles does not narrow the current invocation's approval.
@@ -637,9 +652,12 @@ Recursive profile entries carry `:recursive t`, exposing the directory tree
 through one bind mount at the selected access level; model-facing requests
 name exact paths only. A
 later matching default call
-reattaches a path only while both the profile and a sufficient direct resource
-grant remain — recursive requirements need a recursive grant containing them —
-and removing either immediately restores confinement. Approved paths
+reattaches paths from its matching direct profiles without a second grant.
+Revoking a profile removes that command-scoped authority; revoking an independent
+grant removes only the independent authority. Other sufficient approvals remain
+effective. Existing profiles also use these semantics: deleting a former
+companion resource grant no longer revokes a profile. No migration or automatic
+cleanup of existing independent grants is performed. Approved paths
 are rebound at only the requested access level. A grant that contains a
 protected descendant is bound before that descendant is masked; all other
 grants are bound after protected masks are installed. An explicit write grant
@@ -861,20 +879,17 @@ and writes within npm's cache directory is:
    :network t
    :file-system ((:path "~/.npm" :access write :recursive t))
    :action allow))
- :resource-grants
- ((:path "~/.npm" :access write :recursive t)))
+ :resource-grants nil)
 ```
 
 A `:recursive t` entry grants a whole directory tree — here read access to
-the system Emacs installation, both as a direct grant and inside a Bash
-profile that exposes it to the sandboxed child through one read-only bind
-mount:
+the system Emacs installation for one Bash command. Its profile exposes the
+tree to the sandboxed child through one read-only bind mount:
 
 ```elisp
 (:rules
  (("Bash" :pattern "some-command *"
    :file-system ((:path "/usr/share/emacs" :access read :recursive t))
    :action allow))
- :resource-grants
- ((:path "/usr/share/emacs" :access read :recursive t)))
+ :resource-grants nil)
 ```

@@ -115,7 +115,9 @@
   (test)
   :doc "command and network toggles preserve their dependency"
   (with-temp-buffer
-    (let* ((cell (list '(:operation t)))
+    (let* ((cell (list '(:operation t
+                        :file-system ((:path "/cache" :access write))
+                        :resource-grants ((:path "/input" :access read)))))
            (entry
             `(:session session
               :remember-authority-cell ,cell
@@ -135,9 +137,46 @@
           (let ((last-command-event ?c))
             (mevedel-permission--prompt-toggle-remember))
           (should-not (plist-get (car cell) :operation))
-          (should-not (plist-get (car cell) :network))))))
+          (should-not (plist-get (car cell) :network))
+          (should-not (plist-get (car cell) :file-system))
+          (should (plist-get (car cell) :resource-grants))))))
 
-  :doc "path selection toggles one exact grant"
+  :doc "path scopes are explicit and switching scopes never duplicates a grant"
+  (with-temp-buffer
+    (let* ((grant '(:path "/cache" :access write :recursive t))
+           (cell (list nil))
+           (entry `(:reusable-operation-p t :remember-authority-cell ,cell
+                    :requested-additional-permissions (:file-system (,grant))))
+           (ov (progn (insert "prompt") (make-overlay (point-min) (point-max)))))
+      (overlay-put ov 'mevedel-permission-prompt t)
+      (overlay-put ov 'mevedel-view-interaction-entry entry)
+      (goto-char (point-min))
+      (dolist (choice '(("With this command" . :file-system)
+                        ("Independent path access" . :resource-grants)
+                        ("Do not remember" . nil)))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (prompt choices &rest _)
+                     (if (equal prompt "Remember capability: ")
+                         (caar choices)
+                       (should (assoc (car choice) choices))
+                       (car choice)))))
+          (let ((last-command-event ?p))
+            (mevedel-permission--prompt-toggle-remember)))
+        (dolist (key '(:file-system :resource-grants))
+          (should (equal (and (eq key (cdr choice)) (list grant))
+                         (plist-get (car cell) key))))
+        (should (plist-get (car cell) :operation)))
+      (setf (plist-get entry :reusable-operation-p) nil)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt choices &rest _)
+                   (when (equal prompt "Remember path access: ")
+                     (should-not (assoc "With this command" choices)))
+                   (caar choices))))
+        (let ((last-command-event ?p))
+          (mevedel-permission--prompt-toggle-remember)))
+      (should (equal (list grant) (plist-get (car cell) :resource-grants)))))
+
+  :doc "path selection chooses command scope and enables command remembering"
   (with-temp-buffer
     (let* ((root "/ssh:display:/srv/project/")
            (target (mevedel-execution-target-create root))
@@ -146,7 +185,7 @@
            (grant '(:path "/ssh:display:/external" :access write))
            (cell (list '(:operation t)))
            (entry
-            `(:session ,session
+            `(:session ,session :reusable-operation-p t
               :remember-authority-cell ,cell
               :requested-additional-permissions
               (:file-system (,grant)))))
@@ -156,9 +195,12 @@
         (overlay-put ov 'mevedel-view-interaction-entry entry)
         (goto-char (point-min))
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (_prompt choices &rest _)
-                         (should (equal "Write /external (exact)" (caar choices)))
-                     (caar choices)))
+                   (lambda (prompt choices &rest _)
+                     (let ((choice (if (equal prompt "Remember capability: ")
+                                       "Write /external (exact)"
+                                     "With this command")))
+                       (should (assoc choice choices))
+                       choice)))
                   ((symbol-function
                     'mevedel-permission-queue--render-head)
                    #'ignore))
@@ -174,7 +216,7 @@
            (recursive '(:path "/srv/tree" :access read :recursive t))
            (cell (list '(:operation t)))
            (entry
-            `(:session ,session
+            `(:session ,session :reusable-operation-p t
               :remember-authority-cell ,cell
               :requested-additional-permissions
               (:file-system (,exact ,recursive)))))
@@ -184,11 +226,14 @@
         (overlay-put ov 'mevedel-view-interaction-entry entry)
         (goto-char (point-min))
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (_prompt choices &rest _)
-                     (should (equal '("Read /srv/tree (exact)"
-                                      "Read /srv/tree (recursive)")
-                                    (mapcar #'car choices)))
-                     "Read /srv/tree (recursive)"))
+                   (lambda (prompt choices &rest _)
+                     (if (equal prompt "Remember capability: ")
+                         (progn
+                           (should (equal '("Read /srv/tree (exact)"
+                                            "Read /srv/tree (recursive)")
+                                          (mapcar #'car choices)))
+                           "Read /srv/tree (recursive)")
+                       "With this command")))
                   ((symbol-function
                     'mevedel-permission-queue--render-head)
                    #'ignore))
@@ -261,8 +306,8 @@
              (:network t :file-system (,write))))))
     (should (string-match-p "\\[x\\] Command" text))
     (should (string-match-p "\\[ \\] Network with command" text))
-    (should (string-match-p "\\[x\\] Write /output" text))
-    (should (string-match-p "complete selected profile" text))
+    (should (string-match-p "Write /output (exact) -- With this command" text))
+    (should (string-match-p "selected authority" text))
     (should (string-match-p "p selects a path" text))
     (should-not (string-match-p "/ssh:" text)))
 
@@ -276,7 +321,7 @@
              :requested-additional-permissions
              (:file-system (,grant))))))
     (should (string-match-p
-             (regexp-quote "[ ] Read /srv/tree (recursive)") text))))
+             (regexp-quote "Read /srv/tree (recursive) -- Do not remember") text))))
 
 (mevedel-deftest mevedel-permission--prompt-body
   ()
@@ -589,7 +634,7 @@
       (should (string-match-p
                "\\[x\\] already granted.*\\[ \\] granted by this approval"
                content))
-      (should (string-match-p "complete selected profile" content))
+      (should (string-match-p "selected authority" content))
       (should (string-match-p "\\[x\\] Command" content))
       (should (string-match-p "\\[x\\] Network" content))
       (should (string-match-p

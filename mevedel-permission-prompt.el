@@ -163,11 +163,12 @@ Selection changes the visible card only; approval chooses its lifetime."
                          choices))))
         (setf (nth index (car cell)) selected)
         (when-let* ((remember-cell (plist-get entry :remember-authority-cell)))
-          (setcar remember-cell
-                  (plist-put
-                   (car remember-cell) :file-system
-                   (mapcar (lambda (grant) (if (equal grant previous) selected grant))
-                           (plist-get (car remember-cell) :file-system)))))
+          (dolist (key '(:file-system :resource-grants))
+            (setcar remember-cell
+                    (plist-put
+                     (car remember-cell) key
+                     (mapcar (lambda (grant) (if (equal grant previous) selected grant))
+                             (plist-get (car remember-cell) key))))))
         (mevedel-permission-queue--render-head (plist-get entry :session))))))
 
 (defun mevedel-permission--prompt-self-insert ()
@@ -251,7 +252,8 @@ Selection changes the visible card only; approval chooses its lifetime."
                (plist-put selection :operation
                           (not (plist-get selection :operation))))
          (unless (plist-get selection :operation)
-           (setq selection (plist-put selection :network nil))))
+           (setq selection (plist-put selection :network nil)
+                 selection (plist-put selection :file-system nil))))
         (?n
          (setq selection
                (plist-put selection :network
@@ -271,13 +273,25 @@ Selection changes the visible card only; approval chooses its lifetime."
                     (assoc
                      (completing-read "Remember capability: " choices nil t)
                      choices)))
-                  (selected (plist-get selection :file-system)))
-             (setq selection
-                   (plist-put
-                    selection :file-system
-                    (if (member grant selected)
-                        (delete grant selected)
-                      (append selected (list grant)))))))))
+                  (scopes
+                   (append
+                    (when (plist-get entry :reusable-operation-p)
+                      '(("With this command" . :file-system)))
+                    '(("Independent path access" . :resource-grants)
+                      ("Do not remember" . nil))))
+                  (scope (cdr (assoc (completing-read "Remember path access: "
+                                                     scopes nil t)
+                                     scopes))))
+             (dolist (key '(:file-system :resource-grants))
+               (setq selection
+                     (plist-put selection key
+                                (delete grant (plist-get selection key)))))
+             (when scope
+               (setq selection
+                     (plist-put selection scope
+                                (append (plist-get selection scope) (list grant)))))
+             (when (eq scope :file-system)
+               (setq selection (plist-put selection :operation t)))))))
       (setcar cell selection)
       (when-let* ((session (plist-get entry :session)))
         (mevedel-permission-queue--render-head session)))))
@@ -546,7 +560,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                                       :network))))
       (when (or operation-p network-p resources)
         (concat
-         (propertize "Session/workspace approval remembers the complete selected profile\n"
+         (propertize "Session/workspace approval remembers the selected authority\n"
                      'font-lock-face '(:inherit bold))
          (when operation-p
            (format "[%s] Command  (c toggles)\n"
@@ -557,13 +571,14 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
          (mapconcat
           (lambda (grant)
             (format
-             "[%s] %s"
-             (if (member grant (plist-get selection :file-system))
-                 "x"
-               " ")
-             (mevedel-permission--resource-label entry grant)))
+             "%s -- %s"
+             (mevedel-permission--resource-label entry grant)
+             (cond
+              ((member grant (plist-get selection :file-system)) "With this command")
+              ((member grant (plist-get selection :resource-grants)) "Independent path access")
+              (t "Do not remember"))))
           resources "\n")
-         (and resources "\n(p selects a path)\n")
+         (and resources "\n(p selects a path and remembering scope)\n")
          "\n")))))
 
 (defun mevedel-permission--prompt-async-attributed

@@ -61,6 +61,7 @@
            (mevedel-permission-rules nil)
            (mevedel-permission-guardian nil)
            (mevedel-protected-paths (list (cons source 'inaccessible)))
+           (draft "> keep this draft\nsecond line")
            result)
       (unwind-protect
           (progn
@@ -88,6 +89,8 @@
               (setq-local mevedel--session session)
               (setq-local temporary-file-directory root))
             (mevedel-view--setup view data)
+            (with-current-buffer view
+              (mevedel-view-test--insert-composer-draft draft))
             (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask)))
               (cl-labels
                   ((press (key)
@@ -143,8 +146,10 @@
                   ;; Omit the already granted read and network from remembering.
                   (press "n")
                   (cl-letf (((symbol-function 'completing-read)
-                             (lambda (_prompt collection &rest _)
-                               (let ((choice (format "Read %s (exact)" source)))
+                             (lambda (prompt collection &rest _)
+                               (let ((choice (if (equal prompt "Remember capability: ")
+                                                 (format "Read %s (exact)" source)
+                                               "Do not remember")))
                                  (should (assoc choice collection))
                                  choice))))
                     (press "p")))
@@ -155,6 +160,12 @@
                 (with-temp-buffer
                   (insert-file-contents (file-name-concat cache "run-1" "value"))
                   (should (equal "protected input contents" (buffer-string))))
+                ;; Execution approval must not create independent cache access.
+                (should-not
+                 (mevedel-permission-rules-resource-granted-p
+                  cache 'write (mevedel-session-resource-grants session) t))
+                ;; Revoking the native input grant cannot revoke command access.
+                (setf (mevedel-session-resource-grants session) nil)
                 (setf (mevedel-session-permission-mode session) 'edits)
                 (with-current-buffer data
                   (let* ((request
@@ -174,7 +185,26 @@
                     (should (equal "protected input contents" (buffer-string)))))
                 (with-temp-buffer
                   (insert-file-contents counter)
-                  (should (equal "2" (buffer-string)))))))
+                  (should (equal "2" (buffer-string))))
+                ;; Native tools receive no independent authority from the profile.
+                (run "Read" (list :file_path cache))
+                (should-not result)
+                (should (= 1 (length (mevedel-session-permission-queue session))))
+                (press "d")
+                (should result)
+                ;; The same workload under a different command/expression cannot
+                ;; use the original command's mount, even with operation approval.
+                (setf (mevedel-session-permission-mode session) 'full-auto)
+                (run tool-name
+                     (if (equal tool-name "Bash")
+                         (list :command (concat "sh " (shell-quote-argument script)))
+                       (list :expression (concat "(progn " expression ")") :mode "batch")))
+                (await-result)
+                (should (string-match-p "sandbox: bubblewrap" result))
+                (should-not (string-match-p "profile execution complete" result))
+                (should-not (file-exists-p (file-name-concat cache "run-3" "value")))
+                (with-current-buffer view
+                  (should (equal draft (mevedel-view--input-text)))))))
         (mevedel-permission-queue-abort-all session)
         (mevedel-execution-teardown-session session)
         (when (buffer-live-p view) (kill-buffer view))
@@ -289,6 +319,71 @@
         (when (buffer-live-p data) (kill-buffer data))
         (delete-directory parent t)
         (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-permission-queue--independent-profile
+  (:quiet t :doc "independent tree selection survives extent changes and mixed-scope approval")
+  (let* ((root (make-temp-file "mevedel-pq-independent-" t))
+         (cache (file-name-concat root "cache"))
+         (input (file-name-concat root "input"))
+         (data (generate-new-buffer " *test-pq-independent-data*"))
+         (view (generate-new-buffer " *test-pq-independent-view*"))
+         (workspace (mevedel-workspace-get-or-create 'project root root "independent"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel-permission-rules nil)
+         (mevedel-permission-guardian nil)
+         result)
+    (unwind-protect
+        (progn
+          (make-directory cache)
+          (with-temp-file input (insert "input"))
+          (with-current-buffer data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view data)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask)))
+            (with-current-buffer data
+              (mevedel-tool-exec-permission-check-bash-async
+               nil
+               (list :command "make report"
+                     :sandbox_permissions "with_additional_permissions"
+                     :additional_permissions
+                     (list :file_system (list :read (vector input) :write (vector cache)))
+                     :justification "Read input and write cache")
+               (lambda (value) (setq result value))))
+            (should-not result)
+            (dolist (step (list (list "p" (format "Write %s (exact)" cache)
+                                     "Independent path access")
+                               (list "g" (format "Write %s (exact)" cache)
+                                     (format "Write %s (recursive)" cache))
+                               (list "s")))
+              (with-current-buffer view
+                (let* ((entry (car (mevedel-session-permission-queue session)))
+                       (id (mevedel-queue--entry-metadata-get entry :interaction-id))
+                       (ov (gethash id mevedel-view--interaction-overlays))
+                       (choices (cdr step))
+                       (last-command-event (aref (car step) 0)))
+                  (goto-char (overlay-start ov))
+                  (cl-letf (((symbol-function 'completing-read)
+                             (lambda (_prompt collection &rest _)
+                               (let ((choice (pop choices)))
+                                 (should (assoc choice collection))
+                                 choice))))
+                    (call-interactively (lookup-key (overlay-get ov 'keymap) (car step)))))))
+            (should (eq 'allow result))
+            (should-not (mevedel-session-permission-queue session))
+            (should (equal (list (list :path cache :access 'write :recursive t))
+                           (mevedel-session-resource-grants session)))
+            (should
+             (equal (list (list :path input :access 'read))
+                    (plist-get
+                     (mevedel-tool-exec-permission--remembered-additional-profile
+                      "Bash" "make report" `(:session ,session :workspace ,workspace))
+                     :file-system)))))
+      (mevedel-permission-queue-abort-all session)
+      (when (buffer-live-p view) (kill-buffer view))
+      (when (buffer-live-p data) (kill-buffer data))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-permission-queue-profile)
 ;;; test-mevedel-permission-queue-profile.el ends here

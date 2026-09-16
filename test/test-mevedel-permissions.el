@@ -904,10 +904,14 @@
         (with-temp-buffer
           (setq-local mevedel--session session
                       mevedel-permission--context-frozen-p t
+                      mevedel-permission--frozen-persistent-rules
+                      `(("Bash" :pattern "frozen:*" :network t
+                         :file-system ((:path ,path :access read)) :action allow))
                       mevedel-permission--frozen-resource-grants
                       `((:path ,path :access read)))
           (setf (mevedel-session-permission-rules session)
-                '(("Bash" :pattern "git status:*" :action allow))
+                `(("Bash" :pattern "git status:*" :network t
+                   :file-system ((:path ,path :access read)) :action allow))
                 (mevedel-session-resource-grants session)
                 `((:path ,path :access read))
                 (mevedel-session-dropped-file-grants session)
@@ -924,8 +928,10 @@
           (should-not
            (mevedel-session-active-dropped-file-grants session))
           (should-not mevedel-permission--frozen-resource-grants)
+          (should (equal '(("Bash" :pattern "frozen:*" :network t :action allow))
+                         mevedel-permission--frozen-persistent-rules))
           (should
-           (equal '(("Bash" :pattern "git status:*" :action allow))
+           (equal '(("Bash" :pattern "git status:*" :network t :action allow))
                   (mevedel-session-permission-rules session)))
           ;; The workspace store is shared configuration, not authority
           ;; bound to this target's incarnation: it keeps its grants.
