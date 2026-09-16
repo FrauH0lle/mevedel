@@ -566,18 +566,7 @@
           truncated: record.truncated, collapsed: true}, disclosures, 'root');
   }
 
-  function captureDisclosures(turn) {
-    return new Map([...(turn.disclosures || [])].map(([key, node]) => [key, !!node.open]));
-  }
-
-  function restoreDisclosures(turn, saved) {
-    for (const [key, open] of saved || []) {
-      const node = turn.disclosures && turn.disclosures.get(key);
-      if (node) node.open = open;
-    }
-  }
-
-  function renderRecord(record, directiveLabel, onArtifactOpen) {
+  function renderRecord(record, directiveLabel, onArtifactOpen, previous) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
@@ -592,9 +581,15 @@
     const rendered = renderContent(record, onArtifactOpen, turn.disclosures);
     content.append(rendered);
     turn.append(content);
+    // Rebuilding a record owns disclosure continuity. Callers supply the
+    // prior record element, without coordinating a separate save/restore pass.
+    for (const [key, old] of (previous && previous.disclosures) || []) {
+      const node = turn.disclosures.get(key);
+      if (node) node.open = !!old.open;
+    }
     return turn;
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, renderDiff, renderMarkdown, formatBytes, captureDisclosures, restoreDisclosures});
+    {renderRecord, renderDiff, renderMarkdown, formatBytes});
 })();

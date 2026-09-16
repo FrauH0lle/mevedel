@@ -236,30 +236,23 @@
     }
   }
 
-  function updateRecordElement(record) {
-    let turn = state.elements.get(record.id);
-    if (!turn) {
-      turn = window.mevedelTranscriptRenderer.renderRecord(
-        record, directiveLabel, artifacts.open);
-      state.elements.set(record.id, turn);
-      transcript.append(turn);
+  function updateRecordElement(record, previous) {
+    const current = state.elements.get(record.id);
+    const turn = window.mevedelTranscriptRenderer.renderRecord(
+      record, directiveLabel, artifacts.open, previous || current);
+    if (current) {
+      turn.hidden = current.hidden;
+      current.replaceWith(turn);
     } else {
-      const saved = window.mevedelTranscriptRenderer.captureDisclosures(turn);
-      const fresh = window.mevedelTranscriptRenderer.renderRecord(
-        record, directiveLabel, artifacts.open);
-      window.mevedelTranscriptRenderer.restoreDisclosures(fresh, saved);
-      fresh.hidden = turn.hidden;
-      turn.replaceWith(fresh);
-      state.elements.set(record.id, fresh);
-      turn = fresh;
+      transcript.append(turn);
     }
+    state.elements.set(record.id, turn);
     return turn;
   }
 
   function replaceSnapshot(records) {
     const follow = atLiveEdge();
-    const saved = new Map([...state.elements].map(([id, turn]) =>
-      [id, window.mevedelTranscriptRenderer.captureDisclosures(turn)]));
+    const previous = new Map(state.elements);
     state.records.clear();
     state.elements.clear();
     state.unseen.clear();
@@ -268,8 +261,7 @@
       if (record && typeof record.id === 'string') state.records.set(record.id, record);
     });
     state.records.forEach(record => {
-      const turn = updateRecordElement(record);
-      window.mevedelTranscriptRenderer.restoreDisclosures(turn, saved.get(record.id));
+      updateRecordElement(record, previous.get(record.id));
     });
     refreshFilter();
     markContinuations();
