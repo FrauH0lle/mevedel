@@ -22,16 +22,25 @@
   (should-error (mevedel-plan-validate nil)))
 
 (mevedel-deftest mevedel-plan-extract-proposed
-  (:doc "extracts the last line-oriented proposed-plan block")
+  (:doc "extracts the last complete proposed-plan block")
   ,test
   (test)
   (should (equal
            "second"
            (mevedel-plan-extract-proposed
             "<proposed_plan>\nfirst\n</proposed_plan>\n<proposed_plan>\nsecond\n</proposed_plan>")))
-  (should-not
-   (mevedel-plan-extract-proposed
-    "text <proposed_plan>\nnot a plan\n</proposed_plan>"))
+  :doc "accepts glued opening tags and indented delimiters"
+  (dolist (text '("No changes.<proposed_plan>\n# Plan\n</proposed_plan>"
+                  "  <proposed_plan>\n# Plan\n  </proposed_plan>\n"
+                  "Intro <proposed_plan> \t\n# Plan\n\t</proposed_plan> \t"))
+    (should (equal "# Plan" (mevedel-plan-extract-proposed text))))
+  :doc "rejects incomplete blocks, inline examples, and delimiter discussion"
+  (dolist (text '("<proposed_plan>\n# Incomplete"
+                  "Use `<proposed_plan>` and `</proposed_plan>` tags."
+                  "The opening delimiter is <proposed_plan>\n"
+                  "<proposed_plan>inline example</proposed_plan>"
+                  "<proposed_plan>\n# Plan\ntext </proposed_plan>"))
+    (should-not (mevedel-plan-extract-proposed text)))
   :doc "accepts a concise authoritative reference without template headings"
   (should
    (equal
@@ -50,7 +59,15 @@
   (should (equal
            "Intro"
            (mevedel-plan-strip-proposed
-            "Intro\n<proposed_plan>\n# Streaming plan\n"))))
+            "Intro\n<proposed_plan>\n# Streaming plan\n")))
+  :doc "hides glued and indented proposals during streaming and after completion"
+  (dolist (text '("Intro<proposed_plan>\n# Plan\n</proposed_plan>\n"
+                  "Intro\n  <proposed_plan>\n# Plan\n  </proposed_plan>"
+                  "Intro<proposed_plan>\n# Streaming plan\n"))
+    (should (equal "Intro" (mevedel-plan-strip-proposed text))))
+  :doc "preserves inline delimiter discussion"
+  (let ((text "Use `<proposed_plan>` and `</proposed_plan>` tags."))
+    (should (equal text (mevedel-plan-strip-proposed text)))))
 
 (mevedel-deftest mevedel-plan--metadata-put
   (:doc "updates one plan metadata key without dropping others")

@@ -1069,6 +1069,38 @@ this collapses both shapes to the delivered text."
   (let ((r (mevedel-reminders-make-mode-constraints)))
     (should (equal 5 (mevedel-reminder-interval r)))))
 
+(mevedel-deftest mevedel-reminders-stage-plan-mode
+  (:doc "restores sticky and directive Plan guidance once, without changing history")
+  ,test
+  (test)
+  (dolist (kind '(sticky directive inactive agent))
+    (with-temp-buffer
+      (setq-local mevedel--session
+                  (unless (eq kind 'agent)
+                    (mevedel-session--create
+                     :authority-mode 'pid-lock :name "plan"
+                     :plan-mode (eq kind 'sticky))))
+      (setq-local mevedel--current-request
+                  (when (eq kind 'directive)
+                    (mevedel-request--create :plan-read-only t)))
+      (insert "Compacted conversation\n")
+      (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+        (mevedel-reminders-stage-plan-mode fsm)
+        (mevedel-reminders-stage-plan-mode fsm)
+        (let ((entries (plist-get (gptel-fsm-info fsm)
+                                  :mevedel-reminder-entries)))
+          (if (memq kind '(sticky directive))
+              (progn
+                (should (= 1 (length entries)))
+                (should (eq 'plan-mode (plist-get (car entries) :type)))
+                (should (equal
+                         (funcall (mevedel-reminder-content
+                                   (mevedel-reminders-make-plan-mode))
+                                  mevedel--session)
+                         (plist-get (car entries) :body))))
+            (should-not entries)))
+        (should (equal "Compacted conversation\n" (buffer-string)))))))
+
 (mevedel-deftest mevedel-reminders-make-plan-mode
   (:doc "fires every turn only while Plan mode is active")
   ,test

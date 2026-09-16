@@ -850,6 +850,23 @@ sessions rather than spamming every turn."
       "- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n"
       "</proposed_plan>\n\n"))))
 
+(defun mevedel-reminders-stage-plan-mode (fsm)
+  "Restore active root Plan guidance after FSM's history is compacted.
+Reuse the normal reminder and avoid duplicating an already staged entry."
+  (let* ((info (gptel-fsm-info fsm))
+         (buffer (plist-get info :buffer)))
+    (when (and (buffer-live-p buffer)
+               (not (cl-find 'plan-mode
+                             (plist-get info :mevedel-reminder-entries)
+                             :key (lambda (entry) (plist-get entry :type)))))
+      (with-current-buffer buffer
+        (when-let* ((session mevedel--session)
+                    (reminder (mevedel-reminders-make-plan-mode))
+                    ((funcall (mevedel-reminder-trigger reminder) session)))
+          (mevedel-reminders-stage-entry
+           fsm 'plan-mode
+           (funcall (mevedel-reminder-content reminder) session)))))))
+
 (defun mevedel-reminders-make-full-auto-mode (&optional interval)
   "Create the `full-auto-mode' reminder with INTERVAL.
 Fires immediately after entering full-auto mode, then repeats

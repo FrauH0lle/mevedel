@@ -955,15 +955,17 @@
         (with-temp-buffer
           (setq-local mevedel--session session)
           (let ((start (point)))
-            (insert "<proposed_plan>\n# Root\n<detail>keep</detail>\n</proposed_plan>\n")
+            (insert "Recheck existing edits before changing files.<proposed_plan>\n# Root\n<detail>keep</detail>\n</proposed_plan>\n")
             (add-text-properties start (point) '(gptel response)))
           (let ((start (point)))
             (insert "<proposed_plan>\n# Tool\n</proposed_plan>\n")
             (add-text-properties start (point) '(gptel (tool . "call-1"))))
           (cl-letf (((symbol-function 'mevedel-plan-approval-render) #'ignore))
-            (mevedel-plan-mode--post-response (point-min) (point-max))
+            (mevedel-test--with-captured-diagnostics nil
+              (mevedel-plan-mode--post-response (point-min) (point-max)))
             (let ((first
                    (mevedel-session-pending-plan-approval session)))
+              (should first)
               (mevedel-plan-mode--post-response (point-min) (point-max))
               (should (eq first
                           (mevedel-session-pending-plan-approval session)))
@@ -1016,10 +1018,8 @@
       (should-not presented)))
 
   :doc "warns about malformed proposals without publishing or changing the transcript"
-  (dolist (text '("No changes.<proposed_plan>\n# Plan\n</proposed_plan>"
-                  "<proposed_plan>\n# Incomplete"
+  (dolist (text '("<proposed_plan>\n# Incomplete"
                   "<proposed_plan>"
-                  "  <proposed_plan>\n# Indented\n  </proposed_plan>"
                   "<proposed_plan>\n# Plan\ntext </proposed_plan>"
                   "<proposed_plan>\n \t\n</proposed_plan>"))
     (let ((session (mevedel-session--create

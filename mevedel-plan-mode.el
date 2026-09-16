@@ -800,8 +800,7 @@ Warn when a standalone delimiter is present but no nonblank plan is recognized."
                  (mevedel-plan-mode--approval-entry
                   plan (current-buffer) session selection)
                  session))))
-        ;; One standalone delimiter signals an attempted block.  In the
-        ;; glued-opening-tag case, its closing tag still occupies a line.
+        ;; One standalone delimiter signals an attempted block.
         ;; An inline mention alone is not enough to diagnose a proposal.
         (when (string-match-p "^[ \t]*</?proposed_plan>[ \t]*$" text)
           (display-warning
