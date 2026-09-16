@@ -90,7 +90,7 @@
                (require 'mevedel-permission-persistence)
                (mevedel-permission-persistence-file
                 (mevedel-workspace--create
-                 :type 'file :id "cold" :root default-directory))
+                 :type 'file :id "cold" :root default-directory) 'workspace)
                (unless (featurep 'mevedel-workspace)
                  (error "Permission consumer did not load Workspace"))))
             (file-state-consumer

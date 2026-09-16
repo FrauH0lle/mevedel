@@ -46,7 +46,7 @@
                   "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-persistence-refresh
                   "mevedel-permission-persistence"
-                  (workspace continuation &optional on-cancel))
+                  (workspace continuation &optional on-cancel on-error))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue
@@ -639,7 +639,10 @@ context and typed reason."
                       workspace))))
              (run))
            (lambda ()
-             (funcall fail "Permission store refresh cancelled"))))
+             (funcall fail "Permission store refresh cancelled"))
+           (lambda (err)
+             (funcall fail (format "Permission store refresh failed: %s"
+                                  (error-message-string err))))))
        (frozen-p
         (setq context
               (plist-put

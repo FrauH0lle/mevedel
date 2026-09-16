@@ -1994,6 +1994,8 @@ cover, so the permission step's warning about it is captured here."
             (setq session
                   (mevedel-session-create
                    "remote-additional-root" workspace remote-root))
+            (mevedel-execution-target-probe
+             (mevedel-session-execution-target session) nil 'off)
             (with-temp-buffer
               (setq-local default-directory remote-root)
               (setq-local mevedel--workspace workspace)
@@ -2285,6 +2287,7 @@ cover, so the permission step's warning about it is captured here."
                      :permission-rules
                      (list (list "Read" :path remote-secret
                                  :action 'deny)))))
+              (mevedel-execution-target-probe target nil 'off)
               (with-temp-buffer
                 (setq-local default-directory remote-root)
                 (setq-local mevedel--workspace workspace)

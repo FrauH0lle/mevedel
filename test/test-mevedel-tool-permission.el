@@ -221,6 +221,45 @@
     (mevedel-tool-permission-step
      ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
+  :doc "refreshes global grants before admission and honors explicit workspace denies"
+  (let* ((dir (make-temp-file "mevedel-global-admission-" t))
+         (mevedel-user-dir (file-name-concat dir "global"))
+         (workspace (mevedel-workspace--create :type 'project :root dir))
+         (session (mevedel-session--create :workspace workspace :permission-mode 'ask))
+         (path (file-name-concat dir "protected"))
+         (tool (mevedel-tool--create :name "Read" :read-only-p t))
+         (context (list :tool tool :session session :workspace workspace
+                        :permission-path path))
+         (file (mevedel-permission-persistence-file workspace 'global))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths (list (cons path 'inaccessible)))
+         allowed queued denied)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (&rest _) (setq queued t))))
+          (mevedel-permission-persistence-write-store
+           file `(:rules nil :resource-grants ((:path ,path :access read))))
+          (mevedel-tool-permission-step
+           context (lambda (_) (setq allowed t)) #'ignore)
+          (should allowed)
+          (should-not queued)
+          ;; External revocation must not be hidden by the store cache.
+          (with-temp-file file
+            (insert "(:rules nil :resource-grants nil)"))
+          (setq allowed nil)
+          (mevedel-tool-permission-step
+           context (lambda (_) (setq allowed t)) #'ignore)
+          (should-not allowed)
+          (should queued)
+          (mevedel-permission-persistence-write-store
+           file `(:rules nil :resource-grants ((:path ,path :access read))))
+          (mevedel-permission-persistence-save-rule workspace "Read" 'deny)
+          (mevedel-tool-permission-step
+           context (lambda (_) (setq allowed t))
+           (lambda (&rest _) (setq denied t)))
+          (should denied)
+          (should-not allowed))
+      (delete-directory dir t)))
   :doc "observes an external persistent revocation at the next tool"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-permission-refresh-" t)))
@@ -231,7 +270,7 @@
                    :name "refresh" :workspace workspace
                    :permission-mode 'full-auto))
          (tool (mevedel-tool--create :name "Edit" :read-only-p nil))
-         (file (mevedel-permission-persistence-file workspace))
+         (file (mevedel-permission-persistence-file workspace 'workspace))
          (context (list :tool tool :args nil
                         :session session :workspace workspace))
          (mevedel-permission-rules nil)
@@ -269,7 +308,7 @@
          (grants '((:path "/tmp/snapshot" :access write)))
          contexts pending completed)
     (cl-letf (((symbol-function 'mevedel-permission-persistence-refresh)
-               (lambda (_workspace continuation &optional _on-cancel)
+               (lambda (_workspace continuation &optional _on-cancel _on-error)
                  (funcall continuation)))
               ((symbol-function 'mevedel-permission-persistence-load-rules)
                (lambda (_) rules))

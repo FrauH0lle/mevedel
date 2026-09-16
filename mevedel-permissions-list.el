@@ -2,10 +2,9 @@
 
 ;;; Commentary:
 
-;; Tabulated cockpit surface for remembered permission authority.  Session
-;; and workspace operation rules, network-qualified rules, and exact or
-;; recursive resource grants appear as selectable rows, and each row can be
-;; revoked on its own without touching the others.
+;; Tabulated cockpit surface for remembered permission authority.  Session,
+;; workspace, and target-global rules and resource grants appear as selectable
+;; rows.  Each row can be revoked without touching the other scopes.
 
 ;;; Code:
 
@@ -14,6 +13,8 @@
 (require 'mevedel-cockpit)
 
 ;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-call-in-data
+                  "mevedel-cockpit" (context function &rest args))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-workspace
@@ -36,18 +37,25 @@
                   "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-persistence-file
+                  "mevedel-permission-persistence" (workspace scope))
 (declare-function mevedel-permission-persistent-authority
-                  "mevedel-permission-persistence" (workspace))
+                  "mevedel-permission-persistence" (workspace scope))
 (declare-function mevedel-permission-remove-persistent-resource-grant
                   "mevedel-permission-persistence"
-                  (workspace path access &optional recursive))
+                  (workspace scope path access &optional recursive))
 (declare-function mevedel-permission-remove-persistent-rule
-                  "mevedel-permission-persistence" (workspace rule))
+                  "mevedel-permission-persistence" (workspace scope rule))
+(declare-function mevedel-permission-validate-persistent-stores
+                  "mevedel-permission-persistence" (workspace))
+(autoload 'mevedel-permission-persistence-file "mevedel-permission-persistence")
 (autoload 'mevedel-permission-persistent-authority
   "mevedel-permission-persistence")
 (autoload 'mevedel-permission-remove-persistent-resource-grant
   "mevedel-permission-persistence")
 (autoload 'mevedel-permission-remove-persistent-rule
+  "mevedel-permission-persistence")
+(autoload 'mevedel-permission-validate-persistent-stores
   "mevedel-permission-persistence")
 
 ;; `mevedel-permissions'
@@ -64,6 +72,10 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
 
 (defconst mevedel-permissions-list-buffer-name "*mevedel permissions*"
   "Name of the remembered authority cockpit buffer.")
@@ -118,17 +130,26 @@ An execution profile's remembered child grants follow the pattern."
   "Return remembered authority items for CONTEXT."
   (let* ((session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
-         (persistent (and workspace
-                          (mevedel-permission-persistent-authority workspace)))
          items)
+    (when workspace
+      (when (mevedel-transport-busy-p
+             (mevedel-permission-persistence-file workspace 'workspace))
+        (user-error "Execution target is busy; refresh permissions when idle"))
+      (mevedel-cockpit-call-in-data
+       context #'mevedel-permission-validate-persistent-stores workspace))
     (dolist (rule (and session (mevedel-session-permission-rules session)))
       (push (mevedel-permissions-list--rule-item 'session rule) items))
     (dolist (grant (and session (mevedel-session-resource-grants session)))
       (push (mevedel-permissions-list--resource-item 'session grant) items))
-    (dolist (rule (plist-get persistent :rules))
-      (push (mevedel-permissions-list--rule-item 'workspace rule) items))
-    (dolist (grant (plist-get persistent :resource-grants))
-      (push (mevedel-permissions-list--resource-item 'workspace grant) items))
+    (when workspace
+      (dolist (scope '(workspace global))
+        (let ((persistent
+               (mevedel-cockpit-call-in-data
+                context #'mevedel-permission-persistent-authority workspace scope)))
+          (dolist (rule (plist-get persistent :rules))
+            (push (mevedel-permissions-list--rule-item scope rule) items))
+          (dolist (grant (plist-get persistent :resource-grants))
+            (push (mevedel-permissions-list--resource-item scope grant) items)))))
     (nreverse items)))
 
 (defun mevedel-permissions-list--label (item)
@@ -144,7 +165,7 @@ An execution profile's remembered child grants follow the pattern."
   (list (mevedel-permissions-list--label item)
         (vector
          (propertize (format "%s" (plist-get item :scope))
-                     'face (if (eq (plist-get item :scope) 'workspace)
+                     'face (if (memq (plist-get item :scope) '(workspace global))
                                'warning
                              'default))
          (format "%s" (plist-get item :kind))
@@ -164,13 +185,14 @@ An execution profile's remembered child grants follow the pattern."
      "permissions"
      (if session (mevedel-session-name session) "")
      (if items
-         (format "%d remembered · %d session · %d workspace"
+         (format "%d remembered · %d session · %d workspace · %d global"
                  (length items)
                  (funcall scoped 'session)
-                 (funcall scoped 'workspace))
+                 (funcall scoped 'workspace)
+                 (funcall scoped 'global))
        "nothing remembered"))))
 
-(defun mevedel-permissions-list--details (item _context)
+(defun mevedel-permissions-list--details (item context)
   "Return the information report for authority ITEM."
   (list :title "Remembered authority" :subtitle (format "%s" (plist-get item :subject))
         :identity (plist-get item :value)
@@ -179,6 +201,13 @@ An execution profile's remembered child grants follow the pattern."
          (list :id 'authority :title "Authority"
                :body (mevedel-report-fields
                       (list "Scope" (plist-get item :scope))
+                      (list "Store"
+                            (if (eq (plist-get item :scope) 'session)
+                                "Session sidecar"
+                              (mevedel-cockpit-call-in-data
+                               context #'mevedel-permission-persistence-file
+                               (mevedel-cockpit-context-workspace context)
+                               (plist-get item :scope))))
                       (list "Kind" (plist-get item :kind))
                       (list "Access" (plist-get item :access))
                       (list "Subject" (plist-get item :subject))
@@ -207,11 +236,13 @@ An execution profile's remembered child grants follow the pattern."
        (mevedel-permission-remove-session-resource-grant
         session (plist-get value :path) (plist-get value :access)
         (plist-get value :recursive)))
-      (`(workspace . rule)
-       (mevedel-permission-remove-persistent-rule workspace value))
-      (`(workspace . resource)
-       (mevedel-permission-remove-persistent-resource-grant
-        workspace (plist-get value :path) (plist-get value :access)
+      (`(,(and scope (or 'workspace 'global)) . rule)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-permission-remove-persistent-rule workspace scope value))
+      (`(,(and scope (or 'workspace 'global)) . resource)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-permission-remove-persistent-resource-grant
+        workspace scope (plist-get value :path) (plist-get value :access)
         (plist-get value :recursive))))
     (mevedel-cockpit-surface-refresh)
     (message "mevedel: revoked %s" label)))
@@ -252,7 +283,7 @@ An execution profile's remembered child grants follow the pattern."
   (list :title "Permissions help"
         :sections (list (list :id 'keys :title "Keys"
                               :body (mevedel-cockpit-surface-key-help-text mevedel-permissions-list--surface))
-			(list :id 'rows :title "Rows" :body "operation  Tool authority remembered for a matching operation\nnetwork    Operation authority that also carries network access\nresource   Exact or recursive path grant remembered for one access mode\nsession    Held by this session only, and saved with it\nworkspace  Shared by every session in this workspace\n\nEntries appear here when an authority prompt is answered with\n\"Always\".  Revoking one leaves the others untouched."))))
+			(list :id 'rows :title "Rows" :body "operation  Tool authority remembered for a matching operation\nnetwork    Operation authority that also carries network access\nresource   Exact or recursive path grant remembered for one access mode\nsession    Held by this session only, and saved with it\nworkspace  Shared by every session in this workspace\nglobal     Authored in the execution target user's permissions file\n\nPrompt approvals remember session or workspace authority.\nGlobal entries are authored explicitly. Revoking a global entry affects\nall projects on that target. Other entries may still grant the same access."))))
 
 (define-derived-mode mevedel-permissions-list-mode tabulated-list-mode
   "mevedel-permissions"
