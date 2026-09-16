@@ -241,7 +241,7 @@ func TestPushSubscriptionLifecycle(t *testing.T) {
 		`{"t":"push-subscribe","peer":1,"guestId":"phone-guest","endpoint":"https://push.example/subscription"}`)
 	writeText(t, host,
 		`{"t":"push-subscribe","peer":2,"guestId":"tablet-guest","endpoint":"https://push.example/tablet","active":true}`)
-	writeText(t, host, `{"t":"push","guestIds":["phone-guest"]}`)
+	writeText(t, host, `{"t":"push","guestIds":["phone-guest","phone-guest","tablet-guest","missing-guest","!"]}`)
 	select {
 	case endpoint := <-sender.sent:
 		if endpoint != "https://push.example/subscription" {
