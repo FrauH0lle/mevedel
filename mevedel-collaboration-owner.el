@@ -16,9 +16,12 @@
                   (session-name &optional create workspace working-directory))
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+(declare-function mevedel-chat-discard-buffers
+                  "mevedel-chat" (data-buffer &optional discard-modifications))
 (autoload 'mevedel--chat-buffer "mevedel-chat")
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
+(autoload 'mevedel-chat-discard-buffers "mevedel-chat")
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest
@@ -115,30 +118,7 @@ refusal protects the command allowlist from becoming an escalation path."
   (when room
     (ignore-errors
       (mevedel-collaboration--stop-internal room 'start-failed)))
-  (when (buffer-live-p buffer)
-    (let ((view-buffer (buffer-local-value 'mevedel--view-buffer buffer)))
-      (dolist (candidate (list buffer view-buffer))
-        (when (buffer-live-p candidate)
-          (let* ((hooks (buffer-local-value 'kill-buffer-hook candidate))
-                 (safe-hooks
-                  (lambda ()
-                    (let ((kill-buffer-hook hooks))
-                      (run-hook-wrapped
-                       'kill-buffer-hook
-                       (lambda (hook)
-                         (let ((kill-buffer-hook nil))
-                           (ignore-errors (funcall hook)))
-                         nil))))))
-            (with-current-buffer candidate
-              (set-buffer-modified-p nil)
-              (let ((kill-buffer-query-functions nil)
-                    (kill-buffer-hook (list safe-hooks)))
-                (ignore-errors (kill-buffer candidate)))))
-          (when (buffer-live-p candidate)
-            (with-current-buffer candidate
-              (let ((kill-buffer-hook nil)
-                    (kill-buffer-query-functions nil))
-                (ignore-errors (kill-buffer candidate))))))))))
+  (mevedel-chat-discard-buffers buffer t))
 
 (defun mevedel-collaboration--offer-room (room peer name link)
   "Tell PEER in ROOM that it may join the room NAME at LINK.

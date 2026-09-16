@@ -433,6 +433,36 @@ render immediately, so this never delays tool-call feedback."
   (add-hook 'gptel-post-response-functions
             #'mevedel-collaboration--safe-post-response nil t))
 
+(defun mevedel-chat-discard-buffers (data-buffer &optional discard-modifications)
+  "Discard failed DATA-BUFFER and its companion view without querying.
+Run all cleanup hooks despite individual errors, then force closure if needed.
+With DISCARD-MODIFICATIONS, clear each buffer's modified flag before its hooks;
+otherwise leave the flag available to lifecycle cleanup."
+  (when (buffer-live-p data-buffer)
+    (let ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
+      (dolist (buffer (list data-buffer view-buffer))
+        (when (buffer-live-p buffer)
+          (let* ((hooks (buffer-local-value 'kill-buffer-hook buffer))
+                 (safe-hooks
+                  (lambda ()
+                    (let ((kill-buffer-hook hooks))
+                      (run-hook-wrapped
+                       'kill-buffer-hook
+                       (lambda (hook)
+                         (let ((kill-buffer-hook nil))
+                           (ignore-errors (funcall hook)))
+                         nil))))))
+            (with-current-buffer buffer
+              (when discard-modifications (set-buffer-modified-p nil))
+              (let ((kill-buffer-query-functions nil)
+                    (kill-buffer-hook (list safe-hooks)))
+                (ignore-errors (kill-buffer buffer)))))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (let ((kill-buffer-hook nil)
+                    (kill-buffer-query-functions nil))
+                (ignore-errors (kill-buffer buffer))))))))))
+
 (defun mevedel--chat-buffer (session-name &optional create workspace working-directory)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.
 
@@ -468,31 +498,7 @@ directory, signal `user-error' instead of silently switching context."
                buf workspace session-name working-directory)
               (setq setup-complete-p t))
           (unless setup-complete-p
-            (when (buffer-live-p buf)
-              (let ((view-buffer
-                     (buffer-local-value 'mevedel--view-buffer buf)))
-                (dolist (buffer (list buf view-buffer))
-                  (when (buffer-live-p buffer)
-                    (let* ((hooks (buffer-local-value
-                                   'kill-buffer-hook buffer))
-                           (safe-hooks
-                            (lambda ()
-                              (let ((kill-buffer-hook hooks))
-                                (run-hook-wrapped
-                                 'kill-buffer-hook
-                                 (lambda (hook)
-                                   (let ((kill-buffer-hook nil))
-                                     (ignore-errors (funcall hook)))
-                                   nil))))))
-                      (with-current-buffer buffer
-                        (let ((kill-buffer-query-functions nil)
-                              (kill-buffer-hook (list safe-hooks)))
-                          (ignore-errors (kill-buffer buffer))))))
-                  (when (buffer-live-p buffer)
-                    (with-current-buffer buffer
-                      (let ((kill-buffer-hook nil)
-                            (kill-buffer-query-functions nil))
-                        (ignore-errors (kill-buffer buffer))))))))))))
+            (mevedel-chat-discard-buffers buf)))))
     (when (and buf working-directory (not created-p))
       (with-current-buffer buf
         (when (and (bound-and-true-p mevedel--session)

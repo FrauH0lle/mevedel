@@ -47,6 +47,9 @@ compact-start context to its already-pending request.
 A failed fresh initialization retains neither the named data buffer nor its
 companion view. Buffer-local cleanup hooks unwind any lifecycle state installed
 before the failure, and retrying the same session name starts from a new buffer.
+`mevedel-chat-discard-buffers` owns this cleanup for both fresh initialization
+and failed browser-requested session creation. It attempts every cleanup hook
+despite individual errors, then forces remaining buffers closed without queries.
 
 Plan Here/Summary is a root compaction and follows this rotation and context
 epoch contract. Plan Worktree/Summary is a non-mutating handoff preparation:
