@@ -108,7 +108,9 @@
                     ((symbol-function 'mevedel-view-history-add)
                      (lambda (text) (setq history text))))
             (let ((result (with-current-buffer data-buffer
-                            (mevedel-cmd--init "docs"))))
+                            (funcall (alist-get "init" mevedel-slash-commands
+                                                nil nil #'equal)
+                                     "docs"))))
               (should (eq 'mevedel-view-sent result))))
           (should (equal "/init docs" sent-display))
           (should (equal "/init docs" history))
@@ -120,7 +122,7 @@
   ,test
   (test)
   :doc "registers /init as a local slash command"
-  (should (eq #'mevedel-cmd--init
+  (should (eq #'mevedel-init
               (alist-get "init" mevedel-slash-commands nil nil #'equal))))
 
 
