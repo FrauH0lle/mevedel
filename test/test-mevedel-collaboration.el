@@ -98,7 +98,10 @@
 ;;; Canonical projection
 
 (mevedel-deftest mevedel-collaboration--canonical-records
-  (:doc "uses allowlisted canonical text, stable identities, and revision zero")
+  ()
+  ,test
+  (test)
+  :doc "uses allowlisted canonical text, stable identities, and revision zero"
   (with-temp-buffer
     (insert "prompt\nanswer\n")
     (let ((data-buffer (current-buffer)))
@@ -114,7 +117,43 @@
           (should (equal '(0 0) (mapcar (lambda (r) (plist-get r :revision))
                                         records)))
           (should-not (string-match-p "\\`user-[0-9]+\\'"
-                                      (plist-get (car records) :id))))))))
+                                      (plist-get (car records) :id)))))))
+
+  :doc "distinguishes repeated text, omits blanks, and attributes only user turns"
+  (with-temp-buffer
+    (let (segments)
+      (dolist (item '((user . "repeat\n") (response . "repeat\n")
+                      (user . " \n") (response . "repeat\n")
+                      (user . "repeat\n")))
+        (let ((start (point)))
+          (insert (cdr item))
+          (push (list (car item) start (point)) segments)))
+      (setq segments (nreverse segments))
+      (let ((last-user-start (cadr (car (last segments)))))
+        (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                   (lambda (_start _end) segments))
+                  ((symbol-function 'mevedel-collaboration--directive-ranges)
+                   (lambda ()
+                     (list (list :start last-user-start :end (point-max)
+                                 :directive-id "thread"))))
+                  ((symbol-function 'mevedel-transcript-audit-guest-prompts)
+                   (lambda () (list (cons last-user-start "phone")))))
+          (let* ((records (mevedel-collaboration--canonical-records
+                           (current-buffer)))
+                 (ids (mapcar (lambda (record) (plist-get record :id)) records)))
+            (should (equal '("user" "assistant" "assistant" "user")
+                           (mapcar (lambda (record) (plist-get record :kind)) records)))
+            (should (equal '("repeat" "repeat" "repeat" "repeat")
+                           (mapcar (lambda (record) (plist-get record :text)) records)))
+            (should (= 4 (length (delete-dups (copy-sequence ids)))))
+            (should (equal ids
+                           (mapcar (lambda (record) (plist-get record :id))
+                                   (mevedel-collaboration--canonical-records
+                                    (current-buffer)))))
+            (should (equal '(nil nil nil "phone")
+                           (mapcar (lambda (record) (plist-get record :guest)) records)))
+            (should (equal '(nil nil nil "thread")
+                           (mapcar (lambda (record) (plist-get record :directive)) records)))))))))
 
 (mevedel-deftest mevedel-collaboration--directive-at
   (:doc "maps a position to its owning directive range")
