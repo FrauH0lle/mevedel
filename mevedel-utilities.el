@@ -81,6 +81,18 @@
 ;;; Package metadata
 
 ;;;###autoload
+(defun mevedel-library-source-directory (file)
+  "Return the canonical source directory associated with library FILE.
+For bytecode, prefer an existing sibling .el file: package managers may
+symlink source into a build directory while compiling a separate .elc there.
+Without that source sibling, keep FILE's own directory.  This locates package
+data, not resource descendants; it does not relax their containment checks."
+  (let ((source (and (string-suffix-p ".elc" file)
+                     (substring file 0 -1))))
+    (file-name-directory
+     (file-truename (if (and source (file-regular-p source)) source file)))))
+
+;;;###autoload
 (defun mevedel-version (&optional here message)
   "Return the current version of mevedel.
 

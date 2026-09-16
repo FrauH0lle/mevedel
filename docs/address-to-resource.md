@@ -394,6 +394,15 @@ of canonical documentation addresses; descendant Read, Glob, and Grep stay
 contained under the packaged documentation root and report logical addresses.
 Each operation observes the installed files at execution time.
 
+The documentation owner uses the same source-aware package directory as system
+and tool prompts. When loading bytecode, an existing sibling `.el` file identifies
+that directory through its real path; otherwise the loaded library's real
+directory is used. This supports package managers such as Straight, which keep
+regular compiled files beside source symlinks in a separate build tree, as well
+as source-less installations. Resolving the package owner does not authorize
+symlinked resource descendants: the usual documentation containment checks still
+apply below `docs/`.
+
 The family exposes no package source files, generated source index, compression
 layer, registry, or aliases beyond the relative documentation paths. It cannot
 be used with ApplyPatch.

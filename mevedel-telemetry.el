@@ -85,6 +85,10 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
+;; `mevedel-utilities'
+(declare-function mevedel-library-source-directory "mevedel-utilities" (file))
+(autoload 'mevedel-library-source-directory "mevedel-utilities")
+
 ;; `mevedel-view-render'
 (defvar mevedel-view-render-debug)
 (defvar mevedel-view-render-debug-buffer-name)
@@ -673,21 +677,28 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
           (secure-hash 'sha256 dirty-content))))
 
 (defun mevedel-telemetry--library-snapshot (feature)
-  "Return safe loaded-library identity fields for FEATURE."
-  (when-let* ((file (locate-library (symbol-name feature)))
-              ((file-readable-p file)))
-    (let* ((root (locate-dominating-file file ".git"))
-           (head (and root
-                      (ignore-errors
-                        (mevedel-telemetry--process-output
-                         "git" "-C" root "rev-parse" "HEAD")))))
-      (list :file-hash
-          (with-temp-buffer
-            (set-buffer-multibyte nil)
-            (insert-file-contents-literally file)
-            (secure-hash 'sha256 (current-buffer)))
-            :file-bytes (file-attribute-size (file-attributes file))
-            :git-head head))))
+  "Return current disk artifact identity and checkout provenance for FEATURE.
+Use loaded-feature history, never a different copy from `load-path'.
+Hash and size describe the artifact's disk bytes, not its bytes at load time.
+Git lookup follows sibling source and symlinks; the resulting commit does
+not establish source/bytecode equivalence.  Return nil for unavailable
+artifacts, or a nil commit when only provenance is unavailable."
+  (ignore-errors
+    (when-let* (((featurep feature))
+                (file (symbol-file feature 'provide))
+                ((file-regular-p file))
+                ((file-readable-p file)))
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally file)
+        (list :file-hash (secure-hash 'sha256 (current-buffer))
+              :file-bytes (buffer-size)
+              :git-head
+              (ignore-errors
+                (when-let* ((directory (mevedel-library-source-directory file))
+                            (root (locate-dominating-file directory ".git")))
+                  (mevedel-telemetry--process-output
+                   "git" "-C" (expand-file-name root) "rev-parse" "HEAD"))))))))
 
 (defun mevedel-telemetry--record-environment (session boundary)
   "Record reproduction environment for SESSION at BOUNDARY."
