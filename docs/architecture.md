@@ -318,7 +318,8 @@ repeatedly (turn completion, activation, buffer kill) arm one coalesced
 opportunity per key through `mevedel-transport-schedule-idle`, which the
 journal processor, the memory pass, and memory recovery share.
 
-Deferred transport retries execute and remove entries only while their exact
+Each pending transport entry owns its retry timer and cancellation callback
+together. Deferred retries execute and remove entries only while their exact
 timer still owns the coalescing key. An inline same-key call retires the pending
 timer before running current work. This identity check also rejects cancelled
 timers delivered after TRAMP restores a suspended timer list. Bulk cancellation

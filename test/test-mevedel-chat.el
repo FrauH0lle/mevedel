@@ -275,8 +275,8 @@
             (mevedel-transport-run-when-idle
              'uninstall-test "/ssh:user@host:/srv/x" #'ignore))
           (setq timer
-                (gethash 'uninstall-test
-                         mevedel-transport--pending))
+                (car (gethash 'uninstall-test
+                              mevedel-transport--pending)))
           (should (timerp timer))
           (cl-letf
               (((symbol-function

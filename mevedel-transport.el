@@ -228,10 +228,9 @@ restored on exit as though the cancel never happened."
 ;;; Deferral
 
 (defvar mevedel-transport--pending (make-hash-table :test #'equal)
-  "Timers for work waiting on an idle transport, keyed by coalescing key.")
-
-(defvar mevedel-transport--pending-cancellers (make-hash-table :test #'equal)
-  "Cancellation callbacks for deferred transport work.")
+  "Deferred work keyed by coalescing key.
+Each entry is (TIMER . ON-CANCEL), keeping the retry and its optional
+cancellation callback under one owner.")
 
 (defun mevedel-transport--rearm-pending-timers ()
   "Re-arm retry timers dropped by TRAMP's suspended timer binding.
@@ -240,18 +239,18 @@ The outermost file-name handler calls this after TRAMP has restored the
 real timer list.  Pending entries still name their discarded timer, so
 they can be activated without duplicating or losing the deferred work."
   (maphash
-   (lambda (_key timer)
-     (when (and (timerp timer) (not (mevedel--timer-pending-p timer)))
-       (timer-activate timer)))
+   (lambda (_key entry)
+     (let ((timer (car entry)))
+       (when (and (timerp timer) (not (mevedel--timer-pending-p timer)))
+         (timer-activate timer))))
    mevedel-transport--pending))
 
 (defun mevedel-transport--retry (timer key path thunk on-cancel)
   "Re-attempt KEY's THUNK for PATH only while TIMER owns the pending entry.
 Preserve ON-CANCEL when the retry must wait again.  A cancelled timer can
 still be delivered after a suspended timer list is restored."
-  (when (eq timer (gethash key mevedel-transport--pending))
+  (when (eq timer (car (gethash key mevedel-transport--pending)))
     (remhash key mevedel-transport--pending)
-    (remhash key mevedel-transport--pending-cancellers)
     (mevedel-transport-run-when-idle key path thunk on-cancel)))
 
 (defun mevedel-transport-run-when-idle (key path thunk &optional on-cancel)
@@ -271,16 +270,12 @@ transport drops late work and returns nil."
             (timer-set-function timer #'mevedel-transport--retry
                                 (list timer key path thunk on-cancel))
             (timer-activate timer)
-            (puthash key timer mevedel-transport--pending))
-          (when on-cancel
-            (puthash key on-cancel
-                     mevedel-transport--pending-cancellers)))
+            (puthash key (cons timer on-cancel) mevedel-transport--pending)))
       ;; An idle call fulfills the coalesced work with its current thunk.
       ;; Retire the old timer without notifying cancellation: the work runs.
-      (when-let* ((timer (gethash key mevedel-transport--pending)))
+      (when-let* ((timer (car (gethash key mevedel-transport--pending))))
         (when (timerp timer) (cancel-timer timer)))
       (remhash key mevedel-transport--pending)
-      (remhash key mevedel-transport--pending-cancellers)
       (funcall thunk))
     t))
 
@@ -328,23 +323,19 @@ PATH-OF-KEY maps a TABLE key to its transport PATH; it defaults to identity."
 (defun mevedel-transport-cancel-pending (&optional key)
   "Cancel deferred transport work for KEY, or all of it when KEY is nil."
   (if key
-      (when-let* ((timer (gethash key mevedel-transport--pending)))
-        (when (timerp timer) (cancel-timer timer))
+      (when-let* ((entry (gethash key mevedel-transport--pending)))
+        (when (timerp (car entry)) (cancel-timer (car entry)))
         (remhash key mevedel-transport--pending)
-        (when-let* ((on-cancel
-                     (gethash key mevedel-transport--pending-cancellers)))
-          (remhash key mevedel-transport--pending-cancellers)
+        (when-let* ((on-cancel (cdr entry)))
           (ignore-errors (funcall on-cancel))))
     (let (cancellers)
-      (maphash (lambda (_key timer)
-                 (when (timerp timer) (cancel-timer timer)))
+      (maphash (lambda (_key entry)
+                 (when (timerp (car entry)) (cancel-timer (car entry)))
+                 (when (cdr entry) (push (cdr entry) cancellers)))
                mevedel-transport--pending)
-      (maphash (lambda (_key on-cancel) (push on-cancel cancellers))
-               mevedel-transport--pending-cancellers)
       ;; Retire the entire batch before callbacks can schedule replacement
       ;; work, including a new canceller under the same key.
       (clrhash mevedel-transport--pending)
-      (clrhash mevedel-transport--pending-cancellers)
       (dolist (on-cancel cancellers)
         (ignore-errors (funcall on-cancel))))))
 
