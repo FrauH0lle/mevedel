@@ -102,10 +102,6 @@
           (mevedel-workspace-root workspace))
         (mevedel-init--working-directory data-buffer)))))
 
-(defun mevedel-init--path (root &rest segments)
-  "Return path under ROOT from SEGMENTS."
-  (apply #'file-name-concat root segments))
-
 (defun mevedel-init--display-text (focus)
   "Return user-facing slash display text for FOCUS."
   (let ((focus (and focus (string-trim focus))))
@@ -123,16 +119,16 @@
      `(("ARGUMENTS" . ,focus)
        ("WORKSPACE_ROOT" . ,root)
        ("WORKING_DIRECTORY" . ,cwd)
-       ("TARGET_FILE" . ,(mevedel-init--path root "AGENTS.md"))
-       ("LOCAL_TARGET_FILE" . ,(mevedel-init--path root "AGENTS.local.md"))
-       ("PROJECT_SKILLS_DIR" . ,(mevedel-init--path root ".agents" "skills"))
+       ("TARGET_FILE" . ,(file-name-concat root "AGENTS.md"))
+       ("LOCAL_TARGET_FILE" . ,(file-name-concat root "AGENTS.local.md"))
+       ("PROJECT_SKILLS_DIR" . ,(file-name-concat root ".agents" "skills"))
        ("USER_SKILLS_DIR" . ,(file-name-as-directory
                               (expand-file-name "~/.agents/skills")))
-       ("PROJECT_MEMORY_DIR" . ,(mevedel-init--path root ".agents" "memory"))
+       ("PROJECT_MEMORY_DIR" . ,(file-name-concat root ".agents" "memory"))
        ("USER_MEMORY_DIR" . ,(file-name-as-directory
                               (expand-file-name "~/.agents/memory")))
-       ("HOOKS_FILE" . ,(mevedel-init--path root ".mevedel" "hooks.json"))
-       ("HOOKS_DIR" . ,(mevedel-init--path root ".mevedel" "hooks"))))))
+       ("HOOKS_FILE" . ,(file-name-concat root ".mevedel" "hooks.json"))
+       ("HOOKS_DIR" . ,(file-name-concat root ".mevedel" "hooks"))))))
 
 (defun mevedel-init--view-buffer (data-buffer)
   "Return DATA-BUFFER's live view buffer, if any."
@@ -203,14 +199,10 @@ FOCUS is optional free-form guidance for what `/init' should emphasize."
         value))))
   (mevedel-init--dispatch focus))
 
-(defun mevedel-cmd--init (args)
-  "Run `/init' with optional ARGS."
-  (mevedel-init args))
-
 (defun mevedel-init-install-slash-command ()
   "Install `/init' into `mevedel-slash-commands'."
   (setf (alist-get "init" mevedel-slash-commands nil nil #'equal)
-        #'mevedel-cmd--init))
+        #'mevedel-init))
 
 (mevedel-init-install-slash-command)
 
