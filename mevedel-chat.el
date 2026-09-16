@@ -36,8 +36,6 @@
 ;; `cl-seq'
 (declare-function cl-delete "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
-(declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
-(declare-function cl-sort "cl-seq" (cl-seq cl-pred &rest cl-keys))
 
 ;; `gptel'
 (declare-function gptel-markdown-cycle-block "ext:gptel" nil)
@@ -794,7 +792,7 @@ with workspace."
       (cons target-buf created-p))))
 
 (defun mevedel--workspace-sessions (workspace)
-  "Return alist of (SESSION-NAME . BUFFER) for WORKSPACE.
+  "Return alist of (SESSION-NAME . BUFFER) for WORKSPACE in buffer-list order.
 
 Scans live buffers for those with a `mevedel--session' whose workspace
 matches WORKSPACE by type and id.
@@ -917,45 +915,21 @@ when live, otherwise fall through to the scan branch.  Otherwise
 scan for session buffers matching WORKSPACE: if one exists return
 it, if multiple return the most recently used one.  Returns nil
 if none found."
-  (cond
-   ;; in an agent buffer, return the parent chat buffer
-   ;; (not the agent buffer itself, which would falsely look like
-   ;; a chat buffer because it carries the parent's session).
-   ((and (boundp 'mevedel--agent-invocation) mevedel--agent-invocation)
-    (let ((parent (mevedel-agent-invocation-parent-data-buffer
-                   mevedel--agent-invocation)))
-      (if (and parent (buffer-live-p parent))
-          parent
-        ;; Parent is dead: fall through to the scan branch.
-        (when-let* ((workspace (or workspace (mevedel-workspace)))
-                    (sessions (mevedel--workspace-sessions workspace)))
-          (if (= (length sessions) 1)
-              (cdar sessions)
-            (let ((buf-list (buffer-list)))
-              (cdr (car (cl-sort (copy-sequence sessions) #'<
-                                 :key (lambda (s)
-                                        (or (cl-position (cdr s) buf-list)
-                                            most-positive-fixnum)))))))))))
-   ;; In a view buffer -- return the associated data buffer
-   ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
-         (buffer-live-p mevedel--data-buffer))
-    mevedel--data-buffer)
-   ;; Already in a chat buffer with a session.  Check this after the
-   ;; view-buffer case because rendered views also mirror the session.
-   ((and (boundp 'mevedel--session) mevedel--session)
-    (current-buffer))
-   ;; Search for session buffers
-   (t
-    (when-let* ((workspace (or workspace (mevedel-workspace)))
-                (sessions (mevedel--workspace-sessions workspace)))
-      (if (= (length sessions) 1)
-          (cdar sessions)
-        ;; Multiple sessions: return most recently used (earliest in buffer-list)
-        (let ((buf-list (buffer-list)))
-          (cdr (car (cl-sort (copy-sequence sessions) #'<
-                             :key (lambda (s)
-                                    (or (cl-position (cdr s) buf-list)
-                                        most-positive-fixnum)))))))))))
+  (or
+   (cond
+    ;; An orphaned agent must fall back to workspace roots, not mistake its
+    ;; copied session for root ownership or follow a view-buffer branch.
+    ((bound-and-true-p mevedel--agent-invocation)
+     (let ((parent (mevedel-agent-invocation-parent-data-buffer
+                    mevedel--agent-invocation)))
+       (and (buffer-live-p parent) parent)))
+    ((and (bound-and-true-p mevedel--data-buffer)
+          (buffer-live-p mevedel--data-buffer))
+     mevedel--data-buffer)
+    ((bound-and-true-p mevedel--session) (current-buffer)))
+   (when-let* ((workspace (or workspace (mevedel-workspace))))
+     ;; The workspace scan already preserves most-recent buffer order.
+     (cdar (mevedel--workspace-sessions workspace)))))
 
 (defun mevedel--generate-final-patch (&optional workspace request)
   "Generate final diffs for all tracked files in REQUEST.
