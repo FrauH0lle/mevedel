@@ -77,6 +77,11 @@ it to the already-pending request and resumes that same request without
 rerunning `UserPromptSubmit`. Failed or blocked compaction runs neither event.
 Retained-agent compaction runs `PostCompact` but no start hook.
 
+Rebuilding a root tool continuation also restores the active Plan reminder,
+including directive planning, through the normal reminder injection transaction.
+The workflow's proposal format and tool limits therefore remain explicit even
+when the summary omits the reminder delivered earlier in the turn.
+
 The first-compaction accuracy notice is controlled by
 `mevedel-compact-run-warn-on-completion`, enabled by default. It is emitted
 as a plain `message`, not a `display-warning`.

@@ -116,8 +116,11 @@
                   "mevedel-reminders" (fsm))
 (declare-function mevedel-reminders-stage-entry
                   "mevedel-reminders" (fsm type body &optional commit))
+(declare-function mevedel-reminders-stage-plan-mode
+                  "mevedel-reminders" (fsm))
 (autoload 'mevedel-reminders--handle-inject "mevedel-reminders")
 (autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
+(autoload 'mevedel-reminders-stage-plan-mode "mevedel-reminders")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -364,6 +367,7 @@ set already stored on FSM's info plist."
               (when request-reminder
                 (mevedel-reminders-stage-entry
                  fsm 'compact-file-references request-reminder))
+              (mevedel-reminders-stage-plan-mode fsm)
               (with-current-buffer prompt-buffer
                 (when backend
                   (setq-local gptel-backend backend))

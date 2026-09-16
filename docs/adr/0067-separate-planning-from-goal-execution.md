@@ -14,6 +14,12 @@ tools and Eval are unavailable, and Bash is limited to recognized read-only
 commands. Directive planning also withholds ApplyPatch. These workflow limits
 cannot be widened by ordinary allow rules; they are not an OS sandbox.
 
+Completed proposals accept an opening tag glued to preceding prose and indented
+delimiters. The opening tag still ends its line, and the closing tag occupies
+its own line. Parsing and view hiding share those rules. Automatic continuation
+compaction restores the current Plan reminder before dispatch rather than
+depending on a generated summary to retain the proposal contract.
+
 An accepted plan may execute directly or as a Goal, here or in a worktree, with
 fresh or summarized context and, when staying here, current context. When it
 seeds a Goal, its outcomes, constraints, and achievement criteria remain binding
@@ -43,3 +49,14 @@ smaller lifecycle, rather than a measured failure of the revision limit.
 The earlier ADR 0067 description also allowed Eval under ordinary permissions
 and withheld all file edits. Current Plan filtering instead excludes Eval and
 permits the bounded session-working-file exception documented above.
+
+On 2026-09-16, the resource-root investigation again produced a complete plan
+whose opening tag was glued to the preceding sentence. The earlier column-zero
+parser rejected it; a warning made the failure visible but did not recover the
+proposal. Offline gptel Responses replay had also shown assistant messages
+concatenated without a separator. Accepting that opening boundary replaces the
+formatting restriction without changing transcript bytes or approval authority.
+The rendering investigation exposed a separate loss: its Plan reminder was
+present before automatic compaction and absent from the rebuilt continuation.
+It finished with an edit-permission request instead of a proposal. Restaging
+the existing reminder replaces reliance on summary fidelity for this contract.

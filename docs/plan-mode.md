@@ -114,7 +114,7 @@ including session-only proposals, or `Eval`.
 ## Proposal interaction
 
 Only a completed root-assistant prose span can create a proposal. The last
-complete line-oriented `<proposed_plan>...</proposed_plan>` block in that span
+complete `<proposed_plan>...</proposed_plan>` block in that span
 becomes the one actionable proposal. A later proposal replaces it; an accepted
 user follow-up demotes it to a non-actionable draft while preserving the
 selected axes.
@@ -122,16 +122,21 @@ selected axes.
 Every Plan turn includes the preferred proposal shape: a concrete title,
 Summary, Key Changes, Regression Coverage, Validation, and Assumptions. This
 is model guidance rather than a parser-enforced schema; the proposal parser
-continues to accept any nonblank Markdown inside the exact line-oriented tags.
+continues to accept any nonblank Markdown inside the proposal tags. Automatic
+continuation compaction restores this guidance before the next provider call,
+so the proposal contract does not depend on the generated summary.
 
-Both tags must start at column zero on their own lines; a blank line before
-the opening tag is not required. If a Plan response contains at least one
-standalone proposal tag (possibly indented) but no complete, nonblank proposal
+The opening tag must end its line and the closing tag must occupy its own line.
+Both may be indented. Prose immediately before the opening tag is accepted:
+streaming can concatenate assistant messages without an intervening newline.
+Extraction and view hiding use the same delimiter rules, including while a
+proposal streams. If a Plan response contains at least one
+standalone proposal tag but no complete, nonblank proposal
 can be extracted, mevedel shows a warning explaining why approval is unavailable
 and asks you to have the assistant resend the full plan with correctly separated
 tags. It does not repair the transcript, publish a proposal, or leave Plan mode.
 Ordinary inline discussion of tag names, tool output, and injected agent output
-do not trigger this warning. Responses with no standalone delimiter remain
+do not trigger this warning. Responses without proposal delimiters remain
 ordinary discussion; the diagnostic does not try to infer plan intent from prose.
 
 The approval interaction has these axes:

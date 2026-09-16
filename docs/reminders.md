@@ -136,7 +136,10 @@ owner exactly as on the root path.
   ApplyPatch in standalone/sticky Plan, and no writes in directive Planning.
   It retains exploration-first behavior,
   replacement semantics, exact proposal tags, and the preferred
-  proposal shape.
+  proposal shape. Rebuilding a root tool continuation after compaction stages
+  the same active Plan reminder again, unless it is already staged; this also
+  covers directive planning. A generated summary cannot replace the current
+  proposal contract.
 - **Mode constraints / full-auto:** permission-mode guidance.
 - **Fork provenance:** the sparse (interval 20) `fork-provenance`
   reminder regenerates a fork's provenance from durable session slots

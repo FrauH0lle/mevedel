@@ -45,11 +45,12 @@
 		  (text))
 (autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
-(defconst mevedel-plan--open-tag "<proposed_plan>"
-  "Opening tag for proposed plans.")
+(defconst mevedel-plan--open-regexp "[ \t]*<proposed_plan>[ \t]*\n"
+  "Opening plan delimiter, including its required following newline.
+Assistant message boundaries may be flattened without a preceding newline.")
 
-(defconst mevedel-plan--close-tag "</proposed_plan>"
-  "Closing tag for proposed plans.")
+(defconst mevedel-plan--close-regexp "^[ \t]*</proposed_plan>[ \t]*$"
+  "Closing plan delimiter on its own, optionally indented line.")
 
 (defconst mevedel-plan--relative-current-path
   (file-name-concat "local" "plans" "current.md")
@@ -68,21 +69,16 @@
 
 (defun mevedel-plan-extract-proposed (text)
   "Return the last proposed-plan body found in TEXT, or nil.
-Only exact line-oriented `<proposed_plan>' blocks are recognized."
+The opening tag must end its line; the closing tag must occupy its own
+line.  Tags may be indented, and prose may precede the opening tag."
   (let ((case-fold-search nil)
         found)
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
-      (while (re-search-forward
-              (concat "^" (regexp-quote mevedel-plan--open-tag)
-                      "[ \t]*\n")
-              nil t)
+      (while (re-search-forward mevedel-plan--open-regexp nil t)
         (let ((body-start (point)))
-          (when (re-search-forward
-                 (concat "^" (regexp-quote mevedel-plan--close-tag)
-                         "[ \t]*$")
-                 nil t)
+          (when (re-search-forward mevedel-plan--close-regexp nil t)
             (setq found
                   (string-trim-right
                    (buffer-substring-no-properties
@@ -95,16 +91,12 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
-      (while (re-search-forward
-              (concat "^" (regexp-quote mevedel-plan--open-tag)
-                      "[ \t]*\n")
-              nil t)
+      (while (re-search-forward mevedel-plan--open-regexp nil t)
         (let ((start (match-beginning 0)))
-          (if (re-search-forward
-               (concat "^" (regexp-quote mevedel-plan--close-tag)
-                       "[ \t]*\n?")
-               nil t)
-              (delete-region start (match-end 0))
+          (if (re-search-forward mevedel-plan--close-regexp nil t)
+              (progn
+                (when (looking-at "\n") (forward-char))
+                (delete-region start (point)))
             (delete-region start (point-max)))
           (goto-char start)))
       (string-trim (buffer-string)))))

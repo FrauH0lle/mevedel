@@ -396,6 +396,9 @@
         (progn
           (with-current-buffer chat-buf
             (org-mode)
+            (setq-local mevedel--session
+                        (mevedel-session--create
+                         :authority-mode 'pid-lock :name "plan" :plan-mode t))
             (setq-local mevedel-compact-target-current-request-reminder
                         "Re-read /tmp/old.el")
             (insert "Prompt\n")
@@ -427,10 +430,15 @@
               (should (eq (plist-get (gptel-fsm-info fsm) :data) 'realized))
               ;; Staged for the WAIT injector, never inlined into the
               ;; rebuilt prompt text.
-              (should (equal '((:type compact-file-references
-                                :body "Re-read /tmp/old.el"))
-                             (plist-get (gptel-fsm-info fsm)
+              (let ((entries (plist-get (gptel-fsm-info fsm)
                                         :mevedel-reminder-entries)))
+                (should (equal '(:type compact-file-references
+                                 :body "Re-read /tmp/old.el")
+                               (car entries)))
+                (should (eq 'plan-mode (plist-get (cadr entries) :type)))
+                (should (string-match-p
+                         "<proposed_plan>\n"
+                         (plist-get (cadr entries) :body))))
               (should-not (string-match-p "<system-reminder>" captured))
               (with-current-buffer chat-buf
                 (should-not mevedel-compact-target-current-request-reminder)))))
