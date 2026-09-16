@@ -12,11 +12,8 @@
   --guest: #A44A30;
   --guest-soft: #F6E6E0;
   --running: #14707A;
-  --running-soft: #DCEEEF;
   --ok: #2E7D32;
-  --ok-soft: #E3F0E4;
   --failed: #9B1C2E;
-  --failed-soft: #F7E4E7;
   --diff-add: #E3F0E4;
   --diff-add-ink: #1F5F23;
   --diff-del: #F7E4E7;
@@ -41,11 +38,8 @@
     --guest: #E08A6E;
     --guest-soft: #33201A;
     --running: #5FC2CC;
-    --running-soft: #12312F;
     --ok: #6BBF73;
-    --ok-soft: #14291A;
     --failed: #F08A8A;
-    --failed-soft: #351A1D;
     --diff-add: #14291A;
     --diff-add-ink: #8FD79A;
     --diff-del: #351A1D;
@@ -70,11 +64,8 @@
   --guest: #E08A6E;
   --guest-soft: #33201A;
   --running: #5FC2CC;
-  --running-soft: #12312F;
   --ok: #6BBF73;
-  --ok-soft: #14291A;
   --failed: #F08A8A;
-  --failed-soft: #351A1D;
   --diff-add: #14291A;
   --diff-add-ink: #8FD79A;
   --diff-del: #351A1D;
@@ -105,7 +96,7 @@ body {
     Menlo, Consolas, monospace;
   overflow-x: clip;
 }
-.prose, .request-card .rbody, .own-entry .own-text {
+.prose, .own-entry .own-text {
   font-family: Charter, "Bitstream Charter", "Iowan Old Style",
     "Source Serif 4", Georgia, serif;
   font-size: 1.06em;
@@ -481,32 +472,6 @@ code, pre {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
-}
-.chip {
-  font-size: .64rem;
-  font-weight: 700;
-  padding: .12rem .55rem;
-  border-radius: 999px;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.chip.completed { background: var(--ok-soft); color: var(--ok); }
-.chip.failed  { background: var(--failed-soft); color: var(--failed); }
-.chip.running { background: var(--running-soft); color: var(--running); }
-.chip.running::before {
-  content: "";
-  display: inline-block;
-  width: .45rem;
-  height: .45rem;
-  margin-right: .3rem;
-  border-radius: 999px;
-  background: var(--running);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-@keyframes pulse { 50% { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) {
-  .chip.running::before { animation: none; }
 }
 .tool .result {
   border-left: 2px solid var(--line);
