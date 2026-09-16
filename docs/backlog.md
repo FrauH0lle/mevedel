@@ -11,10 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Consider making mevedel's data buffers hidden
-
-- Notification error: (dbus-error "org.freedesktop.Notifications.Error.ExcessNotificationGeneration" "Created too many similar notifications in quick succession") [3 times]
-- Warning: unknown coding system "utf8" [6 times]
-
 - shared editing
   - use comments for sending selections to llm
 

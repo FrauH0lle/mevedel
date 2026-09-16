@@ -57,6 +57,7 @@
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
+(defvar mevedel-view--pending-render-kind)
 (defvar mevedel-view-pending-tools-visible-max)
 (defvar mevedel-view-rerender-debounce)
 (defvar mevedel-view-spinner-animate)
@@ -74,6 +75,13 @@
                   "mevedel-view-composer" (thunk))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
+(declare-function mevedel-view-render-terminal "mevedel-view-render" ())
+(declare-function mevedel-view-render--settle-now
+                  "mevedel-view-render" (data-buf start end))
+(defvar mevedel-view-render--owner)
+(defvar mevedel-view-render--terminal-p)
 (declare-function mevedel-view--append-request-summary
                   "mevedel-view-render" (data-buf start))
 (declare-function mevedel-view--cache-put
@@ -999,6 +1007,21 @@ they fall back to the history/status boundary rather than the input
 (defun mevedel-view-stream-begin-turn (view-start data-start &optional no-progress)
   "Begin an active streamed turn at VIEW-START and DATA-START.
 When NO-PROGRESS is non-nil, record no active progress state."
+  (let ((view-start (unless mevedel-view-render--owner view-start))
+        (data-start (copy-marker data-start)))
+    (mevedel-view-render-mutate
+     'begin-turn
+     (lambda ()
+       (mevedel-view-stream--stop-now)
+       (setq mevedel-view-render--terminal-p nil)
+       (mevedel-view-stream--begin-turn-now
+        (or view-start (mevedel-view--history-insertion-marker))
+        data-start no-progress))
+     t)))
+
+(defun mevedel-view-stream--begin-turn-now (view-start data-start no-progress)
+  "Anchor VIEW-START and DATA-START while holding projection ownership.
+NO-PROGRESS suppresses active-turn presentation."
   (when (markerp mevedel-view--in-flight-turn-start)
     (set-marker mevedel-view--in-flight-turn-start nil))
   (when (markerp mevedel-view--data-turn-start)
@@ -1013,12 +1036,33 @@ When NO-PROGRESS is non-nil, record no active progress state."
 
 (defun mevedel-view-stream-stop ()
   "Stop active streaming UI and release all turn markers."
-  (mevedel-view--stop-request-progress)
-  (mevedel-view--stop-spinner-timer)
-  (mevedel-view--cancel-scheduled-render)
+  (mevedel-view-render-terminal)
+  (mevedel-view-render-mutate
+   'stop #'mevedel-view-stream--stop-now nil #'mevedel-view-stream--release-turn))
+
+(defun mevedel-view-stream--stop-now ()
+  "Release active streaming presentation with projection ownership held."
+  (unwind-protect
+      (progn
+        (mevedel-view--stop-request-progress)
+        (mevedel-view--cancel-scheduled-render)
+        (setq mevedel-view--pending-tool-calls nil)
+        (mevedel-view--delete-pending-tool-live-lines))
+    (mevedel-view-stream--release-turn)))
+
+(defun mevedel-view-stream--release-turn ()
+  "Release terminal resources even when its projection was superseded."
   (mevedel-view-render-invalidate-live-tail)
-  (setq mevedel-view--pending-tool-calls nil)
-  (mevedel-view--delete-pending-tool-live-lines)
+  ;; A superseding full render must not recreate progress from the old
+  ;; spinner timestamp or a request that has not finished settling yet.
+  (setq mevedel-view--pending-tool-calls nil
+        mevedel-view--request-progress-suppressed t
+        mevedel-view--spinner-start-time nil)
+  ;; Retire obsolete streamed work, but keep a full recovery requested
+  ;; by the terminal render's error handler before this mandatory release.
+  (when (eq mevedel-view--pending-render-kind 'incremental)
+    (mevedel-view--cancel-scheduled-render))
+  (mevedel-view--stop-spinner-timer)
   (when (markerp mevedel-view--in-flight-turn-start)
     (set-marker mevedel-view--in-flight-turn-start nil))
   (setq mevedel-view--in-flight-turn-start nil)
@@ -1028,6 +1072,25 @@ When NO-PROGRESS is non-nil, record no active progress state."
 
 (defun mevedel-view-stream-render-response (start end)
   "Finish and render gptel response bounds START and END."
+  (let ((data-buf (current-buffer))
+        (start (copy-marker start))
+        (end (copy-marker end t)))
+    (when-let* ((view-buf mevedel--view-buffer)
+                ((buffer-live-p view-buf)))
+      (with-current-buffer view-buf
+        (mevedel-view-render-terminal)
+        (mevedel-view-render-mutate
+         'terminal
+         (lambda ()
+           (when (buffer-live-p data-buf)
+             (with-current-buffer data-buf
+               (let ((mevedel--view-buffer view-buf))
+                 (mevedel-view-stream--render-response-now start end)))))
+         nil #'mevedel-view-stream--release-turn))))
+  nil)
+
+(defun mevedel-view-stream--render-response-now (start end)
+  "Finish response START..END with its view's projection ownership held."
   (mevedel-execution-transcript-retry-pending-terminals (current-buffer))
   (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                             (current-buffer)))
@@ -1064,7 +1127,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
                         (or (mevedel-view--append-request-summary
                              data-buf start)
                             end))
-                  (mevedel-view-render-settle data-buf start end)
+                  (mevedel-view-render--settle-now data-buf start end)
                   (mevedel-view--debug-log
                    'render-response-after-incremental
                    :state (mevedel-view--debug-state data-buf start end)))
@@ -1077,14 +1140,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
                 "Terminal response render failed: %s"
                 (error-message-string err))
                (mevedel-view-rerender view-buf)))
-          (setq mevedel-view--pending-tool-calls nil)
-          (mevedel-view--stop-spinner-timer)
-          (when (markerp mevedel-view--in-flight-turn-start)
-            (set-marker mevedel-view--in-flight-turn-start nil))
-          (setq mevedel-view--in-flight-turn-start nil)
-          (when (markerp mevedel-view--data-turn-start)
-            (set-marker mevedel-view--data-turn-start nil))
-          (setq mevedel-view--data-turn-start nil)))))
+          (mevedel-view-stream--release-turn)))))
   nil)
 
 (provide 'mevedel-view-stream)

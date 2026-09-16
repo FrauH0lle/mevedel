@@ -33,6 +33,10 @@
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
+(autoload 'mevedel-view-render-mutate "mevedel-view-render")
+(defvar mevedel-view-render--owner)
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 (declare-function mevedel-view-render-child-calls-end
@@ -454,9 +458,9 @@ knows the freshly rendered span was rewritten after insertion."
                        ((eq vtype 'user-input-summary)
                         (mevedel-view-render-toggle-user-input))
                        ((cdr entry)
-                        (mevedel-view-disclosure--collapse-section source vtype))
+                        (mevedel-view-disclosure--collapse-now source vtype))
                        (t
-                        (mevedel-view-disclosure--expand-section source vtype))))
+                        (mevedel-view-disclosure--expand-now source vtype))))
                     (setq pos
                           (if mailbox-bounds
                               (min (marker-position to-marker)
@@ -497,7 +501,63 @@ this helper.  Source-backed transcript/tool disclosure remains owned by
       (mevedel-view-agent-status-toggle)
       t))))
 
+(defun mevedel-view-disclosure--intent (source vtype collapsed function)
+  "Apply desired COLLAPSED state for SOURCE and VTYPE through FUNCTION.
+Rediscover the current row after an active writer finishes.  Source markers
+and type/discriminator identity survive view replacement; view points do not."
+  (if (not mevedel-view-render--owner)
+      (mevedel-view-render-mutate
+       'disclosure (lambda () (funcall function source vtype)))
+    (let* ((data-buffer (mevedel-view-segments-display-buffer))
+         (start (and source (with-current-buffer data-buffer
+                              (copy-marker (car source)))))
+         (discriminator (nthcdr 4 (get-text-property
+                                   (point) 'mevedel-view-source-key)))
+         (mailbox (get-text-property (point) 'mevedel-view-mailbox-card))
+         (type (if (memq vtype '(turn-header turn-summary)) 'turn vtype)))
+    (mevedel-view-render-mutate
+     (list 'disclosure data-buffer (and start (marker-position start))
+           type discriminator mailbox)
+     (lambda ()
+       (let ((pos (point-min)) found)
+         (while (and (< pos (point-max)) (not found))
+           (let* ((candidate (get-text-property pos 'mevedel-view-source))
+                  (candidate-type (get-text-property pos 'mevedel-view-type)))
+             (when (and (eq type (if (memq candidate-type '(turn-header turn-summary))
+                                    'turn candidate-type))
+                        (if start
+                            (and (eq (marker-buffer start) data-buffer)
+                                 candidate
+                                 (equal (marker-position start)
+                                        (mevedel-view-disclosure-source-start candidate))
+                                 (equal discriminator
+                                        (nthcdr 4 (get-text-property
+                                                   pos 'mevedel-view-source-key))))
+                          (and mailbox
+                               (equal mailbox (get-text-property
+                                               pos 'mevedel-view-mailbox-card)))))
+               (setq found pos)))
+           (setq pos (1+ pos)))
+         (when (and found
+                    (not (eq collapsed (and (get-text-property
+                                              found 'mevedel-view-collapsed) t))))
+           (save-excursion
+             (goto-char found)
+             (funcall function (get-text-property found 'mevedel-view-source)
+                      (get-text-property found 'mevedel-view-type))))))))))
+
 (defun mevedel-view-toggle-section ()
+  "Toggle the current disclosure, retaining its source and desired fold state."
+  (interactive)
+  (if (mevedel-view-disclosure--toggle-fragment)
+      t
+    (mevedel-view-disclosure--intent
+     (get-text-property (point) 'mevedel-view-source)
+     (get-text-property (point) 'mevedel-view-type)
+     (not (get-text-property (point) 'mevedel-view-collapsed))
+     (lambda (_source _type) (mevedel-view-disclosure--toggle-now)))))
+
+(defun mevedel-view-disclosure--toggle-now ()
   "Toggle expand/collapse of the section or turn at point.
 On a turn header or collapsed-turn summary, toggles the whole turn.
 On an inner section summary (thinking, tool, response), toggles that
@@ -525,8 +585,8 @@ section only."
            ((and source
                  (memq vtype mevedel-view-disclosure--collapsible-vtypes))
             (if collapsed
-                (mevedel-view-disclosure--expand-section source vtype)
-              (mevedel-view-disclosure--collapse-section source vtype)))
+                (mevedel-view-disclosure--expand-now source vtype)
+              (mevedel-view-disclosure--collapse-now source vtype)))
            (t
             (user-error "No collapsible section at point")))
         ;; A toggle deletes and re-inserts view text.  The retained
@@ -702,6 +762,11 @@ from signalling `args-out-of-range' on stale source coordinates."
 
 (defun mevedel-view-disclosure--expand-section (source vtype)
   "Expand a collapsed section with SOURCE coordinates and VTYPE."
+  (mevedel-view-disclosure--intent
+   source vtype nil #'mevedel-view-disclosure--expand-now))
+
+(defun mevedel-view-disclosure--expand-now (source vtype)
+  "Expand SOURCE of VTYPE while holding projection ownership."
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (data-buf (mevedel-view-segments-display-buffer)))
     (when (and bounds data-buf (buffer-live-p data-buf))
@@ -719,7 +784,7 @@ from signalling `args-out-of-range' on stale source coordinates."
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
           (unwind-protect
-              (progn
+              (atomic-change-group
                 (delete-region view-start view-end)
                 (setq source
                       (mevedel-view-render-insert-expanded-disclosure
@@ -754,6 +819,11 @@ from signalling `args-out-of-range' on stale source coordinates."
 
 (defun mevedel-view-disclosure--collapse-section (source vtype)
   "Collapse an expanded SOURCE section of VTYPE to its rendered summary."
+  (mevedel-view-disclosure--intent
+   source vtype t #'mevedel-view-disclosure--collapse-now))
+
+(defun mevedel-view-disclosure--collapse-now (source vtype)
+  "Collapse SOURCE of VTYPE while holding projection ownership."
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (data-buf (mevedel-view-segments-display-buffer))
          (rendering

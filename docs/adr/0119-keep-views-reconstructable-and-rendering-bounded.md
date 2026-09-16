@@ -14,11 +14,21 @@ Streaming updates retain completed semantic units and reconcile the mutable
 tail. A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
-changes in presentation. Full rerender is the correctness fallback. One scheduler coalesces redraws;
+changes in presentation. Failed tool calls and sandbox refusals split activity
+groups and start collapsed; warning highlighting is confined to their `!`
+markers. Full rerender is the correctness fallback. One scheduler coalesces redraws;
 unattended graphical views defer visual work, then reconcile when attended.
-Markdown fontification reuses a quiet hidden buffer, and rendering never prompts
-to install missing grammars. The [view manual](../view.md) owns the detailed
-rendering and recovery contracts.
+Transcript writers also share per-view mutation ownership: nested projection,
+terminal, disclosure, and agent-refresh work coalesces rather than mutating
+captured view coordinates recursively. Source replacement retires obsolete
+intent, but not required terminal cleanup. Markdown fontification reuses a quiet
+hidden buffer for ordinary calls and isolates nested calls. Rendering never
+prompts to install missing grammars. The [view manual](../view.md) owns the
+detailed rendering and recovery contracts.
+
+Projection ownership also inhibits redisplay through queued work. Disclosure
+expansion rolls back failed replacement. Reader preservation includes both
+selection endpoints, neighboring managed zones, and table cells across wrapping.
 
 ## Rationale and alternatives
 
@@ -38,6 +48,60 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: preserve readers through replacement and reflow
+
+Five small regressions reproduced disappearing intermediate transcript text,
+status growth moving point out of a permission prompt, rerender enlarging a
+selection, failed expansion deleting its header, and table resizing moving
+point out of a cell. Ownership alone prevented nested writers but allowed
+redisplay during fontification after deletion. Redisplay inhibition now spans
+the owner and queue drain; expansion uses an atomic change group.
+
+Raw mark and neighboring-zone positions were inconsistent with point's existing
+semantic preservation. Both selection endpoints now follow source anchors on
+redraw, while advancing markers keep positions in unchanged neighboring zones.
+Table replacement uses Emacs's native non-destructive replacement and refreshes
+layout properties explicitly. A wrapped-cell test with repeated words showed
+that text diffing alone can choose the wrong occurrence, so table cell identity
+and unwrapped character offsets restore reader positions across reflow.
+
+### September 2026: reentrant writers require ownership
+
+A preserved live view duplicated an intact authoritative response and retained
+streaming-tail markers after settlement. A deterministic replay reproduced the
+failure when settlement ran inside an older incremental render's fontification:
+the older invocation resumed and reinserted obsolete content. Ordinary streaming
+and the reverse nesting order did not reproduce that defect. This establishes
+the ordering bug, not the original session's natural interrupt sequence.
+
+Timer coalescing and atomic change groups alone did not serialize writers.
+Projection entry points now share view-local ownership, with queued source-backed
+intent and terminal cleanup. Agent refreshes rediscover handles, and disclosures
+retain desired state rather than raw positions. Nested fontification also needs
+its own text buffer, since different views share the ordinary reusable buffer.
+Neither fix changes the authoritative transcript or introduces a general event
+framework.
+
+### September 2026: standalone audits retain their identity
+
+A captured execution delivery followed by a provider batch-start audit rendered
+the audit as `Tool (3 lines)` and exposed its encoded body when expanded.
+The transcript grammar correctly classified the audit as ignored, but activity
+rendering passed the standalone span to the tool parser. Activity entries now
+preserve standalone audit identity. Provider bookkeeping produces no entry;
+user-facing hook audits retain source-backed disclosures and prevent grouping
+from silently discarding them.
+
+### September 2026: failures remain visible between activity groups
+
+Failed calls previously stayed inside collapsed activity groups and opened
+automatically when the group was expanded, with warning coloring across their
+entire headers. A user review of a mixed run containing a failed Bash call and
+a sandbox refusal showed that this hid which calls failed until the group was
+opened, then gave their output disproportionate space and emphasis. Failures
+now split their surrounding groups, start collapsed, and highlight only `!`.
+Explicit user expansion remains source-backed and survives redraws.
 
 ### September 2026: streaming groups and managed boundaries
 

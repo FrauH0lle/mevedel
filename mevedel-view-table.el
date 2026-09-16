@@ -232,9 +232,11 @@ not a delimiter."
                     (delim-pos (1- (point))))
                 (cond
                  ((eq ch ?|)
-                  (push (mevedel-view-table--unescape-cell
-                         (string-trim
-                          (buffer-substring cell-start delim-pos)))
+                  (push (propertize
+                         (mevedel-view-table--unescape-cell
+                          (string-trim
+                           (buffer-substring cell-start delim-pos)))
+                         'mevedel-view-table-cell cell-start)
                         cells)
                  (setq cell-start (point)))
                  ((eq ch ?\\)
@@ -587,8 +589,17 @@ non-nil, is layered under each cell's own faces.  WINDOW is used for
 pixel-accurate padding."
   (let* ((pipe (mevedel-view-table--border "│"))
          (wrapped (seq-mapn (lambda (cell width)
-                              (mevedel-view-table--wrap-text
-                               cell width window))
+                             (let ((lines (mevedel-view-table--wrap-text
+                                           cell width window))
+                                   (offset 0))
+                               (dolist (line lines)
+                                 (unless (string-empty-p line)
+                                   (setq offset (string-search line cell offset))
+                                   (put-text-property
+                                    0 (length line) 'mevedel-view-table-cell-offset
+                                    offset line)
+                                   (setq offset (+ offset (length line)))))
+                               lines))
                             cells col-widths))
          (force-pixel-flags
           (mapcar (lambda (cell)
@@ -751,6 +762,40 @@ surrounding transcript properties."
           (setq pos next))))
     (setq carried (cddr carried))))
 
+(defun mevedel-view-table--relocated-position (position start end rendered)
+  "Map POSITION in START..END to its cell location in RENDERED.
+Return nil outside cell text.  Cell identity and unwrapped character offset
+distinguish repeated words and survive changes in line wrapping."
+  (when (and position (<= start position) (<= position end))
+    (let* ((pos (if (and (< position end)
+                        (get-text-property position 'mevedel-view-table-cell))
+                   position
+                 (max start (1- position))))
+           (cell (get-text-property pos 'mevedel-view-table-cell))
+           (offset (get-text-property pos 'mevedel-view-table-cell-offset)))
+      (when (and cell offset)
+        (let ((run-start (max
+                          (previous-single-property-change
+                           (1+ pos) 'mevedel-view-table-cell nil start)
+                          (previous-single-property-change
+                           (1+ pos) 'mevedel-view-table-cell-offset nil start)))
+              (scan 0)
+              found boundary)
+          (setq offset (+ offset (- position run-start)))
+          (while (and (< scan (length rendered)) (not found))
+            (let* ((next (min (next-single-property-change
+                              scan 'mevedel-view-table-cell rendered (length rendered))
+                             (next-single-property-change
+                              scan 'mevedel-view-table-cell-offset rendered (length rendered))))
+                   (base (get-text-property scan 'mevedel-view-table-cell-offset rendered)))
+              (when (and (equal cell (get-text-property scan 'mevedel-view-table-cell rendered))
+                         base (<= base offset) (<= offset (+ base (- next scan))))
+                (if (< offset (+ base (- next scan)))
+                    (setq found (+ start scan (- offset base)))
+                  (setq boundary (+ start next))))
+              (setq scan next)))
+          (or found boundary))))))
+
 (defun mevedel-view-table--render-region (start end source &optional window)
   "Replace START..END with SOURCE rendered as an aligned table.
 The rendered text retains SOURCE and the displaying window's pixel
@@ -765,12 +810,29 @@ layout targets; otherwise a window showing the buffer is used."
          (rendered (mevedel-view-table--render-source source window inset))
          (carried (mevedel-view--selected-text-properties
                    start mevedel-view-table--carried-properties))
+         (saved-point (mevedel-view-table--relocated-position (point) start end rendered))
+         (saved-mark (mevedel-view-table--relocated-position (mark t) start end rendered))
+         (windows
+          (mapcar (lambda (win)
+                    (list win
+                          (mevedel-view-table--relocated-position
+                           (window-point win) start end rendered)
+                          (mevedel-view-table--relocated-position
+                           (window-start win) start end rendered)))
+                  (get-buffer-window-list (current-buffer) nil t)))
          (inhibit-read-only t))
-    (save-excursion
-      (delete-region start end)
-      (goto-char start)
-      (insert rendered)
-      (let ((rend (point)))
+    (progn
+      ;; Preserve markers inside unchanged cell text as the layout changes.
+      (replace-region-contents start end rendered)
+      ;; Native replacement retains old properties on equal text, but padding
+      ;; and cell display properties belong to the newly computed layout.
+      (let ((pos 0))
+        (while (< pos (length rendered))
+          (let ((next (next-property-change pos rendered (length rendered))))
+            (set-text-properties (+ start pos) (+ start next)
+                                 (text-properties-at pos rendered))
+            (setq pos next))))
+      (let ((rend (+ start (length rendered))))
         (when carried
           (mevedel-view-table--fill-carried-properties start rend carried))
         (add-text-properties
@@ -784,7 +846,15 @@ layout targets; otherwise a window showing the buffer is used."
         ;; fontification; a background face there paints a stray band
         ;; to the window edge.
         (when (eq (char-after rend) ?\n)
-          (mevedel-view-table--strip-table-faces rend (1+ rend)))))))
+          (mevedel-view-table--strip-table-faces rend (1+ rend)))))
+    (when saved-point (goto-char saved-point))
+    (when saved-mark (set-marker (mark-marker) saved-mark))
+    (dolist (entry windows)
+      (pcase-let ((`(,win ,wp ,ws) entry))
+        (when (and (window-live-p win)
+                   (eq (window-buffer win) (current-buffer)))
+          (when wp (set-window-point win wp))
+          (when ws (set-window-start win ws t)))))))
 
 (defun mevedel-view-table-decorate (start end avoid-ranges)
   "Render Markdown pipe tables between START and END.
@@ -813,17 +883,20 @@ modified-flag discipline."
                           window
                         (get-buffer-window (current-buffer) t)))
               (width (window-body-width window t)))
-    (save-excursion
-      (goto-char (point-max))
-      (let (match)
-        (while (setq match (text-property-search-backward
-                            'mevedel-view-table-source))
-          (let ((beg (prop-match-beginning match)))
-            (unless (eql width (get-text-property
-                                beg 'mevedel-view-table-width))
-              (mevedel-view-table--render-region
-               beg (prop-match-end match) (prop-match-value match)
-               window))))))))
+    (let (tables)
+      (save-excursion
+        (goto-char (point-min))
+        (let (match)
+          (while (setq match (text-property-search-forward
+                              'mevedel-view-table-source))
+            (push match tables))))
+      ;; Replace from the bottom without leaving point at the search cursor:
+      ;; each replacement preserves the reader's actual cell position.
+      (dolist (match tables)
+        (let ((beg (prop-match-beginning match)))
+          (unless (eql width (get-text-property beg 'mevedel-view-table-width))
+            (mevedel-view-table--render-region
+             beg (prop-match-end match) (prop-match-value match) window)))))))
 
 (provide 'mevedel-view-table)
 

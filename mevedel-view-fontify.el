@@ -112,42 +112,57 @@ segment.  A fresh temp buffer per call would pay that setup on every
 streaming redraw, so the buffer and its mode are set up once and only the
 content is swapped.")
 
+(defvar mevedel-view--markdown-fontify-active-buffers nil
+  "Dynamically bound buffers owned by active Markdown fontification calls.
+This spans mode setup as well as fontification, across all view buffers.")
+
 (defun mevedel-view--markdown-fontify-target ()
-  "Return the live reusable Markdown fontification buffer, or nil.
-Returns nil when no Markdown mode is available."
-  (if (buffer-live-p mevedel-view--markdown-fontify-buffer)
+  "Return a Markdown fontification buffer, or nil when no mode is available.
+Ordinary calls reuse one buffer.  Nested calls receive a fresh buffer that
+`mevedel-view--fontify-as' owns and kills on return."
+  (if (and (null mevedel-view--markdown-fontify-active-buffers)
+           (buffer-live-p mevedel-view--markdown-fontify-buffer))
       mevedel-view--markdown-fontify-buffer
     (when-let* ((mode (mevedel-view--markdown-fontify-mode)))
-      (setq mevedel-view--markdown-fontify-buffer
-            (with-current-buffer
-                (get-buffer-create " *mevedel-markdown-fontify*" t)
-              (mevedel-view--with-quiet-mode-setup
-                ;; Table and code-block context modes only add commands and
-                ;; keys; a buffer nobody visits needs neither, and the
-                ;; latter clones regions into indirect buffers.
-                (let ((markdown-ts-enable-table-mode nil)
-                      (markdown-ts-enable-code-block-context-mode nil))
-                  (funcall mode)))
-              ;; Read by the font-lock rules that put the `invisible'
-              ;; property on markup, so it must be set before fontifying,
-              ;; not just before the mode realizes its invisibility spec.
-              (setq-local markdown-ts-hide-markup
-                          mevedel-view-hide-markdown-markup)
-              ;; The mode installs its own `font-lock-defaults' after
-              ;; `outline-minor-mode' may already have locked in the
-              ;; parent's; clearing the flag lets the real ones take.
-              (setq font-lock-set-defaults nil)
-              ;; `markdown-ts-mode' registers jit-lock.  The buffer is never
-              ;; displayed, so only a stealth pass could touch it.
-              (setq-local jit-lock-stealth-time nil)
-              (buffer-disable-undo)
-              (current-buffer))))))
+      (let ((buffer (generate-new-buffer " *mevedel-markdown-fontify*" t))
+            initialized)
+        (unless mevedel-view--markdown-fontify-active-buffers
+          (setq mevedel-view--markdown-fontify-buffer buffer))
+        (unwind-protect
+            (let ((mevedel-view--markdown-fontify-active-buffers
+                   (cons buffer mevedel-view--markdown-fontify-active-buffers)))
+              (with-current-buffer buffer
+                (mevedel-view--with-quiet-mode-setup
+                  ;; Table and code-block context modes only add commands and
+                  ;; keys; a buffer nobody visits needs neither, and the
+                  ;; latter clones regions into indirect buffers.
+                  (let ((markdown-ts-enable-table-mode nil)
+                        (markdown-ts-enable-code-block-context-mode nil))
+                    (funcall mode)))
+                ;; Font-lock reads this when hiding markup.
+                (setq-local markdown-ts-hide-markup
+                            mevedel-view-hide-markdown-markup)
+                ;; A mode may install defaults after outline mode locked in
+                ;; the parent's.  Let font-lock pick up the real defaults.
+                (setq font-lock-set-defaults nil)
+                (setq-local jit-lock-stealth-time nil)
+                (buffer-disable-undo))
+              (setq initialized t)
+              buffer)
+          (unless initialized
+            (when (eq buffer mevedel-view--markdown-fontify-buffer)
+              (setq mevedel-view--markdown-fontify-buffer nil))
+            (when (buffer-live-p buffer)
+              (kill-buffer buffer))))))))
 
 (defun mevedel-view--release-markdown-fontify-buffer ()
-  "Kill the reusable Markdown fontification buffer."
-  (when (buffer-live-p mevedel-view--markdown-fontify-buffer)
-    (kill-buffer mevedel-view--markdown-fontify-buffer))
-  (setq mevedel-view--markdown-fontify-buffer nil))
+  "Invalidate the reusable Markdown fontification buffer.
+An active owner finishes reading it before killing it on return."
+  (let ((buffer mevedel-view--markdown-fontify-buffer))
+    (setq mevedel-view--markdown-fontify-buffer nil)
+    (when (and (buffer-live-p buffer)
+               (not (memq buffer mevedel-view--markdown-fontify-active-buffers)))
+      (kill-buffer buffer))))
 
 
 ;;
@@ -169,13 +184,21 @@ buffer's font-lock refontification cycles."
        ;; `mevedel-view--markdown-fontify-mode's decision.
        ((eq mode 'markdown-mode)
         (if-let* ((buffer (mevedel-view--markdown-fontify-target)))
-            (mevedel-view--promote-face-to-font-lock-face
-             (with-current-buffer buffer
-               (let ((inhibit-read-only t))
-                 (erase-buffer)
-                 (insert text)
-                 (font-lock-ensure)
-                 (buffer-string))))
+            (let ((mevedel-view--markdown-fontify-active-buffers
+                   (cons buffer mevedel-view--markdown-fontify-active-buffers)))
+              (unwind-protect
+                  (mevedel-view--promote-face-to-font-lock-face
+                   (with-current-buffer buffer
+                     (let ((inhibit-read-only t))
+                       (erase-buffer)
+                       (insert text)
+                       (font-lock-ensure)
+                       (buffer-string))))
+                ;; Nested buffers and an invalidated reusable buffer belong
+                ;; only to this call, including on error or nonlocal exit.
+                (when (and (not (eq buffer mevedel-view--markdown-fontify-buffer))
+                           (buffer-live-p buffer))
+                  (kill-buffer buffer))))
           text))
        ((or (null mode)
             (memq mode '(text-mode fundamental-mode))

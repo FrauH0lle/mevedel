@@ -3958,7 +3958,7 @@
            (mevedel-view--rendering-header-line
             '(:header "Bash: npx test" :status error))))
 
-  :doc "group warnings color only the marker; offending tool rows color the header"
+  :doc "tool warnings color only the marker"
   (dolist (vtype '(tool-group tool-child tool-summary))
     (let ((line (mevedel-view--rendering-header-line
                  (list :vtype vtype :header "Bash: run tests (4 lines)"
@@ -3968,10 +3968,9 @@
                   (get-text-property (match-beginning 0) 'font-lock-face line)))
       (dolist (label '("Bash" "run tests" "4 lines"))
         (should (string-match label line))
-        (should (eq (not (eq vtype 'tool-group))
-                    (eq 'mevedel-view-tool-warning
+        (should-not (eq 'mevedel-view-tool-warning
                         (get-text-property (match-beginning 0)
-                                           'font-lock-face line)))))))
+                                           'font-lock-face line))))))
 
   :doc "started agent paths are highlighted and clickable"
   (let ((line (mevedel-view--rendering-header-line
@@ -4512,6 +4511,9 @@
             :network unrestricted :proc nil
             :additional-read-count 0 :additional-write-count 0))))
     (should (string-match-p "! Sandbox:" line))
+    (should-not (eq 'mevedel-view-tool-warning
+                    (get-text-property (string-match "Sandbox:" line)
+                                       'font-lock-face line)))
     (should (eq 'mevedel-view-tool-warning
                 (get-text-property (string-match "!" line)
                                    'font-lock-face line)))))
@@ -4594,14 +4596,14 @@
       (should (eq 'tool-child (plist-get rendering :vtype)))
       (should (plist-get rendering :initially-collapsed-p))))
 
-  :doc "renders a failed nested call expanded and marked as an error"
+  :doc "renders a failed nested call collapsed and marked as an error"
   (let ((rendering
          (mevedel-view--child-call-rendering
           '(:id "ptc/1" :tool "Bash" :status error
             :args (:command "git status")
             :result "Error: exit 128"))))
     (should (eq 'error (plist-get rendering :status)))
-    (should-not (plist-get rendering :initially-collapsed-p)))
+    (should (plist-get rendering :initially-collapsed-p)))
 
   :doc "keeps a nested compound call's own rows so it expands into them"
   (progn
@@ -4692,23 +4694,7 @@
            :network unrestricted :proc fresh
            :additional-read-count 0 :additional-write-count 1)))))
      (current-buffer))
-    :status))
-  :doc "a warning-class sandbox disclosure marks the group"
-  (should
-   (eq 'warning
-       (plist-get
-        (mevedel-view--tool-group-rendering
-         '((:kind tool
-            :group-child
-            (:tool "Bash" :status success
-             :render-data
-             (:sandbox-summary
-              (:attempt-count 2 :started-count 1 :refused-count 1
-               :sandbox refused :filesystem unavailable
-               :network unavailable :proc nil
-               :additional-read-count 0 :additional-write-count 0)))))
-         (current-buffer))
-        :status))))
+    :status)))
 
 (mevedel-deftest mevedel-view--insert-child-calls ()
   ,test
@@ -6778,6 +6764,10 @@
   :doc "rows demanding individual presentation are not"
   (dolist (rendering
            '(nil
+             (:header "h" :status error)
+             (:header "h" :status failed)
+             (:header "h" :status blocked)
+             (:header "h" :status warning)
              (:header "h" :vtype agent-handle)
              (:header "h" :child-calls ((:id "1")))
              (:header "h" :hook-audits ((:type x)))
@@ -6789,7 +6779,7 @@
   :doc "coalesced rows are not groupable"
   (should-not (mevedel-view--tool-group-entry-p
                '(:count 2 :rendering (:header "h"))))
-  :doc "no sandbox disclosure splits the run"
+  :doc "only warning-class sandbox disclosures split the run"
   (dolist (summary
            '((:attempt-count 1 :started-count 1 :refused-count 0
               :sandbox unavailable :filesystem unrestricted
@@ -6803,10 +6793,13 @@
               :sandbox refused :filesystem unavailable
               :network unavailable :proc nil
               :additional-read-count 0 :additional-write-count 0)))
-    (should (mevedel-view--tool-group-entry-p
-             (list :count 1
-                   :rendering
-                   (list :header "Bash: ls" :sandbox-summary summary))))))
+    (should (eq (not (eq 'warning
+                            (mevedel-execution-telemetry-sandbox-summary-class
+                             summary)))
+                (and (mevedel-view--tool-group-entry-p
+                      (list :count 1 :rendering
+                            (list :header "Bash: ls" :sandbox-summary summary)))
+                     t)))))
 
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test
@@ -6983,39 +6976,48 @@
         (should (string-match-p "Read 4 files, thought 1 time"
                                 (buffer-string)))
         (should-not (string-match-p "HiddenMixed" (buffer-string))))))
-  :doc "a failed call marks the group but leaves it collapsed"
+  :doc "a failed call splits successful runs and stays collapsed through redraws"
   (mevedel-view-test--with-buffers
-    (dotimes (i 3)
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "> draft\nsecond line"))
+    (dotimes (i 9)
       (mevedel-view-test--insert-data
        data-buf
-       (format
-        "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
-        i i)
-       `(tool . ,(format "call_%d" i))))
-    (mevedel-view-test--insert-data
-     data-buf
-     "(:name \"Bash\" :args (:command \"false\"))\n\nError: command failed\n"
-     '(tool . "call_fail"))
-    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
-    (with-current-buffer data-buf
-      (mevedel-view-stream-render-response (point-min) (point-max)))
+       (if (= i 4)
+           "(:name \"Bash\" :args (:command \"false\"))\n\nError: command failed\n"
+         (format
+          "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+          i i))
+       `(tool . ,(format "call_%d" i)))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
     (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p
-                 "! Read 3 files, ran 1 command" text))
-        (should-not (string-match-p "Error: command failed" text)))
+      (dotimes (_ 2)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 2 (cl-count-if
+                        (lambda (line) (string-match-p "✓ Read 4 files" line))
+                        (split-string text "\n"))))
+          (should (string-match-p "! Bash:" text))
+          (should-not (string-match-p "Error: command failed" text)))
+        (goto-char (point-min))
+        (search-forward "Bash:")
+        (should (eq 'tool-summary
+                    (get-text-property (match-beginning 0) 'mevedel-view-type)))
+        (should (get-text-property (point) 'mevedel-view-collapsed))
+        (should-not (eq 'mevedel-view-tool-warning
+                        (get-text-property (match-beginning 0) 'font-lock-face)))
+        (mevedel-view--full-rerender)
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
       (goto-char (point-min))
-      (search-forward "Read 3 files")
-      (should (eq 'mevedel-view-tool-summary
-                  (get-text-property (match-beginning 0) 'font-lock-face)))
-      (mevedel-view-toggle-section)
       (search-forward "Bash:")
-      (should (eq 'mevedel-view-tool-warning
-                  (get-text-property (match-beginning 0) 'font-lock-face)))
-      (search-forward "false")
-      (should (eq 'mevedel-view-tool-warning
-                  (get-text-property (match-beginning 0) 'font-lock-face)))))
+      (mevedel-view-toggle-section)
+      (should (string-search "Error: command failed" (buffer-string)))
+      (mevedel-view--full-rerender)
+      (should (string-search "Error: command failed" (buffer-string)))))
   :doc "a short run and a zero threshold keep individual rows"
   (let ((mevedel-view-tool-group-collapse-threshold 0))
     (mevedel-view-test--with-buffers
