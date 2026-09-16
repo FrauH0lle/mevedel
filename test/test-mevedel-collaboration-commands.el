@@ -38,19 +38,47 @@
 ;;
 ;;; Observer and command boundaries
 
-(mevedel-deftest mevedel-collaboration--safe-post-stream
-  (:doc "contains observer failures without signaling into the request")
-  (with-temp-buffer
-    (let* ((stopped nil)
-           (room (list :data-buffer (current-buffer)))
-           (mevedel-collaboration--rooms (mevedel-test-room-registry room)))
-      (cl-letf (((symbol-function 'mevedel-collaboration--post-stream)
-                 (lambda () (error "Observer failure")))
-                ((symbol-function 'mevedel-collaboration--stop-internal)
-                 (lambda (_room reason) (setq stopped reason)))
-                ((symbol-function 'display-warning) (lambda (&rest _) nil)))
-        (should-not (mevedel-collaboration--safe-post-stream))
-        (should (eq 'observer-failure stopped))))))
+(mevedel-deftest mevedel-collaboration--safe-post-response
+  (:doc "installed response hooks coalesce updates and isolate publication faults")
+  (mevedel-view-test--with-buffers
+    (let* ((room (list :data-buffer data-buf))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (draft "> first line\nsecond line\n> third line")
+           scheduled stopped warnings)
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4))
+      (with-current-buffer data-buf
+        (setq-local gptel-post-stream-hook nil
+                    gptel-post-response-functions nil)
+        (mevedel-chat-install-request-hooks)
+        ;; Other hook owners have their own render tests; exercise the real
+        ;; collaboration observer and scheduler through both gptel seams.
+        (cl-letf (((symbol-function 'mevedel-view-stream-schedule) #'ignore)
+                  ((symbol-function 'mevedel-view-stream-render-response) #'ignore)
+                  ((symbol-function 'mevedel-tool-repair-clear-ledger) #'ignore)
+                  ((symbol-function 'run-at-time)
+                   (lambda (_delay _repeat callback &rest args)
+                     (push (cons callback args) scheduled)
+                     'publication-timer)))
+          (run-hooks 'gptel-post-stream-hook)
+          (run-hook-with-args 'gptel-post-response-functions 1 1)
+          (should (equal (list (list #'mevedel-collaboration--publish-timer data-buf))
+                         scheduled))
+          (should (eq 'publication-timer (plist-get room :publish-timer)))
+          (cl-letf (((symbol-function 'mevedel-collaboration--schedule-publish)
+                     (lambda (_room) (error "Observer failure")))
+                    ((symbol-function 'mevedel-collaboration--stop-internal)
+                     (lambda (failed-room reason)
+                       (push (cons failed-room reason) stopped)))
+                    ((symbol-function 'display-warning)
+                     (lambda (&rest args) (push args warnings))))
+            (run-hooks 'gptel-post-stream-hook)
+            (run-hook-with-args 'gptel-post-response-functions 1 1)
+            (should (equal (make-list 2 (cons room 'observer-failure)) stopped))
+            (should (= 2 (length warnings))))))
+      (with-current-buffer view-buf
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= 4 (- (point) (mevedel-view--input-start))))))))
 
 (mevedel-deftest mevedel-collaboration-status
   (:doc "reports safe active and inactive status without exposing secrets")
