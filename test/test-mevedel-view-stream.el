@@ -3758,7 +3758,7 @@
       (should (timerp mevedel-view--spinner-timer))
       (let (warning later-ran)
         (mevedel-test--with-captured-diagnostics warning
-          (cl-letf (((symbol-function 'mevedel-view-render-settle)
+          (cl-letf (((symbol-function 'mevedel-view--render-live-region)
                      (lambda (&rest _) (error "Projection failed"))))
             (with-current-buffer data-buf
               ;; Through the hook, because the point of not signalling is

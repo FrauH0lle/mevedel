@@ -924,6 +924,8 @@ any window or nothing is stale."
                            (eq (window-buffer window) buffer)
                            window))
               (inhibit-read-only t)
+              (inhibit-redisplay t)
+              (deactivate-mark deactivate-mark)
               (buffer-undo-list t)
               (modified (buffer-modified-p)))
           (unwind-protect

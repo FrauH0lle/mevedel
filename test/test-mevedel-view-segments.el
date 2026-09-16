@@ -314,5 +314,57 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (should (= point-offset
                  (- (point) (mevedel-view--input-start)))))))
 
+(mevedel-deftest mevedel-view-segments/reentry ()
+  ,test
+  (test)
+  :doc "archive switching during fontification replaces, rather than mixes, sources"
+  (mevedel-view-segments-test--with-view
+    (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+    (let ((original (symbol-function 'mevedel-view--fontify-response))
+          entered)
+      ;; Avoid the response cache so the test visits the interruption seam.
+      (clrhash mevedel-view--response-fontify-cache)
+      (cl-letf (((symbol-function 'mevedel-view--fontify-response)
+                 (lambda (&rest args)
+                   (prog1 (apply original args)
+                     (unless entered
+                       (setq entered t)
+                       (mevedel-view-go-to-segment 2))))))
+        (mevedel-view--full-rerender))
+      (should entered))
+    (should (= 2 (mevedel-view-segments-current-number)))
+    (should (string-search "Archived answer two" (buffer-string)))
+    (should-not (string-search "Live answer" (buffer-string)))
+    (should-not mevedel-view-render--owner)
+    (mevedel-view-return-to-latest-segment)
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+    (should (= (point) (+ 4 (mevedel-view--input-start)))))
+
+  :doc "return to live during archive rendering discards queued archive work"
+  (mevedel-view-segments-test--with-view
+    (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+    (mevedel-view-go-to-segment 2)
+    (let ((archive mevedel-view-segments--buffer)
+          (original (symbol-function 'mevedel-view--fontify-response)) entered stale)
+      (cl-letf (((symbol-function 'mevedel-view--fontify-response)
+                 (lambda (&rest args)
+                   (prog1 (apply original args)
+                     (unless entered
+                       (setq entered t)
+                       (mevedel-view-render-mutate 'archive-work
+                                                   (lambda () (setq stale t)))
+                       (mevedel-view-return-to-latest-segment))))))
+        (mevedel-view--full-rerender))
+      (should entered)
+      (should-not stale)
+      (should-not (buffer-live-p archive)))
+    (should-not (mevedel-view-segments-current-number))
+    (should (eq data-buf (mevedel-view-segments-display-buffer)))
+    (should (string-search "Live answer" (buffer-string)))
+    (should-not (string-search "Archived answer" (buffer-string)))
+    (should-not mevedel-view-render--owner)
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+    (should (= (point) (+ 4 (mevedel-view--input-start))))))
+
 (provide 'test-mevedel-view-segments)
 ;;; test-mevedel-view-segments.el ends here

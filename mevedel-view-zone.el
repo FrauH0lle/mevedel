@@ -551,14 +551,18 @@ priorities."
     (list
      :input (and input-start
                  (buffer-substring-no-properties input-start (point-max)))
-     :point (point)
+     :point (copy-marker (point) t)
+     :mark (and (mark t) (copy-marker (mark t) t))
+     :mark-active mark-active
+     :deactivate-mark deactivate-mark
      :point-offset (mevedel-view-zone--input-offset (point))
      :selected-window (selected-window)
      :windows
      (mapcar
       (lambda (window)
         (let ((window-point (window-point window)))
-          (list window window-point (window-start window)
+          (list window (copy-marker window-point t)
+                (copy-marker (window-start window) t)
                 (mevedel-view-zone--input-offset window-point))))
       (get-buffer-window-list (current-buffer) nil t)))))
 
@@ -591,16 +595,28 @@ priorities."
           (when (and window-start (<= window-start (point-max)))
             (set-window-start window window-start t))
           (when (eq window (plist-get state :selected-window))
-            (goto-char (window-point window))))))))
+            (goto-char (window-point window)))))))
+  (when-let* ((mark (plist-get state :mark)))
+    (set-mark (min (point-max) mark)))
+  (setq mark-active (plist-get state :mark-active)
+        deactivate-mark (plist-get state :deactivate-mark)))
 
 (defun mevedel-view-zone--call-preserving (zone thunk)
   "Call THUNK with uniform view-state preservation for ZONE."
   (let ((state (mevedel-view-zone--capture-view-state))
+        (inhibit-redisplay t)
         result)
     (unwind-protect
         (setq result
               (mevedel-view-zone--call-with-marker-types zone thunk))
-      (mevedel-view-zone--restore-view-state state))
+      (unwind-protect
+          (mevedel-view-zone--restore-view-state state)
+        (set-marker (plist-get state :point) nil)
+        (when-let* ((mark (plist-get state :mark)))
+          (set-marker mark nil))
+        (dolist (entry (plist-get state :windows))
+          (set-marker (nth 1 entry) nil)
+          (set-marker (nth 2 entry) nil))))
     result))
 
 (defun mevedel-view-zone--capture-neighbor-regions (zone region)
@@ -685,6 +701,8 @@ priorities."
   "Capture point and displayed-window positions inside ZONE REGION."
   (list
    :point (mevedel-view-zone--fragment-position-state zone region (point))
+   :mark (and (mark t)
+              (mevedel-view-zone--fragment-position-state zone region (mark t)))
    :windows
    (mapcar
     (lambda (window)
@@ -700,6 +718,9 @@ priorities."
   (when-let* ((position (mevedel-view-zone--restore-fragment-position
                          zone (plist-get state :point))))
     (goto-char position))
+  (when-let* ((position (mevedel-view-zone--restore-fragment-position
+                         zone (plist-get state :mark))))
+    (set-marker (mark-marker) position))
   (dolist (window-state (plist-get state :windows))
     (pcase-let ((`(,window ,point-state ,start-state) window-state))
       (when (window-live-p window)

@@ -1932,11 +1932,6 @@ dependencies must either ride a text patch or clear
   (cond
    ((eq (plist-get rendering :vtype) 'request-failure)
     'mevedel-view-handle-error)
-   ((eq (plist-get rendering :vtype) 'tool-group)
-    'mevedel-view-tool-summary)
-   ((memq (plist-get rendering :status)
-          '(error failed blocked warning))
-    'mevedel-view-tool-warning)
    ((and (eq (or (plist-get rendering :vtype) 'tool-summary)
              'agent-handle)
          (eq (plist-get rendering :agent-status) 'running))
@@ -2022,10 +2017,6 @@ Return nil when HEADER is not a `Tool: argument' style line."
                (mevedel-view--operation-line
                 marker marker-face header nil nil
                 (mevedel-view--rendering-header-face rendering)))))
-        (when (and (not (eq vtype 'tool-group))
-                   (memq tool-status '(error failed blocked warning)))
-          (put-text-property 0 (length line) 'font-lock-face
-                             'mevedel-view-tool-warning line))
         (if-let* ((agent-path (plist-get rendering :agent-path)))
             (mevedel-view--buttonize-agent-header-label line agent-path)
           line)))))
@@ -2099,7 +2090,7 @@ every row."
        "Sandbox:"
        (string-join details " · ")
        nil
-       face))))
+       'mevedel-view-tool-metadata))))
 
 (defun mevedel-view--rendering-header-block (rendering)
   "Return RENDERING's header plus any durable sandbox disclosure."
@@ -2251,9 +2242,8 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
 CHILD is one `:child-calls' entry.  The nested tool's own registered
 renderer produces the row, which is why a nested Grep gets Grep's header
 and `grep-mode' body without the compound tool formatting anything
-itself.  Reasoning and mailbox children carry their prepared rendering.  A
-failed row renders expanded: its output is the reason the reader opened
-the block.
+itself.  Reasoning and mailbox children carry their prepared rendering.
+Tool rows start collapsed, including failures.
 
 A nested compound call keeps its own `:child-calls', so expanding it
 inside a block or an activity group shows the calls it ran rather than
@@ -2280,7 +2270,7 @@ folding a run into a group does not lose the boundary it ran with."
                           (cons :coalesce-key nil)
                           (cons :hook-audits nil)
                           (cons :force-expanded-p nil)
-                          (cons :initially-collapsed-p (not failed))))
+                          (cons :initially-collapsed-p t)))
         (setq rendering (plist-put rendering (car cell) (cdr cell))))
       (when failed
         (setq rendering (plist-put rendering :status 'error)))
@@ -2645,6 +2635,12 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
 
 (defun mevedel-view--refresh-tool-row (data-buffer tool-use-id)
   "Refresh only TOOL-USE-ID's visible row from DATA-BUFFER."
+  (mevedel-view-render-mutate
+   (list 'tool-row tool-use-id)
+   (lambda () (mevedel-view-render--refresh-tool-row-now data-buffer tool-use-id))))
+
+(defun mevedel-view-render--refresh-tool-row-now (data-buffer tool-use-id)
+  "Rediscover TOOL-USE-ID in DATA-BUFFER with projection ownership held."
   (when-let* ((region
               (mevedel-view--tool-row-region data-buffer tool-use-id)))
     (let* ((start (nth 0 region))
@@ -3136,7 +3132,10 @@ interaction UI live below that boundary and above the input prompt."
   "Return the first history position after the session header."
   (save-excursion
     (goto-char (point-min))
-    (forward-line 1)
+    ;; Agent transcript chrome lives in the header line, not in the
+    ;; transcript.  Its first text line is already history.
+    (unless mevedel-view--agent-transcript-p
+      (forward-line 1))
     (point)))
 
 (defun mevedel-view--transcript-history-position-p (pos)
@@ -3571,9 +3570,91 @@ the render so user toggles survive streaming ticks."
             (when (fboundp 'mevedel-directive-frame-refresh-filter)
               (mevedel-directive-frame-refresh-filter))))))))))
 
+(defvar-local mevedel-view-render--owner nil
+  "Non-nil while this view has an active projection writer.")
+
+(defvar-local mevedel-view-render--pending nil
+  "Coalesced (KEY GENERATION SOURCE FUNCTION CLEANUP) projection intentions.")
+
+(defvar-local mevedel-view-render--generation 0
+  "Identity of the current source/turn mutation generation.")
+
+(defvar-local mevedel-view-render--terminal-p nil
+  "Non-nil once terminal presentation has been requested for this turn.")
+
+(defvar-local mevedel-view-render--terminal-turn nil
+  "Data-turn marker belonging to the latest terminal presentation intent.")
+
+(defun mevedel-view-render-terminal ()
+  "Invalidate incremental work for the current turn, without changing text."
+  (setq mevedel-view-render--terminal-p t
+        mevedel-view-render--terminal-turn mevedel-view--data-turn-start))
+
+(defun mevedel-view-render-mutate (key function &optional replacement cleanup)
+  "Run FUNCTION as this view's sole projection writer.
+Nested requests coalesce by KEY and run after the active writer unwinds.
+They carry the displayed source identity, never saved view coordinates.
+REPLACEMENT invalidates queued work from the previous source or turn.
+Optional CLEANUP must run even if replacement invalidates FUNCTION.
+Return FUNCTION's value when immediate, or t when queued.  Composed internal
+operations call their owned implementations rather than entering here again."
+  (when replacement
+    (cl-incf mevedel-view-render--generation)
+    ;; Discard obsolete projection, not its mandatory terminal release.
+    ;; Releases stay ahead of the replacement so they cannot clear its state.
+    (setq mevedel-view-render--pending
+          (cl-remove-if-not (lambda (entry) (nth 4 entry))
+                            mevedel-view-render--pending)))
+  (let ((entry (list key mevedel-view-render--generation
+                     (mevedel-view-segments-display-buffer) function cleanup)))
+    (if mevedel-view-render--owner
+        (progn
+          (if-let* ((previous (assoc key mevedel-view-render--pending)))
+              (setcdr previous (cdr entry))
+            (setq mevedel-view-render--pending
+                  (nconc mevedel-view-render--pending (list entry))))
+          t)
+      (setq mevedel-view-render--owner t)
+      ;; Fontification can yield to redisplay after a writer deletes its old
+      ;; projection.  Keep intermediate text hidden through the queue drain.
+      (let ((inhibit-redisplay t)
+            failure result)
+        (cl-labels
+            ((run (work)
+               (pcase-let ((`(,_key ,generation ,source ,thunk ,release) work))
+                 (unwind-protect
+                     (condition-case err
+                         (when (and (= generation mevedel-view-render--generation)
+                                    (eq source (mevedel-view-segments-display-buffer)))
+                           (funcall thunk))
+                       ((error quit) (unless failure (setq failure err)) nil))
+                   (when release
+                     (condition-case err
+                         (funcall release)
+                       ((error quit) (unless failure (setq failure err)))))))))
+          (unwind-protect
+              (progn
+                (unwind-protect
+                    (setq result (run entry))
+                  ;; A queued writer's failure must not starve the terminal
+                  ;; or replacement behind it.  Report the first error only
+                  ;; after every still-current intention has been drained.
+                  (while mevedel-view-render--pending
+                    (run (pop mevedel-view-render--pending))))
+                (if failure (signal (car failure) (cdr failure)) result))
+            (setq mevedel-view-render--owner nil
+                  mevedel-view-render--pending nil)))))))
+
 (defun mevedel-view-render-live-update (data-buf)
   "Update the current in-flight turn from DATA-BUF's mutable tail."
-  (mevedel-view--render-live-region data-buf nil))
+  (unless (eq mevedel-view-render--terminal-turn mevedel-view--data-turn-start)
+    (setq mevedel-view-render--terminal-p nil))
+  (unless mevedel-view-render--terminal-p
+    (mevedel-view-render-mutate
+     'live
+     (lambda ()
+       (unless mevedel-view-render--terminal-p
+         (mevedel-view--render-live-region data-buf nil))))))
 
 (defun mevedel-view-render-settle (data-buf start end)
   "Exactly reconcile DATA-BUF's completed response from START through END.
@@ -3582,6 +3663,15 @@ anchors: this render runs before the stream clears the in-flight turn
 markers, and keys captured or stamped under the temporary `(in-flight)'
 anchor here would be orphaned the moment those markers clear, collapsing
 sections the user expanded during the turn on the next render."
+  (mevedel-view-render-terminal)
+  (let ((start (with-current-buffer data-buf (copy-marker start)))
+        (end (with-current-buffer data-buf (copy-marker end t))))
+    (mevedel-view-render-mutate
+     'settle
+     (lambda () (mevedel-view-render--settle-now data-buf start end)))))
+
+(defun mevedel-view-render--settle-now (data-buf start end)
+  "Reconcile DATA-BUF's START..END with projection ownership already held."
   (mevedel-view-render-invalidate-live-tail)
   (let ((mevedel-view-disclosure--settling-p t))
     (mevedel-view--render-live-region data-buf t start end)))
@@ -4993,13 +5083,20 @@ added when the text before point does not already end with a blank line
             data-buf (cadr seg) (caddr seg)))))
 
 (defun mevedel-view--tool-segment-entry (seg data-buf)
-  "Return SEG's normalized tool rendering entry in DATA-BUF, or nil."
+  "Return SEG's normalized tool or standalone audit entry in DATA-BUF."
   (let* ((seg-start (cadr seg))
          (seg-end (caddr seg))
          (source (mevedel-view-disclosure-source-range
                   data-buf seg-start seg-end))
-         (rendering (mevedel-view--segment-rendering
-                     data-buf seg-start seg-end t))
+         (audit-p (eq (car seg) 'ignored))
+         (audits (when audit-p
+                   (with-current-buffer data-buf
+                     (mevedel-view--hook-audit-records-from-text
+                      (buffer-substring seg-start seg-end)
+                      nil data-buf seg-start))))
+         (rendering (unless audit-p
+                      (mevedel-view--segment-rendering
+                       data-buf seg-start seg-end t)))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (state (and rendering
                      (mevedel-view-disclosure-state-entry source vtype))))
@@ -5012,12 +5109,14 @@ added when the text before point does not already end with a blank line
       (when group-child
         (setq rendering
               (plist-put (copy-sequence rendering) :group-child nil)))
-      (unless (plist-get rendering :hidden-p)
-        (list :kind 'tool
+      (unless (or (plist-get rendering :hidden-p)
+                  (and audit-p (null audits)))
+        (list :kind (if audit-p 'hook-audit 'tool)
               :start seg-start
               :end seg-end
               :source source
               :rendering rendering
+              :hook-audits audits
               :group-child group-child
               :count 1)))))
 
@@ -5080,6 +5179,14 @@ one renderer, including execution summaries and sender links."
           ('mailbox
            (flush-thinking)
            (push (mevedel-view--mailbox-activity-entry seg data-buf) out))
+          ('ignored
+           (if (mevedel-view--hook-audit-only-segment-p
+                data-buf (cadr seg) (caddr seg))
+               (progn
+                 (flush-thinking)
+                 (when-let* ((entry (mevedel-view--tool-segment-entry seg data-buf)))
+                   (push entry out)))
+             (push seg thinking-group)))
           (_ (push seg thinking-group))))
       (flush-thinking))
     (nreverse out)))
@@ -5090,7 +5197,10 @@ one renderer, including execution summaries and sender links."
          (cl-remove-if-not
           (lambda (entry) (eq (plist-get entry :kind) 'tool))
           entries)))
-    (and (> mevedel-view-tool-group-collapse-threshold 0)
+    (and (not (seq-some (lambda (entry)
+                         (eq (plist-get entry :kind) 'hook-audit))
+                       entries))
+         (> mevedel-view-tool-group-collapse-threshold 0)
          (> (length tool-entries)
             mevedel-view-tool-group-collapse-threshold)
          (cl-every
@@ -5470,31 +5580,20 @@ resurrect rows the renderer suppressed."
   "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
 The result reuses the compound-tool row machinery: each tool, reasoning
 occurrence, or delivery is a `:child-calls' entry with its own disclosure
-state.  Failed calls and warning-class sandbox disclosures mark the group
-without forcing it open: the reader can expand it to see what went wrong.
-A newly formed group keeps an already open child visible."
-  (let* ((children
+state.  A newly formed group keeps an already open child visible."
+  (let ((children
           (let ((index 0)
                 out)
             (dolist (entry entries (nreverse out))
               (when-let* ((child (mevedel-view--tool-group-child
                                   entry data-buf index)))
                 (push child out))
-              (cl-incf index))))
-         (failed-p
-          (cl-some (lambda (child)
-                     (or (not (eq (plist-get child :status) 'success))
-                         (eq (mevedel-execution-telemetry-sandbox-summary-class
-                              (plist-get (plist-get child :render-data)
-                                         :sandbox-summary))
-                             'warning)))
-                   children)))
+              (cl-incf index)))))
     (when children
       (list :header (mevedel-view--tool-group-header children)
             :vtype 'tool-group
             :expandable-p t
             :child-calls children
-            :status (and failed-p 'warning)
             ;; A new group must not hide a row the reader already opened.
             ;; An explicit fold of the group itself still takes precedence.
             :initially-collapsed-p
@@ -5527,17 +5626,20 @@ reasoning occurrence."
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
-Rows that demand individual presentation stay out: agent handles and
+Rows that demand individual presentation stay out: failed calls,
+warning-class sandbox disclosures, agent handles and
 other non-tool vtypes, compound tools with their own nested rows, rows
 carrying hook audits, rows their renderer wants expanded or compact,
-coalesced rows, and renderer fallbacks.
-
-A sandbox disclosure does not keep a row out.  The nested row carries
-the summary, so the boundary stays readable one fold deeper, and a
-`warning'-class one marks the group the way a failed call does."
+coalesced rows, and renderer fallbacks.  Note-class sandbox disclosures
+stay with their nested row inside the group."
   (let ((rendering (plist-get entry :rendering)))
     (and rendering
          (= (plist-get entry :count) 1)
+         (not (memq (plist-get rendering :status)
+                    '(error failed blocked warning)))
+         (not (eq (mevedel-execution-telemetry-sandbox-summary-class
+                   (plist-get rendering :sandbox-summary))
+                  'warning))
          (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
          (null (plist-get rendering :child-calls))
          (null (plist-get rendering :hook-audits))
@@ -5629,13 +5731,18 @@ grouped activity row that expands into compound-tool nested rows."
                           (format "%s ×%d"
                                   (plist-get rendering :header)
                                   count))))
-                 (if rendering
-                     (progn
-                       (unless inserted-rule
-                         (mevedel-view--insert-activity-rule-after-response)
-                         (setq inserted-rule t))
-                       (cl-incf rendered)
-                       (mevedel-view--insert-rendered-tool rendering source))
+                 (cond
+                  ((eq (plist-get entry :kind) 'hook-audit)
+                   (dolist (record (plist-get entry :hook-audits))
+                     (mevedel-view--insert-hook-audit-block
+                      record (plist-get record :source))))
+                  (rendering
+                   (unless inserted-rule
+                     (mevedel-view--insert-activity-rule-after-response)
+                     (setq inserted-rule t))
+                   (cl-incf rendered)
+                   (mevedel-view--insert-rendered-tool rendering source))
+                  (t
                    (when-let* ((summary (mevedel-view--tool-one-liner
                                          data-buf seg-start seg-end)))
                      (unless inserted-rule
@@ -5653,7 +5760,7 @@ grouped activity row that expands into compound-tool nested rows."
                           ,(mevedel-view-disclosure-state-key
                             source 'tool-summary)))
                        (mevedel-view--decorate-markdown-in-range
-                        ins-start (point)))))))
+                        ins-start (point))))))))
              (flush-run
                (run)
                (let ((run-entries (nreverse run)))
@@ -6518,8 +6625,9 @@ returns to just before it."
     (set-window-start window (min start (point-max)) t)))
 
 (defun mevedel-view-render-project-segment (data-buffer state direction)
-  "Render DATA-BUFFER and restore projection STATE for DIRECTION."
-  (mevedel-view--full-rerender data-buffer t)
+  "Render DATA-BUFFER and restore projection STATE for DIRECTION.
+The segment owner holds projection ownership across source replacement."
+  (mevedel-view-render--full-now data-buffer t)
   (mevedel-view-render--restore-segment-state state direction))
 
 ;;
@@ -7099,6 +7207,15 @@ HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics."
      :state (mevedel-view--debug-state data-buf))))
 
 (defun mevedel-view--full-rerender (&optional transcript-buffer source-changed-p)
+  "Rebuild the projection, coalescing nested requests for its current source.
+TRANSCRIPT-BUFFER selects the transcript; SOURCE-CHANGED-P drops old fold state."
+  (mevedel-view-render-mutate
+   'full
+   (lambda ()
+     (mevedel-view-render--full-now transcript-buffer source-changed-p))
+   source-changed-p))
+
+(defun mevedel-view-render--full-now (&optional transcript-buffer source-changed-p)
   "Re-render the view from TRANSCRIPT-BUFFER or its displayed transcript.
 Wipe all rendered content and re-render from scratch.  Used after
 compaction, session resume, or manual refresh.

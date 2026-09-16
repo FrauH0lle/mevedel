@@ -194,6 +194,121 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
       (should (eq 'font-lock-keyword-face
                   (get-text-property 6 'font-lock-face text)))))
 
+  :doc "isolates nested fontification from another view and cleans its buffer"
+  (let ((ensure (symbol-function 'font-lock-ensure))
+        outer-buffer nested-buffer nested-text entered)
+    (cl-letf (((symbol-function 'font-lock-ensure)
+               (lambda (&rest args)
+                 (if entered
+                     (setq nested-buffer (current-buffer))
+                   (setq entered t outer-buffer (current-buffer))
+                   (with-temp-buffer
+                     (setq nested-text
+                           (mevedel-view--fontify-as "inner late\n" 'markdown-mode))))
+                 (apply ensure args))))
+      (let ((text (with-temp-buffer
+                    (mevedel-view--fontify-as "late outer\n" 'markdown-mode))))
+        (should (equal "late outer\n" (substring-no-properties text)))
+        (should (eq 'font-lock-keyword-face
+                    (get-text-property 0 'font-lock-face text)))
+        (should (equal "inner late\n" (substring-no-properties nested-text)))
+        (should (eq 'font-lock-keyword-face
+                    (get-text-property 6 'font-lock-face nested-text)))))
+    (should-not (eq outer-buffer nested-buffer))
+    (should-not (buffer-live-p nested-buffer))
+    (should (eq outer-buffer (mevedel-view--markdown-fontify-target))))
+
+  :doc "nested fontification errors leave the outer buffer intact and reusable"
+  (let ((ensure (symbol-function 'font-lock-ensure))
+        nested-buffer nested-text entered)
+    (cl-letf (((symbol-function 'font-lock-ensure)
+               (lambda (&rest args)
+                 (if entered
+                     (progn
+                       (setq nested-buffer (current-buffer))
+                       (error "Injected nested fontification failure"))
+                   (setq entered t)
+                   (setq nested-text
+                         (mevedel-view--fontify-as "inner late\n" 'markdown-mode))
+                   (apply ensure args)))))
+      (let ((text (mevedel-view--fontify-as "late outer\n" 'markdown-mode)))
+        (should (equal "late outer\n" (substring-no-properties text)))
+        (should (eq 'font-lock-keyword-face
+                    (get-text-property 0 'font-lock-face text)))
+        (should (equal "inner late\n" nested-text))))
+    (should-not (buffer-live-p nested-buffer))
+    (should (equal "late again\n"
+                   (substring-no-properties
+                    (mevedel-view--fontify-as "late again\n" 'markdown-mode)))))
+
+  :doc "release during fontification retires the buffer after its owner returns"
+  (let ((ensure (symbol-function 'font-lock-ensure)) retired)
+    (cl-letf (((symbol-function 'font-lock-ensure)
+               (lambda (&rest args)
+                 (setq retired (current-buffer))
+                 (mevedel-view--release-markdown-fontify-buffer)
+                 (apply ensure args))))
+      (let ((text (mevedel-view--fontify-as "late outer\n" 'markdown-mode)))
+        (should (equal "late outer\n" (substring-no-properties text)))
+        (should (eq 'font-lock-keyword-face
+                    (get-text-property 0 'font-lock-face text)))))
+    (should-not (buffer-live-p retired))
+    (should-not mevedel-view--markdown-fontify-buffer)
+    (should (buffer-live-p (mevedel-view--markdown-fontify-target))))
+
+  :doc "nested nonlocal exits release all active ownership and temporary buffers"
+  (let ((ensure (symbol-function 'font-lock-ensure))
+        nested-buffer outer-buffer entered)
+    (cl-letf (((symbol-function 'font-lock-ensure)
+               (lambda (&rest args)
+                 (if entered
+                     (progn
+                       (setq nested-buffer (current-buffer))
+                       (throw 'fontify-stop 'stopped))
+                   (setq entered t outer-buffer (current-buffer))
+                   (mevedel-view--fontify-as "inner late\n" 'markdown-mode)
+                   (apply ensure args)))))
+      (should (eq 'stopped
+                  (catch 'fontify-stop
+                    (mevedel-view--fontify-as "late outer\n" 'markdown-mode)))))
+    (should-not (buffer-live-p nested-buffer))
+    (should (eq outer-buffer (mevedel-view--markdown-fontify-target)))
+    (should (equal "late again\n"
+                   (substring-no-properties
+                    (mevedel-view--fontify-as "late again\n" 'markdown-mode)))))
+
+  :doc "failed Markdown mode setup does not retain a partial buffer"
+  (let ((mode (symbol-function 'mevedel-view-test-late-mode)) failed)
+    (cl-letf (((symbol-function 'mevedel-view-test-late-mode)
+               (lambda ()
+                 (setq failed (current-buffer))
+                 (error "Injected mode setup failure"))))
+      (should (equal "late\n" (mevedel-view--fontify-as "late\n" 'markdown-mode))))
+    (should-not (buffer-live-p failed))
+    (should-not mevedel-view--markdown-fontify-buffer)
+    (should (eq mode (symbol-function 'mevedel-view-test-late-mode)))
+    (should (buffer-live-p (mevedel-view--markdown-fontify-target))))
+
+  :doc "nested mode setup never reuses the partially initialized outer buffer"
+  (let ((mode (symbol-function 'mevedel-view-test-late-mode))
+        nested-text buffers entered)
+    (cl-letf (((symbol-function 'mevedel-view-test-late-mode)
+               (lambda ()
+                 (push (current-buffer) buffers)
+                 (unless entered
+                   (setq entered t)
+                   (setq nested-text
+                         (mevedel-view--fontify-as "inner late\n" 'markdown-mode)))
+                 (funcall mode))))
+      (let ((text (mevedel-view--fontify-as "late outer\n" 'markdown-mode)))
+        (should (equal "late outer\n" (substring-no-properties text)))
+        (should (eq 'font-lock-keyword-face
+                    (get-text-property 0 'font-lock-face text)))))
+    (should (= 2 (length buffers)))
+    (should-not (buffer-live-p (car buffers)))
+    (should (eq (cadr buffers) (mevedel-view--markdown-fontify-target)))
+    (should (equal "inner late\n" (substring-no-properties nested-text))))
+
   :doc "leaves no buffer behind once released"
   (progn
     (should (buffer-live-p (mevedel-view--markdown-fontify-target)))

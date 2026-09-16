@@ -126,6 +126,12 @@
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view-render--full-now
+                  "mevedel-view-render" (&optional transcript-buffer source-changed-p))
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
+(declare-function mevedel-view-render-terminal "mevedel-view-render" ())
+(defvar mevedel-view-render--terminal-p)
 (declare-function mevedel-view--debug-log "mevedel-view-render" (event &rest data))
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 (declare-function mevedel-view--insert-rendered-tool "mevedel-view-render" (rendering source))
@@ -137,7 +143,12 @@
                   (start end &optional default-vtype))
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
 
+;; `mevedel-view-segments'
+(declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
+
 ;; `mevedel-view-stream'
+(declare-function mevedel-view-stream--stop-now "mevedel-view-stream" ())
+(declare-function mevedel-view-stream--release-turn "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-in-flight-turn-start-position
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-post-tool
@@ -576,20 +587,29 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
     (let ((views (mevedel-view--agent-transcript-views-for-data agent-buf)))
       (dolist (view views)
         (when (buffer-live-p view)
-          (condition-case err
-              (with-current-buffer view
-                (setq mevedel-view--agent-transcript-info
-                      (plist-put
-                       (copy-sequence mevedel-view--agent-transcript-info)
-                       :live-buffer t))
-                (mevedel-view--full-rerender)
-                (mevedel-view--agent-transcript-start-streaming)
-                (force-mode-line-update t))
-            (error
-             (mevedel--warn-once
-              'view-agent-start-update
-              "Starting live agent transcript update failed: %s"
-              (error-message-string err))))))
+          (with-current-buffer view
+            (mevedel-view-render-mutate
+             'agent-start
+             (lambda ()
+               ;; Guard execution, not enqueueing: a nested observer runs
+               ;; only after the current projection writer has unwound.
+               (condition-case err
+                   (progn
+                     (mevedel-view-stream--stop-now)
+                     (setq mevedel-view-render--terminal-p nil)
+                     (setq mevedel-view--agent-transcript-info
+                           (plist-put
+                            (copy-sequence mevedel-view--agent-transcript-info)
+                            :live-buffer t))
+                     (mevedel-view-render--full-now)
+                     (mevedel-view--agent-transcript-start-streaming)
+                     (force-mode-line-update t))
+                 (error
+                  (mevedel--warn-once
+                   'view-agent-start-update
+                   "Starting live agent transcript update failed: %s"
+                   (error-message-string err)))))
+             t))))
       views)))
 
 (defun mevedel-view-agent-live-transcript-finalize (invocation)
@@ -610,24 +630,30 @@ retained projections that can follow another turn."
            (calls (mevedel-agent-invocation-call-count invocation)))
       (dolist (view views)
         (when (buffer-live-p view)
-          (condition-case err
-              (with-current-buffer view
-                (mevedel-view-stream-stop)
-                (setq mevedel-view--agent-transcript-info
-                      (append (list :live-buffer nil
-                                    :status status
-                                    :calls calls
-                                    :elapsed elapsed
-                                    :reason reason)
-                              mevedel-view--agent-transcript-info))
-                (when (buffer-live-p mevedel--data-buffer)
-                  (atomic-change-group
-                    (mevedel-view--full-rerender))))
-            (error
-             (mevedel--warn-once
-              'view-agent-final-update
-              "Final live agent transcript update failed: %s"
-              (error-message-string err))))))
+          (with-current-buffer view
+            (mevedel-view-render-terminal)
+            (mevedel-view-render-mutate
+             'agent-finalize
+             (lambda ()
+               (condition-case err
+                   (progn
+                     (mevedel-view-stream--stop-now)
+                     (setq mevedel-view--agent-transcript-info
+                           (append (list :live-buffer nil
+                                         :status status
+                                         :calls calls
+                                         :elapsed elapsed
+                                         :reason reason)
+                                   mevedel-view--agent-transcript-info))
+                     (when (buffer-live-p mevedel--data-buffer)
+                       (atomic-change-group
+                         (mevedel-view-render--full-now))))
+                 (error
+                  (mevedel--warn-once
+                   'view-agent-final-update
+                   "Final live agent transcript update failed: %s"
+                   (error-message-string err)))))
+             nil #'mevedel-view-stream--release-turn))))
       views)))
 
 (defun mevedel-view-close-agent-transcript ()
@@ -1226,6 +1252,15 @@ Return non-nil on success."
 
 (defun mevedel-view--refresh-agent-rendering-now (agent-path)
   "Refresh visible rendering for AGENT-PATH in the current view buffer."
+  (mevedel-view-render-mutate
+   (list 'agent agent-path)
+   (lambda ()
+     (if (mevedel-view-historical-segment-p)
+         (mevedel-view--render-agent-status)
+       (mevedel-view-agent--refresh-owned agent-path)))))
+
+(defun mevedel-view-agent--refresh-owned (agent-path)
+  "Rediscover and refresh AGENT-PATH's handles with projection ownership held."
   (let ((start-time (float-time))
         stale-p)
     (mevedel-view--call-preserving-window-state

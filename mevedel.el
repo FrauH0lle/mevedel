@@ -707,6 +707,7 @@ always prompt for the session name."
   "Register `mevedel' presets, tools, and hooks."
   (interactive)
 
+  (require 'mevedel-view)
   (mevedel-transport-install)
   (add-function :after after-focus-change-function
                 #'mevedel-view--resume-attended-views)

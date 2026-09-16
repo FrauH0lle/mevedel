@@ -186,7 +186,7 @@ initially collapsed `Returned` row; setting the threshold to zero keeps every
 value inline. Each nested call becomes its own collapsible row rendered by that
 tool's registered renderer, so a nested Grep row gets Grep's header and
 `grep-mode` body rather than one flat dump fontified in a single mode. Rows
-exist only while the envelope is expanded, a failed row opens expanded, and a
+exist only while the envelope is expanded, failed rows start collapsed, and a
 nested compound call expands into its own child rows one level deeper. The calls
 of one `parallel` or `parallel-map` join share a batch identity and are drawn
 as a bracketed group, so a concurrent fan-out is distinguishable from the same

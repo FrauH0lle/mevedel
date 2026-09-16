@@ -114,6 +114,9 @@ create or focus an inspection window automatically.
 
 Agent status refreshes replace only the handle. Adjacent audit disclosures,
 including delivered system reminders, retain their rows and fold state.
+Standalone audits after deliveries keep their audit identity during activity
+grouping: provider bookkeeping stays hidden, and user-facing hook records keep
+their own disclosures rather than becoming generic tool rows.
 
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
@@ -204,6 +207,28 @@ Progress spacing also reconciles when the preceding content changes. Managed
 zone boundaries advance past history inserted immediately before them, keeping
 status, interaction, and progress overlays outside the transcript.
 
+Transcript mutations additionally share per-view ownership. Full, incremental,
+and terminal projection, agent-handle refreshes, and disclosure actions cannot
+write the same projection recursively. Nested requests coalesce and run after
+the active writer unwinds; terminal intent prevents an older live update from
+reviving streaming state. Idle settlement remains immediate. Source and turn
+replacement invalidate obsolete queued projection work, while mandatory terminal
+release remains ordered before replacement state. Failed writers release
+ownership without starving pending terminal cleanup.
+Redisplay stays inhibited until the writer and its queued work finish, so
+fontification cannot expose the temporarily deleted projection. Failed
+disclosure expansion rolls back its text replacement and retains the old row
+for a retry.
+
+Queued agent refreshes carry agent identity and rediscover current handles;
+they do not apply live transcript offsets to archived segments. Queued
+disclosure actions retain source identity and the requested expanded/collapsed
+state, not an old view position or a second blind toggle. Internal full-render
+restoration composes within the current owner. These operations preserve
+composer text and point, source-backed reader anchors, and adjacent disclosures.
+Agent transcript inspection uses the same projection ownership rather than a
+second renderer.
+
 Spinner ticks, scheduled transcript flushes, and live tool-row refreshes
 are attention-gated (`mevedel-view--unattended-p`).  When every window
 showing the view sits on an invisible or iconified frame, or on an unfocused
@@ -280,13 +305,13 @@ handles, compound tools, rows carrying hook audits, rows their renderer wants ex
 compact, and coalesced rows — never fold into a group; they split the run
 around themselves, including runs interleaved with reasoning. An unfinished
 activity run remains mutable across streaming events so later calls can join
-its group. A sandbox disclosure does not split a run: the nested row
-carries the summary, so the line stays readable one level in. A group
-containing a failed call, or a call whose sandbox disclosure is a `warning`,
-highlights only the group's `!` marker; the summary text keeps its normal
-face. The offending tool's entire header is highlighted in the expanded
-group, including its argument and metadata. A `note`-class disclosure leaves
-the group unmarked. Expanding a group rebuilds its rows from the
+its group. Failed calls and calls with warning-class sandbox disclosures split
+that run into separate groups around their standalone rows. Failed tool rows,
+including nested calls inside compound tools, start collapsed. Only the `!`
+marker uses warning highlighting; the tool name, argument, metadata, and sandbox
+summary text keep their normal faces. Explicit expansion survives redraws.
+A `note`-class sandbox disclosure stays with its nested row inside the group.
+Expanding a group rebuilds its rows from the
 folded run alone: `mevedel-transcript-segments` expands its end bound to the
 containing property run, so the segment beginning where the run ended is
 dropped instead of being summarized as one more reasoning occurrence.
@@ -806,8 +831,9 @@ read-only mounts remain silent.
 The line's class decides how loudly it reads.
 `mevedel-execution-telemetry-sandbox-summary-class` returns `warning` only
 when something the model asked for did not run — a refusal, or a child that
-never started — and that line takes the `!` marker and
-`mevedel-view-tool-warning`. Every other disclosure is a `note`: a boundary
+never started — and only that line's `!` marker takes
+`mevedel-view-tool-warning`. The text retains `mevedel-view-tool-metadata`.
+Every other disclosure is a `note`: a boundary
 wider than the strictest default is the boundary the session was configured or
 granted, so network access, an additional write path, an escalation, or an
 unavailable sandbox record what ran without claiming a fault. Notes take the
@@ -831,7 +857,7 @@ Attention gating is a redraw path like any other: a skipped tick or flush
 leaves buffer text, properties, and the composer byte-identical, and the
 resumed render runs through the same preserving wrappers.
 
-`mevedel-view--call-preserving-window-state` restores point, window points,
+`mevedel-view--call-preserving-window-state` restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer
 positions: a composer position by its input offset, a managed-fragment
 position by zone namespace, fragment id, and offset, and rendered transcript
@@ -840,6 +866,10 @@ header and its body can share one source start) and offset into the run. A
 raw position saved across a delete-and-re-render lands in different content
 whenever lengths shift. Anchors that cannot be resolved after the redraw fall back to the
 clamped raw position.
+Restoration also runs when a writer exits with an error. Managed-zone updates
+retain fragment-relative selections inside the changed zone and use advancing
+markers for positions in neighboring zones. Growing or removing status rows
+therefore keeps the reader in the same permission prompt below them.
 
 The allocation-heavy chokepoints run with garbage collection batched
 (`mevedel--with-gc-batched`, a direct `gc-cons-threshold` and
@@ -917,7 +947,11 @@ grammars are missing.
 
 To avoid repeated mode setup during streaming redraws,
 `mevedel-view--markdown-fontify-target` sets up one hidden buffer once and
-only the content is swapped. `mevedel-view--fontify-as` treats
+only the content is swapped. Nested fontification, including calls from another
+view or during mode setup, uses a separate temporary buffer so it cannot replace
+the outer call's text. Temporary buffers are released on completion or failure.
+Invalidating an active reusable buffer retires it immediately but lets its owner
+finish reading before killing it. `mevedel-view--fontify-as` treats
 `markdown-mode` as the tag meaning "this body is Markdown" and routes it
 there; every other `:body-mode` is a real major mode and still gets a
 throwaway temp buffer.
@@ -984,6 +1018,11 @@ buffer is killed. The deferred job — never the redisplay hooks
 themselves — rebuilds only the tables and images whose retained width
 no longer matches the displaying window, off the undo list, preserving
 point, the modified flag, the data buffer, and any composer draft. The
+table renderer preserves cell positions by cell identity and unwrapped
+character offset, including both selection endpoints and other displayed
+windows. This distinguishes repeated words when wrapping changes. Native
+non-destructive text replacement retains positions outside cell content;
+display properties are refreshed from the new layout. The
 changed window rides along to the deferred job, so its width is the
 one laid out for. A buffer shown simultaneously in windows of
 different widths holds one layout: the most recently realigned window

@@ -1007,6 +1007,10 @@ above the composer does not strand it in rendered transcript text."
           (mevedel-view--pww-current-anchor
            (mevedel-view--position-render-anchor (point)))
           (mevedel-view--pww-current-mark (mark t))
+          (mevedel-view--pww-mark-anchor
+           (and mevedel-view--pww-current-mark
+                (mevedel-view--position-render-anchor
+                 mevedel-view--pww-current-mark)))
           (mevedel-view--pww-mark-active mark-active)
           (mevedel-view--pww-deactivate-mark deactivate-mark)
           (mevedel-view--pww-current-input-offset
@@ -1032,7 +1036,7 @@ above the composer does not strand it in rendered transcript text."
                                (mevedel-view--position-render-anchor wp)
                                (mevedel-view--position-render-anchor ws)))))
                    (get-buffer-window-list (current-buffer) nil t))))
-     (prog1 (funcall thunk)
+     (unwind-protect (funcall thunk)
        (let ((restored-current-point
               (cond
                ((and mevedel-view--pww-current-input-offset
@@ -1048,7 +1052,8 @@ above the composer does not strand it in rendered transcript text."
          (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom
                         ,wp-anchor ,ws-anchor)
                       entry))
-           (when (window-live-p w)
+           (when (and (window-live-p w)
+                      (eq (window-buffer w) mevedel-view--pww-current-buffer))
              (let ((restored-point
                     (cond
                      ((and input-offset
@@ -1081,7 +1086,9 @@ above the composer does not strand it in rendered transcript text."
                     (marker-buffer mevedel-view--input-marker))
                (+ (mevedel-view--input-start)
                   (max 0 mevedel-view--pww-mark-input-offset))
-             mevedel-view--pww-current-mark)))
+             (or (mevedel-view--render-anchor-position
+                  mevedel-view--pww-mark-anchor)
+                 mevedel-view--pww-current-mark))))
          (setq mark-active mevedel-view--pww-mark-active
                deactivate-mark mevedel-view--pww-deactivate-mark)))))
 

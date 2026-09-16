@@ -31,6 +31,9 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-capture-segment-state
                   "mevedel-view-render" ())
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
+(autoload 'mevedel-view-render-mutate "mevedel-view-render")
 (declare-function mevedel-view-render-project-segment
                   "mevedel-view-render" (data-buffer state direction))
 (autoload 'mevedel-view-render-capture-segment-state "mevedel-view-render")
@@ -118,11 +121,17 @@
 
 (defun mevedel-view-segments--show (number direction)
   "Project session segment NUMBER, landing according to DIRECTION."
+  (mevedel-view-render-mutate
+   'source
+   (lambda () (mevedel-view-segments--show-now number direction)) t))
+
+(defun mevedel-view-segments--show-now (number direction)
+  "Switch to NUMBER in DIRECTION with projection ownership held."
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
          (current (or (mevedel-session-current-segment session) 1)))
     (if (= number current)
-        (mevedel-view-return-to-latest-segment)
+        (mevedel-view-segments--return-now)
       (let* ((new-buffer
               (mevedel-session-artifacts-read-segment session number))
              (old-number mevedel-view-segments--number)
@@ -230,6 +239,10 @@ unreadable entries."
 (defun mevedel-view-return-to-latest-segment (&optional _event)
   "Return from archived inspection to the live session segment."
   (interactive)
+  (mevedel-view-render-mutate 'source #'mevedel-view-segments--return-now t))
+
+(defun mevedel-view-segments--return-now ()
+  "Return to the live source while holding projection ownership."
   (when (mevedel-view-historical-segment-p)
     (let ((old-number mevedel-view-segments--number)
           (old-buffer mevedel-view-segments--buffer)
