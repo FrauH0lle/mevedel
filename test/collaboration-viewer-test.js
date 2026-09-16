@@ -161,10 +161,11 @@ async function testTransportLifecycle() {
     crypto: {
       getRandomValues: value => value,
       subtle: {
-        encrypt: (_algorithm, _key, plaintext) => new Promise(resolve => {
+        encrypt: (_algorithm, _key, plaintext) => new Promise((resolve, reject) => {
           finishSeals.push({
             frame: JSON.parse(new TextDecoder().decode(plaintext)),
             finish: () => resolve(new ArrayBuffer(16)),
+            fail: () => reject(new Error('encryption failed')),
           });
         }),
         decrypt: (_algorithm, _key, sealed) => {
@@ -236,6 +237,21 @@ async function testTransportLifecycle() {
   finishSeals.shift().finish();
   assert.deepEqual(await Promise.all([firstSend, secondSend]), [true, true]);
   assert.equal(latest.sent.length, 2);
+
+  // A failed send is reported to its caller without poisoning queued work.
+  const failedSend = assert.rejects(transport.send({t: 'failed'}),
+                                    /encryption failed/);
+  const recoveredSend = transport.send({t: 'recovered'});
+  await waitFor(() => finishSeals.length, 'failing encryption');
+  assert.equal(finishSeals.length, 1);
+  assert.equal(finishSeals[0].frame.t, 'failed');
+  finishSeals.shift().fail();
+  await failedSend;
+  await waitFor(() => finishSeals.length, 'encryption after failure');
+  assert.equal(finishSeals[0].frame.t, 'recovered');
+  finishSeals.shift().finish();
+  assert.equal(await recoveredSend, true);
+  assert.equal(latest.sent.length, 3);
 
   const bad = new Uint8Array(33);
   bad[16] = 1;
@@ -948,6 +964,17 @@ async function main() {
   // frame verbatim, a disallowed one never leaves the browser, and the
   // extension decides when the browser reports no type at all.
   const api2 = context.window.mevedelViewer;
+  const failedRead = assert.rejects(api2.addFiles([{
+    ...fakeFile('unreadable.log', '', 'x'),
+    arrayBuffer: async () => { throw new Error('read failed'); },
+  }]), /read failed/);
+  const recoveredRead = api2.addFiles([fakeFile('recovered.log', '', 'ok')]);
+  await failedRead;
+  await recoveredRead;
+  assert.equal(nodes.attachments.children.length, 1);
+  assert.match(textOf(nodes.attachments), /recovered\.log/);
+  nodes.attachments.children[0].children.at(-1).dispatch('click');
+
   await api2.addFiles([fakeFile('build.log', '', 'log line\n'),
                        fakeFile('notes.exe', 'application/x-msdownload', 'x')]);
   assert.equal(nodes.attachments.children.length, 1);
