@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-chat)
+(require 'mevedel-collaboration-owner)
 (require 'mevedel-agent-control)
 (require 'mevedel)
 (require 'mevedel-permission-queue)
@@ -481,6 +482,50 @@
             (let ((kill-buffer-query-functions nil))
               (kill-buffer chat-buffer)))
           (setq chat-buffer nil))))))
+
+(mevedel-deftest mevedel-chat-discard-buffers
+  (:doc "both failure paths run remaining cleanup hooks with their modification policy")
+  (dolist (guestp '(nil t))
+    (let ((view (generate-new-buffer " *discard-view*"))
+          data seen)
+      (unwind-protect
+          (cl-labels
+              ((prepare (buffer)
+                 (setq data buffer)
+                 (with-current-buffer data
+                   (setq-local mevedel--view-buffer view))
+                 (dolist (entry (list (cons 'data data) (cons 'view view)))
+                   (let ((label (car entry)))
+                     (with-current-buffer (cdr entry)
+                       (insert "unfinished")
+                       (setq-local
+                        kill-buffer-query-functions
+                        (list (lambda () (ert-fail "Cleanup queried")))
+                        kill-buffer-hook
+                        (list (lambda () (error "Broken cleanup hook"))
+                              (lambda ()
+                                (push (cons label (buffer-modified-p)) seen)))))))))
+            (if guestp
+                (progn
+                  (prepare (generate-new-buffer " *discard-data*"))
+                  (mevedel-collaboration--discard-created-session nil data))
+              (cl-letf (((symbol-function 'mevedel--workspace-sessions) #'ignore)
+                        ((symbol-function 'mevedel--chat-buffer-setup)
+                         (lambda (buffer &rest _)
+                           (prepare buffer)
+                           (error "Setup failed"))))
+                (should-error (mevedel--chat-buffer "failed" t 'workspace))))
+            (should-not (buffer-live-p data))
+            (should-not (buffer-live-p view))
+            (should (equal (list (cons 'data (not guestp))
+                                (cons 'view (not guestp)))
+                           (nreverse seen))))
+        (dolist (buffer (list data view))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (setq-local kill-buffer-hook nil kill-buffer-query-functions nil)
+              (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
 
 (mevedel-deftest mevedel--probe-session-target ()
                  ,test
