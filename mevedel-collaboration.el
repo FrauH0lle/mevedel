@@ -981,29 +981,13 @@ Runs from a buffer-local hook, so the current buffer names the room."
        'mevedel "Live collaboration stopped after an observer failure" :warning)
     (error nil)))
 
-(defun mevedel-collaboration--post-stream ()
-  "Schedule a coalesced publication after gptel inserts response text."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer
-                     (current-buffer))))
-    (mevedel-collaboration--schedule-publish room)))
-
-(defun mevedel-collaboration--post-response (_start _end)
-  "Publish the settled response for the active data buffer."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer
-                     (current-buffer))))
-    (mevedel-collaboration--schedule-publish room)))
-
-(defun mevedel-collaboration--safe-post-stream ()
-  "Run the stream observer without signaling into gptel."
+(defun mevedel-collaboration--safe-post-response (&rest _positions)
+  "Schedule response publication without signaling into gptel.
+Accept both the stream hook and settled-response hook's arguments."
   (condition-case nil
-      (mevedel-collaboration--post-stream)
-    (error (mevedel-collaboration--observer-failure
-            (mevedel-collaboration--room-for-buffer (current-buffer))))))
-
-(defun mevedel-collaboration--safe-post-response (start end)
-  "Run the response observer without signaling into gptel."
-  (condition-case nil
-      (mevedel-collaboration--post-response start end)
+      (when-let* ((room (mevedel-collaboration--room-for-buffer
+                         (current-buffer))))
+        (mevedel-collaboration--schedule-publish room))
     (error (mevedel-collaboration--observer-failure
             (mevedel-collaboration--room-for-buffer (current-buffer))))))
 

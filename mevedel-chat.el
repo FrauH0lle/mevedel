@@ -73,9 +73,7 @@
 (declare-function mevedel-collaboration--safe-accepted-prompt
                   "mevedel-collaboration" (data-buffer))
 (declare-function mevedel-collaboration--safe-post-response
-                  "mevedel-collaboration" (start end))
-(declare-function mevedel-collaboration--safe-post-stream
-                  "mevedel-collaboration" nil)
+                  "mevedel-collaboration" (&rest positions))
 
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-cancel)
@@ -431,7 +429,7 @@ render immediately, so this never delays tool-call feedback."
             #'mevedel-view-stream-post-tool nil t)
   (add-hook 'gptel-post-stream-hook #'mevedel-view-stream-schedule nil t)
   (add-hook 'gptel-post-stream-hook
-            #'mevedel-collaboration--safe-post-stream nil t)
+            #'mevedel-collaboration--safe-post-response nil t)
   (add-hook 'gptel-post-response-functions
             #'mevedel-collaboration--safe-post-response nil t))
 
