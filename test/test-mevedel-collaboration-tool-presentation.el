@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -60,7 +61,7 @@
                                     :attachments ("base" "missing")
                                     :attachment-bodies (("base" . "# Base\nDelivered body"))))
                     "fixture"))
-           (wire (mevedel-collaboration--json-string
+           (wire (json-encode
                   (mevedel-collaboration--json-record record)))
            (display (plist-get record :presentation))
            (dependencies (plist-get display :attachments)))

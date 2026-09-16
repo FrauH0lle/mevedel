@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -199,7 +200,7 @@
                      "result" "artifact" "size")
                    (mapcar #'car (nth 3 payload))))
     (should-not (string-match-p "secret\\|script\\|target"
-                                (mevedel-collaboration--json-string payload)))))
+                                (json-encode payload)))))
 
 (mevedel-deftest mevedel-collaboration--canonical-excluded-spans
   (:doc "projects visible payload exactly while excluding control and unknown spans")
@@ -236,7 +237,7 @@
                        (cdr (assoc "text" (cadr payload)))))
         (should (equal "Visible tool result"
                        (cdr (assoc "result" (nth 2 payload)))))
-        (let ((json (mevedel-collaboration--json-string payload)))
+        (let ((json (json-encode payload)))
           (dolist (hidden '("reason secret" "reminder secret" "hook secret"
                             "/secret.png" "unknown secret"
                             "Unknown kind payload"))
@@ -260,7 +261,7 @@
     (let* ((remote-room (list :data-buffer (current-buffer)
                               :session 'remote-session
                               :execution-target "/ssh:someone@example:/srv/"))
-           (wire (mevedel-collaboration--json-string
+           (wire (json-encode
                   (mapcar #'mevedel-collaboration--json-record
                           (mevedel-collaboration--project-records
                            remote-room)))))

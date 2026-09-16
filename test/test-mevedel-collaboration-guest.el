@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -47,7 +48,7 @@
 (defun test-mevedel-collaboration-guest--chunk-frame-bytes (chunk)
   "Return the encoded size of the snapshot frame carrying CHUNK."
   (string-bytes
-   (mevedel-collaboration--json-string
+   (json-encode
     (list :t "snapshot-chunk" :records (vconcat chunk) :final t))))
 
 (mevedel-deftest mevedel-collaboration--snapshot-chunks ()

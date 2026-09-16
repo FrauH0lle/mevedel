@@ -11,6 +11,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'json)
+
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-record-conversation-buffer
                   "mevedel-agent-control" (record))
@@ -39,8 +41,6 @@
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection" (data-buffer))
-(declare-function mevedel-collaboration--json-string
-                  "mevedel-collaboration-projection" (object))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
@@ -107,7 +107,7 @@ transcript stays reachable from the viewer's finished-agents list."
 (defun mevedel-collaboration--agent-frame-overhead (req-id path)
   "Return encoded agent-frame overhead for REQ-ID and PATH."
   (string-bytes
-   (mevedel-collaboration--json-string
+   (json-encode
     (list :t "agent" :reqId req-id :path path
           :digest (make-string 64 ?0) :records (vconcat nil)
           :final :json-false))))
@@ -159,7 +159,7 @@ transcript stays reachable from the viewer's finished-agents list."
                                  (list nil)))
                      (digest (secure-hash
                               'sha256
-                              (mapconcat #'mevedel-collaboration--json-string
+                              (mapconcat #'json-encode
                                          (apply #'append chunks) "\n"))))
                 (plist-put guest :agent-artifacts
                            (cl-remove-if-not
