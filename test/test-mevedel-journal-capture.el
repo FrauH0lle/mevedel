@@ -136,8 +136,8 @@
             (mevedel--warn-once-table (make-hash-table :test #'equal))
             diagnostics)
        (make-directory (file-name-concat root ".mevedel") t)
-       (write-region "blocked journal directory" nil
-                     (file-name-concat root ".mevedel" "journal") nil 'silent)
+       (write-region "blocked private state directory" nil
+                     (file-name-concat root ".mevedel" "state") nil 'silent)
        (mevedel-test--with-captured-diagnostics diagnostics
          (mevedel-test-journal-capture--turn session buffer "Completed request" "Completed result"))
        (should (string-match-p "Journal capture checkpoint failed" diagnostics))

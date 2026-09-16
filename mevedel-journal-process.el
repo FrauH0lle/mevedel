@@ -242,7 +242,8 @@ Use the generator's exact prompt accounting, retaining explicit omissions."
            state :timer
            (run-at-time
             (max 0 (- (plist-get (plist-get state :claim) :expires-at)
-                      (mevedel-session-control-fs-target-time (plist-get state :key))))
+                      (mevedel-session-control-fs-target-time
+                       (plist-get (plist-get state :claim) :directory))))
             nil
             (lambda ()
               (let ((cancel (plist-get state :cancel)))

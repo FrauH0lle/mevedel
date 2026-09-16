@@ -126,7 +126,7 @@ Return nil when WORKSPACE is nil."
   (unless workspace
     (error "No workspace for plugin data"))
   (file-name-concat (mevedel-workspace-state-dir workspace)
-                    "plugin-data"
+                    "state" "plugin-data"
                     plugin-name))
 
 

@@ -120,10 +120,10 @@ authorizes access nor decides whether stored evidence can be deleted."
   (format-time-string "%Y-%m-%dT%H:%M:%SZ" seconds t))
 
 (defun mevedel-journal-store-claim-directory (directory scope)
-  "Return the private claim directory for work SCOPE below journal DIRECTORY.
+  "Return the private claim directory for work SCOPE of journal DIRECTORY.
 SCOPE is `digest-run' for one digest request at a time, `mutation' for
 journal state changes, or `consolidation' for one memory pass at a time."
-  (file-name-concat directory "state" (symbol-name scope)))
+  (file-name-concat (mevedel-journal-store-state-directory directory) (symbol-name scope)))
 
 (defun mevedel-journal-store-entry-for-capture (entries id)
   "Return the entry among ENTRIES published from capture ID, or nil."
@@ -134,6 +134,13 @@ journal state changes, or `consolidation' for one memory pass at a time."
 This computes a path; it does not create any state."
   (file-name-concat
    (mevedel-session-control-fs-physical-path root) ".mevedel" "journal"))
+
+(defun mevedel-journal-store-state-directory (directory)
+  "Return private journal state beside public journal DIRECTORY.
+The public journal remains at .mevedel/journal; private records live at
+.mevedel/state/journal on the same target.  Do not create either directory."
+  (file-name-concat
+   (file-name-directory (directory-file-name directory)) "state" "journal"))
 
 (defun mevedel-journal-store--utc-time-p (value)
   "Return non-nil when VALUE is a canonical UTC timestamp that round-trips."
@@ -344,7 +351,7 @@ Consolidation and decision bodies are derived exclusively from metadata."
 (defun mevedel-journal-store-expired-marker (directory file)
   "Return the private marker that records public entry FILE's expiry.
 DIRECTORY is the journal directory."
-  (file-name-concat directory "state" "expired" (concat file ".json")))
+  (file-name-concat (mevedel-journal-store-state-directory directory) "expired" (concat file ".json")))
 
 (defun mevedel-journal-store--assert-current (root file)
   "Signal when public entry FILE in workspace ROOT has been durably expired."
@@ -404,7 +411,7 @@ Malformed records fail closed so completed work cannot become eligible again."
 (defun mevedel-journal-store--record-coverage (root entry)
   "Retain ENTRY's published turn IDs in ROOT before its capture can retire."
   (let* ((id (plist-get entry :capture-id))
-         (directory (file-name-concat (mevedel-journal-store-directory root) "state" "coverage"))
+         (directory (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage"))
          (path (file-name-concat directory (concat id ".json")))
          (turns (plist-get entry :turn-ids)))
     (mevedel-session-control-fs-make-directory directory t)
@@ -419,7 +426,7 @@ evidence text and are independent of consolidation review coverage."
   (delete-dups
    (mapcan #'mevedel-journal-store--read-coverage
            (mevedel-session-control-fs-list-directory
-            (file-name-concat (mevedel-journal-store-directory root) "state" "coverage")
+            (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage")
             (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))))
 
 (defun mevedel-journal-store-publish-digest (root metadata body)

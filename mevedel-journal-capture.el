@@ -66,8 +66,7 @@ Disabling capture preserves existing entries, pending work, and evidence pins."
 (defun mevedel-journal-capture--directory (workspace id)
   "Return WORKSPACE's private capture directory for ID."
   (unless (mevedel-journal-store-id-p id) (error "Invalid journal capture identity"))
-  (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace))
-                    "state" "captures" id))
+  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "captures" id))
 
 (defun mevedel-journal-capture--file (workspace id name)
   "Return private capture file NAME for capture ID in WORKSPACE.
@@ -190,8 +189,7 @@ INCLUDE-INACTIVE includes unready and retired records for storage recovery."
   (let (records)
     (dolist (directory
              (mevedel-session-control-fs-list-directory
-              (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace))
-                                "state" "captures")
+              (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "captures")
               mevedel-journal-store-id-regexp))
       (let ((id (file-name-nondirectory (directory-file-name directory))))
         (when (or include-inactive (mevedel-journal-capture--pending-p workspace id))

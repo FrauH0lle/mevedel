@@ -340,7 +340,7 @@ name one public entry.
 The workspace owns `.mevedel/journal/` on its execution target. Root Read lists
 validated published records within the ordinary recall age limit, newest first; an exact filename reads the full
 public Markdown with ordinary Read pagination. Timestamp colons use canonical
-`%3A` encoding in addresses. Private `state/`, nested names, traversal, malformed
+`%3A` encoding in addresses. Private `.mevedel/state/journal/`, nested names, traversal, malformed
 records, and symlink escapes are excluded. ApplyPatch is unsupported.
 Completed consolidation reviews are public records alongside digests; their
 metadata names examined digest IDs, focus, reference checks, and proposal IDs.

@@ -374,7 +374,8 @@
                 "/ssh:user@host:/srv/project/.mevedel/session")
           (setq first (mevedel-telemetry-profiler-directory session))
           (should-not (file-remote-p first))
-          (should (file-in-directory-p first temporary-file-directory))
+          (should (equal (file-name-directory first)
+                         (file-name-as-directory temporary-file-directory)))
           ;; Every caller derives the same answer without state to leak.
           (should (equal first (mevedel-telemetry-profiler-directory session)))
           (setq mevedel-telemetry--profiler-run-id "run-other")
@@ -1062,7 +1063,7 @@
                :input-bytes 128 :pass-id "pass-1" :reviewed-count 3
                :attempt-generation 2 :evidence "SECRET evidence"
                :prompt "SECRET prompt")))
-          (let* ((path (file-name-concat root ".mevedel" "diagnostics" "telemetry-log.el"))
+          (let* ((path (file-name-concat root ".mevedel" "state" "diagnostics" "telemetry-log.el"))
                  (events (test-mevedel-telemetry--read path)))
             (should (= 2 (length events)))
             (dolist (event events)
@@ -1092,7 +1093,7 @@
                  :reasoning "SECRET reasoning" :arguments "SECRET arguments"
                  diagnostics)
           (let ((event (car (test-mevedel-telemetry--read
-                             (file-name-concat root ".mevedel" "diagnostics" "telemetry-log.el")))))
+                             (file-name-concat root ".mevedel" "state" "diagnostics" "telemetry-log.el")))))
             (cl-loop for (key value) on diagnostics by #'cddr
                      do (should (equal value (plist-get event key))))
             (should (eq 'output-limit (plist-get event :failure-class)))

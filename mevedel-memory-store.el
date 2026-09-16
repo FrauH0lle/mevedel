@@ -22,8 +22,7 @@
 (defun mevedel-memory-store--directory (workspace id)
   "Return WORKSPACE's private pass directory for ID."
   (unless (mevedel-journal-store-id-p id) (error "Invalid memory pass identity"))
-  (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace))
-                    "state" "passes" id))
+  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes" id))
 
 (defun mevedel-memory-store--claim-directory (workspace)
   "Return WORKSPACE's consolidation ownership directory."
@@ -77,8 +76,7 @@ whitespace; callers validate DATA's shape and signal their own errors."
   "Return WORKSPACE's pin path for pass ID and DIGEST identity."
   (unless (and (mevedel-journal-store-id-p id) (mevedel-journal-store-id-p digest))
     (error "Invalid memory evidence identity"))
-  (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace))
-                    "state" "evidence-pins" digest (concat id ".pin")))
+  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "evidence-pins" digest (concat id ".pin")))
 
 (defun mevedel-memory-store-read (workspace id)
   "Read WORKSPACE's immutable prepared pass ID, including its private scope.
@@ -320,8 +318,7 @@ Live preparations are left alone. Unreadable accepted state fails closed rather
 than letting a new selection silently ignore its unpublished review coverage."
   (dolist (directory
            (mevedel-session-control-fs-list-directory
-            (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace))
-                              "state" "passes") mevedel-journal-store-id-regexp))
+            (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes") mevedel-journal-store-id-regexp))
     ;; A crash after creating the directory but before preparation retains no
     ;; evidence pins: the immutable prepared file always precedes pin writes.
     (when (and (not (mevedel-journal-cleanup-pass-retired-p

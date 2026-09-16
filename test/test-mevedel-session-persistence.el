@@ -392,7 +392,13 @@
         (kill-buffer buffer)))))
 
 
-(mevedel-deftest mevedel-session-persistence--kill-emacs-hook (:quiet t)
+(mevedel-deftest mevedel-session-persistence--kill-emacs-hook
+    (:quiet t
+     ;; Exit walks every registered workspace, including roots discovered by
+     ;; buffer setup.  Never let a scratch buffer discover the checkout here.
+     :vars* ((default-directory
+              (file-name-as-directory (make-temp-file "mevedel-exit-cwd-" t))))
+     :after-each ((delete-directory default-directory t)))
   ,test
   (test)
   :doc "flushes retained agent text before its idle save timer fires"

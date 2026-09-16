@@ -42,8 +42,8 @@
                (file (plist-get entry :file))
                (address (concat "memory://journal/" (mevedel-resource-encode-component file)))
                (directory (mevedel-journal-store-directory root)))
-          (make-directory (file-name-concat directory "state") t)
-          (write-region "Private evidence" nil (file-name-concat directory "state" "job.md") nil 'silent)
+          (make-directory (mevedel-journal-store-state-directory directory) t)
+          (write-region "Private evidence" nil (file-name-concat (mevedel-journal-store-state-directory directory) "job.md") nil 'silent)
           (write-region "Malformed entry" nil
                         (file-name-concat directory (string-replace "2026-09-07" "2026-09-08" file)) nil 'silent)
           (plist-put context :resource-attempts-cell cell)
@@ -177,8 +177,8 @@
                (file (plist-get entry :file))
                (address (concat "memory://journal/" (mevedel-resource-encode-component file)))
                (directory (mevedel-journal-store-directory root)))
-          (make-directory (file-name-concat directory "state") t)
-          (write-region "local runner PRIVATE" nil (file-name-concat directory "state" "evidence.md") nil 'silent)
+          (make-directory (mevedel-journal-store-state-directory directory) t)
+          (write-region "local runner PRIVATE" nil (file-name-concat (mevedel-journal-store-state-directory directory) "evidence.md") nil 'silent)
           (write-region "local runner MALFORMED" nil
                         (file-name-concat directory (string-replace "2026-09-07" "2026-09-08" file)) nil 'silent)
           (should (equal address (string-trim (test-mevedel-resource-journal--search
@@ -324,7 +324,7 @@
                    :workspace workspace :working-directory root :session session)))
     (unwind-protect
         (progn
-          (make-directory (file-name-concat (mevedel-journal-store-directory root) "state" "pending") t)
+          (make-directory (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "pending") t)
           (should-not (string-match-p "memory://journal/" (mevedel-system--resource-roster context)))
           (test-mevedel-resource-journal--publish root)
           (setf (mevedel-workspace-journal-observation workspace) nil)

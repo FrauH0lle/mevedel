@@ -258,9 +258,10 @@
   (let ((root (make-temp-file "mevedel-journal-" t)))
     (unwind-protect
         (let* ((directory (mevedel-journal-store-directory root))
-               (state (file-name-concat directory "state")))
+               (state (mevedel-journal-store-state-directory directory)))
           (should-not (mevedel-journal-store-entries root))
           (make-directory state t)
+          (make-directory directory t)
           (write-region "private capture evidence" nil
                         (file-name-concat state "job.el") nil 'silent)
           (write-region "a plain Markdown file is not a publication" nil
@@ -361,8 +362,7 @@
             (should-not (mevedel-journal-store-entries root))
             (should (equal (plist-get entry :turn-ids) (mevedel-journal-store-covered-turns root)))
             (let ((bytes (mevedel-session-control-fs-read-file
-                          (file-name-concat (mevedel-journal-store-directory root)
-                                            "state" "coverage"
+                          (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage"
                                             (concat (plist-get entry :capture-id) ".json")))))
               (should-not (string-match-p "tests passed\\|session-name\\|quoted" bytes)))))
       (delete-directory root t)))
@@ -370,10 +370,11 @@
   :doc "repairs publication interrupted before coverage, without replacing the first body"
   (let* ((root (make-temp-file "mevedel-journal-coverage-" t))
          (directory (mevedel-journal-store-directory root))
-         (state (file-name-concat directory "state")))
+         (state (mevedel-journal-store-state-directory directory)))
     (unwind-protect
         (progn
           (make-directory directory t)
+          (make-directory (file-name-directory state) t)
           (write-region "block control state" nil state nil 'silent)
           (should-error (mevedel-journal-store-publish-digest
                          root mevedel-test-journal--metadata mevedel-test-journal--body))
@@ -391,8 +392,7 @@
     (unwind-protect
         (let* ((entry (mevedel-journal-store-publish-digest
                        root mevedel-test-journal--metadata mevedel-test-journal--body))
-               (path (file-name-concat (mevedel-journal-store-directory root)
-                                      "state" "coverage" (concat (plist-get entry :capture-id) ".json"))))
+               (path (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage" (concat (plist-get entry :capture-id) ".json"))))
           (write-region "{}" nil path nil 'silent)
           (should-error (mevedel-journal-store-covered-turns root))
           (should-error (mevedel-journal-store-publish-digest
@@ -445,17 +445,25 @@
     (should (mevedel-journal-store--utc-time-p (mevedel-journal-store-timestamp 1757332800)))
     (should-not (mevedel-journal-store--utc-time-p "2026-09-07T12:00:00+02:00"))))
 
+(mevedel-deftest mevedel-journal-store-state-directory
+  (:doc "keeps private journal state outside public entries on local and remote targets")
+  (progn
+    (should (equal "/w/.mevedel/state/journal"
+                   (mevedel-journal-store-state-directory "/w/.mevedel/journal/")))
+    (should (equal "/ssh:host:/w/.mevedel/state/journal"
+                   (mevedel-journal-store-state-directory "/ssh:host:/w/.mevedel/journal")))))
+
 (mevedel-deftest mevedel-journal-store-claim-directory
   (:doc "names one private state directory per work scope")
   (progn
-    (should (equal "/w/.mevedel/journal/state/digest-run"
+    (should (equal "/w/.mevedel/state/journal/digest-run"
                    (mevedel-journal-store-claim-directory "/w/.mevedel/journal" 'digest-run)))
-    (should (equal "/w/.mevedel/journal/state/mutation"
+    (should (equal "/w/.mevedel/state/journal/mutation"
                    (mevedel-journal-store-claim-directory "/w/.mevedel/journal" 'mutation)))))
 
 (mevedel-deftest mevedel-journal-store-expired-marker
   (:doc "records expiry beside the private state, never at the public entry")
-  (should (equal "/j/state/expired/entry.md.json"
+  (should (equal "/state/journal/expired/entry.md.json"
                  (mevedel-journal-store-expired-marker "/j" "entry.md"))))
 
 (mevedel-deftest mevedel-journal-store-entry-for-capture

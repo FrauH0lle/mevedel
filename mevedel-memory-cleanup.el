@@ -11,9 +11,11 @@
 (require 'mevedel-memory-decision)
 
 (defun mevedel-memory-cleanup--file (workspace file expected)
-  "Capture FILE in WORKSPACE only when its bytes match accepted EXPECTED hash."
+  "Capture private FILE in WORKSPACE when its bytes match EXPECTED hash.
+FILE is relative to the private journal state directory."
   (let ((text (mevedel-session-control-fs-read-file
-               (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace)) file)
+               (file-name-concat (mevedel-journal-store-state-directory
+                                  (mevedel-journal-store-directory (mevedel-workspace-root workspace))) file)
                'utf-8-unix (1+ mevedel-memory-store--max-bytes))))
     (unless (equal expected (secure-hash 'sha256 text)) (error "Memory expiry source changed"))
     (list :file file :sha256 expected)))
@@ -44,7 +46,7 @@ write resolved without a target marker. Signal when dependencies remain."
           (puthash (plist-get entry :decision-id) t decisions)
           ;; The reader already proved these exact bytes against acceptance.
           ;; The expiry transaction checks them again immediately before deletion.
-          (push (list :file (format "state/decisions/%s.el" (plist-get entry :decision-id))
+          (push (list :file (format "decisions/%s.el" (plist-get entry :decision-id))
                       :sha256 (plist-get record :hash)) private))))
     (unless (cl-every (lambda (proposal) (mevedel-memory-decision-terminal-status-p (cdr (gethash (plist-get proposal :id) latest))))
                      (plist-get accepted :proposals))
@@ -63,7 +65,7 @@ write resolved without a target marker. Signal when dependencies remain."
                                      (and (equal (plist-get row :hash) (plist-get entry :state-hash))
                                           (mevedel-memory-decision-resolved-write-status-p (plist-get entry :status)))) history)))
             (error "Memory write recovery is unresolved"))
-          (push (mevedel-memory-cleanup--file workspace (format "state/writes/%s.el" (plist-get row :id)) (plist-get row :hash)) private))))
+          (push (mevedel-memory-cleanup--file workspace (format "writes/%s.el" (plist-get row :id)) (plist-get row :hash)) private))))
     (list :private (nreverse private) :related (vconcat (nreverse related))
           :expires (+ resolved-at (* mevedel-memory-history-max-age-days 86400)))))
 
@@ -98,7 +100,7 @@ dependencies; this function never deletes or publishes state."
                     (vconcat
                      (mapcar (lambda (name)
                                (mevedel-memory-cleanup--file
-                                workspace (format "state/passes/%s/%s" id name)
+                                workspace (format "passes/%s/%s" id name)
                                 (if (equal name "prepared.el") (plist-get prepared :hash)
                                   (plist-get accepted :hash))))
                              '("prepared.el" "accepted.el"))

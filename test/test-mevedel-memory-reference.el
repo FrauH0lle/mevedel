@@ -79,7 +79,7 @@
           (make-directory (file-name-directory topic))
           (with-temp-file (file-name-concat directory "source.el") (insert ";; A file.\n"))
           (with-temp-file topic
-            (insert "Read ``source.el:7`` then `missing.el`. Private `.mevedel/journal/state/job.json`, `memory/refs.md`, and `../outside.el` are outside source scope.\n"))
+            (insert "Read ``source.el:7`` then `missing.el`. Private `.mevedel/state/journal/job.json`, `memory/refs.md`, and `../outside.el` are outside source scope.\n"))
           (let ((references (plist-get (mevedel-memory-reference-check
                                         (mevedel-memory-scope-capture workspace)) :references)))
             (should (= 5 (length references)))

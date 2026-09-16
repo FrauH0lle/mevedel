@@ -15,6 +15,7 @@ Data model
   mevedel-journal-claim.el     bounded journal work ownership and durable outcomes
   mevedel-journal-gc.el        bounded coordination collection and retained proof references
   mevedel-journal-cleanup.el   accepted expiry manifests and retained turn coverage
+  mevedel-state-cleanup.el     reference-aware generated media and review-package collection
   mevedel-journal-capture.el   completed-turn checkpoints and lifecycle sealing
   mevedel-journal-process.el   bounded digest requests, outcome recovery, and scheduling
   mevedel-journal-recovery.el  abandoned checkpoint recovery through source authority

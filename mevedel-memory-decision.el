@@ -38,7 +38,7 @@
 
 (defun mevedel-memory-decision--directory (workspace)
   "Return the private decision directory for WORKSPACE."
-  (file-name-concat (mevedel-journal-store-directory (mevedel-workspace-root workspace)) "state" "decisions"))
+  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "decisions"))
 
 (defun mevedel-memory-decision-status (workspace proposal)
   "Return the latest accepted public decision for PROPOSAL in WORKSPACE.

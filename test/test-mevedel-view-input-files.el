@@ -104,7 +104,7 @@
                                         :root dir :name "clipboard"))
          (session (mevedel-session-create "main" ws))
          (expected (file-name-concat
-                    dir ".mevedel" "media"
+                    dir ".mevedel" "state" "media"
                     "clipboard-20260620-121314.png"))
          (mevedel-view-clipboard-image-handlers
           `(((:command . "fake-clipboard")

@@ -13,6 +13,53 @@
           "helpers"))
 (require 'mevedel-memory-write)
 
+(mevedel-deftest mevedel-memory-write-control-directory
+  (:doc "shares target-local state across callers without aliasing memory and instruction ownership")
+  (progn
+    (dolist (prefix '("" "/ssh:host:"))
+      (let ((workspace (concat prefix "/w")))
+        (should (equal (concat workspace "/.mevedel/state/memory-write")
+                       (mevedel-memory-write-control-directory
+                        (concat workspace "/.mevedel/memory/"))))
+        (should (equal (concat workspace "/.mevedel/state/memory-write/root")
+                       (mevedel-memory-write-control-directory workspace)))
+        (should (equal (concat workspace "/custom/.mevedel/state/memory-write/root")
+                       (mevedel-memory-write-control-directory (concat workspace "/custom/"))))))))
+
+(mevedel-deftest mevedel-memory-write-call
+    (:vars* ((root (make-temp-file "mevedel-memory-state-" t))
+             (memory (file-name-concat root "owner" ".mevedel" "memory"))
+             (alias (file-name-concat root "other" ".mevedel" "memory"))
+             (owner (mevedel-workspace--create :root (file-name-concat root "owner")))
+             (other (mevedel-workspace--create :root (file-name-concat root "other")))
+             (control (file-name-concat root "owner" ".mevedel" "state" "memory-write")))
+     :after-each ((delete-directory root t)))
+  ,test
+  (test)
+  :doc "standard memory and its alias share busy ownership and unresolved markers across workspaces"
+  (progn
+    (make-directory memory t)
+    (make-directory (file-name-directory alias) t)
+    (make-symbolic-link memory alias)
+    (mevedel-workspace-identity-ensure (mevedel-workspace-root owner))
+    (mevedel-workspace-identity-ensure (mevedel-workspace-root other))
+    (let* ((scope (let ((mevedel-memory-dirs (list memory)))
+                    (mevedel-memory-scope-capture owner)))
+           (second (let ((mevedel-memory-dirs (list alias)))
+                     (mevedel-memory-scope-capture other)))
+           (id (caar (plist-get scope :roots)))
+           (second-id (caar (plist-get second :roots))))
+      (mevedel-memory-write-call
+       scope id
+       (lambda (claim)
+         (should (equal (file-name-concat control "claims") (plist-get claim :directory)))
+         (should-error (mevedel-memory-write-call second second-id #'ignore))))
+      (should-not (file-exists-p (file-name-concat memory ".mevedel")))
+      (make-directory (file-name-concat control "pending"))
+      (write-region (make-string 64 ?a) nil
+                    (file-name-concat control "pending" (concat (make-string 64 ?b) ".pin")) nil 'silent)
+      (should-error (mevedel-memory-write-call second second-id #'ignore)))))
+
 (mevedel-deftest mevedel-memory-write--changes
     (:vars* ((root (make-temp-file "mevedel-memory-reverse-" t))
              (removed (file-name-concat root "removed.md"))

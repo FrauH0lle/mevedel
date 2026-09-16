@@ -222,7 +222,7 @@ expansion and released again if the entry never reaches the model.
 ## Clipboard images
 
 `C-y` in the view composer saves a clipboard image to
-`<workspace-root>/.mevedel/media/` and inserts an `@file` mention for it.
+`<workspace-root>/.mevedel/state/media/` and inserts an `@file` mention for it.
 The saved image follows the same pending exact-file grant and media
 attachment path as a dropped file. If no clipboard image is available,
 `C-y` falls back to normal text yank.

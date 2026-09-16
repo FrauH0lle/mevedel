@@ -131,7 +131,7 @@ when an update changes hook files, events, matchers, commands, or functions,
 skills remain enabled but hooks require consent again before running.
 Plugin runtime data stays workspace-scoped and keyed by plugin name, so
 switching an activation between roots with the same manifest name reuses
-the same `<workspace>/.mevedel/plugin-data/<plugin-name>` directory.
+the same `<workspace>/.mevedel/state/plugin-data/<plugin-name>` directory.
 
 Bundled skills currently include:
 
@@ -681,7 +681,7 @@ narrowed one behind that refuses a later spawn. A forked skill's synthetic
 agent is dispatched the same way, for the same reason. After the parent
 submission passes its mutation-authority checks, concrete Git targets receive
 a collision-free package under
-`.mevedel/review-packages/`; the command tells the reviewer or verifier to
+`.mevedel/state/review-packages/`; the command tells the reviewer or verifier to
 read that file before rerunning broad repository inspection. Package collection
 uses one fixed Git runner that disables pagers, replacement objects,
 filesystem monitors, external diffs, and text conversion. It supplies

@@ -41,7 +41,7 @@ Absolute, home-relative, control-character, colon, and `..' spellings fail."
   "Return non-nil for an ordinary relative Markdown FILE below a root."
   (and (mevedel-memory-proposal-relative-path-p file)
        (string-suffix-p ".md" file)
-       (cl-every (lambda (part) (not (member part '("" "." ".mevedel-memory-write"))))
+       (cl-every (lambda (part) (not (member part '("" "." ".mevedel"))))
                  (split-string file "/"))))
 
 (defun mevedel-memory-proposal--item (text action roots evidence)

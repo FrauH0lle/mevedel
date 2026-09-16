@@ -447,8 +447,7 @@
               (dolist (entry '("/.mevedel/sessions/"
                                "/.mevedel/tool-results/"
                                "/.mevedel/input-history.el"
-                               "/.mevedel/media/"
-                               "/.mevedel/plugin-data/"))
+                               "/.mevedel/state/"))
                 (goto-char (point-min))
                 (should (re-search-forward
                          (concat "^" (regexp-quote entry) "$") nil t))

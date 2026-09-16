@@ -235,7 +235,7 @@
             (should (equal (file-name-concat directory "src" "new.el")
                            (mevedel-memory-scope-source-path scope "src/new.el")))
             (dolist (path '("../escape.el" "/etc/passwd" "~/.emacs" "escape/secret.el"
-                            ".mevedel/journal/state/job.json" ".git/config" "memory/secret.md"
+                            ".mevedel/state/journal/job.json" ".git/config" "memory/secret.md"
                             "memory://journal/state/job.json"))
               (should-error (mevedel-memory-scope-source-path scope path)))
             (cl-letf (((symbol-function 'system-name) (lambda () "another-client")))
@@ -265,18 +265,18 @@
   (let* ((directory (make-temp-file "mevedel-memory-private-control-" t))
          (workspace (mevedel-workspace--create :root directory))
          (mevedel-memory-dirs (list directory))
-         (private (file-name-concat directory ".mevedel-memory-write")))
+         (private (file-name-concat directory ".mevedel" "state" "memory-write" "root")))
     (unwind-protect
         (progn
-          (make-directory private)
+          (make-directory private t)
           (dotimes (n 300) (write-region "claim" nil (file-name-concat private (format "%d.claim" n)) nil 'silent))
           (write-region "Topic\n" nil (file-name-concat directory "topic.md") nil 'silent)
           (let* ((scope (mevedel-memory-scope-capture workspace))
                  (root (cdr (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'memory)) (plist-get scope :roots)))))
             (should (plist-get root :complete))
             (should (equal '("topic.md") (plist-get root :files)))
-            (should-not (mevedel-memory-proposal--file-p ".mevedel-memory-write/topic.md"))
-            (should-error (mevedel-memory-scope-source-path scope ".mevedel-memory-write/1.claim"))))
+            (should-not (mevedel-memory-proposal--file-p ".mevedel/state/memory-write/topic.md"))
+            (should-error (mevedel-memory-scope-source-path scope ".mevedel/state/memory-write/root/1.claim"))))
       (delete-directory directory t))))
 
 (provide 'test-mevedel-memory-scope)

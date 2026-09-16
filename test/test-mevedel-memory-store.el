@@ -49,7 +49,7 @@
                                     :created "2020-01-01T00:00:00Z" :model "test:model")
                          "## Done\n- Observed: Tests passed.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none"))
                  (scope (mevedel-memory-scope-capture workspace)))
-            (setq claim (mevedel-journal-claim-acquire (file-name-concat journal "state" "consolidation") 180))
+            (setq claim (mevedel-journal-claim-acquire (file-name-concat (mevedel-journal-store-state-directory journal) "consolidation") 180))
             (let* ((prepared (mevedel-memory-store-prepare workspace claim scope (list entry) ""))
                    (id (plist-get prepared :id))
                    (restored (mevedel-memory-store-read workspace id)))
@@ -79,9 +79,9 @@
     (unwind-protect
         (let* ((entry (mevedel-test-memory-store--digest root identity 1))
                (scope (mevedel-memory-scope-capture workspace)))
-          (setq claim (mevedel-journal-claim-acquire (file-name-concat journal "state" "consolidation") 180)
-                mutation (mevedel-journal-claim-acquire (file-name-concat journal "state" "mutation") 120))
-          (let* ((path (file-name-concat journal "state" "expiry" (concat (plist-get mutation :owner) ".json")))
+          (setq claim (mevedel-journal-claim-acquire (file-name-concat (mevedel-journal-store-state-directory journal) "consolidation") 180)
+                mutation (mevedel-journal-claim-acquire (file-name-concat (mevedel-journal-store-state-directory journal) "mutation") 120))
+          (let* ((path (file-name-concat (mevedel-journal-store-state-directory journal) "expiry" (concat (plist-get mutation :owner) ".json")))
                  (text (json-serialize
                         (append (mevedel-journal-claim--record mutation)
                                 (list :entries (vector (list :file (plist-get entry :file)
@@ -94,8 +94,8 @@
             (should (equal (list entry) (mevedel-journal-store-entries root)))
             (should-error (mevedel-memory-store-prepare workspace claim scope (list entry) ""))
             (should-not (mevedel-journal-store-entries root))
-            (should-not (file-exists-p (file-name-concat journal "state" "evidence-pins")))
-            (should-not (file-exists-p (file-name-concat journal "state" "passes" (plist-get claim :owner))))))
+            (should-not (file-exists-p (file-name-concat (mevedel-journal-store-state-directory journal) "evidence-pins")))
+            (should-not (file-exists-p (file-name-concat (mevedel-journal-store-state-directory journal) "passes" (plist-get claim :owner))))))
       (when claim (mevedel-journal-claim-settle claim 'cancelled ""))
       (when mutation (mevedel-journal-claim-settle mutation 'cancelled ""))
       (delete-directory root t))))
@@ -120,13 +120,13 @@
                        "## Done\n- Observed: Tests passed.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none"))
                (scope (mevedel-memory-scope-capture workspace)))
           (setq claim (mevedel-journal-claim-acquire
-                       (file-name-concat (mevedel-journal-store-directory root) "state" "consolidation") 180))
+                       (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "consolidation") 180))
           (let* ((prepared (mevedel-memory-store-prepare workspace claim scope (list entry) ""))
                  (id (plist-get prepared :id)))
             (should-not (mevedel-memory-store-accepted workspace id))
             (should-error (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil))
             (should-not (mevedel-journal-claim-outcome claim))
-            (let ((pin (file-name-concat (mevedel-journal-store-directory root) "state" "evidence-pins"
+            (let ((pin (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "evidence-pins"
                                          (plist-get entry :id) (concat id ".pin"))))
               (delete-file pin)
               (should-error (mevedel-memory-store-accept workspace prepared reply (list entry) "test:model" nil))
@@ -172,7 +172,7 @@
                                         "---\nProposed private replacement.\n````\n## Merge\n- none\n## Remove\n- none\n"
                                         "## Instructions\n- none\n## No action\n- none") root-id (plist-get entry :id))))
             (setq claim (mevedel-journal-claim-acquire
-                         (file-name-concat (mevedel-journal-store-directory root) "state" "consolidation") 180))
+                         (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "consolidation") 180))
             (dotimes (_ 3)
               (let* ((parsed (mevedel-memory-proposal-parse reply (plist-get scope :roots) (list (plist-get entry :id))))
                      (bound (mevedel-memory-store--proposal scope (plist-get claim :owner) (car (plist-get parsed :proposals)))))
@@ -197,7 +197,7 @@
                                     (mevedel-journal-store-entries root)))))
               (should (equal omitted (mevedel-journal-store-read root (plist-get omitted :file))))
               (should-error (mevedel-memory-store-release workspace id))
-              (let* ((path (file-name-concat (mevedel-journal-store-directory root) "state" "passes" id "accepted.el"))
+              (let* ((path (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "passes" id "accepted.el"))
                      (text (mevedel-session-control-fs-read-file path)))
                 (write-region (concat text "\nChanged after acceptance") nil path nil 'silent)
                 (should-error (mevedel-memory-store-accepted workspace id))

@@ -222,7 +222,7 @@
                 (events ()
                   (with-temp-buffer
                     (insert-file-contents
-                     (file-name-concat directory ".mevedel" "diagnostics" mevedel-telemetry-file-name))
+                     (file-name-concat directory ".mevedel" "state" "diagnostics" mevedel-telemetry-file-name))
                     (goto-char (point-min))
                     (let (values)
                       (condition-case nil
@@ -416,7 +416,7 @@
               (should (= 1 callbacks))
               (should-not (mevedel-memory-pass-running workspace))
               (let* ((records (with-temp-buffer
-                                (insert-file-contents (file-name-concat directory ".mevedel" "diagnostics"
+                                (insert-file-contents (file-name-concat directory ".mevedel" "state" "diagnostics"
                                                                         mevedel-telemetry-file-name))
                                 (goto-char (point-min))
                                 (list (read (current-buffer)) (ignore-errors (read (current-buffer))))))
