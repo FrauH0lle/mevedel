@@ -411,43 +411,32 @@ attributed to a collaboration guest carry that guest's name."
           (let ((directive (mevedel-collaboration--directive-at
                             ranges (cadr segment))))
             (cond
-             ((eq (car segment) 'user)
-              (let ((text (mevedel-collaboration--clean-user
-                           segment data-buffer)))
+             ((memq (car segment) '(user response))
+              (let* ((userp (eq (car segment) 'user))
+                     (kind (if userp "user" "assistant"))
+                     (text (if userp
+                               (mevedel-collaboration--clean-user
+                                segment data-buffer)
+                             (mevedel-collaboration--clean-response
+                              (buffer-substring
+                               (cadr segment) (caddr segment))))))
                 (unless (string-empty-p text)
-                  (let* ((key (list "user" text))
+                  (let* ((key (list kind text))
                          (occurrence (gethash key occurrences 0)))
                     (puthash key (1+ occurrence) occurrences)
                     (push (apply
                            #'mevedel-collaboration--record
                            (mevedel-collaboration--stable-record-id
-                            "user" text occurrence) "user"
+                            kind text occurrence) kind
                            :revision 0
                            :text (mevedel-collaboration--truncate-bytes
                                   text
                                   mevedel-collaboration--max-record-text-bytes)
                            (when directive (list :directive directive)))
                           records)
-                    (push (cons (cadr segment) (car records))
-                          user-starts)))))
-             ((eq (car segment) 'response)
-              (let ((text (mevedel-collaboration--clean-response
-                           (buffer-substring
-                            (cadr segment) (caddr segment)))))
-                (unless (string-empty-p text)
-                  (let* ((key (list "assistant" text))
-                         (occurrence (gethash key occurrences 0)))
-                    (puthash key (1+ occurrence) occurrences)
-                    (push (apply
-                           #'mevedel-collaboration--record
-                           (mevedel-collaboration--stable-record-id
-                            "assistant" text occurrence) "assistant"
-                           :revision 0
-                           :text (mevedel-collaboration--truncate-bytes
-                                  text
-                                  mevedel-collaboration--max-record-text-bytes)
-                           (when directive (list :directive directive)))
-                          records)))))
+                    (when userp
+                      (push (cons (cadr segment) (car records))
+                            user-starts))))))
              ((eq (car segment) 'tool)
               (let* ((start (cadr segment))
                      (end (caddr segment))
@@ -552,14 +541,8 @@ completion instead of seeing a duplicate tool card."
                 (setq exact record)))))
         (setq candidate (or exact candidate))
         (if candidate
-            (let ((index 0)
-                  found)
+            (let ((index (cl-position candidate canonical :test #'eq)))
               (push candidate claimed)
-              (dolist (record canonical)
-                (when (and (null found) (eq record candidate))
-                  (setq found index))
-                (setq index (1+ index)))
-              (setq index found)
               (setf (nth index canonical)
                     (plist-put (plist-put candidate :id
                                           (plist-get entry :id))
