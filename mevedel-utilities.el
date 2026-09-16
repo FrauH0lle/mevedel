@@ -312,6 +312,42 @@ echo area stays untouched.  FORMAT and ARGS are as for `format'."
 ;;
 ;;; Plain data
 
+(defun mevedel--diagnostic-value (value)
+  "Return a disk-log-safe representation of VALUE without mutating it.
+Keep ordinary Lisp data; stringify runtime objects.  Keyword lists retain
+the last value for duplicate keys and supply nil for a missing final value."
+  (cond
+   ((or (null value)
+        (keywordp value)
+        (symbolp value)
+        (stringp value)
+        (numberp value))
+    value)
+   ((and (listp value) (keywordp (car-safe value)))
+    (let (out)
+      (while value
+        (let ((key (pop value))
+              (val (pop value)))
+          (setq out
+                (plist-put out key
+                           (mevedel--diagnostic-value val)))))
+      out))
+   ((consp value)
+    (cons (mevedel--diagnostic-value (car value))
+          (mevedel--diagnostic-value (cdr value))))
+   ((vectorp value)
+    (vconcat (mapcar #'mevedel--diagnostic-value
+                     (append value nil))))
+   (t
+   (format "%S" value))))
+
+(defun mevedel--diagnostic-entry-text (entry)
+  "Return sanitized diagnostic ENTRY in its durable line format."
+  (let ((print-length nil)
+        (print-level nil)
+        (print-quoted t))
+    (concat (prin1-to-string (mevedel--diagnostic-value entry)) "\n")))
+
 (defun mevedel--plain-data-p (value)
   "Return non-nil when VALUE contains only read-safe data."
   (cond

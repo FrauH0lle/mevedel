@@ -1341,40 +1341,6 @@ EVENT labels each generated hook event block."
   (when-let* ((save-path (and session (mevedel-session-save-path session))))
     (file-name-concat save-path "hook-log.el")))
 
-(defun mevedel-hooks--printable-value (value)
-  "Return a disk-log-safe representation of VALUE."
-  (cond
-   ((or (null value)
-        (keywordp value)
-        (symbolp value)
-        (stringp value)
-        (numberp value))
-    value)
-   ((and (listp value) (keywordp (car-safe value)))
-    (let (out)
-      (while value
-        (let ((key (pop value))
-              (val (pop value)))
-          (setq out
-                (plist-put out key
-                           (mevedel-hooks--printable-value val)))))
-      out))
-   ((consp value)
-    (cons (mevedel-hooks--printable-value (car value))
-          (mevedel-hooks--printable-value (cdr value))))
-   ((vectorp value)
-    (vconcat (mapcar #'mevedel-hooks--printable-value
-                     (append value nil))))
-   (t
-   (format "%S" value))))
-
-(defun mevedel-hooks--log-entry-text (entry)
-  "Return sanitized hook log ENTRY in its durable line format."
-  (let ((print-length nil)
-        (print-level nil)
-        (print-quoted t))
-    (concat (prin1-to-string (mevedel-hooks--printable-value entry)) "\n")))
-
 (defun mevedel-hooks--persist-log-content (session content)
   "Append serialized hook log CONTENT for SESSION."
   (when-let* ((file (and mevedel-hooks-persist-log
@@ -1399,7 +1365,7 @@ EVENT labels each generated hook event block."
 (defun mevedel-hooks--persist-log-entry (session entry)
   "Append sanitized hook log ENTRY to SESSION's persistent hook log."
   (mevedel-hooks--persist-log-content
-   session (mevedel-hooks--log-entry-text entry)))
+   session (mevedel--diagnostic-entry-text entry)))
 
 (defun mevedel-hooks-flush-log (session)
   "Persist SESSION's queued hook diagnostics, retaining failures."
@@ -1411,7 +1377,7 @@ EVENT labels each generated hook event block."
                  (mevedel-execution-target-remote-p target))))
       (if (and pending remote-p)
           (when (mevedel-hooks--persist-log-content
-                 session (mapconcat #'mevedel-hooks--log-entry-text
+                 session (mapconcat #'mevedel--diagnostic-entry-text
                                     pending ""))
             (setf (mevedel-session-hook-log-pending session) nil))
         (while (and pending
@@ -2362,7 +2328,7 @@ display the dry-run result."
           (list :event event
                 :payload payload
                 :matcher-target (mevedel-hooks--matcher-target event payload)
-                :handlers (mevedel-hooks--printable-value handlers)
+                :handlers (mevedel--diagnostic-value handlers)
                 :handler-count (length handlers))))
     (when interactive-p
       (mevedel-report-show
