@@ -322,6 +322,9 @@ Xref is capability-scoped: Emacs Lisp reference search is the currently
 tested TRAMP-aware path, while definition lookup and other backends return a
 direct unsupported-backend diagnostic instead of invoking client-side
 programs. Location results are rendered as target-native paths.
+Emacs Lisp reference searches use the recognized project, or the file's
+directory when no project is recognized. Searching does not register a project
+or require writing Emacs's remembered-project list.
 
 Code navigation answers the location it was asked for or reports why it
 cannot. A Treesitter line or column the file does not have is an error, never

@@ -223,7 +223,13 @@ and :file_path."
                         (mevedel-tool-code--with-quiet-file-visit
                           (if (eq backend 'elisp)
                               (let ((project-files-relative-names nil))
-                                (when-let* ((project (project-current t))
+                                ;; A search must not register a project or
+                                ;; depend on writing the user's project list.
+                                (when-let* ((project
+                                             (or (project-current nil)
+                                                 (cons 'transient
+                                                       (file-name-directory
+                                                        full-path))))
                                             (files (project-files project)))
                                   (let ((symbol-regexp
                                          (format "\\_<%s\\_>"
