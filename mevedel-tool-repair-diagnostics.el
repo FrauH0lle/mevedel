@@ -185,10 +185,7 @@
         (push
          (cond
           ((and (integerp part) (>= part 0)) part)
-          ((and (symbolp part)
-                (<= (length (symbol-name part)) 48)
-                (string-match-p "\\`[-[:alnum:]_]+\\'" (symbol-name part)))
-           part)
+          ((mevedel-tool-repair--audit-identifier-p part) part)
           (t 'redacted))
          kept))
       (setq count (1+ count)))
