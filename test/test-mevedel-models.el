@@ -514,48 +514,6 @@
                    (mevedel-model-resolve-selector '(:tier custom))
                    :model))))))
 
-(mevedel-deftest mevedel-model-apply-provider-to-info ()
-  ,test
-  (test)
-
-  :doc "applies backend and model to FSM info and patches plist data"
-  (mevedel-models-test--with-backends
-    (let* ((backend (gptel-get-backend "Fast"))
-           (provider (mevedel-model-resolve-provider "Fast:fast-model"))
-           (info (mevedel-model-apply-provider-to-info
-                  (list :backend backend
-                        :data '(:model "old" :messages []))
-                  provider)))
-      (should (equal "Fast" (gptel-backend-name (plist-get info :backend))))
-      (should (eq 'fast-model (plist-get info :model)))
-      (should (equal "fast-model"
-                     (plist-get (plist-get info :data) :model)))))
-
-  :doc "rejects cross-backend switches after request data is realized"
-  (mevedel-models-test--with-backends
-    (let ((provider (mevedel-model-resolve-provider "Balanced:balanced-model")))
-      (should-error
-       (mevedel-model-apply-provider-to-info
-        (list :backend (gptel-get-backend "Fast")
-              :data '(:model "old" :messages []))
-       provider)
-       :type 'user-error))))
-
-(mevedel-deftest mevedel-model-apply-policy-to-info
-  ()
-  ,test
-  (test)
-  :doc "records effort while applying the provider"
-  (mevedel-models-test--with-backends
-    (let* ((backend (gptel-get-backend "Fast"))
-           (policy (append
-                    (mevedel-model-resolve-provider "Fast:fast-model")
-                    '(:effort high)))
-           (info (mevedel-model-apply-policy-to-info
-                  (list :backend backend) policy)))
-      (should (eq 'fast-model (plist-get info :model)))
-      (should (eq 'high (plist-get info :reasoning-effort))))))
-
 (mevedel-deftest mevedel-model--max-output-tokens ()
   ,test
   (test)

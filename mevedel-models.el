@@ -502,7 +502,7 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
 
 
 ;;
-;;; Tool descriptions and FSM application
+;;; Agent tool description
 
 (defun mevedel-model-agent-tool-description ()
   "Return the Agent tool model-argument description."
@@ -512,36 +512,6 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
               mevedel-model-tiers ", ")
    ". Omit this argument to use the agent workload declared by the current "
    "session preset."))
-
-(defun mevedel-model-apply-provider-to-info (info provider)
-  "Return INFO with PROVIDER applied to backend/model slots.
-
-Also patches a realized plist request payload's :model field when the
-backend is unchanged.  Realized gptel payloads are backend-specific;
-cross-backend switches must happen before gptel builds `info' :data."
-  (if (not provider)
-      info
-    (let ((backend (plist-get provider :backend))
-          (model (plist-get provider :model))
-          (current-backend (plist-get info :backend))
-          (data (plist-get info :data)))
-      (when (and current-backend
-                 (listp data)
-                 (not (eq backend current-backend)))
-        (user-error
-         "Cannot switch skill model backend after request data is realized: %s -> %s"
-         (gptel-backend-name current-backend)
-         (gptel-backend-name backend)))
-      (setq info (plist-put info :backend backend))
-      (setq info (plist-put info :model model))
-      (when (listp data)
-        (plist-put data :model (gptel--model-name model)))
-      info)))
-
-(defun mevedel-model-apply-policy-to-info (info policy)
-  "Return INFO with resolved model POLICY recorded and applied."
-  (setq info (mevedel-model-apply-provider-to-info info policy))
-  (plist-put info :reasoning-effort (plist-get policy :effort)))
 
 (provide 'mevedel-models)
 ;;; mevedel-models.el ends here
