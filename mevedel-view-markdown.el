@@ -359,14 +359,10 @@ ends at END."
 
 (defun mevedel-view--position-in-ranges-p (position ranges)
   "Return non-nil when POSITION is inside one of RANGES."
-  (let (found)
-    (while (and ranges (not found))
-      (let ((range (car ranges)))
-        (when (and (<= (car range) position)
-                   (< position (cdr range)))
-          (setq found t)))
-      (setq ranges (cdr ranges)))
-    found))
+  (seq-some (lambda (range)
+              (and (<= (car range) position)
+                   (< position (cdr range))))
+            ranges))
 
 (defun mevedel-view--last-live-response-boundary (data-buf start end)
   "Return the last safe Markdown block boundary in DATA-BUF START..END."

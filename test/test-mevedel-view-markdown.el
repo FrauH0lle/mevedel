@@ -978,6 +978,23 @@
       (should (equal "stock"
                      (mevedel-view--buffer-substring-filter 1 6)))))
 
+(mevedel-deftest mevedel-view--position-in-ranges-p ()
+  ,test
+  (test)
+  :doc "range membership includes starts, excludes ends and preserves input"
+  (dolist (case '((nil nil)
+                  (((3 . 6)) (3 4 5))
+                  (((8 . 10) (2 . 5) (4 . 7)) (2 3 4 5 6 8 9))
+                  (((3 . 3)) nil)
+                  (((6 . 2)) nil)))
+    (let* ((ranges (car case))
+           (before (copy-tree ranges)))
+      (dotimes (position 12)
+        (should
+         (eq (and (member position (cadr case)) t)
+             (mevedel-view--position-in-ranges-p position ranges))))
+      (should (equal before ranges)))))
+
 (mevedel-deftest mevedel-view--last-live-response-boundary ()
   ,test
   (test)
