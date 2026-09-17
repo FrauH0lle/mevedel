@@ -5433,6 +5433,8 @@
 
 (mevedel-deftest mevedel-session-persistence--pid-alive-p
   (:doc "distinguishes a live process from an actually exited child")
+  ,test
+  (test)
   (should (mevedel-session-persistence--pid-alive-p (emacs-pid)))
   (let* ((child (make-process :name "session-dead-pid" :command '("true") :noquery t))
          (pid (process-id child)))

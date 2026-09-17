@@ -121,8 +121,8 @@
        (equal first (mevedel-execution-telemetry--cache-identity))))))
 
 (mevedel-deftest mevedel-execution-telemetry-prepare-resource-capture
-  (:doc "wraps at most one profiled full suite with GNU time")
-  (skip-unless (file-executable-p "/usr/bin/time"))
+  (:before-each (skip-unless (file-executable-p "/usr/bin/time"))
+   :doc "wraps at most one profiled full suite with GNU time")
   (let* ((root (make-temp-file "mevedel-resource-capture-" t))
          (session (test-mevedel-execution--session root))
          (context

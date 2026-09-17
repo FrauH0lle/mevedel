@@ -641,6 +641,8 @@
    :after-each (progn
                  (delete-directory user-dir t)
                  (delete-directory workspace-root t)))
+  ,test
+  (test)
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
     (should (equal (file-name-as-directory (expand-file-name root))

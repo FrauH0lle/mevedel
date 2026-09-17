@@ -1237,6 +1237,8 @@
 
 (mevedel-deftest mevedel-hooks--event-json
 		 (:doc "serializes Lisp booleans and nil optional fields as JSON values")
+  ,test
+  (test)
 		 (let* ((payload (json-parse-string
 				  (mevedel-hooks--event-json
 				   '(:hook-event-name SubagentStart
@@ -2002,6 +2004,8 @@
 
 (mevedel-deftest mevedel-hooks-run-event/session-reminders
   (:quiet t :doc "queues model-visible reminders for blocking outcomes only")
+  ,test
+  (test)
   (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
          (session (mevedel-hooks-test--session root)))
     (unwind-protect
@@ -2633,6 +2637,8 @@
 
 (mevedel-deftest mevedel-hooks-surface-blocking-decision
 		 (:doc "surfaces blocking hook decisions and system messages to the user")
+  ,test
+  (test)
 		 (let* ((root (make-temp-file "mevedel-hooks-surface" t))
 			(session (mevedel-hooks-test--session root))
 			(messages nil)
@@ -2661,11 +2667,12 @@
 			 '((PostToolUse
 			    ((:matcher "Read"
 				       :hooks ((:type elisp
-						      :function
-						      (lambda (_event)
-							'(:system-message "formatted result"))))))))))
+						      :function mevedel-hooks-test--notify))))))))
 		   (unwind-protect
-		       (cl-letf (((symbol-function 'message)
+		       (cl-letf (((symbol-function 'mevedel-hooks-test--notify)
+                          (lambda (_event)
+                            '(:system-message "formatted result")))
+                         ((symbol-function 'message)
 				  (lambda (fmt &rest args)
 				    (push (apply #'format fmt args) messages))))
 			 (mevedel-hooks-test--await

@@ -776,6 +776,8 @@
 
 (mevedel-deftest mevedel-session-durability--lease-record
   (:doc "requires target time and records the open transfer generation")
+  ,test
+  (test)
   (should-error (mevedel-session-durability--lease-record "*buffer*" 1)
                 :type 'error)
   (let ((mevedel-session-durability--client-id (make-string 64 ?a)))

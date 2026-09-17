@@ -36,6 +36,8 @@
 
 (mevedel-deftest mevedel-collaboration--discard-created-session
   (:doc "stops the partial room and kills its buffer without a query")
+  ,test
+  (test)
   (let ((buffer (generate-new-buffer " *partial-guest-session*"))
         stopped)
     (with-current-buffer buffer

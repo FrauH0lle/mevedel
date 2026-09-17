@@ -1299,6 +1299,8 @@
 
 (mevedel-deftest mevedel-revision-api-removed
   (:doc "removes the superseded revision command and prompt path")
+  ,test
+  (test)
   (should-not (fboundp 'mevedel-revise-directive))
   (should-not (fboundp 'mevedel--revise-directive-prompt)))
 

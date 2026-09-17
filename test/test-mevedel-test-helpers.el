@@ -60,5 +60,27 @@
               (should (equal expected-home (buffer-string))))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-test--template ()
+  ,test
+  (test)
+  :doc "rejects a second body mistaken for unbound template variables"
+  (should-error
+   (macroexpand '(mevedel-test--template (should t) (should nil)))
+   :type 'error)
+  :doc "rejects case values without template variables"
+  (should-error
+   (macroexpand '(mevedel-test--template (should t) nil 1))
+   :type 'error)
+  :doc "preserves single bodies and parameterized case values"
+  (progn
+    (should (equal '(("" (progn (should t) (should-not nil))))
+                   (macroexpand
+                    '(mevedel-test--template
+                      (progn (should t) (should-not nil))))))
+    (should (equal '(("" (list 1)) ("second" (list 2)))
+                   (macroexpand
+                    '(mevedel-test--template (list ,value) (value)
+                       1 :doc "second" 2))))))
+
 (provide 'test-mevedel-test-helpers)
 ;;; test-mevedel-test-helpers.el ends here
