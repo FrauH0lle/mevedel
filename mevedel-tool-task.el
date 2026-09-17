@@ -220,7 +220,7 @@ OWNER is nil for the main session.  A nil NOTE clears the entry."
     (if note
         (let ((data (list :note note
                           :updated-turn
-                          (mevedel-tool-task--write-turn session)
+                          (mevedel-current-turn session)
                           :updated-at
                           (format-time-string "%FT%T%z"))))
           (if entry
@@ -258,10 +258,6 @@ The JSON object from gptel may arrive as either form; normalize once."
 ;;
 ;;; Task mutations
 
-(defun mevedel-tool-task--write-turn (session)
-  "Return the task-write turn for SESSION."
-  (mevedel-current-turn session))
-
 (defun mevedel-tool-task--mark-write (session)
   "Record a successful task write on SESSION.
 Also drops dependency edges the write resolved.  Every task mutation
@@ -271,21 +267,21 @@ keep that edge forever -- nothing clears it, because unblocking only
 ever fired on a task's transition to completed."
   (mevedel-task-prune-resolved-dependencies (mevedel-session-tasks session))
   (setf (mevedel-session-last-task-write-turn session)
-        (mevedel-tool-task--write-turn session)))
+        (mevedel-current-turn session)))
 
 (defun mevedel-tool-task--create-one (session spec &optional id)
   "Return a task for SESSION from SPEC plist, using ID when non-nil.
 Returns the new `mevedel-task' struct."
   (let* ((p (mevedel-tool-task--object-to-plist spec))
-         (subject (mevedel-tool-task--plist-get-any p :subject))
-         (description (mevedel-tool-task--plist-get-any p :description))
-         (status-raw (mevedel-tool-task--plist-get-any p :status))
+         (subject (plist-get p :subject))
+         (description (plist-get p :description))
+         (status-raw (plist-get p :status))
          (owner (if (plist-member p :owner)
                     (plist-get p :owner)
                   (mevedel-tool-task--current-agent-owner session)))
          (blocked-by-raw (mevedel-tool-task--plist-get-any
                           p :blockedBy :blocked_by :blocked-by))
-         (metadata (mevedel-tool-task--plist-get-any p :metadata)))
+         (metadata (plist-get p :metadata)))
     (setq subject (mevedel-tool-task--normalize-subject subject))
     (let* ((status (mevedel-tool-task--parse-status status-raw))
            (task (mevedel-task--create
@@ -299,7 +295,7 @@ Returns the new `mevedel-task' struct."
                   :blocked-by (mevedel-tool-task--normalize-id-list
                                blocked-by-raw)
                   :completed-turn (and (eq status 'completed)
-                                       (mevedel-tool-task--write-turn
+                                       (mevedel-current-turn
                                         session))
                   :metadata metadata)))
       task)))
@@ -319,7 +315,7 @@ Returns the updated task.  Signals an error if ID is unknown."
           blocked-by blocked-by-p
           metadata metadata-p)
       (when-let* ((subject-value
-                   (mevedel-tool-task--plist-get-any p :subject)))
+                   (plist-get p :subject)))
         (setq subject (mevedel-tool-task--normalize-subject subject-value)
               subject-p t))
       (when (plist-member p :description)
@@ -356,7 +352,7 @@ Returns the updated task.  Signals an error if ID is unknown."
           (when (and (eq new-status 'completed)
                      (not (eq old-status 'completed)))
             (setf (mevedel-task-completed-turn task)
-                  (mevedel-tool-task--write-turn session)))))
+                  (mevedel-current-turn session)))))
       (when owner-p
         (setf (mevedel-task-owner task) owner))
       (when blocked-by-p
@@ -375,7 +371,7 @@ Return non-nil when SESSION changed."
              (mevedel-agent-path-p owner)
              (not (equal owner "/root")))
     (let ((changed nil)
-          (turn (mevedel-tool-task--write-turn session)))
+          (turn (mevedel-current-turn session)))
       (dolist (task (mevedel-session-tasks session))
         (when (and (equal owner (mevedel-task-owner task))
                    (mevedel-tool-task--active-p task))
@@ -561,36 +557,13 @@ blockers."
 
 (defun mevedel-tool-task--sort-active-tasks (tasks)
   "Return active TASKS in compact display priority order."
-  (mapcar
-   (lambda (entry) (nth 3 entry))
-   (sort
-    (cl-loop for task in tasks
-             for index from 0
-             collect (list (mevedel-tool-task--active-priority task)
-                           (mevedel-task-id task)
-                           index
-                           task))
-    (lambda (a b)
-      (or (< (car a) (car b))
-          (and (= (car a) (car b))
-               (or (< (cadr a) (cadr b))
-                   (and (= (cadr a) (cadr b))
-                        (< (nth 2 a) (nth 2 b))))))))))
+  (sort tasks :key (lambda (task)
+                    (list (mevedel-tool-task--active-priority task)
+                          (mevedel-task-id task)))))
 
 (defun mevedel-tool-task--sort-completed-tasks (tasks)
   "Return completed TASKS in stable display order."
-  (mapcar
-   #'cdr
-   (sort
-    (cl-loop for task in tasks
-             for index from 0
-             collect (cons (list (mevedel-task-id task) index) task))
-    (lambda (a b)
-      (let ((ak (car a))
-            (bk (car b)))
-        (or (< (car ak) (car bk))
-            (and (= (car ak) (car bk))
-                 (< (cadr ak) (cadr bk)))))))))
+  (sort tasks :key #'mevedel-task-id))
 
 (defun mevedel-tool-task--summary-line (open completed)
   "Return one indented summary for omitted OPEN and COMPLETED tasks."
@@ -1151,13 +1124,9 @@ this runs after the task mutation it accompanies."
     (let* ((status-filter (mevedel-tool-task--optional-argument
                            args :status))
            (count (mevedel-tool-task--task-line-count result))
-           (suffix (if status-filter
-                       (format "%s, %d %s"
-                               status-filter count
-                               (if (= count 1) "task" "tasks"))
-                     (format "%d %s"
-                             count
-                             (if (= count 1) "task" "tasks")))))
+           (suffix (format "%s%d %s"
+                           (if status-filter (format "%s, " status-filter) "")
+                           count (if (= count 1) "task" "tasks"))))
       (list :header (format "%s: %s" (or name "TaskList") suffix)
             :body result
             :body-mode nil
