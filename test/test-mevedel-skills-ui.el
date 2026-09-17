@@ -247,18 +247,21 @@ spanning lines")))
         (should (equal "hello" called))
         (should (equal "### " (buffer-string))))))
 
-  :doc "blank mode slash command opens the mode cockpit surface"
-  (let ((session (mevedel-skills-test--make-session))
-        called)
-    (mevedel-skills-test--with-chat-buffer session
-      (cl-letf (((symbol-function 'mevedel-menu-open)
-                 (lambda (area) (setq called area))))
-        (insert "### /mode")
-        (goto-char (point-max))
-        (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-        (should (eq called 'mode))
-        (should (equal "### " (buffer-string))))))
+  :doc "local surface commands open their cockpit and preserve the prompt prefix"
+  (dolist (case '(("/mode" . mode) ("/model" . model)
+                  ("/skills" . skills) ("/skills list" . skills)
+                  ("/tools" . tools) ("/tools list" . tools) ("/help" . help)))
+    (let ((session (mevedel-skills-test--make-session))
+          called)
+      (mevedel-skills-test--with-chat-buffer session
+        (cl-letf (((symbol-function 'mevedel-menu-open)
+                   (lambda (area) (setq called area))))
+          (insert "### " (car case))
+          (goto-char (point-max))
+          (should (eq 'local (mevedel-test--with-captured-messages nil
+                              (mevedel-skills--dispatch-slash-command))))
+          (should (eq called (cdr case)))
+          (should (equal "### " (buffer-string)))))))
 
   :doc "mode slash command with an argument remains direct"
   (let ((session (mevedel-skills-test--make-session))
@@ -275,19 +278,6 @@ spanning lines")))
                     (mevedel-session-permission-mode session)))
         (should (equal "### " (buffer-string))))))
 
-  :doc "blank model slash command opens the model cockpit surface"
-  (let ((session (mevedel-skills-test--make-session))
-        called)
-    (mevedel-skills-test--with-chat-buffer session
-      (cl-letf (((symbol-function 'mevedel-menu-open)
-                 (lambda (area) (setq called area))))
-        (insert "### /model")
-        (goto-char (point-max))
-        (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-        (should (eq called 'model))
-        (should (equal "### " (buffer-string))))))
-
   :doc "model slash command with an argument remains direct"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
@@ -297,39 +287,6 @@ spanning lines")))
            (mevedel-skills--dispatch-slash-command))))
       (should (eq 'gpt-5.5 gptel-model))
       (should (equal "### " (buffer-string)))))
-
-  :doc "blank and list skills slash commands open the skills surface"
-  (let ((session (mevedel-skills-test--make-session))
-        called)
-    (dolist (command '("/skills" "/skills list"))
-      (setq called nil)
-      (mevedel-skills-test--with-chat-buffer session
-        (cl-letf (((symbol-function 'mevedel-menu-open)
-                   (lambda (area)
-                     (setq called area))))
-          (insert "### " command)
-          (goto-char (point-max))
-          (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-          (should (eq called 'skills))
-          (should (equal "### " (buffer-string)))))))
-
-  :doc "blank and list tools slash commands open the tools surface"
-  (let ((session (mevedel-skills-test--make-session))
-        called)
-    (mevedel-skills-test--with-chat-buffer session
-      (dolist (command '("/tools" "/tools list"))
-        (setq called nil)
-        (erase-buffer)
-        (cl-letf (((symbol-function 'mevedel-menu-open)
-                   (lambda (area)
-                     (setq called area))))
-          (insert "### " command)
-          (goto-char (point-max))
-          (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-          (should (eq called 'tools))
-          (should (equal "### " (buffer-string)))))))
 
   :doc "worktree slash commands open status and list surfaces"
   (let ((session (mevedel-skills-test--make-session))
@@ -362,19 +319,6 @@ spanning lines")))
           (should (eq list-buffer (current-buffer)))
           (should (equal "### " (buffer-string)))))))
 
-  :doc "help slash command opens the help surface"
-  (let ((session (mevedel-skills-test--make-session))
-        called)
-    (mevedel-skills-test--with-chat-buffer session
-      (cl-letf (((symbol-function 'mevedel-menu-open)
-                 (lambda (area) (setq called area))))
-        (insert "### /help")
-        (goto-char (point-max))
-        (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-        (should (eq called 'help))
-        (should (equal "### " (buffer-string))))))
-
   :doc "skills mutation slash commands remain direct"
   (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
@@ -389,12 +333,15 @@ spanning lines")))
             (cl-letf (((symbol-function 'mevedel-skills-list-open)
                        (lambda (_session)
                          (ert-fail "skills surface should not open"))))
-              (insert "### /skills disable visible")
-              (goto-char (point-max))
-              (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-              (should-not (mevedel-skills-skill-enabled-p skill))
-              (should (equal "### " (buffer-string))))))
+              (dolist (action '("disable" "enable"))
+                (erase-buffer)
+                (insert "### /skills " action " visible")
+                (goto-char (point-max))
+                (should (eq 'local (mevedel-test--with-captured-messages nil
+                                    (mevedel-skills--dispatch-slash-command))))
+                (should (eq (mevedel-skills-skill-enabled-p skill)
+                            (equal action "enable")))
+                (should (equal "### " (buffer-string)))))))
       (delete-directory user-dir t)))
 
   :doc "local command wins over a same-named skill"
@@ -816,6 +763,33 @@ spanning lines")))
                        message-text)))))
       (mevedel-skills-test--cleanup-list)
       (delete-directory user-dir t)))
+
+  :doc "enable and disable preserve a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-skills-test--make-session nil mevedel-user-dir))
+           (skill (mevedel-skills-test--stateful-skill
+                   :name "visible" :source 'project
+                   :workspace (mevedel-session-workspace session)))
+           (draft "> quoted\nsecond line")
+           (point-offset 4))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-skills session) (list skill))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft point-offset))
+      (dolist (action '("disable" "enable"))
+        (with-current-buffer data-buf
+          (let (messages)
+            (mevedel-test--with-captured-messages messages
+              (mevedel-cmd--skills (concat action " visible")))
+            (should (equal (format "Skill visible %sd\n" action) messages))))
+        (should (eq (mevedel-skills-skill-enabled-p skill)
+                    (equal action "enable")))
+        (with-current-buffer view-buf
+          (let ((start (mevedel-view--input-start)))
+            (should (equal draft
+                           (buffer-substring-no-properties start (point-max))))
+            (should (= (point) (+ start point-offset))))))))
 
   :doc "enable and disable reject unknown skills"
   (let ((session (mevedel-skills-test--make-session)))
