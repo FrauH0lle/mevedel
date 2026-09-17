@@ -1417,14 +1417,8 @@ head CAS."
                          (not (eq boundary 'after)))))
                    (unless
                        (equal
-                        (sort (copy-sequence plan)
-                              (lambda (a b)
-                                (string< (plist-get a :path)
-                                         (plist-get b :path))))
-                        (sort (copy-sequence rechecked)
-                              (lambda (a b)
-                                (string< (plist-get a :path)
-                                         (plist-get b :path)))))
+                        (mevedel-session-rewind--sorted-file-plan plan)
+                        (mevedel-session-rewind--sorted-file-plan rechecked))
                      (error
                       "Captured files changed after Rewind confirmation")))
                  (setq project-restore-started t)
@@ -1639,14 +1633,8 @@ head CAS."
                   session (plist-get target :cum-turn)
                   (not (eq boundary 'after)))))
             (unless (equal
-                     (sort (copy-sequence plan)
-                           (lambda (a b)
-                             (string< (plist-get a :path)
-                                      (plist-get b :path))))
-                     (sort (copy-sequence rechecked)
-                           (lambda (a b)
-                             (string< (plist-get a :path)
-                                      (plist-get b :path)))))
+                     (mevedel-session-rewind--sorted-file-plan plan)
+                     (mevedel-session-rewind--sorted-file-plan rechecked))
               (error "Captured files changed after Rewind confirmation")))
           (setq file-restore-started t)
           (let ((result
