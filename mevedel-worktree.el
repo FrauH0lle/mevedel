@@ -197,7 +197,7 @@ directory they happen to be sitting in."
                      directory "rev-parse" "--show-toplevel")))
     ;; Git answers in the target's own path domain, so expand it back into
     ;; the caller's: plain `expand-file-name' leaves a remote answer looking
-    ;; local.  This is the same conversion `--collect-status' applies.
+    ;; local.
     (file-name-as-directory
      (mevedel-worktree--expand-git-path root directory))))
 
@@ -312,8 +312,7 @@ directory they happen to be sitting in."
                               (file-name-as-directory
                                (expand-file-name
                                 (mevedel-workspace-root workspace)))))
-         (repo-root (mevedel-worktree--git-success-output
-                     directory "rev-parse" "--show-toplevel")))
+         (repo-root (mevedel-worktree-repository-root directory)))
     (if (not repo-root)
         (list :session session
               :workspace workspace
@@ -322,10 +321,7 @@ directory they happen to be sitting in."
               :isolation 'not-git
               :ignore-state 'unknown
               :worktrees nil)
-      (let* ((repo-root
-              (file-name-as-directory
-               (mevedel-worktree--expand-git-path repo-root directory)))
-             (git-dir (mevedel-worktree--expand-git-path
+      (let* ((git-dir (mevedel-worktree--expand-git-path
                        (mevedel-worktree--git-success-output
                         directory "rev-parse" "--git-dir")
                        directory))
@@ -1426,10 +1422,9 @@ The return value is a plist with `:buffer', `:branch', `:directory', and
                 (mevedel-worktree--cleanup-message
                  worktree-directory workspace-root))))))))))
 
-(defun mevedel-worktree--create (args)
-  "Create a new worktree session from slash command ARGS."
-  (let* ((options (mevedel-worktree--parse-create-options
-                   (cdr (mevedel-worktree--split-args args))))
+(defun mevedel-worktree--create (tokens)
+  "Create a new worktree session from parsed option TOKENS."
+  (let* ((options (mevedel-worktree--parse-create-options tokens))
          (result (mevedel-worktree-create-session
                   (plist-get options :name)
                   (plist-get options :purpose)
@@ -1463,7 +1458,7 @@ The return value is a plist with `:buffer', `:branch', `:directory', and
       (mevedel-worktree-list-open)
       nil)
      ((string= command "create")
-      (mevedel-worktree--create args))
+      (mevedel-worktree--create (cdr tokens)))
      (t
       (user-error "Unknown /worktree command: %s" command)))))
 

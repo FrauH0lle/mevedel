@@ -711,7 +711,8 @@
             (let ((status (mevedel-worktree-collect-status context)))
               (should (eq (plist-get status :session) session))
               (should (eq (plist-get status :workspace) workspace))
-              (should (equal (plist-get status :directory) root)))))
+              (should (equal (plist-get status :directory) root))
+              (should (equal (plist-get status :repo-root) root)))))
       (mevedel-worktree-test--cleanup-surfaces data-buffer)
       (delete-directory root t))))
 
@@ -2153,50 +2154,27 @@
                         :type 'user-error))
       (delete-directory root t)))
 
-  :doc "rejects invalid names before Git add"
-  (let ((root (file-name-as-directory
-               (make-temp-file "mevedel-worktree-invalid-" t)))
-        (calls nil))
-    (unwind-protect
-        (mevedel-worktree-test--with-session root
-          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
-                     (lambda (_dir &rest args)
-                       (push args calls)
-                       (if (equal args '("check-ref-format" "--branch"
-                                         "bad name"))
-                           (mevedel-worktree-test--git-result "" 1)
-                         (mevedel-worktree-test--base-response
-                          root args)))))
-            (should-error (mevedel-cmd--worktree
-                           "create \"bad name\" --clean")
-                          :type 'user-error)
-            (should-not (member '("worktree" "add") calls))))
-      (delete-directory root t)))
-
-  :doc "rejects Git-invalid ref names before worktree add"
-  (let ((root (file-name-as-directory
-               (make-temp-file "mevedel-worktree-invalid-ref-" t)))
-        (calls nil))
-    (unwind-protect
-        (mevedel-worktree-test--with-session root
-          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
-                     (lambda (_dir &rest args)
-                       (push args calls)
-                       (if (equal args '("check-ref-format" "--branch"
-                                         "worktree/foo.lock"))
-                           (mevedel-worktree-test--git-result "" 1)
-                         (mevedel-worktree-test--base-response
-                          root args)))))
-            (should-error (mevedel-cmd--worktree
-                           "create worktree/foo.lock --clean")
-                          :type 'user-error)
-            (should-not
-             (cl-find-if
-              (lambda (args)
-                (equal (list (nth 0 args) (nth 1 args))
-                       '("worktree" "add")))
-              calls))))
-      (delete-directory root t))))
+  :doc "rejects invalid branch names before Git add"
+  (dolist (name '("bad name" "worktree/foo.lock"))
+    (let ((root (file-name-as-directory
+                 (make-temp-file "mevedel-worktree-invalid-" t)))
+          calls)
+      (unwind-protect
+          (mevedel-worktree-test--with-session root
+            (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                       (lambda (_dir &rest args)
+                         (push args calls)
+                         (if (equal args (list "check-ref-format" "--branch" name))
+                             (mevedel-worktree-test--git-result "" 1)
+                           (mevedel-worktree-test--base-response root args)))))
+              (should-error (mevedel-cmd--worktree
+                             (format "create %S --clean" name))
+                            :type 'user-error)
+              (should-not
+               (cl-find-if
+                (lambda (args) (equal (seq-take args 2) '("worktree" "add")))
+                calls))))
+        (delete-directory root t)))))
 
 
 ;;
