@@ -206,23 +206,6 @@ reactivated without scheduling because its caller owns the prepared kickoff."
   (or (mevedel-session-goal mevedel--session)
       (user-error "No current Goal")))
 
-(defun mevedel-goal-unfinished-p (&optional goal)
-  "Return non-nil when GOAL is not complete."
-  (and (setq goal (or goal
-                      (and (bound-and-true-p mevedel--session)
-                           (mevedel-session-goal mevedel--session))))
-       (not (eq (mevedel-goal-status goal) 'complete))))
-
-(defun mevedel-goal-description (&optional goal)
-  "Return a compact user-facing description of GOAL."
-  (let ((goal (or goal (mevedel-goal--current))))
-    (format "%s — %s; %d turns; %d/%s tokens"
-            (mevedel-goal-objective goal)
-            (mevedel-goal-status goal)
-            (mevedel-goal-turns-run goal)
-            (mevedel-goal-tokens-used goal)
-            (or (mevedel-goal-token-budget goal) "unbounded"))))
-
 (defun mevedel-goal--touch (goal)
   "Update GOAL's modification timestamp."
   (setf (mevedel-goal-updated-at goal) (format-time-string "%FT%T%z"))
