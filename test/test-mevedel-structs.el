@@ -46,11 +46,11 @@
     (setf (mevedel-session-authority-mode session) 'pid-lock)
     (should-error
      (mevedel-session-authority-mode-for-session session)
-     :type 'error))
-  (should-error
-   (mevedel-session-authority-mode-for-session
-    (mevedel-session--create))
-   :type 'error))
+     :type 'error)
+    (should-error
+     (mevedel-session-authority-mode-for-session
+      (mevedel-session--create))
+     :type 'error)))
 
 (mevedel-deftest mevedel-session-audit-target ()
   ,test

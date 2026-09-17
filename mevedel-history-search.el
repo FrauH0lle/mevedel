@@ -24,6 +24,10 @@
                   "mevedel-session-publication" (directories listings))
 (autoload 'mevedel-session-publication-read-batch "mevedel-session-publication")
 
+;; `mevedel-structs'
+(declare-function mevedel-session-authority-mode-for-workspace
+                  "mevedel-structs" (workspace))
+
 ;; `mevedel-tool-fs-read'
 (declare-function mevedel-tool-fs-read--virtual-text
                   "mevedel-tool-fs-read" (text args address))
@@ -65,7 +69,7 @@
 ARGS carries ordinary search options. DIRECTORY receives disposable files.
 The final yielded value is (:ready SOURCES), using relative public names."
   (let* ((root (mevedel-session-artifacts-sessions-dir workspace))
-         (mode (mevedel-session-codec-workspace-authority-mode workspace))
+         (mode (mevedel-session-authority-mode-for-workspace workspace))
          (selected-session (cadr components))
          (selected-source (caddr components))
          (contents (or (eq (plist-get args :operation) 'grep)

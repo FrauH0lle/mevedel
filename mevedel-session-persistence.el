@@ -9,46 +9,6 @@
 ;; to `mevedel-session-rewind'; and Fork projection, publication, Worktree
 ;; restoration, and rename belong to `mevedel-session-fork'.
 
-;;
-;; The codec-owned sidecar plist shape is:
-;;
-;;   (:version "v0.5.4"
-;;    :session-id "main-2026-04-23T14-30-a9f2"
-;;    :session-name "main"
-;;    :workspace (:type project :workspace-id ID
-;;                :target-native-root ROOT :name NAME)
-;;    :authority-mode portable
-;;    :target-incarnation STRING
-;;    :created-at "..." :updated-at "..."
-;;    :current-segment 3 :total-turn-count 47
-;;    :first-user-message "..."
-;;    :latest-user-message "..."
-;;    :task-status-notes ((nil :note "..." :updated-turn 12) ...)
-;;    :forked-from-session-id nil :forked-from-turn nil
-;;    :fork-type nil :forked-from-fork-point-id nil
-;;    :permission-mode ask
-;;    :sandbox-mode best-effort
-;;    :plan-mode nil
-;;    :permission-rules ((TOOL-NAME ...) ...)
-;;    :resource-grants ((:path "/abs/path" :access read [:recursive t]) ...)
-;;    :workspace-instruction-hashes (((OWNER PATH) . SHA256) ...)
-;;    :additional-roots (("name" . "/abs/path") ...)
-;;    :prompt-index ((SEGMENT-N . ((:turn N :pos POS :preview STR :timestamp STR) ...)) ...)
-;;    :file-snapshots ((TURN-N . ((PATH . (:backup-name STR-OR-NIL
-;;                                          :pre-backup-name STR-OR-NIL
-;;                                          :version INT :gap STR-OR-NIL)) ...)) ...))
-;;    :ptc-checkpoints ((:id ID :args (:expression SCRIPT) :state STATE
-;;                       :result RESULT :render-data DATA) ...))
-;;
-;; Hash-table-valued slots on the session struct (`touched-files',
-;; `mentions-shown') are NOT persisted.  Workspace instruction hashes
-;; are persisted as an owner/path alist.  The hash tables reset to empty
-;; on load; the consequence is that an LLM coming back from a
-;; resume may re-Read files that were already read pre-resume (over-
-;; dedup is worse than re-expansion).  Tasks are serialized as plists
-;; in `:tasks' and deserialized on load.  Owner-scoped task status
-;; notes are serialized in `:task-status-notes'.
-
 ;;; Code:
 
 (require 'mevedel-session-artifacts)
@@ -218,14 +178,12 @@
 (defvar mevedel-session-artifacts-require-agent-commit-p)
 
 ;; `mevedel-session-codec'
-(declare-function mevedel-session-codec-authority-mode "mevedel-session-codec" (session))
 (declare-function mevedel-session-codec-authority-mode-for-path "mevedel-session-codec" (session-dir &optional session explicit-mode))
 (declare-function mevedel-session-codec-deserialize "mevedel-session-codec" (plist workspace))
 (declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
 (declare-function mevedel-session-codec-read "mevedel-session-codec" (path))
 (declare-function mevedel-session-codec-validate-authority-mode "mevedel-session-codec" (mode workspace-plist))
 (declare-function mevedel-session-codec-validate-current-sidecar "mevedel-session-codec" (plist))
-(declare-function mevedel-session-codec-workspace-authority-mode "mevedel-session-codec" (workspace))
 (declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
 (defvar mevedel-session-codec-format-version)
 
@@ -1715,10 +1673,10 @@ mentions-shown reset to empty hash tables on load."
                (mevedel-session-codec-read direct-sidecar)))
          (authority-mode
           (or (and session-override
-                   (mevedel-session-codec-authority-mode
+                   (mevedel-session-authority-mode-for-session
                     session-override))
               (and workspace
-                   (mevedel-session-codec-workspace-authority-mode
+                   (mevedel-session-authority-mode-for-workspace
                     workspace))
               (and cold-sidecar
                    (mevedel-session-codec-validate-authority-mode
@@ -2238,7 +2196,7 @@ reuse the last live enumeration when one exists."
         (let* ((sessions-dir
                 (mevedel-session-artifacts-sessions-dir workspace))
                (authority-mode
-                (mevedel-session-codec-workspace-authority-mode workspace))
+                (mevedel-session-authority-mode-for-workspace workspace))
                (portable-p (eq authority-mode 'portable))
                sessions
                incompatible)
@@ -2435,7 +2393,7 @@ the state and the holder are read together."
                         "already open here, read-only"
                       "already open here")
             :held t)))
-   ((eq (mevedel-session-codec-workspace-authority-mode workspace)
+   ((eq (mevedel-session-authority-mode-for-workspace workspace)
         'portable)
     (let* ((status (mevedel-session-durability-lease-status
                     (plist-get entry :save-path)))

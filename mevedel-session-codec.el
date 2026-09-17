@@ -86,7 +86,6 @@
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
 (declare-function mevedel-session-authority-mode-for-session "mevedel-structs" (session))
-(declare-function mevedel-session-authority-mode-for-workspace "mevedel-structs" (workspace))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
@@ -176,20 +175,9 @@ add more, and we don't want to act on actions we don't understand).")
     :agent-turn-capacity :plan-metadata :goal :messages)
   "Keys required in every current-version session sidecar.")
 
-(defun mevedel-session-codec-workspace-authority-mode (workspace)
-  "Return the authority mode required by WORKSPACE's category."
-  (mevedel-session-authority-mode-for-workspace workspace))
-
-(defun mevedel-session-codec-authority-mode (session)
-  "Return SESSION's explicit authority mode.
-
-Normalize a fresh session's missing mode from its workspace category.  An
-explicit mode that contradicts the workspace is rejected."
-  (mevedel-session-authority-mode-for-session session))
-
 (defun mevedel-session-codec-portable-authority-p (session)
   "Return non-nil when SESSION uses the portable lease authority."
-  (eq (mevedel-session-codec-authority-mode session) 'portable))
+  (eq (mevedel-session-authority-mode-for-session session) 'portable))
 
 (defun mevedel-session-codec-validate-authority-mode
     (mode workspace-plist)
@@ -221,7 +209,7 @@ an error rather than an implicit PID-lock fallback."
          ;; probe is one target process.
          (decided (or explicit-mode
                       (and session
-                           (mevedel-session-codec-authority-mode
+                           (mevedel-session-authority-mode-for-session
                             session))))
          (mode
           (or decided
@@ -529,7 +517,7 @@ The resulting plist is round-trippable via
 `mevedel-session-codec-deserialize'."
   (let* ((execution-target (mevedel-session-execution-target session))
          (authority-mode
-          (mevedel-session-codec-authority-mode session))
+          (mevedel-session-authority-mode-for-session session))
          (target-incarnation
           (mevedel-execution-target-incarnation execution-target))
          (permission-mode
@@ -548,11 +536,12 @@ The resulting plist is round-trippable via
            (mevedel-session-permission-rules session)
            (mevedel-session-resource-grants session)
            execution-target)
-          (error "Session permission authority is not portable"))))
+          (error "Session permission authority is not portable")))
+        (workspace-plist
+         (mevedel-session-codec--workspace-to-plist
+          (mevedel-session-workspace session))))
     (mevedel-session-codec-validate-authority-mode
-     authority-mode
-     (mevedel-session-codec--workspace-to-plist
-      (mevedel-session-workspace session)))
+     authority-mode workspace-plist)
     (unless (and (stringp target-incarnation)
                  (string-match-p "\\S-" target-incarnation))
       (error "Target incarnation is not available"))
@@ -565,8 +554,7 @@ The resulting plist is round-trippable via
    :session-id             (mevedel-session-session-id session)
    :session-name           (mevedel-session-name session)
    :naming-state           (mevedel-session-naming-state session)
-   :workspace              (mevedel-session-codec--workspace-to-plist
-                            (mevedel-session-workspace session))
+   :workspace              workspace-plist
    :authority-mode         authority-mode
    :working-directory
    (mevedel-execution-target-native-path
