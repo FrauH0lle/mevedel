@@ -165,17 +165,6 @@
 ;;
 ;;; Request-scoped skill context
 
-(defun mevedel-skills--activate-request-context (request rules hooks)
-  "Append skill-scoped RULES and HOOKS to REQUEST."
-  (when rules
-    (setf (mevedel-request-skill-permission-rules request)
-          (append (mevedel-request-skill-permission-rules request)
-                  rules)))
-  (when hooks
-    (setf (mevedel-request-hook-rules request)
-          (append (mevedel-request-hook-rules request)
-                  hooks))))
-
 (defun mevedel-skills-commit-invoked-records (session records)
   "Append skill invocation RECORDS to SESSION for compaction and replay."
   (when (and session records)
@@ -436,25 +425,25 @@ compaction/replay."
    (t
     (let ((req (mevedel-skills--current-request))
           (inv (mevedel-skills--current-invocation)))
-      ;; Permission rules accumulate on the innermost slot.
-      (when permission-rules
-        (cond
-         (inv
+      ;; Permission and hook rules accumulate on the innermost slot.
+      (cond
+       (inv
+        (when permission-rules
           (setf (mevedel-agent-invocation-skill-permission-rules inv)
                 (append (mevedel-agent-invocation-skill-permission-rules inv)
                         permission-rules)))
-         (req
-          (mevedel-skills--activate-request-context
-           req permission-rules nil))))
-      (when hook-rules
-        (cond
-         (inv
+        (when hook-rules
           (setf (mevedel-agent-invocation-hook-rules inv)
                 (append (mevedel-agent-invocation-hook-rules inv)
-                        hook-rules)))
-	 (req
-	  (mevedel-skills--activate-request-context
-	   req nil hook-rules))))
+                        hook-rules))))
+       (req
+        (when permission-rules
+          (setf (mevedel-request-skill-permission-rules req)
+                (append (mevedel-request-skill-permission-rules req)
+                        permission-rules)))
+        (when hook-rules
+          (setf (mevedel-request-hook-rules req)
+                (append (mevedel-request-hook-rules req) hook-rules)))))
       (when (and req (not (eq ptc-primitives :unrestricted)))
         (setf (mevedel-request-ptc-primitives req)
               (mevedel-skills-intersect-ptc-primitives
@@ -576,8 +565,7 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
          (nodes (make-hash-table :test #'equal))
          (arguments-by-source (make-hash-table :test #'equal))
          (states (make-hash-table :test #'equal))
-         order
-         root-nodes)
+         order)
     (when session
       (mevedel-skills-ensure-fresh
        (or (and (buffer-live-p (mevedel-session-root-buffer session))
@@ -755,10 +743,8 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
                       (plist-get root :policy) policy)
                 (when (or (eq role 'command)
                           (null (plist-get node :root)))
-                  (setf (plist-get node :root) root))
-                (push node root-nodes)))))
-        (list :status 'ok :roots roots :root-nodes (nreverse root-nodes)
-              :nodes (nreverse order))))))
+                  (setf (plist-get node :root) root))))))
+        (list :status 'ok :roots roots :nodes (nreverse order))))))
 
 (defun mevedel-skills--preparation-settler
     (session rules hooks callback)
