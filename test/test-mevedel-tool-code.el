@@ -21,6 +21,7 @@
 
 ;; `project'
 (defvar project-files-relative-names)
+(defvar project-find-functions)
 (defvar project-list-file)
 
 (defvar mevedel-tool-code-test-open-state nil
@@ -349,10 +350,14 @@ formatter without a compiled grammar."
         (kill-buffer buffer))
       (delete-directory root t)))
   :doc "finds references to an elisp symbol"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+  (let* ((root (make-temp-file "mevedel-xref-local-" t))
+         (tmp (file-name-concat root "source.el"))
+         (default-directory (file-name-as-directory root))
+         (project-list-file (file-name-concat root "absent" "projects"))
          (result nil))
     (unwind-protect
         (progn
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
           (with-temp-file tmp
             (insert "(defun my-test-fn-12345 () nil)\n"
                     "(my-test-fn-12345)\n"
@@ -362,12 +367,14 @@ formatter without a compiled grammar."
              (setq result (test-mevedel-tool-code--handler-result r)))
            (list :identifier "my-test-fn-12345" :file_path tmp))
           (should (stringp result))
-          ;; Should find at least the two call sites
-          (should (string-match-p "my-test-fn-12345" result))
+          ;; Error messages also name the symbol; require actual call sites.
+          (should (string-match-p (regexp-quote (concat tmp ":2:")) result))
+          (should (string-match-p (regexp-quote (concat tmp ":3:")) result))
+          (should-not (file-exists-p project-list-file))
           (should-not (find-buffer-visiting tmp)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
-      (delete-file tmp)))
+      (delete-directory root t)))
   :doc "runs xref backend reference lookup without prompting for unsafe local variables"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
          (enable-local-variables t)
@@ -399,11 +406,15 @@ formatter without a compiled grammar."
         (kill-buffer buf))
       (delete-file tmp)))
   :doc "returns message when no references found"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+  (let* ((root (make-temp-file "mevedel-xref-local-" t))
+         (tmp (file-name-concat root "source.el"))
+         (default-directory (file-name-as-directory root))
+         (project-list-file (file-name-concat root "absent" "projects"))
          (identifier (format "nonexistent-symbol-%s" (file-name-base tmp)))
          (result nil))
     (unwind-protect
         (progn
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
           (with-temp-file tmp
             (insert "(defun some-unique-fn-99999 () nil)\n"))
           (mevedel-tool-code--xref-references
@@ -411,10 +422,31 @@ formatter without a compiled grammar."
              (setq result (test-mevedel-tool-code--handler-result r)))
            (list :identifier identifier :file_path tmp))
           (should (stringp result))
-          (should (string-match-p "No references found\\|Error" result)))
+          (should (equal (format "No references found for '%s'" identifier)
+                         result))
+          (should-not (file-exists-p project-list-file)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
-      (delete-file tmp)))
+      (delete-directory root t)))
+  :doc "searches an unrecognized directory without remembering a project"
+  (let* ((root (make-temp-file "mevedel-xref-transient-" t))
+         (source (file-name-concat root "source.el"))
+         (project-find-functions nil)
+         (project-list-file (file-name-concat root "absent" "projects"))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun transient-reference () nil)\n(transient-reference)\n"
+                        nil source nil 'silent)
+          (mevedel-tool-code--xref-references
+           (lambda (envelope)
+             (setq result (test-mevedel-tool-code--handler-result envelope)))
+           (list :identifier "transient-reference" :file_path source))
+          (should (string-match-p (regexp-quote (concat source ":2:")) result))
+          (should-not (file-exists-p project-list-file)))
+      (when-let* ((buffer (find-buffer-visiting source)))
+        (kill-buffer buffer))
+      (delete-directory root t)))
   :doc "errors on non-existent file"
   (should-error
    (mevedel-tool-code--xref-references
@@ -450,6 +482,8 @@ formatter without a compiled grammar."
          (native-file (file-name-concat root "source.el"))
          (remote-file (format "/mevedelmock:code:%s" native-file))
          (identifier "mevedel-remote-elisp-reference-target")
+         (project-list-file (file-name-concat root "absent" "projects"))
+         diagnostics
          result)
     (unwind-protect
         (progn
@@ -461,12 +495,21 @@ formatter without a compiled grammar."
             (should (zerop (process-file "git" nil nil nil
                                          "add" "source.el"))))
           (mevedel-test--with-local-shell-tramp '("code")
-            (mevedel-tool-code--xref-references
-             (lambda (envelope)
-               (setq result
-                     (test-mevedel-tool-code--handler-result envelope)))
-             (list :identifier identifier :file_path remote-file)))
-          (should (string-match-p (regexp-quote native-file) result))
+            (should (file-exists-p remote-file))
+            ;; Native project discovery probes optional .gitmodules.  TRAMP
+            ;; reports its absence before project.el handles file-missing.
+            (mevedel-test--with-captured-messages diagnostics
+              (mevedel-tool-code--xref-references
+               (lambda (envelope)
+                 (setq result
+                       (test-mevedel-tool-code--handler-result envelope)))
+               (list :identifier identifier :file_path remote-file))))
+          (dolist (line (split-string diagnostics "\n" t))
+            (should (equal line (concat "File is missing: "
+                                        (file-name-directory remote-file)
+                                        ".gitmodules"))))
+          (should (string-match-p (regexp-quote (concat native-file ":2:")) result))
+          (should-not (file-exists-p project-list-file))
           (should-not (string-match-p "/mevedelmock:" result)))
       (delete-directory root t))))
 
