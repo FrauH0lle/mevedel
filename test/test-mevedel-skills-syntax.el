@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-skills-core)
 (require 'mevedel-skills-preparation)
 (require 'mevedel-skills-syntax)
 
