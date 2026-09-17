@@ -462,8 +462,38 @@
                                                buffer
                                                '(:live (("remote-call" :execution-id "exec-remote"
                                                          :state running :live-execution-p t))))
-                                              (mevedel-execution-transcript--record-archived-terminal
-                                               buffer event render-data)
+                                              (let ((before
+                                                     (with-current-buffer buffer
+                                                       (buffer-string)))
+                                                    (committed
+                                                     (mevedel-session-artifacts-read-artifact
+                                                      session "agents/remote-call.chat.org" t)))
+                                                (cl-letf
+                                                    (((symbol-function
+                                                       'mevedel-session-artifacts-publish-transcript-state)
+                                                      (lambda (&rest _)
+                                                        (error "Publication failed"))))
+                                                  (should-error
+                                                   (mevedel-execution-transcript--record-archived-terminal
+                                                    buffer event render-data)))
+                                                (with-current-buffer buffer
+                                                  (should (equal-including-properties
+                                                           before (buffer-string)))
+                                                  (should-not (buffer-modified-p))
+                                                  (should (gethash
+                                                           "remote-call"
+                                                           mevedel-execution-transcript--archived-rows)))
+                                                (should (equal
+                                                         committed
+                                                         (mevedel-session-artifacts-read-artifact
+                                                          session "agents/remote-call.chat.org" t))))
+                                              (dotimes (_ 2)
+                                                (mevedel-execution-transcript--record-archived-terminal
+                                                 buffer event render-data))
+                                              (with-current-buffer buffer
+                                                (should-not (gethash
+                                                             "remote-call"
+                                                             mevedel-execution-transcript--archived-rows)))
                                               (let ((published
                                                      (decode-coding-string
                                                       (mevedel-session-artifacts-read-artifact
