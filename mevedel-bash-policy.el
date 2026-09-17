@@ -642,7 +642,7 @@ the Bash tool path because Bash had its own flattened resolver."
 
 
 (cl-defun mevedel-bash-policy-check-permission
-    (command &key trust-literal-p ignore-effective-trust-p
+    (command &key ignore-effective-trust-p
              permission-context metadata-p)
   "Decide Bash permission for COMMAND and PERMISSION-CONTEXT.
 
@@ -654,8 +654,6 @@ Normalized Bash analysis supplies read-only, dangerous, complex, or unknown
 classification.  Read-only commands run without a matching rule.  Unknown
 commands need matching authority.  Dangerous and complex commands require
 direct user authority rather than invocation- or request-delegated rules.
-TRUST-LITERAL-P identifies a delegated skill-body call and grants no extra
-authority over dangerous or complex syntax.
 
 In `full-auto' mode, explicit deny rules and protected path tokens still
 win, then unknown, dangerous, and complex Bash invocations are allowed.
@@ -669,7 +667,6 @@ of the outcome symbol.
 Bucket-aware: delegated invocation and request rules may authorize ordinary
 unknown commands, but only session, persistent, and global user rules may
 authorize dangerous or complex syntax."
-  (ignore trust-literal-p)
   (let* ((analysis (mevedel-bash-analysis-analyze command))
          (class (plist-get analysis :class))
          (segments (plist-get analysis :segments))

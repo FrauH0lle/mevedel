@@ -550,22 +550,19 @@ for effects despite reusable authority"
   (let ((mevedel-bash-dangerous-commands '("rm"))
         (mevedel-permission-rules '(("Bash" :pattern "rm *" :action allow))))
     (should (eq 'allow
-                (mevedel-bash-policy-check-permission
-                 "rm /tmp/foo" :trust-literal-p t)))
-    (should (eq 'allow
                 (mevedel-bash-policy-check-permission "rm /tmp/foo"))))
 
   :doc "direct user patterns deliberately authorize complex syntax"
   (let ((mevedel-permission-rules '(("Bash" :pattern "echo *" :action allow))))
     (should (eq 'allow
                 (mevedel-bash-policy-check-permission
-                 "echo $VAR" :trust-literal-p t))))
+                 "echo $VAR"))))
 
-  :doc "explicit deny still wins under :trust-literal-p t"
+  :doc "explicit deny rejects dangerous commands"
   (let ((mevedel-permission-rules '(("Bash" :pattern "rm *" :action deny))))
     (should (eq 'deny
                 (mevedel-bash-policy-check-permission
-                 "rm /tmp/foo" :trust-literal-p t))))
+                 "rm /tmp/foo"))))
 
   :doc "decision metadata distinguishes rule, mode, and one-shot asks"
   (let ((mevedel-permission-rules nil))
@@ -620,9 +617,6 @@ for effects despite reusable authority"
           (setq-local mevedel--current-request request)
           (should (eq 'allow
                       (mevedel-bash-policy-check-permission
-                       "gh issue list" :trust-literal-p t)))
-          (should (eq 'allow
-                      (mevedel-bash-policy-check-permission
                        "gh issue list"))))
       (delete-directory root t)))
 
@@ -649,7 +643,7 @@ for effects despite reusable authority"
               (setq-local mevedel--current-request request)
               (should (eq 'deny
                           (mevedel-bash-policy-check-permission
-                           "rm /tmp/foo" :trust-literal-p t))))))
+                           "rm /tmp/foo"))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-bash-policy--bash-guardian-normalize ()
