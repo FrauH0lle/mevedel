@@ -22,16 +22,12 @@
 (defvar gptel-tools)
 
 ;; `gptel-request'
-(declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-description "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 
 ;; `gptel-transient'
 (declare-function gptel-menu "ext:gptel-transient" ())
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -57,8 +53,6 @@
                   "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-refresh
                   "mevedel-cockpit" (&optional selected-id))
-(declare-function mevedel-cockpit-surface-selected
-                  "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-tool-catalog
@@ -104,12 +98,6 @@
   (list (plist-get item :state)
         (format "%s" (or (plist-get item :category) ""))
         (plist-get item :name)))
-
-(defun mevedel-tools-list--tool-matches-item-p (tool item)
-  "Return non-nil when TOOL is represented by ITEM."
-  (and (equal (gptel-tool-name tool) (plist-get item :name))
-       (equal (format "%s" (or (gptel-tool-category tool) ""))
-              (format "%s" (or (plist-get item :category) "")))))
 
 (defun mevedel-tools-list--description-cell (item)
   "Return the compact table description for ITEM."
@@ -176,13 +164,9 @@
              (alist-get 'active counts 0)
              (alist-get 'discoverable counts 0)))))
 
-(defun mevedel-tools-list--context ()
-  "Return the current tools cockpit context."
-  (mevedel-cockpit-surface-context))
-
 (defun mevedel-tools-list--context-data-buffer ()
   "Return the current tools cockpit data buffer."
-  (mevedel-cockpit-context-data-buffer (mevedel-tools-list--context)))
+  (mevedel-cockpit-context-data-buffer (mevedel-cockpit-surface-context)))
 
 (defun mevedel-tools-list--collect (context)
   "Return tools cockpit items for CONTEXT."
@@ -195,18 +179,6 @@
   "Refresh the current tools listing buffer."
   (interactive)
   (mevedel-cockpit-surface-refresh))
-
-(defun mevedel-tools-list--selected-item ()
-  "Return the selected tools cockpit item, or nil."
-  (mevedel-cockpit-surface-selected t))
-
-(defun mevedel-tools-list--selected-item-for-state (state)
-  "Return the selected tools cockpit item when its state is STATE."
-  (condition-case nil
-      (when-let* ((item (mevedel-tools-list--selected-item)))
-        (and (eq (plist-get item :state) state)
-             item))
-    (user-error nil)))
 
 (defun mevedel-tools-list--detail-report (item &optional _context)
   "Return the information report for tool ITEM."
@@ -230,7 +202,7 @@
 (defun mevedel-tools-list-search (&optional query)
   "Retrieve discoverable tool contracts matching QUERY."
   (interactive)
-  (let* ((context (mevedel-tools-list--context))
+  (let* ((context (mevedel-cockpit-surface-context))
          (session (or (mevedel-cockpit-context-session context)
                       (user-error "No mevedel session in this buffer")))
          (data-buffer (mevedel-tools-list--context-data-buffer))

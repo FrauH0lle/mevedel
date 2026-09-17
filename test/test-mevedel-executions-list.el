@@ -22,10 +22,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-(defun mevedel-executions-list-test--session ()
-  "Return a minimal execution cockpit session."
-  (mevedel-session--create :name "main"))
-
 (defun mevedel-executions-list-test--context (session view data)
   "Return a cockpit context for SESSION, VIEW, and DATA."
   (list :session session
@@ -53,7 +49,7 @@
   ,test
   (test)
   :doc "opens an all-owner row with live facts and details"
-  (let* ((session (mevedel-executions-list-test--session))
+  (let* ((session (mevedel-session--create :name "main"))
          (view (generate-new-buffer " *execution-list-view*"))
          (data (generate-new-buffer " *execution-list-data*"))
          (artifact (make-temp-file "mevedel-execution-list-artifact-"))
@@ -93,15 +89,16 @@
   (test)
   :doc "sends one newline-terminated line only to a selected PTY"
   (let ((item '(:tty t)) call)
-    (cl-letf (((symbol-function 'mevedel-executions-list--selected)
-               (lambda () item))
+    (cl-letf (((symbol-function 'mevedel-cockpit-surface-selected)
+               (lambda (&optional _) item))
               ((symbol-function 'mevedel-executions-list--call-control)
                (lambda (&rest args) (setq call args)))
               ((symbol-function 'read-string) (lambda (&rest _) "hello")))
-      (mevedel-executions-list-send-input))
-    (should (equal (list #'mevedel-execution-write-user "hello\n") call))
-    (setq item '(:tty nil))
-    (should-error (mevedel-executions-list-send-input) :type 'user-error)))
+      (mevedel-executions-list-send-input)
+      (should (equal (list #'mevedel-execution-write-user "hello\n") call))
+      (setq item '(:tty nil) call nil)
+      (should-error (mevedel-executions-list-send-input) :type 'user-error)
+      (should-not call))))
 
 (mevedel-deftest mevedel-executions-list-interrupt (:quiet t)
   ,test
@@ -130,8 +127,8 @@
   (let ((artifact (make-temp-file "mevedel-execution-open-artifact-"))
         opened item)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-executions-list--selected)
-                   (lambda () item))
+        (cl-letf (((symbol-function 'mevedel-cockpit-surface-selected)
+                   (lambda (&optional _) item))
                   ((symbol-function 'find-file)
                    (lambda (path) (setq opened path))))
           (setq item (list :artifact-path artifact))
@@ -156,7 +153,7 @@
   ,test
   (test)
   :doc "refreshes live output and removes a completed row"
-  (let* ((session (mevedel-executions-list-test--session))
+  (let* ((session (mevedel-session--create :name "main"))
          (view (generate-new-buffer " *execution-stale-view*"))
          (data (generate-new-buffer " *execution-stale-data*"))
          (artifact (make-temp-file "mevedel-execution-stale-artifact-"))
@@ -204,7 +201,7 @@
   ,test
   (test)
   :doc "refreshes and reports a selected-row race rejected by the backend"
-  (let* ((session (mevedel-executions-list-test--session))
+  (let* ((session (mevedel-session--create :name "main"))
          (view (generate-new-buffer " *execution-race-view*"))
          (data (generate-new-buffer " *execution-race-data*"))
          (artifact (make-temp-file "mevedel-execution-race-artifact-"))
