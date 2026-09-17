@@ -509,20 +509,11 @@ yaml.el false sentinel :false.  Anything else is treated as t."
   (cond
    ((null val) default)
    ((eq val :false) nil)
-   ((eq val t) t)
    ((stringp val)
     (pcase (downcase val)
       ((or "false" "no" "off" "nil") nil)
       (_ t)))
    (t t)))
-
-(defun mevedel-skills--coerce-list (val)
-  "Return VAL as a list.  Handles nil, strings, and existing lists."
-  (cond
-   ((null val) nil)
-   ((listp val) val)
-   ((stringp val) (list val))
-   (t (list val))))
 
 (defun mevedel-skills--coerce-context (val)
   "Return VAL as a context symbol (`inline' or `fork')."
@@ -807,10 +798,10 @@ configured root under which SOURCE-FILE was found."
      :model-invocable-p (not (mevedel-skills--coerce-bool disable-model nil))
      :context context
      :agent (and (stringp agent) agent)
-     :allowed-tools (mevedel-skills--coerce-list allowed-tools)
+     :allowed-tools (ensure-list allowed-tools)
      :allowed-tool-rules
      (mevedel-skills--parse-allowed-tool-rules
-      (mevedel-skills--coerce-list allowed-tools) source-file)
+      (ensure-list allowed-tools) source-file)
      :ptc-primitives (mevedel-skills--parse-ptc-primitives plist source-file)
      :model (and model
                  (cond
@@ -819,7 +810,7 @@ configured root under which SOURCE-FILE was found."
      :effort (if (stringp effort) (intern effort) effort)
      :argument-hint (and (stringp argument-hint) argument-hint)
      :argument-names (mevedel-skills--parse-argument-names arguments)
-     :path-patterns (mevedel-skills--coerce-list paths)
+     :path-patterns (ensure-list paths)
      :hooks
      (when-let* ((rules (mevedel-skills--normalize-hooks
                          hooks (and (eq context 'fork) 'skill-fork))))
@@ -886,15 +877,13 @@ relative and WORKSPACE-ROOT is nil."
          (source-tag (if (consp source) (car source) source))
          (source-family (and (consp source)
                              (memq (cdr source) '(mevedel agents))
-                             (cdr source)))
-         skills)
-    (dolist (skill (mevedel-skills--scan-dir
-                    dir source-tag source-family workspace plugin-name)
-                   (nreverse skills))
-      (push (if plugin-name
-                (mevedel-skills--namespace-plugin-skill plugin-name skill)
-              skill)
-            skills))))
+                             (cdr source))))
+    (mapcar (lambda (skill)
+              (if plugin-name
+                  (mevedel-skills--namespace-plugin-skill plugin-name skill)
+                skill))
+            (mevedel-skills--scan-dir
+             dir source-tag source-family workspace plugin-name))))
 
 (defun mevedel-skills-project-files (workspace-root)
   "Return SKILL.md files under configured project roots in WORKSPACE-ROOT."
@@ -1415,20 +1404,19 @@ Removes now-orphan watchers."
 (defun mevedel-skills--unregister-buffer (buffer)
   "Drop BUFFER from every directory's consumer list.
 Watchers whose consumer list becomes empty are torn down."
-  (let (remove update touched)
+  (let (remove update)
     (maphash (lambda (dir consumers)
                (when (memq buffer consumers)
                  (let ((rest (delq buffer (copy-sequence consumers))))
                    (if rest
                        (push (cons dir rest) update)
-                     (push dir remove)
-                     (push dir touched)))))
+                     (push dir remove)))))
              mevedel-skills--dir-buffers)
     (dolist (dir remove)
       (remhash dir mevedel-skills--dir-buffers))
     (dolist (entry update)
       (puthash (car entry) (cdr entry) mevedel-skills--dir-buffers))
-    (dolist (dir touched)
+    (dolist (dir remove)
       (mevedel-skills--remove-watcher-if-unused dir)))
   (remhash buffer mevedel-skills--dirty-buffers)
   (mevedel-skills--clear-mtime-cache-for-buffer buffer))

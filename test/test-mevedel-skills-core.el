@@ -52,15 +52,20 @@
   (should (eq (mevedel-skills--coerce-bool "no" t) nil))
   (should (eq (mevedel-skills--coerce-bool "yes" nil) t)))
 
-(mevedel-deftest mevedel-skills--coerce-list ()
+(mevedel-deftest mevedel-skills--from-plist ()
   ,test
   (test)
-  :doc "nil stays nil, lists pass through, scalars become single-element"
-  (should (null (mevedel-skills--coerce-list nil)))
-  (should (equal (mevedel-skills--coerce-list '("a" "b"))
-                 '("a" "b")))
-  (should (equal (mevedel-skills--coerce-list "solo")
-                 '("solo"))))
+  :doc "normalizes absent, scalar, and list paths and allowed tools"
+  (dolist (pair '((nil . nil) ("ListSkills" . ("ListSkills"))
+                  (("ListSkills" "Skill") . ("ListSkills" "Skill"))))
+    (let ((skill (mevedel-skills--from-plist
+                  "demo" (list :paths (car pair) :allowed-tools (car pair))
+                  "/demo/SKILL.md" 'user)))
+      (should (equal (cdr pair) (mevedel-skill-path-patterns skill)))
+      (should (equal (cdr pair) (mevedel-skill-allowed-tools skill)))
+      (should (equal (mapcar (lambda (name) (list name :action 'allow))
+                            (cdr pair))
+                     (mevedel-skill-allowed-tool-rules skill))))))
 
 (mevedel-deftest mevedel-skills--coerce-context ()
   ,test
@@ -980,12 +985,11 @@ shell: fish
            "name: intact
 description: present
 " "Body")
-          (cl-letf* ((display-warning-orig (symbol-function 'display-warning))
-                     ((symbol-function 'display-warning)
-                      (lambda (type message &rest args)
-                        (when (eq type 'mevedel)
-                          (push message warnings))
-                        nil)))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (type message &rest args)
+                       (when (eq type 'mevedel)
+                         (push message warnings))
+                       nil)))
             (let* ((skills (mevedel-skills-scan dir '(".")))
                    (names (mapcar #'mevedel-skill-name skills)))
               (should (member "intact" names))
@@ -1018,13 +1022,11 @@ description: unknown
 allowed-tools:
   - DoesNotExist
 " "Body")
-          (cl-letf* ((display-warning-orig
-                      (symbol-function 'display-warning))
-                     ((symbol-function 'display-warning)
-                      (lambda (type message &rest args)
-                        (when (eq type 'mevedel)
-                          (push message warnings))
-                        nil)))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (type message &rest args)
+                       (when (eq type 'mevedel)
+                         (push message warnings))
+                       nil)))
             (let* ((skills (mevedel-skills-scan dir '(".")))
                    (known (cl-find "known-tools" skills
                                    :key #'mevedel-skill-name :test #'equal)))
@@ -1059,13 +1061,12 @@ allowed-tools:
                             :name "Bash" :handler #'ignore
                             :get-pattern (lambda (_) ""))))))
     (unwind-protect
-        (cl-letf* ((display-warning-orig (symbol-function 'display-warning))
-                   ((symbol-function 'mevedel-tool-get)
-                    (lambda (n &optional _c) (cdr (assoc n fake-tools))))
-                   ((symbol-function 'display-warning)
-                    (lambda (type message &rest args)
-                      (when (eq type 'mevedel) (push message warnings))
-                        nil)))
+        (cl-letf (((symbol-function 'mevedel-tool-get)
+                   (lambda (n &optional _c) (cdr (assoc n fake-tools))))
+                  ((symbol-function 'display-warning)
+                   (lambda (type message &rest args)
+                     (when (eq type 'mevedel) (push message warnings))
+                     nil)))
           (mevedel-skills-test--write-skill
            dir "ok-rules"
            "name: ok-rules
