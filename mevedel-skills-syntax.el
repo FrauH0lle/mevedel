@@ -69,17 +69,13 @@ When INCLUDE-INJECTIONS-P is non-nil, include body-injection fences."
              (close-re (concat "\\(^\\|\n\\)"
                                (regexp-quote marker)
                                "\\(\n\\|\\'\\)"))
-             (close-end (mevedel-skills-syntax--authored-fence-close-end
-                         text close-re body-start)))
-        (if (and (not include-injections-p)
-                 (mevedel-skills-syntax--injection-fence-opener-p line marker))
-            (setq pos (or close-end len))
-          (if close-end
-              (progn
-                (push (cons line-start close-end) ranges)
-                (setq pos close-end))
-            (push (cons line-start len) ranges)
-            (setq pos len)))))
+             (end (or (mevedel-skills-syntax--authored-fence-close-end
+                       text close-re body-start)
+                      len)))
+        (unless (and (not include-injections-p)
+                     (mevedel-skills-syntax--injection-fence-opener-p line marker))
+          (push (cons line-start end) ranges))
+        (setq pos end)))
     (nreverse ranges)))
 
 (defun mevedel-skills-syntax--injection-inline-marker-start (text position)
