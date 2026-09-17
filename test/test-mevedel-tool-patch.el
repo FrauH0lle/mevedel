@@ -20,12 +20,6 @@
             "helpers"))
 (require 'mevedel-session-persistence)
 
-(defun test-mevedel-tool-patch--read-text (path)
-  "Read decoded text from PATH for filesystem assertions."
-  (with-temp-buffer
-    (insert-file-contents path)
-    (buffer-string)))
-
 (defun test-mevedel-tool-patch--read-bytes (path)
   "Read literal bytes from PATH for coding and rollback assertions."
   (with-temp-buffer
@@ -92,13 +86,13 @@
        (lambda (value) (setq result value))
        (list :patch patch)))
     (should (equal "alpha\nnew\nomega\n"
-                   (test-mevedel-tool-patch--read-text update-path)))
+                   (mevedel-test--read-file update-path)))
     (should (equal "created\n"
-                   (test-mevedel-tool-patch--read-text added-path)))
+                   (mevedel-test--read-file added-path)))
     (should-not (file-exists-p delete-path))
     (should-not (file-exists-p move-path))
     (should (equal "after move\n"
-                   (test-mevedel-tool-patch--read-text moved-path)))
+                   (mevedel-test--read-file moved-path)))
     (should (= #o751 (file-modes moved-path)))
     (should (equal "alpha\nnew\nomega\n"
                    (mevedel-file-state-content
@@ -116,7 +110,7 @@
        (list :patch patch)))
     (should result)
     (should (equal "alpha\nnew\nomega\n"
-                   (test-mevedel-tool-patch--read-text update-path)))))
+                   (mevedel-test--read-file update-path)))))
 
 (mevedel-deftest mevedel-tool-patch-resource-handler
   (:vars* ((root (file-name-as-directory
@@ -155,7 +149,7 @@
            (local-path (file-name-concat save-path "local" "notes" "new.txt")))
       (should save-path)
       (should (equal "created\n"
-                     (test-mevedel-tool-patch--read-text local-path)))
+                     (mevedel-test--read-file local-path)))
       (should (string-match-p "work://notes/new.txt"
                               (plist-get result :result)))
       (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))))
@@ -541,7 +535,7 @@
           (should-not continued)
           (should (buffer-modified-p buffer))
           (should (equal "disk\n"
-                         (test-mevedel-tool-patch--read-text path)))
+                         (mevedel-test--read-file path)))
           (should (equal "disk\nunsaved\n"
                          (with-current-buffer buffer (buffer-string)))))
       (when (buffer-live-p buffer)

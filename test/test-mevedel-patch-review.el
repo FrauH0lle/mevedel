@@ -92,9 +92,7 @@ adopt prompt.  Returns the messages the session produced."
                (list :patch patch)))
             (should-not result)
             (should (equal "a\nold1\nmiddle\nold2\nz\n"
-                           (with-temp-buffer
-                             (insert-file-contents one)
-                             (buffer-string))))
+                           (mevedel-test--read-file one)))
             (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
@@ -135,13 +133,9 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "a\nold1\nmiddle\nnew2\nz\n"
-                           (with-temp-buffer
-                             (insert-file-contents one)
-                             (buffer-string))))
+                           (mevedel-test--read-file one)))
             (should (equal "after\n"
-                           (with-temp-buffer
-                             (insert-file-contents two)
-                             (buffer-string))))
+                           (mevedel-test--read-file two)))
             (should (string-search "Rejected: one.txt hunk 1"
                                    (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t))))))
@@ -288,9 +282,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "first\nold1\nsecond\nold2\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should (string-search
                      "Feedback (whole patch): Overall: split this into two patches."
                      (plist-get result :result)))
@@ -368,14 +360,10 @@ adopt prompt.  Returns the messages the session produced."
               (mevedel-patch-review-submit))
             (should (file-exists-p delete-path))
             (should (equal "added\n"
-                           (with-temp-buffer
-                             (insert-file-contents added-path)
-                             (buffer-string))))
+                           (mevedel-test--read-file added-path)))
             (should-not (file-exists-p move-path))
             (should (equal "moved\n"
-                           (with-temp-buffer
-                             (insert-file-contents moved-path)
-                             (buffer-string))))
+                           (mevedel-test--read-file moved-path)))
             (should (string-search "Rejected: delete.txt"
                                    (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t)))))
@@ -435,9 +423,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "first\nnew1\nsecond\nnew2\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string)))))
+                           (mevedel-test--read-file path))))
         (when (file-directory-p root) (delete-directory root t)))))
 
   :doc "a hidden locator does not make file-row reselection take two presses"
@@ -537,9 +523,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "user edited\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should (string-search
                      (concat "User edited during review (authoritative):"
                              " one.txt (whole file revised)")
@@ -588,9 +572,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "model\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should-not (string-search "revised by the user"
                                        (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t)))))
@@ -631,9 +613,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "model\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should-not (string-search "revised by the user"
                                        (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t)))))
@@ -708,9 +688,7 @@ adopt prompt.  Returns the messages the session produced."
               (mevedel-patch-review-submit))
             (should (equal (concat "head\nEDITED\nmiddle\nmiddle\nmiddle\n"
                                    "tail\nSECOND\nend\n")
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should (string-search "two.txt (whole file revised)"
                                    (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t)))))
@@ -817,9 +795,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "user content\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should (string-search
                      "User edited during review (authoritative): fresh.txt"
                      (plist-get result :result)))
@@ -909,9 +885,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "model content\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should-not (string-search "revised by the user"
                                        (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t)))))
@@ -1004,9 +978,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
             (should (equal "keep me\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should (string-search
                      (concat "User edited during review (authoritative):"
                              " gone.txt (whole file revised)")
@@ -1192,9 +1164,7 @@ adopt prompt.  Returns the messages the session produced."
                 (mevedel-patch-review-test--edit-quit view-buf t)))
             (should (string-search "already settled" captured))
             (should (equal "model\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
+                           (mevedel-test--read-file path)))
             (should-not (string-search "revised by the user"
                                        (plist-get result :result))))
         (when (file-directory-p root) (delete-directory root t)))))
@@ -1399,13 +1369,9 @@ adopt prompt.  Returns the messages the session produced."
                        (buffer-substring-no-properties
                         (point-min) mevedel-view--input-marker))))
             (should (equal "old one\n"
-                           (with-temp-buffer
-                             (insert-file-contents one)
-                             (buffer-string))))
+                           (mevedel-test--read-file one)))
             (should (equal "external change\n"
-                           (with-temp-buffer
-                             (insert-file-contents two)
-                             (buffer-string)))))
+                           (mevedel-test--read-file two))))
         (when (file-directory-p root) (delete-directory root t)))))
 
   :doc "RET on Apply selected writes the patch and settles the callback"
@@ -1447,9 +1413,7 @@ adopt prompt.  Returns the messages the session produced."
                 (call-interactively command)))
             (should result)
             (should (equal "(defun hello-world ()\n  (interactive)\n  (message \"Hello, world!\"))\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string)))))
+                           (mevedel-test--read-file path))))
         (when (file-directory-p root) (delete-directory root t)))))
 
   :doc "A newly active parent is disclosed before the patch can apply"
@@ -1508,9 +1472,7 @@ adopt prompt.  Returns the messages the session produced."
               (mevedel-patch-review-submit))
             (should result)
             (should (equal "new\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string)))))
+                           (mevedel-test--read-file path))))
         (when (buffer-live-p parent-data) (kill-buffer parent-data))
         (when (file-directory-p root) (delete-directory root t)))))
 
@@ -1590,9 +1552,7 @@ adopt prompt.  Returns the messages the session produced."
               (unless (eq action 'view-kill)
                 (should-not (plist-get (car results) :status)))
               (should (equal "new\n"
-                             (with-temp-buffer
-                               (insert-file-contents path)
-                               (buffer-string)))))
+                             (mevedel-test--read-file path))))
           (when (file-directory-p root) (delete-directory root t))))))
 
   :doc "Sanitizes local paths and warns when review rollback is incomplete"
@@ -1714,9 +1674,7 @@ adopt prompt.  Returns the messages the session produced."
                            (plist-get result :result)))
             (should (eq 'error (plist-get result :status)))
             (should (equal "old\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string)))))
+                           (mevedel-test--read-file path))))
         (when (file-directory-p root) (delete-directory root t))))))
 
 (mevedel-deftest mevedel-patch-review-visit
@@ -1948,6 +1906,27 @@ adopt prompt.  Returns the messages the session produced."
     (should (string-search "Keys:" body))
     (should (string-search "edit" body))
     (should (string-search "feedback" body)))
+
+  :doc "File rows, hunk rows, and diff lines expose the same review keys"
+  (with-temp-buffer
+    (insert (mevedel-patch-review--body
+             '(:operations
+               ((:kind update :rel-path "a.el" :expanded t
+                 :hunks ((:selected t :diff-lines ("-old" "+new"))))))))
+    (dolist (label '("M a.el" "@@" "│ old" "│ new"))
+      (goto-char (point-min))
+      (search-forward label)
+      (dolist (binding '(("TAB" . mevedel-patch-review-toggle-fold)
+                         ("SPC" . mevedel-patch-review-toggle-selection)
+                         ("RET" . mevedel-patch-review-visit)
+                         ("<return>" . mevedel-patch-review-visit)
+                         ("n" . mevedel-patch-review-next-row)
+                         ("p" . mevedel-patch-review-previous-row)
+                         ("e" . mevedel-patch-review-edit)
+                         ("f" . mevedel-patch-review-feedback)
+                         ("C-c C-c" . mevedel-patch-review-submit)
+                         ("C-c C-k" . mevedel-patch-review-reject)))
+        (should (eq (cdr binding) (key-binding (kbd (car binding))))))))
 
   :doc "Dims a deselected hunk instead of tinting it"
   (let* ((body
