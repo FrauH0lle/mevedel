@@ -133,7 +133,6 @@ repair heuristically instead of prompting or modifying the diff."
               (failures 0)
               (created-files nil)
               (created-directories nil)
-              (preexisting-buffers nil)
               (preexisting-buffer-modtimes nil)
               (applied nil)
               (diff-refine nil)
@@ -150,7 +149,6 @@ repair heuristically instead of prompting or modifying the diff."
                      (mevedel-tool-patch-missing-parent-directories file)
                      created-directories))
               (when-let* ((buffer (find-buffer-visiting file)))
-                (push buffer preexisting-buffers)
                 (push (cons buffer
                             (with-current-buffer buffer
                               (visited-file-modtime)))
@@ -231,7 +229,7 @@ repair heuristically instead of prompting or modifying the diff."
       (unless applied
         (dolist (file created-files)
           (when-let* ((buffer (find-buffer-visiting file))
-                      ((not (memq buffer preexisting-buffers))))
+                      ((not (assq buffer preexisting-buffer-modtimes))))
             (kill-buffer buffer))
           (when (file-exists-p file)
             (delete-file file)))
