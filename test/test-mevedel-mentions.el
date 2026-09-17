@@ -1901,7 +1901,7 @@ injector would once the payload exists."
 (mevedel-deftest mevedel-mentions--expand-buffer ()
   ,test
   (test)
-  :doc "uses explicit insertion and media callbacks and defers dedup changes"
+  :doc "returns media separately and defers dedup changes"
   (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "expand-buffer" :root "/tmp"
                      :name "expand-buffer"))
@@ -1926,7 +1926,67 @@ injector would once the payload exists."
                    (plist-get expansion :dedup-updates)))
     (should-not
      (gethash '(asset . "/tmp/asset.png")
-              (mevedel-session-mentions-shown session)))))
+              (mevedel-session-mentions-shown session))))
+
+  :doc "keeps reminder, media and deferred commit ordering independent"
+  (let* ((session (mevedel-session-create
+                   "main" (mevedel-workspace--create
+                           :type 'file :id "expansion-order" :root "/tmp"
+                           :name "expansion-order")))
+         (shown (mevedel-session-mentions-shown session))
+         (results
+          '((:key text :hash "first" :reminder "text first")
+            (:key text :hash "second" :reminder "text duplicate")
+            (:key prior :hash "known" :reminder "already delivered")
+            (:key media :hash "one" :reminder "media first"
+             :media-context ("one.png" "image/png"))
+            (:key media :hash "two" :reminder "media duplicate"
+             :media-context ("two.png" "image/png"))
+            (:reminder "anonymous first")
+            (:reminder "anonymous second")
+            (:key denied :reminder "unavailable")
+            (:key empty :hash "nothing delivered")
+            (:key prior :hash "known" :reminder "already delivered"
+             :media-context ("known.png" "image/png"))
+            (:key unhashed :media-context ("unhashed.png" "image/png"))
+            (:media-context ("anonymous.png" "image/png"))))
+         (mevedel-mention-handlers
+          (list (list "@item:\\([0-9]+\\)" nil
+                      (lambda (info)
+                        (let ((index (string-to-number
+                                      (plist-get info :capture))))
+                          (append (list :placeholder (format "[%d]" index))
+                                  (nth (1- index) results)))))))
+         expansion)
+    (puthash 'prior '(0 . "known") shown)
+    (with-temp-buffer
+      (insert (propertize
+               (mapconcat (lambda (i) (format "@item:%d" i))
+                          (number-sequence 1 12) " ")
+               'gptel 'prompt))
+      (setq expansion (mevedel-mentions--expand-buffer session nil))
+      (should (equal "[1] [2] [3] [4] [5] [6] [7] [8] [9] [10] [11] [12]"
+                     (buffer-string)))
+      (should-not (text-property-not-all
+                   (point-min) (point-max) 'gptel 'prompt)))
+    (should (equal '((:key text :body "text first")
+                     (:key media :body "media first")
+                     (:key nil :body "anonymous first")
+                     (:key nil :body "anonymous second")
+                     (:key denied :body "unavailable"))
+                   (plist-get expansion :reminder-items)))
+    (should (equal '(("one.png" "image/png") ("two.png" "image/png")
+                     ("known.png" "image/png") ("unhashed.png" "image/png")
+                     ("anonymous.png" "image/png"))
+                   (plist-get expansion :media-contexts)))
+    (should (equal '((prior . "known") (media . "two")
+                     (media . "one") (text . "first"))
+                   (plist-get expansion :dedup-updates)))
+    (should (= 1 (hash-table-count shown)))
+    (mevedel-mentions-commit-expansion session expansion)
+    (should (= 3 (hash-table-count shown)))
+    (should (equal "first" (cdr (gethash 'text shown))))
+    (should (equal "one" (cdr (gethash 'media shown))))))
 
 (mevedel-deftest mevedel-mentions-commit-expansion ()
   ,test

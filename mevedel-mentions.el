@@ -922,7 +922,8 @@ Dispatches per `mevedel-mention-handlers'."
          (mentions-shown (and session
                               (mevedel-session-mentions-shown session)))
          (seen-this-pass (make-hash-table :test #'equal))
-         (new-items nil)
+         (reminder-items nil)
+         (dedup-updates nil)
          (media-contexts nil)
          (warnings nil))
     (dolist (entry mevedel-mention-handlers)
@@ -983,28 +984,21 @@ Dispatches per `mevedel-mention-handlers'."
                     (push warning warnings))
                   (when media-context
                     (push media-context media-contexts))
+                  (when fresh-reminder-p
+                    (push (list :key key :body reminder) reminder-items))
                   (when (or fresh-reminder-p media-context)
-                    (when (and key (or fresh-reminder-p media-context))
+                    (when key
                       (puthash key t seen-this-pass))
-                    (push (list :key key
-                                :hash hash
-                                :reminder (and fresh-reminder-p reminder))
-                          new-items)))))))))
+                    (when (and key hash)
+                      ;; Reverse dispatch order preserves the first hash
+                      ;; when repeated media mentions share a key.
+                      (push (cons key hash) dedup-updates))))))))))
     (when warnings
       (message "mevedel: %s"
                (mapconcat #'identity (delete-dups (nreverse warnings)) "; ")))
     (list :media-contexts (nreverse media-contexts)
-          :reminder-items
-          (cl-loop for item in (reverse new-items)
-                   when (plist-get item :reminder)
-                   collect (list :key (plist-get item :key)
-                                 :body (plist-get item :reminder)))
-          :dedup-updates
-          (cl-loop for item in new-items
-                   when (and (plist-get item :key)
-                             (plist-get item :hash))
-                   collect (cons (plist-get item :key)
-                                 (plist-get item :hash))))))
+          :reminder-items (nreverse reminder-items)
+          :dedup-updates dedup-updates)))
 
 (defun mevedel-mentions-commit-expansion (session expansion)
   "Record deduplication data from EXPANSION in SESSION."
