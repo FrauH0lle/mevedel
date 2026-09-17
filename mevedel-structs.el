@@ -170,7 +170,6 @@ read by a tool, or nil if never.  MODIFIED-TURN is the same for tool
 modifications.  READ-OFFSET and READ-LIMIT capture the arguments of
 the last read call so that repeated Read calls over the same range
 can be deduplicated when the on-disk mtime is unchanged."
-  path
   read-turn
   modified-turn
   read-offset
@@ -730,7 +729,6 @@ Created at request start, cleared in the termination handler."
   plan-read-only    ; immutable Plan capability boundary for this request
   one-shot-mutations-p ; non-read-only tools require one-time approval
   ephemeral-p       ; suppress request-owned durable conversation artifacts
-  pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
   active-work-pause-started-at ; wall-clock time when the current pause began

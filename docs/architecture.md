@@ -114,7 +114,7 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
 - **`mevedel-request`**: per-turn state: process-unique request identity,
   owning session and agent origin, its once-reserved session turn identity,
   request start time, accumulated active-work pause time, file-snapshots,
-  directive UUID, immutable Plan read-only authority, pending plan, cancellers,
+  directive UUID, immutable Plan read-only authority, cancellers,
   skill-scoped permission rules, user-attached skill records, hook rules, and
   transient one-shot-mutation/ephemeral-artifact boundaries.
   Skill model and effort policy is consumed before
