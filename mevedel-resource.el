@@ -258,10 +258,7 @@ literal and are expanded in that same base directory."
         (result nil))
     (dotimes (index (length bytes))
       (let ((byte (aref bytes index)))
-        (if (and (< byte 128)
-                 (string-match-p
-                  (regexp-quote (char-to-string byte))
-                  mevedel-resource--unreserved))
+        (if (string-search (char-to-string byte) mevedel-resource--unreserved)
             (push (char-to-string byte) result)
           (push (format "%%%02X" byte) result))))
     (apply #'concat (nreverse result))))
@@ -318,18 +315,14 @@ MCP address."
       (when (string-suffix-p "/" tail)
         (signal 'mevedel-resource-error
                 '("Remove the trailing slash from the resource address; directories use their canonical name")))
-      (when (or (member "" raw-components)
-                (string-prefix-p "/" tail)
-                (string-suffix-p "/" tail))
+      (when (member "" raw-components)
         (signal 'mevedel-resource-error
                 (list "Empty resource path component")))
       (mapcar #'mevedel-resource--decode-component raw-components))))
 
 (defun mevedel-resource--canonical-components (components)
   "Return canonical slash-separated encoding for COMPONENTS."
-  (if components
-      (mapconcat #'mevedel-resource-encode-component components "/")
-    ""))
+  (mapconcat #'mevedel-resource-encode-component components "/"))
 
 (defun mevedel-resource--decode-json-pointer (fragment)
   "Validate decoded JSON Pointer FRAGMENT and return its tokens.
@@ -401,11 +394,9 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
            (canonical
             (mapconcat
              (lambda (character)
-               (if (or (= character ?/) (= character ?~)
-                       (and (< character 128)
-                            (string-match-p
-                             (regexp-quote (char-to-string character))
-                             mevedel-resource--unreserved)))
+               (if (or (= character ?/)
+                       (string-search (char-to-string character)
+                                      mevedel-resource--unreserved))
                    (char-to-string character)
                  (mevedel-resource-encode-component
                   (char-to-string character))))
@@ -506,16 +497,10 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
       (when (or (member "" raw-components) (> (length raw-components) 2))
         (signal 'mevedel-resource-error
                 (list "MCP address has an invalid component count")))
-      (let ((components
-             (list (mevedel-resource--decode-component
-                    (car raw-components) t)))
-            (resource-p (> (length raw-components) 1)))
-        (when resource-p
-          (setq components
-                (append components
-                        (list (mevedel-resource--decode-component
-                               (cadr raw-components) t)))))
-        (list :components components :dynamic-p (not resource-p))))))
+      (list :components
+            (mapcar (lambda (raw) (mevedel-resource--decode-component raw t))
+                    raw-components)
+            :dynamic-p (= (length raw-components) 1)))))
 
 (defun mevedel-resource--session (context)
   "Return the owning session from CONTEXT, or nil."
@@ -875,10 +860,9 @@ Physical resolution is intentionally not performed here."
            (fragment-p (and (eq scheme 'agent)
                             (string-match "#" tail))))
       (when fragment-p
-        (let ((hash (string-match "#" tail)))
-          (setq fragment-data
-                (mevedel-resource--decode-fragment (substring tail (1+ hash))))
-          (setq tail (substring tail 0 hash))))
+        (setq fragment-data
+              (mevedel-resource--decode-fragment (substring tail (1+ fragment-p))))
+        (setq tail (substring tail 0 fragment-p)))
       (when (and (not (eq scheme 'agent)) (string-match "#" tail))
         (signal 'mevedel-resource-error
                 (list "Fragments are not supported by this resource scheme")))
@@ -925,8 +909,6 @@ Physical resolution is intentionally not performed here."
                  (t "")))
                ((and (eq scheme 'memory) (equal components '("journal")))
                 "journal/")
-               ((eq scheme 'mcp)
-                (mevedel-resource--canonical-components components))
                (t (mevedel-resource--canonical-components components))))
              (canonical (concat prefix canonical-tail
                                 (if fragment-p
@@ -946,11 +928,6 @@ Physical resolution is intentionally not performed here."
                    (null components))
           (signal 'mevedel-resource-error
                   (list "Agent JSON Pointer requires a canonical agent path")))
-        (when (and (eq scheme 'agent)
-                   (not fragment-p)
-                   (string-match "#" address))
-          (signal 'mevedel-resource-error
-                  (list "Agent address contains an invalid fragment")))
         (unless (equal address canonical)
           (signal 'mevedel-resource-error
                   (list "Noncanonical resource address")))

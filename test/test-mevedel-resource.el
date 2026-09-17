@@ -48,7 +48,7 @@
   (dolist (address '("work://a//b" "work://a/../b" "work://a/./b"
                      "work://a%2fb" "work://a%2Fb" "work://a%2eb"
                      "work://a%2Eb" "work://a%ZZ" "work:///a"
-                     "work://a#fragment"))
+                     "work://a#fragment" "work://a/" "work:///"))
     (should-error (mevedel-resource-parse-address address)))
   :doc "rejects unknown scheme URLs instead of treating them as paths"
   (should-error (mevedel-resource-parse-address "https://example.test/a"))
@@ -143,7 +143,12 @@
                    "agent://root/reviewer#not-a-pointer"
                    "agent://root/reviewer#/%7E0"
                    "agent://root/reviewer#/bad~2escape"))
-      (should-error (mevedel-resource-parse-address address))))
+      (should-error (mevedel-resource-parse-address address)))
+    (dolist (fragment '("" "/" "/a~1b/~0/%C3%A4%25"))
+      (let* ((address (concat "agent://root/reviewer#" fragment))
+             (parsed (mevedel-resource-parse-address address)))
+        (should (equal address (plist-get parsed :canonical)))
+        (should (= (length "root/reviewer") (plist-get parsed :fragment-p))))))
   :doc "accepts the root history as a session-relative read-only address"
   (let ((parsed (mevedel-resource-parse-address "history://root")))
     (should (equal '("root") (plist-get parsed :components)))
