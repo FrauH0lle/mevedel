@@ -321,7 +321,52 @@ cover, so the permission step's warning about it is captured here."
 		   (funcall saved-next saved-ctx)
 		   (mevedel-test--with-captured-diagnostics nil
 		     (funcall saved-fail "ignored"))
-		   (should (equal results '("ok")))))
+		   (should (equal results '("ok"))))
+
+  :doc "signal classes preserve failure, telemetry, directory and cancellation cleanup"
+  (let ((root (make-temp-file "mevedel-pipeline-failure-" t))
+        (other (make-temp-file "mevedel-pipeline-outside-" t)))
+    (unwind-protect
+        (dolist (case '((mevedel-validation-error nil validation validation "Validation error")
+                        (mevedel-validation-error ("bad input") validation validation "bad input")
+                        (mevedel-resource-error nil invalid-resource validation "Invalid resource address")
+                        (mevedel-resource-error ("bad address") invalid-resource validation "bad address")
+                        (mevedel-permission-denied nil permission-denied permission-denied "Permission denied")
+                        (mevedel-permission-denied ("blocked") permission-denied permission-denied "Permission denied: blocked")
+                        (mevedel-pipeline-error nil pipeline-error pipeline "Pipeline error")
+                        (mevedel-pipeline-error ("failed step") pipeline-error pipeline "failed step")
+                        (error ("failed operation") pipeline-error error "failed operation")))
+          (let* ((cancel-cell (list nil))
+                 (context (list :tool (mevedel-tool--create :name "Failure")
+                                :session (mevedel-session--create)
+                                :tool-use-id "failure-id" :call-source 'ptc
+                                :default-directory root :cancel-cell cancel-cell))
+                 result telemetry)
+            (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+                       (lambda (_) t))
+                      ((symbol-function 'mevedel-telemetry-start)
+                       (lambda (&rest _) 'span))
+                      ((symbol-function 'mevedel-telemetry-finish)
+                       (lambda (_span &rest properties) (push properties telemetry))))
+              (mevedel-pipeline--run
+               (list (lambda (_context _next _fail)
+                       (should (functionp (car cancel-cell)))
+                       (let ((default-directory other))
+                         (signal (nth 0 case) (nth 1 case)))))
+               (lambda (outcome)
+                 (should (equal default-directory (file-name-as-directory root)))
+                 (should-not (car cancel-cell))
+                 (setq result outcome))
+               context))
+            (should (eq 'error (plist-get result :status)))
+            (should (eq (nth 2 case) (plist-get result :reason)))
+            (should (equal (concat "Error: " (nth 4 case)) (plist-get result :result)))
+            (should (equal "failure-id" (plist-get result :tool-use-id)))
+            (should (eq 'ptc (plist-get result :source)))
+            (should (equal (list (list :outcome 'error :error-class (nth 3 case)))
+                           telemetry))))
+      (delete-directory root t)
+      (delete-directory other t))))
 
 
 ;;
