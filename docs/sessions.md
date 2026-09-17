@@ -870,8 +870,9 @@ than the parent's retained history.  Its in-memory session is built by the same
 explicit slot policy as every Save As path: logical containers are deep-copied,
 the workspace and immutable execution-target identity are shared, and all
 request, queue, publication, transfer, and lease runtime is reset.  Pre-commit
-failure removes staging and leaves
-the parent unchanged.  Once the marker commits, later finalization failure
+failure, including cancellation or another nonlocal exit, removes staging and
+releases any child lease while leaving the parent unchanged. Once the marker
+commits, later finalization failure
 retains the independently resumable child and reports the failure instead of
 rolling it back. If the final staging-directory rename itself fails, session
 listing recognizes that hidden committed child by its verified publication;

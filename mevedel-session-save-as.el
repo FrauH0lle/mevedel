@@ -197,7 +197,9 @@ parent identity."
          (staging-path
           (file-name-as-directory
            (make-temp-file
-            (expand-file-name ".mevedel-save-as-" parent-directory) t)))
+           (expand-file-name ".mevedel-save-as-" parent-directory) t)))
+         ;; Cleanup owns the directory even if clone construction exits.
+         (_ (plist-put transaction :staging-path staging-path))
          (now (format-time-string "%FT%H-%M-%S"))
          (child
           (mevedel-session-fork-clone-session
@@ -208,7 +210,6 @@ parent identity."
            :created-at now
            :updated-at now
            :forked-from-session-id (plist-get transaction :old-id))))
-    (plist-put transaction :staging-path staging-path)
     (plist-put transaction :child child)
     (plist-put transaction :stage 'staged)))
 
@@ -242,23 +243,27 @@ parent identity."
         (buffer (plist-get transaction :buffer))
         (staging-path (plist-get transaction :staging-path)))
     (condition-case error
-        (progn
-          (mevedel-session-publication-publish
-           child
-           (mevedel-session-rewind-rewind-publication-artifacts
-            child buffer staging-path child))
-          (plist-put transaction :stage 'published))
+        (unwind-protect
+            (progn
+              (mevedel-session-publication-publish
+               child
+               (mevedel-session-rewind-rewind-publication-artifacts
+                child buffer staging-path child))
+              (plist-put transaction :stage 'published))
+          ;; A throw or quit after publication must not make outer cleanup
+          ;; mistake the committed child for disposable staging.
+          (unless (mevedel-session-save-as--committed-p transaction)
+            (let ((publication
+                   (mevedel-session-save-as--read-publication staging-path))
+                  (committed-head
+                   (plist-get (mevedel-session-lease child) :publication-head)))
+              (when (or publication committed-head)
+                (plist-put transaction :publication publication)
+                (plist-put transaction :stage 'published)))))
       (error
-       (let ((publication
-              (mevedel-session-save-as--read-publication staging-path))
-             (committed-head
-              (plist-get (mevedel-session-lease child) :publication-head)))
-         (if (or publication committed-head)
-             (progn
-               (plist-put transaction :publication publication)
-               (plist-put transaction :stage 'published)
-               (mevedel-session-save-as--record-error transaction error))
-           (signal (car error) (cdr error))))))))
+       (if (mevedel-session-save-as--committed-p transaction)
+           (mevedel-session-save-as--record-error transaction error)
+         (signal (car error) (cdr error)))))))
 
 (defun mevedel-session-save-as--move-child (transaction)
   "Move TRANSACTION's published child into its discoverable path."
@@ -420,8 +425,9 @@ parent identity."
 NEW-NAME, NEW-ID, and NEW-SAVE-PATH identify the child.  Return a result plist
 with `:status' `committed', the adopted live `:session', its `:save-path', and
 the committed `:publication'.  Pre-commit errors are re-signaled after
-staging cleanup.  Once the child marker commits, failures retain the child and
-are signaled as finalization errors.
+staging cleanup.  Once the child marker commits, errors retain the child and
+are signaled as finalization errors.  Throws and quits propagate after cleanup
+or committed-child adoption.
 
 The caller must already have checked live mutation authority.  This module
 rechecks the portable parent head while holding the reserved lease and uses
@@ -429,17 +435,18 @@ the existing lease/publication gates for every child write."
   (let ((transaction
          (mevedel-session-save-as--validate
           session buffer new-name new-id new-save-path)))
-    (condition-case error
+    (unwind-protect
+        (condition-case error
+            (setq transaction
+                  (mevedel-session-save-as--run-stages transaction))
+          (error
+           (setq transaction
+                 (mevedel-session-save-as--record-error transaction error))))
+      (if (mevedel-session-save-as--committed-p transaction)
+          (setq transaction
+                (mevedel-session-save-as--adopt-child transaction))
         (setq transaction
-              (mevedel-session-save-as--run-stages transaction))
-      (error
-       (setq transaction
-             (mevedel-session-save-as--record-error transaction error))))
-    (if (mevedel-session-save-as--committed-p transaction)
-        (setq transaction
-              (mevedel-session-save-as--adopt-child transaction))
-      (setq transaction
-            (mevedel-session-save-as--cleanup transaction)))
+              (mevedel-session-save-as--cleanup transaction))))
     (mevedel-session-save-as--finish transaction)))
 
 (defun mevedel-session-save-as--rename-live-session-buffers
