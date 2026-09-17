@@ -1191,6 +1191,33 @@
    (mevedel-view--steering-request-context-supported-p
     '(:future-policy nil))))
 
+(mevedel-deftest mevedel-view--next-follow-up ()
+  ,test
+  (test)
+  :doc "uses FIFO without a workflow and returns the original entry"
+  (let* ((first (list :input "first"))
+         (session (mevedel-session--create
+                   :pending-follow-ups (list first '(:input "second")))))
+    (should (eq first (mevedel-view--next-follow-up session)))
+    (setf (mevedel-session-pending-follow-ups session) nil)
+    (should-not (mevedel-view--next-follow-up session)))
+  :doc "selects only the owning directive's first Plan entry"
+  (let* ((first (list :input "first revision"
+                      :scope '(:directive-id "d1" :action plan)))
+         (queue (list '(:input "ordinary")
+                      '(:input "other" :scope (:directive-id "d2" :action plan))
+                      '(:input "discuss" :scope (:directive-id "d1" :action discuss))
+                      first
+                      '(:input "second revision"
+                        :scope (:directive-id "d1" :action plan))))
+         (session (mevedel-session--create
+                   :directive-planning '(:directive-id "d1")
+                   :pending-follow-ups queue)))
+    (should (eq first (mevedel-view--next-follow-up session)))
+    (should (eq queue (mevedel-session-pending-follow-ups session)))
+    (setf (mevedel-session-directive-planning session) '(:directive-id "absent"))
+    (should-not (mevedel-view--next-follow-up session))))
+
 (mevedel-deftest mevedel-view--follow-up-auto-drain-blocked-p ()
   ,test
   (test)
@@ -1250,7 +1277,10 @@
           :authority-mode 'pid-lock
           :name "directive-plan"
           :directive-planning '(:directive-id "d1" :phase approval)
-          :pending-follow-ups '((:input "ordinary")))))
+          :pending-follow-ups
+          '((:input "ordinary")
+            (:input "other plan" :scope (:directive-id "d2" :action plan))
+            (:input "discussion" :scope (:directive-id "d1" :action discuss))))))
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-session-pending-follow-ups session)
           '((:input "ordinary")

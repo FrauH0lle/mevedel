@@ -4928,13 +4928,27 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             '(:directive-id "d1" :phase approval)
             (mevedel-session-pending-follow-ups session)
             '((:input "ordinary" :display-text "ordinary")
+              (:input "other plan"
+               :scope (:directive-id "d2" :action plan))
+              (:input "discussion"
+               :scope (:directive-id "d1" :action discuss))
               (:input "revise" :display-text "revise"
+               :scope (:directive-id "d1" :action plan))
+              (:input "revise again"
                :scope (:directive-id "d1" :action plan))))
       (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
                  (lambda (_scope input) (setq sent input))))
         (mevedel-view--drain-follow-up data-buf))
       (should (equal "revise" sent))
-      (should (equal '("ordinary")
+      (should (equal '("ordinary" "other plan" "discussion" "revise again")
+                     (mapcar (lambda (entry) (plist-get entry :input))
+                             (mevedel-session-pending-follow-ups session))))
+      (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
+                 (lambda (_scope input) (setq sent input))))
+        (mevedel-view--drain-follow-up data-buf))
+      (should (equal "revise again" sent))
+      (should (mevedel-view--follow-up-auto-drain-blocked-p session))
+      (should (equal '("ordinary" "other plan" "discussion")
                      (mapcar (lambda (entry) (plist-get entry :input))
                              (mevedel-session-pending-follow-ups session))))))
 
