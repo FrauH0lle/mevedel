@@ -69,7 +69,7 @@ Use only a plan's first line and list binary or undecodable file names."
         (if (or (string-match-p "[[:cntrl:]]"
                                 (replace-regexp-in-string "[\t\r\n]" "" text))
                 (cl-some (lambda (char) (eq (char-charset char) 'eight-bit))
-                         (string-to-list text)))
+                         text))
             (concat header "[binary or non-UTF-8 file; name only]\n")
           (concat header
                   (if plan-p (car (split-string text "\n")) text)

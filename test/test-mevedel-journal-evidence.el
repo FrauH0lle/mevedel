@@ -60,7 +60,7 @@
             (should (string-match-p "\u754c" snapshot))
             (should-not (string-match-p "Other note" snapshot))
             (should-not (cl-some (lambda (char) (eq (char-charset char) 'eight-bit))
-                                 (string-to-list snapshot)))))
+                                 snapshot))))
       (delete-directory session-dir t)))
 
   :doc "lists unrecognized binary files and rejects symlink escapes"
