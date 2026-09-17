@@ -141,13 +141,17 @@
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test
   (test)
-  :doc "exposes role-declared ToolCall to retained agents"
-  (let* ((spec (mevedel-agent-to-gptel-spec
-                (mevedel-agent-get "explorer")))
-         (tool-function (cadr (plist-get (cdr spec) :tools)))
-         (tools (funcall tool-function nil)))
-    (should
-     (cl-find "ToolCall" tools :key #'gptel-tool-name :test #'equal))))
+  :doc "installs discovery and ToolCall once for every built-in role"
+  (dolist (name '("worker" "explorer" "verifier" "reviewer"))
+    (let ((spec (mevedel-agent-to-gptel-spec (mevedel-agent-get name)))
+          tools)
+      (gptel--apply-preset
+       (cdr spec)
+       (lambda (symbol value)
+         (when (eq symbol 'gptel-tools) (setq tools value))))
+      (dolist (name '("ToolCall" "ToolSearch"))
+        (should (= 1 (cl-count name tools :key #'gptel-tool-name
+                               :test #'equal)))))))
 
 (mevedel-deftest mevedel-agent--declared-specs/test
   (:before-each (test-mevedel-agents--restore-builtins))
