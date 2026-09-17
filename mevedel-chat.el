@@ -58,9 +58,7 @@
 (declare-function gptel-request "ext:gptel-request")
 (defvar gptel--request-alist)
 (defvar gptel-org-convert-response)
-(defvar gptel-prompt-prefix-alist)
 (defvar gptel-prompt-transform-functions)
-(defvar gptel-response-separator)
 (defvar gptel-stream)
 
 ;; `mevedel-agents'
@@ -268,14 +266,14 @@
 (defvar mevedel--turn-settlements-pending)
 
 ;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-		  "mevedel-utilities" (start end))
+(declare-function mevedel--insert-user-turn
+                  "mevedel-utilities" (input))
 (declare-function mevedel--optimize-transcript-buffer
 		  "mevedel-utilities" nil)
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-generate-diff "mevedel-utilities"
                   (original modified filepath &optional labels-real))
-(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(autoload 'mevedel--insert-user-turn "mevedel-utilities")
 (autoload 'mevedel--optimize-transcript-buffer "mevedel-utilities")
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 (autoload 'mevedel-generate-diff "mevedel-utilities")
@@ -1199,21 +1197,10 @@ DISPLAY-TEXT is mirrored to the view, defaulting to PROMPT.  KIND and
 HOOK-CONTEXT are forwarded to `mevedel-view--begin-external-turn',
 with NO-SPINNER forwarded when non-nil."
   (goto-char (point-max))
-  (let ((user-turn-start (point)))
-    (insert gptel-response-separator)
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (let ((prefix-length (length prefix)))
-        (unless (and (>= (point) (+ (point-min) prefix-length))
-                     (string= (buffer-substring-no-properties
-                               (- (point) prefix-length) (point))
-                              prefix))
-          (unless (bolp) (insert "\n"))
-          (insert prefix))))
-    (insert prompt "\n")
-    (mevedel--clear-user-turn-gptel-properties user-turn-start (point))
-    (when (and display-text (not (equal display-text prompt)))
-      (insert (mevedel-tool-render-data-format
-               (list :kind 'user-display :text display-text)))))
+  (mevedel--insert-user-turn prompt)
+  (when (and display-text (not (equal display-text prompt)))
+    (insert (mevedel-tool-render-data-format
+             (list :kind 'user-display :text display-text))))
   (mevedel-collaboration--safe-accepted-prompt (current-buffer))
   (let ((data-turn-start (copy-marker (point) nil)))
     (when-let* ((view (and (boundp 'mevedel--view-buffer)

@@ -20,6 +20,8 @@
 ;; `gptel'
 (declare-function gptel--display-reasoning-stream "ext:gptel" (text info))
 (defvar gptel-default-mode)
+(defvar gptel-prompt-prefix-alist)
+(defvar gptel-response-separator)
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-run-helper
@@ -962,6 +964,26 @@ Preserve atomic mention bindings and live structural producer provenance."
                (+ start position) (+ start next) (list property t)))
             (setq position next))))))
   (mevedel-transcript-restore-ignored-properties start end))
+
+(defun mevedel--insert-user-turn (input)
+  "Insert user INPUT at point with the configured gptel separator and prefix.
+Clear inherited transcript properties while retaining mention bindings and
+structural provenance.  Return the start of INPUT, leaving point after its
+trailing newline.  The caller owns request admission and response markers."
+  (let ((start (point)))
+    (insert gptel-response-separator)
+    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+      (let ((prefix-length (length prefix)))
+        (unless (and (>= (point) (+ (point-min) prefix-length))
+                     (string= (buffer-substring-no-properties
+                               (- (point) prefix-length) (point))
+                              prefix))
+          (unless (bolp) (insert "\n"))
+          (insert prefix))))
+    (let ((body-start (point)))
+      (insert input "\n")
+      (mevedel--clear-user-turn-gptel-properties start (point))
+      body-start)))
 
 (defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
   "Opening delimiter for internal render-data side-channel blocks.")

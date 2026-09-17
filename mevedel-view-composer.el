@@ -34,8 +34,6 @@
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-backend)
-(defvar gptel-prompt-prefix-alist)
-(defvar gptel-response-separator)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -379,11 +377,11 @@
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-		  "mevedel-utilities" (start end))
+(declare-function mevedel--insert-user-turn
+                  "mevedel-utilities" (input))
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
-(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(autoload 'mevedel--insert-user-turn "mevedel-utilities")
 (autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
 ;; `mevedel-view'
@@ -1737,18 +1735,7 @@ when the submission started."
          (and (boundp 'mevedel--current-directive-uuid)
               mevedel--current-directive-uuid)))
       (goto-char (point-max))
-      (let ((user-turn-start (point)))
-        (insert gptel-response-separator)
-        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-          (let ((prefix-length (length prefix)))
-            (unless (and (>= (point) (+ (point-min) prefix-length))
-                         (string= (buffer-substring-no-properties
-                                   (- (point) prefix-length) (point))
-                                  prefix))
-              (unless (bolp) (insert "\n"))
-              (insert prefix))))
-        (insert input "\n")
-        (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
+      (mevedel--insert-user-turn input)
       (let ((data-turn-start (copy-marker (point) nil)))
         (with-current-buffer mevedel--view-buffer
           (mevedel-view-stream-begin-turn
@@ -2632,21 +2619,7 @@ asynchronous preparation ran is left alone instead of cleared."
        ;; path as a full rerender.
        (with-current-buffer mevedel--data-buffer
          (goto-char (point-max))
-         (let ((user-turn-start (point))
-               body-start)
-           ;; Insert response separator
-           (insert gptel-response-separator)
-           ;; Insert prompt prefix if needed (e.g., org heading marker)
-           (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-             (let ((prefix-length (length prefix)))
-               (unless (and (>= (point) (+ (point-min) prefix-length))
-                            (string= (buffer-substring-no-properties
-                                      (- (point) prefix-length) (point))
-                                     prefix))
-                 (unless (bolp) (insert "\n"))
-                 (insert prefix))))
-           (setq body-start (point))
-           (insert input "\n")
+         (let ((body-start (mevedel--insert-user-turn input)))
            (when-let* ((prompt-summary-body)
                        (block
 			(car (last
@@ -2655,9 +2628,7 @@ asynchronous preparation ran is left alone instead of cleared."
                    (mevedel-view-disclosure-source-range
                     data-buffer
                     (+ body-start (car block))
-                    (+ body-start (cadr block)))))
-           (mevedel--clear-user-turn-gptel-properties
-            user-turn-start (point)))
+                    (+ body-start (cadr block))))))
          (dolist (audit hook-audits)
            (let ((audit-start (point)))
              (insert (mevedel--format-hook-audit-record audit))

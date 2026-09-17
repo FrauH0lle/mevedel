@@ -20,8 +20,6 @@
 (declare-function gptel--update-status
                   "ext:gptel" (status &optional face))
 (defvar gptel-display-buffer-action)
-(defvar gptel-prompt-prefix-alist)
-(defvar gptel-response-separator)
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-interrupt
@@ -142,9 +140,9 @@
 (autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-                  "mevedel-utilities" (start end))
-(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(declare-function mevedel--insert-user-turn
+                  "mevedel-utilities" (input))
+(autoload 'mevedel--insert-user-turn "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
@@ -997,18 +995,7 @@ Loading the agents module registers the bundled agents."
                              (and (boundp 'mevedel--current-directive-uuid)
                                   mevedel--current-directive-uuid)))
     (goto-char (point-max))
-    (let ((user-turn-start (point)))
-      (insert gptel-response-separator)
-      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-        (let ((prefix-length (length prefix)))
-          (unless (and (>= (point) (+ (point-min) prefix-length))
-                       (string= (buffer-substring-no-properties
-                                 (- (point) prefix-length) (point))
-                                prefix))
-            (unless (bolp) (insert "\n"))
-            (insert prefix))))
-      (insert display "\n")
-      (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))))
+    (mevedel--insert-user-turn display)))
 
 (defun mevedel-review--end-direct-request (data-buffer)
   "End DATA-BUFFER's direct review request if one is active."
