@@ -57,6 +57,9 @@ rule matches against.  At most one specifier is allowed per rule:
   :pattern GLOB  - command or expression string (supports *, plus
                    Bash-style PREFIX:*).  Used by Bash and by qualified
                    full-escalation Eval rules.
+  :expression TEXT - complete Eval expression, matched literally.
+                   Used by remembered Eval approvals, including execution
+                   profiles and full escalation.  No wildcard expansion.
   :domain  GLOB  - host name (supports *)
                    Used by WebFetch and WebSearch.
   :name    GLOB  - match name (supports *)
@@ -264,7 +267,7 @@ Returns non-nil if PATH matches PATTERN."
       (string-match-p (apply #'concat (nreverse parts)) expanded-path))))
 
 (defconst mevedel-permission--specifier-keys
-  '(:path :pattern :domain :name)
+  '(:path :pattern :expression :domain :name)
   "Keys recognised as rule specifiers.
 A rule may carry at most one of these.  The first match wins.")
 
@@ -282,6 +285,7 @@ A rule may carry at most one of these.  The first match wins.")
   "Return non-nil if VALUE matches PATTERN under specifier KIND."
   (when (and pattern value)
     (pcase kind
+      (:expression (equal value pattern))
       (:path (mevedel-permission-rules-match-path-p value pattern))
       (:pattern
        (if (string-suffix-p ":*" pattern)
@@ -297,13 +301,15 @@ A rule may carry at most one of these.  The first match wins.")
   "Find all matching rules in RULES for TOOL-NAME under the given values.
 
 RULES is a list in the format of `mevedel-permission-rules'.  Rule
-matches are determined by the rule's specifier (one of `:path',
-`:pattern', `:domain', `:name') against PATH, PATTERN, DOMAIN, or NAME.
+matches are determined by the rule's specifier against PATH, PATTERN,
+DOMAIN, or NAME.  Eval `:expression' rules compare PATTERN literally;
+`:pattern' rules retain wildcard semantics.
 Unqualified rules match unconditionally.  Return a list of
 matching rules in order (later entries = higher priority)."
   (let ((matches nil)
         (values `((:path    . ,path)
                   (:pattern . ,pattern)
+                  (:expression . ,(and (equal tool-name "Eval") pattern))
                   (:domain  . ,domain)
                   (:name    . ,name))))
     (dolist (rule rules)
@@ -328,8 +334,8 @@ matching rules in order (later entries = higher priority)."
     (rules tool-name &key path pattern domain name)
   "Determine the effective action from RULES for TOOL-NAME and specifiers.
 
-Rules that carry a specifier (any of `:path', `:pattern', `:domain',
-`:name') match PATH, PATTERN, DOMAIN, or NAME and take precedence over
+Rules that carry a specifier match PATH, PATTERN, DOMAIN, or NAME
+as described by `mevedel-permission-rules-find' and take precedence over
 unqualified rules.  Within each group, deny > ask > allow.  Return
 `allow', `deny', `ask', or nil if no rules match."
   (let ((matching (mevedel-permission-rules-find
@@ -582,8 +588,9 @@ recursive grant on the same path."
   "Build a permission rule list from the given components.
 
 TOOL-NAME is the tool name string or \"*\".  ACTION is `allow', `deny',
-or `ask'.  SPEC-KEY is one of `:path', `:pattern', `:domain', `:name',
-or nil for an unqualified rule.  SPEC-VALUE is the glob associated with
+or `ask'.  SPEC-KEY is one of `:path', `:pattern', `:expression', `:domain',
+`:name', or nil for an unqualified rule.  SPEC-VALUE is the literal
+expression or glob associated with
 SPEC-KEY (ignored when SPEC-KEY is nil).  NETWORK and FILE-SYSTEM record a
 matching additive execution profile.  SANDBOX-PERMISSIONS optionally qualifies
 the already requested child-execution level."

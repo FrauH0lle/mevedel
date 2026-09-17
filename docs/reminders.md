@@ -140,7 +140,8 @@ owner exactly as on the root path.
   the same active Plan reminder again, unless it is already staged; this also
   covers directive planning. A generated summary cannot replace the current
   proposal contract.
-- **Mode constraints / full-auto:** permission-mode guidance.
+- **Mode constraints / full-auto:** permission-mode guidance, including the
+  disclosure that live Eval runs inside Emacs without confinement.
 - **Fork provenance:** the sparse (interval 20) `fork-provenance`
   reminder regenerates a fork's provenance from durable session slots
   via `mevedel-session-fork-provenance-body`: source session and, for

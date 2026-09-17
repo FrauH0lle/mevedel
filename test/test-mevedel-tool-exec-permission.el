@@ -1516,7 +1516,7 @@ the exact expression and selected network authority are reused together"
              (lambda (result) (setq outcome result))))
           (should
            (member
-            '("Eval" :pattern "(+ 1 2)" :network t :action allow)
+            '("Eval" :expression "(+ 1 2)" :network t :action allow)
             (mevedel-session-permission-rules session)))
           (setq outcome nil)
           (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -2646,8 +2646,8 @@ default Bash keeps bare dot inspection automatic"
                  'deny-session session nil "(delete-file x)" nil)))
     (should
      (equal
-      '(("Eval" :pattern "(+ 1 2)" :action allow)
-        ("Eval" :pattern "(delete-file x)" :action deny))
+      '(("Eval" :expression "(+ 1 2)" :action allow)
+        ("Eval" :expression "(delete-file x)" :action deny))
       (mevedel-session-permission-rules session))))
   :doc "persists always-allow Eval rules to real workspace storage"
   (let* ((root (make-temp-file "mevedel-eval-prompt-" t))
@@ -2664,7 +2664,7 @@ default Bash keeps bare dot inspection automatic"
                (mevedel-tool-exec-permission--eval-prompt-result
                 'always-allow session workspace "(message x)" nil)))
           (should
-           (member '("Eval" :pattern "(message x)" :action allow)
+           (member '("Eval" :expression "(message x)" :action allow)
                    (mevedel-permission-persistence-load-rules workspace))))
       (delete-directory root t)))
   :doc "returns structured Eval metadata when requested"
@@ -2678,6 +2678,67 @@ default Bash keeps bare dot inspection automatic"
 (mevedel-deftest mevedel-tool-exec-permission-check-eval-async ()
   ,test
   (test)
+  :doc "remembered Eval matches the complete literal expression in every authority scope"
+  (dolist (authority '(ordinary network escalated))
+    (dolist (scope '(allow-session always-allow))
+      (dolist (text '("*" "?" "[ab]"))
+        (let* ((root (make-temp-file "mevedel-literal-eval-" t))
+               (mevedel-user-dir (file-name-concat root "global"))
+               (mevedel-permission--store-cache (make-hash-table :test #'equal))
+               (workspace (mevedel-workspace--create :type 'project :root root))
+               (session (mevedel-session--create :authority-mode 'pid-lock
+                                               :name "literal" :workspace workspace))
+               (mode (if (eq authority 'escalated) 'full-auto 'ask))
+               (mevedel-permission-rules nil)
+               (expression (format "(message %S)" text))
+               (prompts 0)
+               outcome)
+          (unwind-protect
+              (with-temp-buffer
+                (setq-local mevedel--session session)
+                (cl-labels
+                    ((check (code)
+                       (setq outcome nil)
+                       (mevedel-tool-exec-permission-check-eval-async
+                        nil
+                        (append
+                         (list :expression code :mode (if (eq authority 'ordinary) "live" "batch")
+                               :permission-context (list :session session :workspace workspace :mode mode))
+                         (pcase authority
+                           ('network '(:sandbox_permissions "with_additional_permissions"
+                                       :additional_permissions (:network t)
+                                       :justification "Test network authority"))
+                           ('escalated '(:sandbox_permissions "require_escalated"
+                                         :justification "Test full escalation"))))
+                        (lambda (result) (setq outcome result)))))
+                  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                             (lambda (entry &optional _session)
+                               (cl-incf prompts)
+                               (when (eq authority 'network)
+                                 (setcar (plist-get entry :remember-authority-cell)
+                                         '(:operation t :network t)))
+                               (funcall (plist-get entry :callback) scope))))
+                    (check expression))
+                  (should (eq outcome 'allow))
+                  (should (= prompts 1))
+                  ;; Workspace reuse must survive a fresh disk read, with no
+                  ;; session rule or persistence-cache entry to supply it.
+                  (when (eq scope 'always-allow)
+                    (setf (mevedel-session-permission-rules session) nil)
+                    (clrhash mevedel-permission--store-cache))
+                  (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                             (lambda (entry &optional _session)
+                               (cl-incf prompts)
+                               (funcall (plist-get entry :callback) 'deny-once))))
+                    (check expression)
+                    (should (eq outcome 'allow))
+                    (should (= prompts 1))
+                    (dolist (other (list "(message \"a\")" (concat expression " ")))
+                      (let ((previous prompts))
+                        (check other)
+                        (should (eq outcome 'deny))
+                        (should (= prompts (1+ previous))))))))
+            (delete-directory root t))))))
   :doc "returns deny when input has no expression"
   (let (outcome)
     (mevedel-tool-exec-permission-check-eval-async

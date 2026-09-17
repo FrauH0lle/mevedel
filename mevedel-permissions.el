@@ -837,8 +837,8 @@ RESULT is one of:
 
 TOOL-NAME is the tool being permitted.  SESSION and WORKSPACE are used
 for storage.  PATH scopes resource authority; SPEC-KEY/SPEC-VALUE scope
-operation rules (`:path', `:pattern', `:domain', `:name').  When no rule
-specifier is supplied, PATH also scopes the operation rule.
+operation rules (`:path', `:pattern', `:expression', `:domain', `:name').
+When no rule specifier is supplied, PATH also scopes the operation rule.
 RESOURCE-ACCESS stores path authority separately from rules;
 RESOURCE-RECURSIVE non-nil extends it to all descendants of PATH.
 NETWORK and FILE-SYSTEM store a capability-qualified operation rule.

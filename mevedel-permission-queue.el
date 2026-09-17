@@ -262,7 +262,8 @@ ENTRY plist keys:
   :kind                  -- `generic' / `bash' / `eval' / `sandbox'
   :tool-name             -- string (`generic' and `sandbox')
   :args                  -- keyword plist
-  :specifier-key         -- `:path' / `:pattern' / `:domain' / `:name'
+  :specifier-key         -- `:path', `:pattern', `:expression',
+                            `:domain', or `:name'
   :specifier-value       -- display path / pattern / domain
   :protected-path        -- non-nil when the original path is protected
   :resource-path         -- exact additive filesystem path (`sandbox' only)

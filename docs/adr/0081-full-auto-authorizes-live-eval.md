@@ -8,6 +8,9 @@ cannot use child-process confinement. This follows the mode's contract of
 removing heuristic execution prompts; the UI and model reminder must disclose
 that live Eval is inherently unconfined.
 
+The full-auto reminder states: "Live Eval runs inside Emacs without confinement."
+The tool description and permission card also disclose this execution boundary.
+
 ## Decision history
 
 ADR 0013 made the same choice: full-auto is deliberate authority for unattended
