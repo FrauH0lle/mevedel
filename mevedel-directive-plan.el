@@ -151,10 +151,6 @@
       (when drain
         (mevedel-view--schedule-late-follow-up-drain)))))
 
-(defun mevedel-directive-plan--persist (session chat-buffer)
-  "Persist SESSION from CHAT-BUFFER."
-  (mevedel-session-artifacts-save session chat-buffer))
-
 (defun mevedel-directive-plan--planning-prompt
     (implementation-prompt &optional feedback proposal)
   "Return a planning request for IMPLEMENTATION-PROMPT.
@@ -247,7 +243,7 @@ card's selection stays authoritative once retained."
     (setf (mevedel-session-directive-planning session)
           (list :directive-id (mevedel-directive-id record)
                 :action action :phase 'implementation :attempt attempt))
-    (mevedel-directive-plan--persist
+    (mevedel-session-artifacts-save
      session (plist-get plan :chat-buffer))
     ;; Mark implementing before dispatching: the settle callback may
     ;; write :status 'settled, which a post-dispatch write from this
@@ -300,21 +296,21 @@ card's selection stays authoritative once retained."
          directive record session (plist-get outcome :selection) callback)))
      ((eq outcome 'feedback-draft)
       (mevedel-directive-plan-put record :status 'draft)
-      (mevedel-directive-plan--persist
+      (mevedel-session-artifacts-save
        session (plist-get plan :chat-buffer))
       (mevedel-directive-plan--refresh directive)
       (mevedel-view-enter-directive-scope directive 'plan))
      ((memq outcome '(aborted render-error))
       (mevedel-directive-plan-put record :status 'draft :cancelled t)
       (mevedel-directive-plan--clear-session session record attempt)
-      (mevedel-directive-plan--persist
+      (mevedel-session-artifacts-save
        session (plist-get plan :chat-buffer))
       (mevedel-directive-plan--refresh directive)
       (mevedel-directive-plan--restore-chat-scope plan t)
       (when callback (funcall callback nil nil)))
      ((eq outcome 'invalidated)
       (mevedel-directive-plan--clear-session session record attempt)
-      (mevedel-directive-plan--persist
+      (mevedel-session-artifacts-save
        session (plist-get plan :chat-buffer))
       (mevedel-directive-plan--refresh directive)
       (mevedel-directive-plan--restore-chat-scope plan t)
@@ -348,7 +344,7 @@ card's selection stays authoritative once retained."
        (when (eq attempt
                  (plist-get (mevedel-directive-plan record) :attempt))
          (mevedel-directive-plan-put record :selection (copy-tree changed))
-         (mevedel-directive-plan--persist session chat-buffer))))
+         (mevedel-session-artifacts-save session chat-buffer))))
     (plist-put
      entry :callback
      (lambda (outcome)
