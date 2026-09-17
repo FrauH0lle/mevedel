@@ -304,27 +304,44 @@
   (let* ((root (make-temp-file "mevedel-process-start-" t))
          (spool (file-name-concat root "output"))
          (terminals 0)
-         result
+         result callback-output callback-live callback-terminal timers
          (child
           (mevedel-execution-process-create
            :workdir root :spool-path spool
            :terminal-function
-           (lambda (_child value)
+           (lambda (child value)
              (cl-incf terminals)
-             (setq result value)))))
+             (setq result value
+                   callback-output (mevedel-execution-process-read child)
+                   callback-live (mevedel-execution-process-live-p child)
+                   callback-terminal
+                   (mevedel-execution-process-terminal-p child))))))
     (unwind-protect
         (progn
           (write-region "" nil spool nil 'silent)
           (mevedel-execution-process-start
            child :name "mevedel-test-process-start"
            :command '("sh" "-c" "printf 'hello world'")
-           :coding 'utf-8-unix)
+           :coding 'utf-8-unix :timeout 30)
+          (setq timers
+                (list (mevedel-execution-process--child-watch-timer child)
+                      (mevedel-execution-process--child-timeout-timer child)))
           (test-mevedel-execution-process--wait (lambda () result))
           (accept-process-output nil 0.05)
           (should (= 1 terminals))
           (should (= 0 (plist-get result :exit-code)))
           (should (equal "hello world" (plist-get result :output)))
-          (should (= 11 (plist-get result :output-bytes))))
+          (should (= 11 (plist-get result :output-bytes)))
+          (should (equal "hello world" callback-output))
+          (should-not callback-live)
+          (should callback-terminal)
+          (dolist (timer timers)
+            (should (timerp timer))
+            (should-not (memq timer timer-list)))
+          (should (equal spool (mevedel-execution-process-spool-path child)))
+          (should (equal "hello world" (mevedel-execution-process-read child)))
+          (mevedel-execution-process-release child)
+          (should-not (file-exists-p spool)))
       (mevedel-execution-process-release child)
       (delete-directory root t)))
   :doc "drains filter output when the watchdog observes exit first"
