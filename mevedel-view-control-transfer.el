@@ -448,6 +448,15 @@ this view follows."
 ;;
 ;;; View lifecycle
 
+(defun mevedel-view-control-transfer-stop-polling ()
+  "Stop the current view's polling while retaining its registrations.
+Only initialization may re-arm polling after this call.  A closing view
+can still use its root registration to seal journal work before teardown."
+  (when (timerp mevedel-view--control-transfer-timer)
+    (cancel-timer mevedel-view--control-transfer-timer))
+  (setq mevedel-view--control-transfer-timer nil
+        mevedel-view--control-transfer-torn-down-p t))
+
 (defun mevedel-view-control-transfer-teardown ()
   "Remove transfer registrations and cancel the current view's poll timer."
   (when (and mevedel-view--session-observer-session
@@ -472,10 +481,7 @@ this view follows."
      mevedel-view--control-transfer-drain-token)
     (setq mevedel-view--control-transfer-drain-session nil
           mevedel-view--control-transfer-drain-token nil))
-  (when (timerp mevedel-view--control-transfer-timer)
-    (cancel-timer mevedel-view--control-transfer-timer)
-    (setq mevedel-view--control-transfer-timer nil))
-  (setq mevedel-view--control-transfer-torn-down-p t)
+  (mevedel-view-control-transfer-stop-polling)
   (setq mevedel-view--control-transfer-rebuild-function nil))
 
 (defun mevedel-view-control-transfer-initialize (rebuild-function drain-predicate)

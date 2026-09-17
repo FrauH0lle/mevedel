@@ -151,6 +151,27 @@
                          mevedel-session-control-transfer--observers))
         (should (timerp mevedel-view--control-transfer-timer))))))
 
+(mevedel-deftest mevedel-view-control-transfer-stop-polling ()
+  ,test
+  (test)
+  :doc "retains registrations but refuses rearming until initialization"
+  (let ((session (mevedel-session--create :name "stop-polling")))
+    (test-mevedel-view-control-transfer--with-pair session nil
+      (let ((drain (lambda () t)))
+        (mevedel-view-control-transfer-initialize #'ignore drain)
+        (let ((timer mevedel-view--control-transfer-timer))
+          (mevedel-view-control-transfer-stop-polling)
+          (mevedel-view-control-transfer-stop-polling)
+          (should-not (memq timer timer-list)))
+        (should (eq data
+                    (mevedel-session-control-transfer-root-buffer session)))
+        (should (memq drain (mevedel-session-control-transfer-drains session)))
+        (should (gethash session mevedel-session-control-transfer--observers))
+        (mevedel-view--control-transfer-schedule view)
+        (should-not mevedel-view--control-transfer-timer)
+        (mevedel-view-control-transfer-initialize #'ignore drain)
+        (should (memq mevedel-view--control-transfer-timer timer-list))))))
+
 (mevedel-deftest mevedel-view-control-transfer-teardown ()
   ,test
   (test)

@@ -770,6 +770,33 @@
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))))
 
+  :doc "stops transfer polling before sealing without losing root registration"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "kill-transfer"))
+          timer sealed)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (mevedel-view-control-transfer-initialize #'ignore #'ignore)
+        (setq timer mevedel-view--control-transfer-timer))
+      (cl-letf (((symbol-function 'mevedel-journal-capture-seal-and-schedule)
+                 (lambda (owner data trigger &optional _captures)
+                   (should (eq session owner))
+                   (should (eq data-buf data))
+                   (should (eq 'session-end trigger))
+                   (should (eq data-buf
+                               (mevedel-session-control-transfer-root-buffer
+                                session)))
+                   (should-not (memq timer timer-list))
+                   (with-current-buffer view-buf
+                     (mevedel-view--control-transfer-schedule view-buf)
+                     (should-not mevedel-view--control-transfer-timer))
+                   (setq sealed t))))
+        (kill-buffer view-buf))
+      (should sealed)
+      (should-not (buffer-live-p data-buf))
+      (should-not (mevedel-session-control-transfer-root-buffer session))))
+
   :doc "killing an agent view detaches its observer from retained data"
   (let ((data-buf (generate-new-buffer " *test-agent-data-kill-view*"))
         (view-buf (generate-new-buffer " *test-agent-view-kill-view*"))
