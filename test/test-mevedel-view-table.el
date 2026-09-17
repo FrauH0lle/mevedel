@@ -168,7 +168,13 @@
       (should-not (text-property-not-all (point-min) table-end
                                          'mevedel-view-turn-id 7))
       (should-not (text-property-not-all (point-min) table-end
-                                         'read-only t))))
+                                         'read-only t)))
+    ;; Native string replacement shares a work buffer with coding conversion.
+    ;; View properties must not make a later, unrelated conversion read-only.
+    (should (equal (unibyte-string #x80)
+                   (encode-coding-string
+                    (decode-coding-string (unibyte-string #x80) 'utf-8)
+                    'utf-8))))
 
   :doc "image bookkeeping never survives into a rendered row"
   (with-temp-buffer
