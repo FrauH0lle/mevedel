@@ -358,6 +358,34 @@
                    (plist-get parsed :overall_explanation)))
     (should (null (plist-get parsed :findings))))
 
+  :doc "keeps findings with unspecified or integer priorities"
+  (dolist (entry '((nil nil) ("null" :null)
+                   ("0" 0) ("1" 1) ("2" 2) ("3" 3)))
+    (let* ((literal (car entry))
+           (text (format
+                  "{\"findings\":[{\"title\":\"Fix thing\",\"body\":\"body\",%s\"confidence_score\":0.8,\"code_location\":{\"absolute_file_path\":\"/tmp/a.el\",\"line_range\":{\"start\":3,\"end\":3}}}],\"overall_correctness\":\"patch is incorrect\",\"overall_explanation\":\"One issue.\",\"overall_confidence_score\":0.7}"
+                  (if literal (format "\"priority\":%s," literal) "")))
+           (parsed (mevedel-review-parse-output text))
+           (findings (plist-get parsed :findings)))
+      (ert-info ((format "Priority %S" literal))
+        (should (equal "One issue." (plist-get parsed :overall_explanation)))
+        (should (= 1 (length findings)))
+        (should (equal "Fix thing" (plist-get (car findings) :title)))
+        (should (equal "body" (plist-get (car findings) :body)))
+        (should (equal (cadr entry) (plist-get (car findings) :priority)))
+        (should (eq (not (null literal))
+                    (not (null (plist-member (car findings) :priority))))))))
+
+  :doc "rejects priorities outside the nullable integer contract"
+  (dolist (literal '("-1" "4" "1.5" "true" "false" "\"2\"" "[]" "{}"))
+    (let* ((text (format
+                  "{\"findings\":[{\"title\":\"Fix thing\",\"body\":\"body\",\"priority\":%s,\"confidence_score\":0.8,\"code_location\":{\"absolute_file_path\":\"/tmp/a.el\",\"line_range\":{\"start\":3,\"end\":3}}}],\"overall_correctness\":\"patch is incorrect\",\"overall_explanation\":\"One issue.\",\"overall_confidence_score\":0.7}"
+                  literal))
+           (parsed (mevedel-review-parse-output text)))
+      (ert-info ((format "Priority %s" literal))
+        (should (equal text (plist-get parsed :overall_explanation)))
+        (should-not (plist-get parsed :findings)))))
+
   :doc "falls back when valid JSON does not match the review schema"
   (dolist (text '("[]"
                   "{\"findings\":1,\"overall_correctness\":\"patch is incorrect\",\"overall_explanation\":\"bad\",\"overall_confidence_score\":0.5}"
