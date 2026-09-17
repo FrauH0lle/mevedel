@@ -259,7 +259,7 @@
       (let* ((segments (mevedel-transcript-segments (point-min) (point-max)))
              (turns (mevedel-view--group-into-turns segments data-buf)))
         (should (= 1 (length turns)))
-        (should (eq 'assistant (plist-get (car turns) :role)))))))
+        (should (eq 'assistant (plist-get (car turns) :role))))))
 
   :doc "task background is its own turn beside the authoritative Agent Task"
   (mevedel-view-test--with-buffers
@@ -274,7 +274,7 @@
         (should (equal '(task-background user)
                        (mapcar (lambda (turn) (plist-get turn :role)) turns)))
         (should (eq 'task-background
-                    (caar (plist-get (car turns) :segments)))))))
+                    (caar (plist-get (car turns) :segments))))))))
 
 (mevedel-deftest mevedel-view--directive-ranges ()
   ,test

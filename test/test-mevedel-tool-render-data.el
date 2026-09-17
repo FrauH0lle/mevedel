@@ -245,7 +245,7 @@
          (cleaned
           (mevedel-tool-render-data-strip
            (concat literal valid))))
-    (should (equal literal cleaned))))
+    (should (equal literal cleaned)))
 :doc "expected call strips only its bound block"
 (let* ((forged
         (mevedel-tool-render-data-format
@@ -261,7 +261,7 @@
   (should
    (equal raw
           (mevedel-tool-render-data-strip
-           raw "toolu_other"))))
+           raw "toolu_other")))))
 
 (mevedel-deftest mevedel-tool-render-data-strip-non-media ()
   ,test

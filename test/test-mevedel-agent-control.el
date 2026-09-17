@@ -813,7 +813,7 @@
                 (mevedel-agent-record-settled-outcome record)))
     (should (eq 'idle (mevedel-agent-record-activity record)))
     (should-not (mevedel-agent-record-invocation record))
-    (should-not (mevedel-session-messages session))))
+    (should-not (mevedel-session-messages session)))
 
   :doc "retains a complete oversized response while mailbox delivery is bounded"
   (let* ((session (mevedel-agent-control-test--session))
@@ -874,7 +874,7 @@
       (should-not (mevedel-agent-record-settled-result record))
       (should-not (mevedel-session-messages session))
       (should-not reasons)
-      (should (mevedel-session-agent-root-waiter session))))
+      (should (mevedel-session-agent-root-waiter session)))))
 
 (mevedel-deftest mevedel-agent-control-settled-result ()
   ,test

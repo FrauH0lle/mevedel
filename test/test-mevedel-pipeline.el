@@ -826,7 +826,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
 		   (should (equal "\\x80" (plist-get out :result)))
 		   (should (equal "\\x80" (plist-get out :raw-result)))
-		   (should (json-serialize (list :result (plist-get out :result))))))
+		   (should (json-serialize (list :result (plist-get out :result)))))
 		 :doc "normalizes non-Unicode result characters before callback"
 		 (let* ((invalid
 			 (decode-coding-string
@@ -839,7 +839,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
 		   (should (equal "\\xF4\\x90\\x80\\x80"
 				  (plist-get out :result)))
-		   (should (json-serialize (list :result (plist-get out :result)))))
+		   (should (json-serialize (list :result (plist-get out :result))))))
 
 
 ;;

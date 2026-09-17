@@ -6,6 +6,8 @@
 ;; can nest a deftest inside its predecessor's body, where it still reads and
 ;; byte-compiles but is never defined and never runs; twenty durability
 ;; deftests were lost that way for the whole life of a feature branch.
+;; Loose template keywords also identify cases accidentally moved outside
+;; their deftest, where their bodies run during loading without ERT isolation.
 
 ;;; Code:
 
@@ -30,17 +32,33 @@
       count)))
 
 (defun test-mevedel-integrity--top-level-deftests (file)
-  "Return how many top-level forms of FILE are deftests."
+  "Count top-level deftests in FILE, rejecting loose template keywords."
   (with-temp-buffer
     (insert-file-contents file)
     (goto-char (point-min))
     (let ((count 0))
       (condition-case nil
           (while t
-            (when (memq (car-safe (read (current-buffer)))
-                        '(mevedel-deftest ert-deftest))
-              (cl-incf count)))
+            (let ((form (read (current-buffer))))
+              (when (keywordp form)
+                (error "Loose test template keyword %S in %s" form file))
+              (when (memq (car-safe form) '(mevedel-deftest ert-deftest))
+                (cl-incf count))))
         (end-of-file count)))))
+
+(mevedel-deftest test-mevedel-integrity--top-level-deftests ()
+  (let ((file (make-temp-file "mevedel-test-structure-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "(mevedel-deftest first () (should t))\n"
+                    "(ert-deftest second () (should t))\n"))
+          (should (= 2 (test-mevedel-integrity--top-level-deftests file)))
+          (with-temp-file file
+            (insert "(mevedel-deftest first () (should t))\n"
+                    ":doc \"escaped case\"\n(should t)\n"))
+          (should-error (test-mevedel-integrity--top-level-deftests file)))
+      (delete-file file))))
 
 (mevedel-deftest mevedel-test-file-integrity ()
   ,test
