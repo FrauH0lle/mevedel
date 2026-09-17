@@ -168,9 +168,10 @@ and interaction tools require a model turn to consume their result."
 
 (defun mevedel-tool-ptc--handler (callback args)
   "Run the script in ARGS through the current request's nested tool roster."
-  (mevedel-ptc-driver-run
-   callback (plist-get args :expression) (mevedel-tool-ptc--roster)
-   (seq-remove #'mevedel-tool-ptc--composable-p (mevedel-tool-ptc--roster))))
+  (let ((roster (mevedel-tool-ptc--roster)))
+    (mevedel-ptc-driver-run
+     callback (plist-get args :expression) roster
+     (seq-remove #'mevedel-tool-ptc--composable-p roster))))
 
 
 ;;;; Rendering
