@@ -670,6 +670,22 @@ dispatched), and `:pauses'."
                             (test-mevedel-ptc--error
                              "(format \"%.1000000s\" \"x\")"))))
 
+  :doc "formats multiple fields without revisiting their widths or precision"
+  (dolist (args '(("%2s %3s" "x" "y")
+                  ("prefix %s and %s" "x" "y")
+                  ("prefix %4.2f / %5.3s end" 1.25 "abcde")
+                  ("%2$s then %1$3s" "x" "y")))
+    (should (equal (apply #'format args)
+                   (test-mevedel-ptc--value
+                    (prin1-to-string (cons 'format args))))))
+
+  :doc "rejects an oversized later format field before host allocation"
+  (let ((mevedel-ptc-max-value-bytes 100))
+    (dolist (script '("(format \"prefix %2s %1000000s\" \"x\" \"y\")"
+                      "(format \"%s %.1000000s\" \"x\" \"y\")"))
+      (should (string-match-p "field size"
+                              (test-mevedel-ptc--error script)))))
+
   :doc "rejects a circular host value before the guest receives it"
   (let* ((circle (list "x"))
          (run nil))
