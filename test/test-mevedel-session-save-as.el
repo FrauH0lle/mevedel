@@ -16,6 +16,98 @@
 (mevedel-deftest mevedel-session-save-as-run ()
   ,test
   (test)
+  :doc "cleans early exits and retains a child committed before throw or quit"
+  (dolist (scenario '(clone-error materialize-throw materialize-quit
+                     publish-throw publish-quit))
+    (let* ((root (file-name-as-directory (make-temp-file "save-as-exit-" t)))
+           (workspace (test-mevedel-session-persistence--make-workspace root))
+           (session (mevedel-session-create "parent" workspace root))
+           (buffer (generate-new-buffer " *save-as-exit*"))
+           (clone (symbol-function 'mevedel-session-fork-clone-session))
+           (materialize (symbol-function 'mevedel-session-rewind-materialize-publication))
+           (publish (symbol-function 'mevedel-session-publication-publish))
+           staging child)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "Parent transcript\n")
+              (mevedel-session-artifacts-save session buffer))
+            (let* ((parent-path (mevedel-session-save-path session))
+                   (parent-id (mevedel-session-session-id session))
+                   (parent-sidecar (mevedel-session-artifacts-read-file-raw
+                                    (mevedel-session-artifacts-sidecar-path parent-path)))
+                   (destination (file-name-concat
+                                 (file-name-directory (directory-file-name parent-path))
+                                 "child"))
+                   (committed (memq scenario '(publish-throw publish-quit)))
+                   (outcome
+                    (cl-letf (((symbol-function 'mevedel-session-fork-clone-session)
+                               (lambda (source policy &rest keys)
+                                 (setq staging (plist-get keys :save-path))
+                                 (if (eq scenario 'clone-error)
+                                     (error "Injected clone failure")
+                                   (setq child (apply clone source policy keys)))))
+                              ((symbol-function 'mevedel-session-rewind-materialize-publication)
+                               (lambda (&rest args)
+                                 (pcase scenario
+                                   ('materialize-throw (throw 'save-as-escape 'escaped))
+                                   ('materialize-quit (signal 'quit nil))
+                                   (_ (apply materialize args)))))
+                              ((symbol-function 'mevedel-session-publication-publish)
+                               (lambda (&rest args)
+                                 (prog1 (apply publish args)
+                                   (pcase scenario
+                                     ('publish-throw (throw 'save-as-escape 'escaped))
+                                     ('publish-quit (signal 'quit nil)))))))
+                      (condition-case failure
+                          (catch 'save-as-escape
+                            (mevedel-session-save-as-run
+                             session buffer "child" "child" destination))
+                        (error failure)
+                        (quit 'quit)))))
+              (ert-info ((format "Save As exit %s" scenario))
+                (should (equal outcome
+                               (pcase scenario
+                                 ('clone-error '(error "Injected clone failure"))
+                                 ((or 'materialize-throw 'publish-throw) 'escaped)
+                                 (_ 'quit))))
+                (should staging)
+                (should-not (file-directory-p destination))
+                (should (equal parent-sidecar
+                               (mevedel-session-artifacts-read-file-raw
+                                (mevedel-session-artifacts-sidecar-path parent-path))))
+                (if committed
+                    (progn
+                      (should (file-directory-p staging))
+                      (should (mevedel-session-publication-read staging))
+                      (should (equal "child" (mevedel-session-session-id session)))
+                      (should (equal staging (mevedel-session-save-path session)))
+                      (should (cl-find staging
+                                       (mevedel-session-persistence-list-sessions workspace)
+                                       :key (lambda (entry) (plist-get entry :save-path))
+                                       :test #'equal)))
+                  (should-not (file-directory-p staging))
+                  (should (equal parent-path (mevedel-session-save-path session)))
+                  (should (equal parent-id (mevedel-session-session-id session))))
+                (should (mevedel-session-durability-lease-owned-p session))
+                (when child
+                  (should-not (mevedel-session-durability-lease-owned-p child))
+                  (should-not (mevedel-session-lease-renewal-timer child))))))
+        (when (and child (mevedel-session-lease child))
+          (mevedel-session-persistence-lock-release
+           (mevedel-session-save-path child) child))
+        (when (mevedel-session-save-path session)
+          (mevedel-session-persistence-lock-release
+           (mevedel-session-save-path session) session))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil)
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer buffer))
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry))))
   :doc "cleans pre-commit recovery and keeps every committed child discoverable"
   (dolist (scenario
            '(pre-commit publish-pre-commit post-commit move-post-commit
