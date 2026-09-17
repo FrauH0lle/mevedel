@@ -438,7 +438,7 @@ its own parent"
   (:doc "`mevedel-directive-frame--follow-setup' tracks the source buffer")
   ,test
   (test)
-  :doc "installs scroll and configuration hooks locally in the source buffer"
+  :doc "installs local follow hooks and removes them on teardown"
   (let* ((buffer (generate-new-buffer " *test-source*"))
          (directive (with-current-buffer buffer
                       (insert "directive body\n")
@@ -451,18 +451,7 @@ its own parent"
                           window-scroll-functions))
             (should (memq #'mevedel-directive-frame--follow
                           window-configuration-change-hook)))
-          (should (eq directive mevedel-directive-frame--directive)))
-      (kill-buffer buffer)
-      (mevedel-directive-frame-test--reset)))
-
-  :doc "removes both hooks again, so a closed frame leaves nothing behind"
-  (let* ((buffer (generate-new-buffer " *test-source*"))
-         (directive (with-current-buffer buffer
-                      (insert "directive body\n")
-                      (make-overlay (point-min) (point-max)))))
-    (unwind-protect
-        (progn
-          (mevedel-directive-frame--follow-setup directive)
+          (should (eq directive mevedel-directive-frame--directive))
           (mevedel-directive-frame--unfollow)
           (with-current-buffer buffer
             (should-not (memq #'mevedel-directive-frame--follow
