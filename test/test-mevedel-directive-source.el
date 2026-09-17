@@ -273,22 +273,6 @@
                       (mevedel--deserialize-directives
                        (mevedel--serialize-directives workspace directory)
                        directory)))))
-      (mevedel-instruction-test--discard-source fixture)))
-
-  :doc "deletion removes an activity-free record and blocks durable activity"
-  (let* ((fixture (mevedel-instruction-test--source-fixture))
-         (workspace (nth 1 fixture))
-         (overlay (nth 4 fixture))
-         (record (nth 5 fixture)))
-    (unwind-protect
-        (progn
-          (setf (mevedel-directive-attempts record)
-                (list (mevedel-instruction-test--attempt)))
-          (should-error (mevedel--delete-instruction overlay)
-                        :type 'user-error)
-          (setf (mevedel-directive-attempts record) nil)
-          (mevedel--delete-instruction overlay)
-          (should-not (memq record (mevedel-workspace-directives workspace))))
       (mevedel-instruction-test--discard-source fixture))))
 
 
@@ -651,19 +635,23 @@
     (mevedel--instruction-current-state-key :global)))
   ,test
   (test)
-  :doc "removes a Ready directive record with its presentation overlay"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "delete-directive" :root "/tmp"
-                     :name "delete-directive"))
-         (cell (mevedel-instruction-test--make-directive
-                "directive body\n" "Unused request" workspace))
-         (directive (cdr cell)))
+  :doc "deletion removes an activity-free record and blocks durable activity"
+  (let* ((fixture (mevedel-instruction-test--source-fixture))
+         (workspace (nth 1 fixture))
+         (overlay (nth 4 fixture))
+         (record (nth 5 fixture)))
     (unwind-protect
         (progn
           (should (mevedel-workspace-directives workspace))
-          (mevedel--delete-instruction directive)
-          (should-not (mevedel-workspace-directives workspace)))
-      (mevedel-instruction-test--discard cell))))
+          (setf (mevedel-directive-attempts record)
+                (list (mevedel-instruction-test--attempt)))
+          (should-error (mevedel--delete-instruction overlay)
+                        :type 'user-error)
+          (setf (mevedel-directive-attempts record) nil)
+          (mevedel--delete-instruction overlay)
+          (should-not (mevedel-workspace-directives workspace))
+          (should-not (overlay-buffer overlay)))
+      (mevedel-instruction-test--discard-source fixture))))
 
 (provide 'test-mevedel-directive-source)
 ;;; test-mevedel-directive-source.el ends here
