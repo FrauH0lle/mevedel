@@ -123,11 +123,10 @@ evidence bundle; accepted output is never deleted here."
              (metadata (mevedel-journal-capture--metadata record))
              (sources (plist-get record :sources)))
         (unless (and (proper-list-p record) (= (length record) 24)
-                     (cl-loop for (key _value) on record by #'cddr
-                              always (memq key '(:id :metadata :policy :source-directory
-                                                     :source-client :source-kind :head :sources
-                                                     :evidence :notes :evidence-sha256 :notes-sha256)))
-                     (= 12 (length (delete-dups (cl-loop for (key _value) on record by #'cddr collect key))))
+                     (cl-every (lambda (key) (plist-member record key))
+                               '(:id :metadata :policy :source-directory
+                                 :source-client :source-kind :head :sources
+                                 :evidence :notes :evidence-sha256 :notes-sha256))
                      (equal id (plist-get record :id))
                      (equal id (plist-get metadata :capture-id))
                      (equal id (mevedel-journal-capture--identity
@@ -371,16 +370,16 @@ settlement.  This performs no inference and does not seal the capture."
   (let* ((workspace (mevedel-session-workspace session))
          (root (mevedel-workspace-root workspace))
          (pending (mevedel-journal-capture-list workspace))
-         (covered (mevedel-journal-store-covered-turns root))
-         (reserved
-          (mapcan
-           (lambda (capture)
-             (when (mevedel-session-control-fs-path-exists-p
-                    (mevedel-journal-capture--file workspace (plist-get capture :id) "seal.json"))
-               (copy-sequence (plist-get (plist-get capture :metadata) :turn-ids))))
-           pending))
+         (covered
+          (append (mevedel-journal-store-covered-turns root)
+                  (mapcan
+                   (lambda (capture)
+                     (when (mevedel-session-control-fs-path-exists-p
+                            (mevedel-journal-capture--file workspace (plist-get capture :id) "seal.json"))
+                       (copy-sequence (plist-get (plist-get capture :metadata) :turn-ids))))
+                   pending)))
          (turns (cl-remove-if
-                 (lambda (turn) (member (plist-get turn :id) (append covered reserved)))
+                 (lambda (turn) (member (plist-get turn :id) covered))
                  (mevedel-journal-capture--turns session))))
     (when turns
       (let* ((ids (mapcar (lambda (turn) (plist-get turn :id)) turns))
