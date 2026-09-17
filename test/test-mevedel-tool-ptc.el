@@ -160,76 +160,60 @@
            (session (mevedel-session--create
                      :name "ptc-roster" :workspace workspace
                      :touched-files (make-hash-table :test #'equal)))))
-  ,test
+  (unwind-protect ,test (kill-buffer buffer))
   (test)
 
   :doc "offers all active tools independently of their composition policy"
-  (unwind-protect
-      (progn
-        (mevedel-tool-fs--register)
-        (with-current-buffer buffer
-          (setq-local gptel-tools
-                      (test-mevedel-tool-ptc--gptel-tools "Read" "Glob"))
-          (let ((mevedel-ptc-composable-tools '("Read" "Bash")))
-            ;; Read is allowlisted and active; Glob is active but not in this
-            ;; allowlist; Bash is allowlisted but not active in the request.
-            (should (equal '("Read" "Glob") (mevedel-tool-ptc--roster))))))
-    (kill-buffer buffer))
+  (progn
+    (mevedel-tool-fs--register)
+    (with-current-buffer buffer
+      (setq-local gptel-tools
+                  (test-mevedel-tool-ptc--gptel-tools "Read" "Glob"))
+      (let ((mevedel-ptc-composable-tools '("Read" "Bash")))
+        ;; Read is allowlisted and active; Glob is active but not in this
+        ;; allowlist; Bash is allowlisted but not active in the request.
+        (should (equal '("Read" "Glob") (mevedel-tool-ptc--roster)))
+        (setq-local gptel-tools (test-mevedel-tool-ptc--gptel-tools "Glob"))
+        (should (equal '("Glob") (mevedel-tool-ptc--roster))))))
 
   :doc "offers a deferred tool, which the pipeline can execute regardless"
-  (unwind-protect
-      (progn
-        (mevedel-tool-fs--register)
-        (mevedel-tool-code--register)
-        (with-current-buffer buffer
-          (setq-local gptel-tools (test-mevedel-tool-ptc--gptel-tools "Read")
-                      mevedel--session session)
-          (setf (mevedel-session-tool-catalog session)
-                (list (cons (list "mevedel" "Treesitter") "tree-sitter info")))
-          (let ((mevedel-ptc-composable-tools '("Read" "Treesitter" "Bash")))
-            ;; Read is active, Treesitter is deferred but still callable, and
-            ;; Bash is neither.
-            (should (equal '("Read" "Treesitter") (mevedel-tool-ptc--roster))))))
-    (kill-buffer buffer))
-
-  :doc "allows standalone invocation when an active tool is not composable"
-  (unwind-protect
-      (progn
-        (mevedel-tool-fs--register)
-        (with-current-buffer buffer
-          (setq-local gptel-tools (test-mevedel-tool-ptc--gptel-tools "Glob"))
-          (let ((mevedel-ptc-composable-tools '("Read")))
-            (should (equal '("Glob") (mevedel-tool-ptc--roster))))))
-    (kill-buffer buffer))
+  (progn
+    (mevedel-tool-fs--register)
+    (mevedel-tool-code--register)
+    (with-current-buffer buffer
+      (setq-local gptel-tools (test-mevedel-tool-ptc--gptel-tools "Read")
+                  mevedel--session session)
+      (setf (mevedel-session-tool-catalog session)
+            (list (cons (list "mevedel" "Treesitter") "tree-sitter info")))
+      (let ((mevedel-ptc-composable-tools '("Read" "Treesitter" "Bash")))
+        ;; Read is active, Treesitter is deferred but still callable, and
+        ;; Bash is neither.
+        (should (equal '("Read" "Treesitter") (mevedel-tool-ptc--roster))))))
 
   :doc "intersects the active roster with the owning skill restriction"
-  (unwind-protect
-      (progn
-        (mevedel-tool-fs--register)
-        (with-current-buffer buffer
-          (setq-local gptel-tools
-                      (test-mevedel-tool-ptc--gptel-tools "Read" "Glob")
-                      mevedel--current-request
-                      (mevedel-request--create :ptc-primitives '("Glob" "Bash")))
-          (let ((mevedel-ptc-composable-tools '("Read" "Glob")))
-            ;; Bash is named by the skill but absent from the global allowlist
-            ;; and request roster, so the restriction cannot grant it.
-            (should (equal '("Glob") (mevedel-tool-ptc--roster))))))
-    (kill-buffer buffer))
+  (progn
+    (mevedel-tool-fs--register)
+    (with-current-buffer buffer
+      (setq-local gptel-tools
+                  (test-mevedel-tool-ptc--gptel-tools "Read" "Glob")
+                  mevedel--current-request
+                  (mevedel-request--create :ptc-primitives '("Glob" "Bash")))
+      (let ((mevedel-ptc-composable-tools '("Read" "Glob")))
+        ;; Bash is named by the skill but absent from the global allowlist
+        ;; and request roster, so the restriction cannot grant it.
+        (should (equal '("Glob") (mevedel-tool-ptc--roster))))))
 
   :doc "keeps the registered description stable as the catalog changes"
-  (unwind-protect
-      (progn
-        (mevedel-tool-ptc--register)
-        (with-current-buffer buffer
-          (setq-local mevedel--session session)
-          (let* ((tool (mevedel-tool-ensure "ToolCall"))
-                 (before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
-            (setf (mevedel-session-tool-catalog session)
-                  '((("mevedel" "Imenu") . "outline")))
-            (should (equal before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
-            (should (string-search "mevedel://ptc-dialect.md" before)))))
-    (kill-buffer buffer)))
+  (progn
+    (mevedel-tool-ptc--register)
+    (with-current-buffer buffer
+      (setq-local mevedel--session session)
+      (let* ((tool (mevedel-tool-ensure "ToolCall"))
+             (before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
+        (setf (mevedel-session-tool-catalog session)
+              '((("mevedel" "Imenu") . "outline")))
+        (should (equal before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
+        (should (string-search "mevedel://ptc-dialect.md" before))))))
 
 (mevedel-deftest mevedel-tool-ptc--call-template ()
   ,test
@@ -255,6 +239,25 @@
         (mevedel-tool-register tool)
         (push native gptel-tools)))
     (should (equal '("server/Good") (mevedel-tool-ptc--active-tool-names)))))
+
+(mevedel-deftest mevedel-tool-ptc--handler ()
+  ,test
+  (test)
+  :doc "forwards the expression and restricted roster with standalone tools"
+  (with-temp-buffer
+    (mevedel-tool-fs--register)
+    (setq-local gptel-tools
+                (test-mevedel-tool-ptc--gptel-tools "Read" "Glob" "Grep")
+                mevedel--current-request
+                (mevedel-request--create :ptc-primitives '("Read" "Glob")))
+    (let ((mevedel-ptc-composable-tools '("Read")))
+      (cl-letf (((symbol-function 'mevedel-ptc-driver-run)
+                 (lambda (callback expression roster &optional standalone)
+                   (funcall callback (list expression roster standalone)))))
+        (should
+         (equal '("(Glob :pattern \"*.el\")" ("Read" "Glob") ("Glob"))
+                (mevedel-tool-ptc--handler
+                 #'identity '(:expression "(Glob :pattern \"*.el\")"))))))))
 
 (provide 'test-mevedel-tool-ptc)
 ;;; test-mevedel-tool-ptc.el ends here
