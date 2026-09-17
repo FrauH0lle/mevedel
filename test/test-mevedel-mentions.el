@@ -1054,7 +1054,8 @@ Returns (buffer . overlay)."
          (session (mevedel-session-create "main" ws))
          ;; Session deny rule matching the exact path
          (mevedel-permission-rules nil))
-    (mevedel-permission--add-session-rule session "Read" 'deny tmp)
+    (mevedel-permission--add-session-rule
+     session (list "Read" :path tmp :action 'deny))
     (unwind-protect
         (let ((result (mevedel--handle-file-mention
                        (list :match-text (concat "@file:" tmp)
@@ -1129,7 +1130,8 @@ Returns (buffer . overlay)."
          (mevedel-permission-rules nil))
     (with-temp-file tmp (insert "dropped secret\n"))
     (mevedel-session-activate-dropped-file-grants session (list tmp))
-    (mevedel-permission--add-session-rule session "Read" 'deny tmp)
+    (mevedel-permission--add-session-rule
+     session (list "Read" :path tmp :action 'deny))
     (unwind-protect
         (let ((result (mevedel--handle-file-mention
                        (list :match-text (concat "@file:" tmp)
@@ -1302,7 +1304,8 @@ Returns (buffer . overlay)."
          (session (mevedel-session-create "main" workspace))
          (token "@file:visible.txt")
          (binding (list :kind 'file :token token :path tmp)))
-    (mevedel-permission--add-session-rule session "Read" 'deny tmp)
+    (mevedel-permission--add-session-rule
+     session (list "Read" :path tmp :action 'deny))
     (unwind-protect
         (let ((result (mevedel--handle-file-mention
                        (list :match-text token

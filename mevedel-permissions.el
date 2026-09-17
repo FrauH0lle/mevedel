@@ -46,7 +46,7 @@
                   (workspace path access &optional recursive))
 (declare-function mevedel-permission-persistence-save-rule
                   "mevedel-permission-persistence"
-                  (workspace tool-name action &optional path &rest keys))
+                  (workspace rule))
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-rules-build-rule
@@ -771,38 +771,13 @@ RECURSIVE non-nil covers PATH and all descendants."
                  (mevedel-session-permission-rules session)))))
 
 
-(cl-defun mevedel-permission--add-session-rule
-    (session tool-name action &optional path
-             &key spec-key spec-value network file-system
-             sandbox-permissions)
-  "Add a permission rule to SESSION's rule list.
-
-TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
-
-Positional PATH is retained for existing call sites; when supplied it is
-equivalent to SPEC-KEY `:path' with that value.  Callers specifying
-another specifier should pass SPEC-KEY (e.g. `:pattern') and SPEC-VALUE
-instead, leaving PATH nil.  NETWORK and FILE-SYSTEM record matching additive
-execution authority.  SANDBOX-PERMISSIONS qualifies an already requested
-execution level.
-
-Mutates SESSION's `permission-rules' slot via `setf' -- this is a
-**by-reference** write.  Sub-agents share the parent session by
-reference (see `mevedel-agent-conversation-open'), so a
-rule recorded inside any sub-agent's permission prompt, such as
-\"allow-session\" or \"deny-session\", immediately applies to the parent
-and to every other live sub-agent sharing the same session struct.  This
-is a deliberate contract, not an accident of the buffer-local plumbing."
+(defun mevedel-permission--add-session-rule (session rule)
+  "Append RULE to SESSION's permission rules unless already present.
+RULE uses the `mevedel-permission-rules' format.  Sub-agents share the
+root SESSION by reference, so the rule immediately applies to the tree."
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
-  (let* ((key (or spec-key (and path :path)))
-         (value (or spec-value path))
-         (rule (mevedel-permission-rules-build-rule
-                tool-name action key value
-                :network network
-                :file-system file-system
-                :sandbox-permissions sandbox-permissions))
-         (rules (mevedel-session-permission-rules session)))
+  (let ((rules (mevedel-session-permission-rules session)))
     (unless (member rule rules)
       (setf (mevedel-session-permission-rules session)
             (append rules (list rule))))))
@@ -861,21 +836,22 @@ RESULT is one of:
   `deny-session'  -- add session deny rule, return `deny'
 
 TOOL-NAME is the tool being permitted.  SESSION and WORKSPACE are used
-for storage.  Positional PATH scopes the authority to a file path (kept
-for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow rule
-scoping by any other specifier (`:pattern', `:domain', `:name').
+for storage.  PATH scopes resource authority; SPEC-KEY/SPEC-VALUE scope
+operation rules (`:path', `:pattern', `:domain', `:name').  When no rule
+specifier is supplied, PATH also scopes the operation rule.
 RESOURCE-ACCESS stores path authority separately from rules;
 RESOURCE-RECURSIVE non-nil extends it to all descendants of PATH.
 NETWORK and FILE-SYSTEM store a capability-qualified operation rule.
 SANDBOX-PERMISSIONS qualifies an already requested execution level."
-  (cl-flet ((session-rule (action)
+  (cl-flet ((rule (action)
+              (mevedel-permission-rules-build-rule
+               tool-name action (or spec-key (and path :path))
+               (or spec-value path)
+               :network network :file-system file-system
+               :sandbox-permissions sandbox-permissions))
+            (session-rule (rule)
               (when session
-                (mevedel-permission--add-session-rule
-                 session tool-name action path
-                 :spec-key spec-key :spec-value spec-value
-                 :network network
-                 :file-system file-system
-                 :sandbox-permissions sandbox-permissions)))
+                (mevedel-permission--add-session-rule session rule)))
             (session-resource-grant ()
               (when (and session path resource-access)
                 (mevedel-permission-add-session-resource-grant
@@ -884,15 +860,10 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
               (when (and workspace path resource-access)
                 (mevedel-permission-persistence-save-resource-grant
                  workspace path resource-access resource-recursive)))
-            (persistent-rule (action)
+            (persistent-rule (rule)
               (cond
                (workspace
-                (mevedel-permission-persistence-save-rule
-                 workspace tool-name action path
-                 :spec-key spec-key :spec-value spec-value
-                 :network network
-                 :file-system file-system
-                 :sandbox-permissions sandbox-permissions))
+                (mevedel-permission-persistence-save-rule workspace rule))
                (t
                 ;; User clicked always-allow but no workspace is
                 ;; in scope (gone since enqueue, or session not
@@ -910,16 +881,17 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
       ('allow-session
        (if resource-access
            (session-resource-grant)
-         (session-rule 'allow))
+         (session-rule (rule 'allow)))
        'allow)
       ('always-allow
        (if resource-access
            (persistent-resource-grant)
-         (persistent-rule 'allow)
-         (session-rule 'allow))
+         (let ((rule (rule 'allow)))
+           (persistent-rule rule)
+           (session-rule rule)))
        'allow)
       ('deny-once 'deny)
-      ('deny-session (session-rule 'deny) 'deny)
+      ('deny-session (session-rule (rule 'deny)) 'deny)
       (_ 'deny))))
 
 (provide 'mevedel-permissions)
