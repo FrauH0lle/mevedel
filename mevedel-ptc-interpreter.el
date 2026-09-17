@@ -730,13 +730,13 @@ When REJECT-EMPTY-P is non-nil, reject an empty REGEXP."
                              format-string start)
           (let ((spec (match-string 0 format-string))
                 (number-start 0))
+            (setq start (match-end 0))
             (while (string-match "[0-9]+" spec number-start)
               (when (> (string-to-number (match-string 0 spec))
                        mevedel-ptc-max-value-bytes)
                 (mevedel-ptc--fail
                  'value "'format': field size exceeds the guest value byte budget"))
-              (setq number-start (match-end 0))))
-          (setq start (match-end 0)))))))
+              (setq number-start (match-end 0)))))))))
 
 (defun mevedel-ptc--apply-pure (state name function args)
   "Apply pure guest FUNCTION named NAME to ARGS under atomic budgets.
