@@ -17,7 +17,6 @@
 
 ;; `gptel'
 (declare-function gptel--save-state "ext:gptel" ())
-(declare-function gptel-mode "ext:gptel" (&optional arg))
 (defvar gptel-mode)
 (defvar gptel-post-response-functions)
 (defvar gptel-post-stream-hook)
@@ -34,70 +33,6 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-alist)
 (defvar gptel-org-convert-response)
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-configuration-p
-                  "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-configuration-request-locals
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-activity
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-call-count
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-frozen-configuration
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-tool-use-id
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-render-data-end-marker
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-render-data-start-marker
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-settled-p
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-sandbox-summary-cell
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-sidecar-dirty
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-started-at
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-terminal-reason
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-relative-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-save-timer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-status
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-verdict
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-request-locals-p
-                  "mevedel-agents" (locals &optional complete))
-(declare-function mevedel-agents-set-specs
-                  "mevedel-agents" (specs))
-(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
-(defvar mevedel-agent-request-local-symbols)
-
-;; `mevedel-execution-telemetry'
-(declare-function mevedel-execution-telemetry-sandbox-summary-class
-                  "mevedel-execution-telemetry" (summary))
-
-;; `mevedel-execution-transcript'
-(declare-function mevedel-execution-transcript-retry-terminals
-                  "mevedel-execution-transcript" (&rest args))
-(declare-function mevedel-execution-transcript-store-pending-terminal
-                  "mevedel-execution-transcript"
-                  (data-buffer event render-data))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-find-artifact-noselect
@@ -160,20 +95,6 @@
 (autoload 'mevedel-tool-repair-post-tool-call "mevedel-tool-repair")
 (autoload 'mevedel-tool-repair-pre-tool-call "mevedel-tool-repair")
 
-;; `mevedel-tool-render-data'
-(declare-function mevedel-tool-render-data-extract
-                  "mevedel-tool-render-data"
-                  (result-string &optional session expected-tool-use-id
-                                 allow-payload-tool-use-id))
-(declare-function mevedel-tool-render-data-find-agent-block
-                  "mevedel-tool-render-data" (agent-id))
-(declare-function mevedel-tool-render-data-for-tool
-                  "mevedel-tool-render-data" (buffer tool-use-id))
-(declare-function mevedel-tool-render-data-patch-block
-                  "mevedel-tool-render-data" (beg end new-plist))
-(declare-function mevedel-tool-render-data-update
-                  "mevedel-tool-render-data" (buffer tool-use-id updates))
-
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-normalize-properties
                   "mevedel-transcript" ())
@@ -183,7 +104,6 @@
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
-(autoload 'mevedel-transcript-project-evidence "mevedel-transcript")
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-restore'

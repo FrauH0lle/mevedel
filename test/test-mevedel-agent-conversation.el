@@ -366,7 +366,7 @@
 		 ,test
 		 (test)
 
-		 :doc "forces agent data buffers to use linear gptel Org context"
+		 :doc "installs linear gptel Org context and path-scoped skill activation"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-agent-parent-" t)))
 			(workspace (mevedel-workspace--create
@@ -399,7 +399,9 @@
 			   (should (equal root default-directory))
 			   (should (equal "/root/test_agent"
 				          (mevedel-agent-invocation-path inv)))
-			   (should-not gptel-org-branching-context)))
+			   (should-not gptel-org-branching-context)
+                           (should (memq #'mevedel-skills--post-tool-activate
+                                         mevedel-post-tool-use-functions))))
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 		     (delete-directory root t)))
@@ -479,45 +481,6 @@
 		     (when (buffer-live-p worker-buf) (kill-buffer worker-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 		     (delete-directory root t)))
-
-                 :doc "installs path-scoped skill activation in agent buffers"
-                 (let* ((root (file-name-as-directory
-                               (make-temp-file "mevedel-agent-parent-" t)))
-                        (workspace (mevedel-workspace--create
-                                    :type 'project
-                                    :id root
-                                    :root root
-                                    :name "agent"))
-                        (session (mevedel-session-create
-                                  "main" workspace root))
-                        (parent-buf
-                         (generate-new-buffer " *mev-agent-parent*"))
-                        (agent (mevedel-agent--create
-                                :name "explorer"))
-                        (inv (mevedel-agent-invocation--create
-                              :path "/root/test_agent"
-                              :agent agent
-                              :agent-id "explorer--skills"))
-                        agent-buf)
-                   (unwind-protect
-                       (progn
-                         (with-current-buffer parent-buf
-                           (setq-local mevedel--session session)
-                           (setq-local mevedel--workspace workspace))
-                         (cl-letf (((symbol-function 'gptel-mode)
-                                    #'ignore))
-                           (setq agent-buf
-                                 (mevedel-agent-conversation-open
-                                  inv parent-buf)))
-                         (with-current-buffer agent-buf
-                           (should (memq
-                                    #'mevedel-skills--post-tool-activate
-                                    mevedel-post-tool-use-functions))))
-                     (when (buffer-live-p agent-buf)
-                       (kill-buffer agent-buf))
-                     (when (buffer-live-p parent-buf)
-                       (kill-buffer parent-buf))
-                     (delete-directory root t)))
 
                  :doc "installs independent repair hooks in retained agent buffers"
                  (let* ((root (file-name-as-directory
