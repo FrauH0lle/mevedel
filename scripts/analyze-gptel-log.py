@@ -206,9 +206,9 @@ def parse_log(filepath: str) -> list:
 
     # Track the last-seen HTTP status per response-headers marker, so that
     # when we process the next response body we can attach the status.
-    pending_status = [None, None]  # [status_code, timestamp]
+    pending_status = None
 
-    for marker_idx, (start_line, after_marker_line, marker) in enumerate(markers):
+    for start_line, after_marker_line, marker in markers:
         gptel_type = marker.get("gptel", "")
         timestamp = marker.get("timestamp", "?")
 
@@ -220,8 +220,7 @@ def parse_log(filepath: str) -> list:
             if idx < len(lines):
                 try:
                     parts = lines[idx].lstrip().split()
-                    pending_status[0] = int(parts[1])
-                    pending_status[1] = timestamp
+                    pending_status = int(parts[1])
                 except (ValueError, IndexError):
                     pass
             continue
@@ -232,51 +231,38 @@ def parse_log(filepath: str) -> list:
 
         if gptel_type == "request body":
             # Chat Completions API uses `messages`; Responses API uses `input`.
-            if "messages" in body:
+            chat_api = "messages" in body
+            if chat_api:
                 msgs = body.get("messages", [])
                 sys_content = msgs[0].get("content", "") if msgs else ""
-                agent = identify_agent(sys_content)
-                last_user = None
-                for m in reversed(msgs):
-                    if m.get("role") == "user":
-                        last_user = m
-                        break
-                luc = str(last_user.get("content", "")) if last_user else ""
-                num_items = len(msgs)
-                stream = body.get("stream", True)
             else:
-                items = body.get("input", [])
+                msgs = body.get("input", [])
                 sys_content = body.get("instructions", "")
-                agent = identify_agent(sys_content)
-                last_user = None
-                for it in reversed(items):
-                    if isinstance(it, dict) and it.get("role") == "user":
-                        last_user = it
-                        break
-                luc = str(last_user.get("content", "")) if last_user else ""
-                num_items = len(items)
-                stream = body.get("stream", True)
-
-            has_agent_result = "<agent-result" in luc
-            has_agent_msg = "<agent-message" in luc
+            agent = identify_agent(sys_content)
+            last_user = None
+            for msg in reversed(msgs):
+                if (chat_api or isinstance(msg, dict)) and msg.get("role") == "user":
+                    last_user = msg
+                    break
+            luc = str(last_user.get("content", "")) if last_user else ""
 
             events.append({
                 "type": "request",
                 "line": start_line + 1,
                 "timestamp": timestamp,
                 "agent": agent,
-                "num_messages": num_items,
-                "stream": bool(stream),
+                "num_messages": len(msgs),
+                "stream": bool(body.get("stream", True)),
                 "last_user": summarize_user_content(
                     last_user.get("content") if last_user else None
                 ),
-                "has_agent_result": has_agent_result,
-                "has_agent_message": has_agent_msg,
+                "has_agent_result": "<agent-result" in luc,
+                "has_agent_message": "<agent-message" in luc,
             })
 
         elif gptel_type == "response body":
-            status = pending_status[0]
-            pending_status = [None, None]
+            status = pending_status
+            pending_status = None
 
             # Responses API sometimes returns {"detail": "..."} as plain error.
             if isinstance(body, dict) and "detail" in body and "output" not in body:
@@ -350,16 +336,10 @@ def parse_log(filepath: str) -> list:
                 })
 
     # Pick up streaming finishes from SSE `data:` lines (both APIs).
-    in_responses_api_stream = False
     pending_tool_calls = []
     pending_content = ""
-    pending_usage = {}
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("event: response."):
-            # Responses API stream event
-            in_responses_api_stream = True
-            continue
         if not stripped.startswith("data: {"):
             continue
         try:
@@ -426,17 +406,13 @@ def format_trace(events: list, verbose: bool = False) -> str:
     output.append("GPTEL LOG TRACE")
     output.append("=" * 70)
 
-    # Track per-agent turn counts and assign responses to preceding requests
+    # Track per-agent turn counts.
     agent_turns = {}
-    last_request_agent = None
-    turn = 0
 
     for evt in events:
         if evt["type"] == "request":
-            turn += 1
             agent = evt["agent"]
             agent_turns[agent] = agent_turns.get(agent, 0) + 1
-            last_request_agent = agent
 
             flags = []
             if evt.get("has_agent_result"):
@@ -545,11 +521,7 @@ def main():
     events = parse_log(args.logfile)
 
     if args.json:
-        # Filter out internal keys
-        clean = []
-        for e in events:
-            clean.append({k: v for k, v in e.items() if not k.startswith("_")})
-        print(json.dumps(clean, indent=2, default=str))
+        print(json.dumps(events, indent=2, default=str))
     else:
         print(format_trace(events, verbose=args.verbose))
 
