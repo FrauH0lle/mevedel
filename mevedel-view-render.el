@@ -284,7 +284,7 @@
 (declare-function mevedel-view-disclosure-restore-state
                   "mevedel-view-disclosure" (from to states))
 (declare-function mevedel-view-disclosure-section-bounds
-                  "mevedel-view-disclosure" ())
+                  "mevedel-view-disclosure" (&optional property))
 (declare-function mevedel-view-disclosure-source-range
                   "mevedel-view-disclosure" (data-buffer start end))
 (declare-function mevedel-view-disclosure-source-start
@@ -4105,28 +4105,10 @@ EXPANDED means insert the disclosure body expanded."
          mevedel-view-source-key ,(mevedel-view-disclosure-state-key
                                    source 'hook-context))))))
 
-(defun mevedel-view--hook-context-section-bounds ()
-  "Return bounds of the hook context disclosure at point, or nil."
-  (let ((id (get-text-property (point) 'mevedel-view-hook-context-id)))
-    (when id
-      (let ((start (or (previous-single-property-change
-                        (point) 'mevedel-view-hook-context-id)
-                       (point-min)))
-            (end (or (next-single-property-change
-                      (point) 'mevedel-view-hook-context-id)
-                     (point-max))))
-        (when (and (< start (point))
-                   (not (eq (get-text-property
-                             start 'mevedel-view-hook-context-id)
-                            id)))
-          (setq start (or (next-single-property-change
-                           start 'mevedel-view-hook-context-id)
-                          (point))))
-        (cons start end)))))
-
 (defun mevedel-view-render-toggle-hook-context ()
   "Toggle a hook context disclosure."
-  (let* ((bounds (or (mevedel-view--hook-context-section-bounds)
+  (let* ((bounds (or (mevedel-view-disclosure-section-bounds
+                      'mevedel-view-hook-context-id)
                      (mevedel-view-disclosure-section-bounds)))
          (source (and bounds
                       (get-text-property
@@ -4583,32 +4565,15 @@ its fold state to the next full rerender, which re-folds from source."
     (mevedel-view-render-add-display-properties
      start (point) 'user-input-summary)))
 
-(defun mevedel-view--user-input-fold-bounds ()
-  "Return bounds of the contiguous user-input fold section at point."
-  (when (eq (get-text-property (point) 'mevedel-view-type)
-            'user-input-summary)
-    (let ((start (or (previous-single-property-change
-                      (point) 'mevedel-view-type)
-                     (point-min)))
-          (end (or (next-single-property-change
-                    (point) 'mevedel-view-type)
-                   (point-max))))
-      ;; `previous-single-property-change' lands in the previous run
-      ;; when point sits at the start of this one.
-      (when (and (< start (point))
-                 (not (eq (get-text-property start 'mevedel-view-type)
-                          'user-input-summary)))
-        (setq start (or (next-single-property-change
-                         start 'mevedel-view-type)
-                        (point))))
-      (cons start end))))
-
 (defun mevedel-view-render-toggle-user-input ()
   "Toggle the folded user input section at point.
 The full input travels in a text property rather than being re-read
 from the data buffer, so the send-path echo -- which has no source
 coordinates yet -- folds and expands the same way as a rendered turn."
-  (let* ((bounds (mevedel-view--user-input-fold-bounds))
+  (let* ((bounds (and (eq (get-text-property (point) 'mevedel-view-type)
+                        'user-input-summary)
+                       (mevedel-view-disclosure-section-bounds
+                        'mevedel-view-type)))
          (start (car-safe bounds)))
     (unless bounds
       (user-error "No collapsible section at point"))
@@ -6052,29 +6017,6 @@ The result contains normalized `:source', `:summary', and `:face' values."
 ;;
 ;;; Turn-level expand/collapse
 
-(defun mevedel-view--turn-bounds ()
-  "Return (START . END) bounds of the turn at point.
-A turn is the contiguous run of text sharing the same
-`mevedel-view-turn-id'.  Returns nil when point has no turn id."
-  (let ((id (get-text-property (point) 'mevedel-view-turn-id)))
-    (when id
-      (let ((start (or (previous-single-property-change
-                        (point) 'mevedel-view-turn-id)
-                       (point-min)))
-            (end (or (next-single-property-change
-                      (point) 'mevedel-view-turn-id)
-                     (point-max))))
-        ;; `previous-single-property-change' lands in the PREVIOUS run
-        ;; when point is at the start of the current run.  Advance past
-        ;; any leading region whose id is not `eq' to ours.
-        (when (and (< start (point))
-                   (not (eq (get-text-property start 'mevedel-view-turn-id)
-                            id)))
-          (setq start (or (next-single-property-change
-                           start 'mevedel-view-turn-id)
-                          (point))))
-        (cons start end)))))
-
 (defun mevedel-view--user-turn-summary (start end)
   "Build a one-line summary for a user turn between START and END.
 Return nil when the body is a single line -- short turns are already
@@ -6227,7 +6169,8 @@ synthesizes a preview with tool counters."
 Stashes the original propertized text on the summary so expand can
 restore the turn with all inner section state intact.  Signals a
 `user-error' when the turn is too short to benefit from folding."
-  (let* ((bounds (mevedel-view--turn-bounds))
+  (let* ((bounds (mevedel-view-disclosure-section-bounds
+                  'mevedel-view-turn-id))
          (role (get-text-property (point) 'mevedel-view-turn-role))
          (id (get-text-property (point) 'mevedel-view-turn-id))
          (directive (get-text-property (point) 'mevedel-view-directive)))
@@ -6305,7 +6248,8 @@ restore the turn with all inner section state intact.  Signals a
 
 (defun mevedel-view--expand-turn ()
   "Restore a collapsed turn at point from its stashed content."
-  (let* ((bounds (mevedel-view--turn-bounds))
+  (let* ((bounds (mevedel-view-disclosure-section-bounds
+                  'mevedel-view-turn-id))
          (stash (get-text-property (point) 'mevedel-view-stash))
          (directive (get-text-property (point) 'mevedel-view-directive)))
     (unless (and bounds stash)
@@ -6369,7 +6313,8 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
 
 (defun mevedel-view--settled-response-at-point ()
   "Return the stable settled response target at point."
-  (let* ((bounds (mevedel-view--turn-bounds))
+  (let* ((bounds (mevedel-view-disclosure-section-bounds
+                  'mevedel-view-turn-id))
          (role (and bounds
                     (get-text-property
                      (car bounds) 'mevedel-view-turn-role)))
@@ -6416,7 +6361,8 @@ continuation context."
     (unless found
       (user-error "Conversation fork point is no longer available"))
     (goto-char found)
-    (when-let* ((bounds (mevedel-view--turn-bounds)))
+    (when-let* ((bounds (mevedel-view-disclosure-section-bounds
+                        'mevedel-view-turn-id)))
       (goto-char (car bounds)))))
 
 (defun mevedel-view-switch-conversation-variant (fork-point-id)

@@ -18,7 +18,9 @@ On view closure, `mevedel-view-control-transfer-stop-polling` stops the timer
 and prevents rearming while retaining the root registration needed for journal
 sealing. Full transfer teardown removes the registrations after sealing.
 `mevedel-view-disclosure.el` owns source-backed disclosure identity, state,
-and expand/collapse actions. `mevedel-view-render.el` owns transcript
+and expand/collapse actions. It also locates contiguous section bounds for
+source disclosures, hook context, user-input folds, and turns using each
+caller's identity property; equal but distinct source objects remain separate. `mevedel-view-render.el` owns transcript
 projection, source mapping, and live transcript navigation.
 `mevedel-view-segments.el` owns archived segment buffers, switching, and
 ephemeral projection state.

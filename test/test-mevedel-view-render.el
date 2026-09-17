@@ -6767,6 +6767,14 @@
 (mevedel-deftest mevedel-view-render-toggle-user-input ()
   ,test
   (test)
+  :doc "rejects another section type without changing its content"
+  (with-temp-buffer
+    (insert (propertize "Response text" 'mevedel-view-type 'response))
+    (goto-char (point-min))
+    (let ((before (buffer-string)))
+      (should-error (mevedel-view-render-toggle-user-input) :type 'user-error)
+      (should (equal-including-properties before (buffer-string)))
+      (should (= (point) (point-min)))))
   :doc "a long rendered user turn folds, expands, and refolds"
   (let ((mevedel-view-user-input-collapse-line-threshold 3))
     (mevedel-view-test--with-buffers
