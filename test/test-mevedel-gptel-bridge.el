@@ -319,18 +319,17 @@
               (select-window right-window)
               (mevedel-gptel-bridge--schedule-return-to-view
                view-buf data-buf)
-              (let* ((args
-                      (mevedel-gptel-bridge--edit-directive-args
-                       (list 'gptel-system-prompt
-                             :callback
-                             (lambda (message)
-                               (setq callback-message message
-                                     callback-buffer (current-buffer)
-                                     callback-window (selected-window))
-                               (should
-                                (equal gptel-system-prompt
-                                       "data prompt"))))))
-                     (callback (plist-get (cdr args) :callback)))
+              (let (callback)
+                (mevedel-gptel-bridge--edit-directive-advice
+                 (lambda (&rest args)
+                   (setq callback (plist-get (cdr args) :callback)))
+                 'gptel-system-prompt
+                 :callback
+                 (lambda (message)
+                   (setq callback-message message
+                         callback-buffer (current-buffer)
+                         callback-window (selected-window))
+                   (should (equal gptel-system-prompt "data prompt"))))
                 (set-window-buffer left-window data-buf)
                 (select-window left-window)
                 (funcall callback "new prompt")
