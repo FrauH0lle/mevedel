@@ -90,7 +90,7 @@
   (test)
   (let ((prompt
          (mevedel-plan-handoff--implementation-prompt
-          nil '(:path "local/plans/accepted-20260813-120000.md"
+          '(:path "local/plans/accepted-20260813-120000.md"
             :absolute-path "/tmp/accepted.md") "# Accepted")))
     (should (string-match-p "work://plans/accepted-20260813-120000.md"
                             prompt))
@@ -105,11 +105,9 @@
      '(:kind skill :token "$beta"
        :source-file "/tmp/beta/SKILL.md")
      instructions)
-    (let* ((session
-            (mevedel-session--create :name "main" :save-path "/tmp/session/"))
-           (prompt
+    (let* ((prompt
             (mevedel-plan-handoff--implementation-prompt
-             nil '(:path "local/plans/accepted-20260813-120000.md"
+             '(:path "local/plans/accepted-20260813-120000.md"
                   :absolute-path "/tmp/accepted.md") "# Accepted"
              (list
               :skills
@@ -134,7 +132,7 @@
   (let* ((artifact '(:path "local/plans/accepted-20260813-120000.md"
                      :absolute-path "/tmp/accepted.md"))
          (body "Free-form plan")
-         (prompt (mevedel-plan-handoff--goal-kickoff-prompt nil artifact body)))
+         (prompt (mevedel-plan-handoff--goal-kickoff-prompt artifact body)))
     (should (< (string-search "work://plans/accepted-20260813-120000.md"
                               prompt)
                (string-search body prompt)
@@ -191,24 +189,6 @@
     (should (stringp (plist-get goal-record :goal-id)))
     (should-not (plist-member direct-record :goal-id))))
 
-(mevedel-deftest mevedel-plan-handoff--accepted-body
-  (:doc "delegates accepted-plan reads to the verified Plan resolver")
-  ,test
-  (test)
-  (let* ((session
-          (mevedel-session--create
-           :name "main" :save-path "/tmp/plan-submit-session/"))
-         (artifact '(:path "plans/accepted.md" :hash "h"))
-         seen)
-    (cl-letf (((symbol-function 'mevedel-plan-read-artifact)
-               (lambda (seen-session seen-artifact)
-                 (setq seen (list seen-session seen-artifact))
-                 "# Accepted")))
-      (should (equal "# Accepted"
-                     (mevedel-plan-handoff--accepted-body
-                      session artifact))))
-    (should (equal (list session artifact) seen))))
-
 (mevedel-deftest mevedel-plan-handoff--summary-focus
   (:doc "keeps the exact accepted plan and implementation-only instructions")
   ,test
@@ -248,7 +228,7 @@
                    (lambda (_) view-buffer))
                   ((symbol-function 'mevedel-view--stop-request-progress)
                    (lambda () (setq stopped t)))
-                  ((symbol-function 'mevedel-plan-handoff--persist) #'ignore))
+                  ((symbol-function 'mevedel-session-artifacts-save) #'ignore))
           (mevedel-plan-handoff--implementation-failed
            session chat-buffer "Transport failed")
           (should stopped)
@@ -308,7 +288,7 @@
             (setq-local mevedel--session session))
           (mevedel-plan-handoff--implementation-request-started
            fsm chat-buffer)
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (saved-session saved-buffer)
                        (setq persisted (list saved-session saved-buffer)))))
             (mevedel-plan-handoff-settle-request fsm 'success))
@@ -343,7 +323,7 @@
             (cl-letf (((symbol-function
                         'mevedel-view--interaction-target-buffer)
                        (lambda (_) nil))
-                      ((symbol-function 'mevedel-plan-handoff--persist)
+                      ((symbol-function 'mevedel-session-artifacts-save)
                        #'ignore))
               (mevedel-plan-handoff-settle-request fsm status reason))
             (let ((saved
@@ -387,7 +367,7 @@
          (metadata (list :status 'accepted :implementation-retry retry))
          (session (mevedel-session--create
                    :name "main" :plan-metadata metadata)))
-    (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+    (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                (lambda (&rest _) (error "Disk unavailable"))))
       (should-error
        (mevedel-plan-handoff--goal-handoff-complete session (current-buffer))))
@@ -395,19 +375,6 @@
     (should (eq retry
                 (plist-get (mevedel-session-plan-metadata session)
                            :implementation-retry)))))
-
-(mevedel-deftest mevedel-plan-handoff--persist
-  (:doc "delegates session saving to the canonical persistence writer")
-  ,test
-  (test)
-  (let ((session (mevedel-session--create :name "main"
-                                          :authority-mode 'pid-lock))
-        seen)
-    (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
-               (lambda (saved-session buffer)
-                 (setq seen (list saved-session buffer)))))
-      (mevedel-plan-handoff--persist session (current-buffer)))
-    (should (equal (list session (current-buffer)) seen))))
 
 (mevedel-deftest mevedel-plan-handoff--worktree-target-buffer
   (:doc "restores only the recorded Worktree session and directory")
@@ -473,7 +440,7 @@
                        (setq clean clean-arg)
                        (list :branch branch :directory "/tmp/target"
                              :buffer target-buffer)))
-                    ((symbol-function 'mevedel-plan-handoff--persist)
+                    ((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (session _buffer)
                        (push (if (eq session target-session)
                                  'target-save
@@ -520,7 +487,7 @@
           (cl-letf (((symbol-function
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--accepted-body)
+                    ((symbol-function 'mevedel-plan-read-artifact)
                      (lambda (_session _artifact) "# Accepted"))
                     ((symbol-function 'mevedel-plan-archive-accepted)
                      (lambda (&rest args)
@@ -532,7 +499,7 @@
                      #'ignore)
                     ((symbol-function 'mevedel-permission-mode-transition)
                      (lambda (selected) (setq mode selected)))
-                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore))
+                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore))
             (let* ((record
                     (list :selection
                           '(:location worktree :context fresh
@@ -609,7 +576,7 @@
           (cl-letf (((symbol-function
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--accepted-body)
+                    ((symbol-function 'mevedel-plan-read-artifact)
                      (lambda (_session _artifact) body))
                     ((symbol-function 'mevedel-plan-archive-accepted)
                      (lambda (&rest _)
@@ -621,7 +588,7 @@
                      (lambda (&rest _) (cl-incf settings)))
                     ((symbol-function 'mevedel-permission-mode-transition)
                      #'ignore)
-                    ((symbol-function 'mevedel-plan-handoff--persist)
+                    ((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (saved-session _buffer)
                        (when (eq saved-session source-session)
                          (cl-incf source-saves)
@@ -751,7 +718,7 @@
                                       (concat root "/file.el\n"
                                               test-mevedel-plan-handoff--summary)))
                        #'ignore))
-                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
                      (lambda (&rest _) (setq dispatched t))))
             (mevedel-plan-handoff--prepare-summary
@@ -786,7 +753,7 @@
                       ((symbol-function 'mevedel-context-summary-generate)
                        (lambda (&rest _)
                          (ert-fail "Cached summary sent another request")))
-                      ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                      ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                       ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
                        #'ignore))
               (mevedel-plan-handoff--prepare-summary
@@ -833,7 +800,7 @@
                               (target (plist-get args :target)))
                          (funcall (plist-get target :apply) target summary)
                          (funcall (plist-get args :callback) nil))))
-                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
                      (lambda (&rest _) (setq dispatched t))))
             (mevedel-plan-handoff--prepare-summary
@@ -963,7 +930,7 @@
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf
-              (((symbol-function 'mevedel-plan-handoff--accepted-body)
+              (((symbol-function 'mevedel-plan-read-artifact)
                 (lambda (_session _artifact) "# Accepted"))
                ((symbol-function 'mevedel-view--interaction-target-buffer)
                 (lambda (_) view-buffer))

@@ -71,7 +71,7 @@
           (with-current-buffer data-buffer
             (setq-local mevedel--session session
                         gptel-prompt-prefix-alist '((fundamental-mode . "> "))))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function
                       'mevedel-session-artifacts-start-fresh-segment)
                      (lambda (&rest _)
@@ -117,7 +117,7 @@
             (should
              (plist-member (mevedel-session-plan-metadata session)
                            :implementation-retry))
-            (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                        #'ignore))
               (mevedel-plan-handoff-settle-request request-fsm 'success))
             (should-not
@@ -146,7 +146,7 @@
            (list :status 'accepted :implementation-retry record)))
          (data-buffer (generate-new-buffer " *plan-fresh-failure*")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                   ((symbol-function
                     'mevedel-session-artifacts-start-fresh-segment)
                    (lambda (&rest _) (error "Rotation failed"))))
@@ -221,7 +221,6 @@
                                        :transcript-input input)))))
                     ((symbol-function 'mevedel-session-artifacts-save)
                      #'ignore)
-                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function 'mevedel--implement-plan) #'ignore))
             (mevedel-plan-handoff--dispatch-accepted
              source-session source-buffer))
@@ -268,8 +267,7 @@
           (write-region body nil accepted-path nil 'silent)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
-                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
                     ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
@@ -327,7 +325,7 @@
           (write-region body nil accepted-path nil 'silent)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
                     ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
@@ -386,9 +384,7 @@
           (write-region body nil accepted-path nil 'silent)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
-                    ((symbol-function 'mevedel-session-artifacts-save)
-                     #'ignore)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
                     ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
@@ -471,7 +467,7 @@
           (write-region body nil accepted-path nil 'silent)
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (&rest _)
                        (push (copy-tree
                               (mevedel-session-plan-metadata session))
@@ -628,7 +624,7 @@
             (setq-local mevedel--session source-session))
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function
                       'mevedel-worktree-session-directory)
                      (lambda (_) target-directory))
@@ -776,7 +772,7 @@
                     (list :buffer target-buffer :branch branch
                           :directory target-directory
                           :reused (> create-calls 1))))
-                 ((symbol-function 'mevedel-plan-handoff--persist)
+                 ((symbol-function 'mevedel-session-artifacts-save)
                   (lambda (session _buffer)
                     (if (eq session target-session)
                         (progn
@@ -873,7 +869,7 @@
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session))
           (cl-letf
-              (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+              (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                ((symbol-function 'mevedel-compact-target-main-target)
                 (lambda ()
                   (list :apply (lambda (&rest _) (ert-fail "Source mutated"))

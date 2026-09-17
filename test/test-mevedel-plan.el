@@ -261,8 +261,7 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-body-" t))
-         (path (file-name-concat save-dir "local" "plans" "current.md"))
-         (stale-path (file-name-concat save-dir "plans" "current.md")))
+         (path (file-name-concat save-dir "local" "plans" "current.md")))
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
