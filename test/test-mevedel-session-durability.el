@@ -3006,6 +3006,7 @@
          (sidecar (file-name-concat session-dir "session.meta.el"))
          (session (test-mevedel-session-durability--local-session local-root))
          (mevedel-session-durability--client-id (make-string 64 ?a))
+         (temporary-file-directory local-root)
          recovery)
     (make-directory session-dir t)
     (setf (mevedel-session-save-path session) session-dir)
@@ -3038,8 +3039,20 @@
            (mevedel-session-publication-uncommitted-batches session))
           (should-not
            (mevedel-session-durability-publication-head session-dir))
-          (should
-           (mevedel-session-publication-retry session))
+          ;; Another publisher can create a sibling between filesystem
+          ;; reads.  Keep real path resolution while changing parent metadata.
+          (let ((native-truename (symbol-function 'file-truename))
+                (parent (directory-file-name local-root))
+                (changes 0))
+            (cl-letf (((symbol-function 'file-truename)
+                       (lambda (file &rest args)
+                         (prog1 (apply native-truename file args)
+                           (when (equal (directory-file-name file) parent)
+                             (make-temp-file
+                              (file-name-concat parent "concurrent-") t)
+                             (cl-incf changes))))))
+              (should (mevedel-session-publication-retry session)))
+            (should (> changes 0)))
           (should-not (mevedel-session-pending-publication session))
           (should (cl-every (lambda (path) (not (file-exists-p path)))
                             recovery))
