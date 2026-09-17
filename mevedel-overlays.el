@@ -1230,6 +1230,14 @@ PRED must be a function which accepts an instruction."
         nil))))
 
 
+(defun mevedel--directive-at-point ()
+  "Return the top-level owner of the selected directive at point, or nil.
+Prefer the highlighted directive when present, otherwise overlay priority."
+  (mevedel--topmost-instruction
+   (mevedel--highest-priority-instruction
+    (mevedel--instructions-at (point) 'directive) t)
+   'directive))
+
 (defun mevedel--directive-truncated-text (directive)
   "Return the truncated directive text of the DIRECTIVE overlay.
 
