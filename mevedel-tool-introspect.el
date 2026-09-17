@@ -395,9 +395,8 @@ TYPE is nil for functions or defvar for variables."
    :prompt-file "prompts/tools/function_source.md"
    :handler (lambda (args)
 	      (list :result
-		    (let ((symbol (plist-get args :function)))
-		      (when-let* ((symbol (intern-soft symbol)))
-			(mevedel-tool-introspect--source symbol)))))
+		    (mevedel-tool-introspect--source
+                     (plist-get args :function))))
    :args ((function string :required
 		    "Name of a FUNCTION, such as \"find-file-noselect\"."))
    :category "mevedel-introspection"
@@ -414,9 +413,8 @@ TYPE is nil for functions or defvar for variables."
    :prompt-file "prompts/tools/variable_source.md"
    :handler (lambda (args)
 	      (list :result
-		    (let ((symbol (plist-get args :variable)))
-		      (when-let* ((symbol (intern-soft symbol)))
-			(mevedel-tool-introspect--source symbol 'defvar)))))
+		    (mevedel-tool-introspect--source
+                     (plist-get args :variable) 'defvar)))
    :args ((variable string :required
 		    "Name of a VARIABLE, such as \"last-kbd-macro\"."))
    :category "mevedel-introspection"
