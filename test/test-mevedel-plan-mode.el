@@ -251,7 +251,7 @@
                             :accepted-hash "hash"))
                     '(:accepted
                       (:path "local/plans/accepted.md" :hash "hash"))))
-                 ((symbol-function 'mevedel-plan-handoff--persist)
+                 ((symbol-function 'mevedel-session-artifacts-save)
                   (lambda (&rest _)
                     (cl-incf saves)
                     (when (and (eq failure 'goal-save) (= saves 1))
@@ -1209,7 +1209,7 @@
                     ((symbol-function
                       'mevedel-plan-handoff--apply-model-policy)
                      #'ignore)
-                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action)
                        (setq implementation action
@@ -1238,7 +1238,7 @@
             (should (string-match-p "# Accepted" hook-input))
             (should (plist-member metadata :implementation-retry))
             (should-not (mevedel-session-goal session))
-            (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                        #'ignore))
               (mevedel-plan-handoff-settle-request request-fsm 'success))
             (should-not
@@ -1279,7 +1279,7 @@
                     ((symbol-function
                       'mevedel-plan-handoff--apply-model-policy)
                      #'ignore)
-                    ((symbol-function 'mevedel-plan-handoff--persist)
+                    ((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (saved-session _buffer)
                        (when (and (not (mevedel-session-goal saved-session))
                                   (plist-get
@@ -1291,8 +1291,6 @@
                                  (mevedel-session-plan-metadata saved-session)
                                  :implementation-retry)
                                 :goal-id)))))
-                    ((symbol-function 'mevedel-session-artifacts-save)
-                     #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action) (setq implementation action))))
             (mevedel-plan-mode--approval-callback
@@ -1343,7 +1341,7 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
                      (lambda (_session _buffer) (setq dispatched t)))
                     ((symbol-function 'mevedel-permission-mode-transition)

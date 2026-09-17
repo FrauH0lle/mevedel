@@ -290,11 +290,8 @@ reservation while its prepared kickoff has not started."
     result))
 
 (defun mevedel-plan-handoff--implementation-prompt
-    (_session accepted-artifact plan-markdown &optional selection)
-  "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN.
-
-The accepted artifact is named by its canonical address, so the prompt
-needs no session."
+    (accepted-artifact plan-markdown &optional selection)
+  "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
   (mevedel-plan-handoff-append-implementation-input
    (format
     "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
@@ -304,11 +301,8 @@ needs no session."
    selection))
 
 (defun mevedel-plan-handoff--goal-kickoff-prompt
-    (_session accepted-artifact plan-markdown &optional selection)
-  "Return the Goal kickoff for ACCEPTED-ARTIFACT and PLAN-MARKDOWN.
-
-The accepted artifact is named by its canonical address, so the kickoff
-needs no session."
+    (accepted-artifact plan-markdown &optional selection)
+  "Return the Goal kickoff for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
   (mevedel-plan-handoff-append-implementation-input
    (format
     "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
@@ -316,10 +310,6 @@ needs no session."
      (plist-get accepted-artifact :path))
     plan-markdown)
    selection))
-
-(defun mevedel-plan-handoff--persist (session chat-buffer)
-  "Persist SESSION from CHAT-BUFFER."
-  (mevedel-session-artifacts-save session chat-buffer))
 
 (defun mevedel-plan-handoff--apply-model-policy
     (selection session buffer)
@@ -363,10 +353,6 @@ needs no session."
       (setq record (plist-put record :goal-id (mevedel-goal-new-id))))
     record))
 
-(defun mevedel-plan-handoff--accepted-body (session artifact)
-  "Return SESSION's validated immutable accepted-plan ARTIFACT body."
-  (mevedel-plan-read-artifact session artifact))
-
 (defun mevedel-plan-handoff--worktree-target-buffer (record)
   "Return RECORD's prepared Worktree target buffer."
   (let ((save-path (plist-get record :target-save-path))
@@ -396,7 +382,7 @@ needs no session."
              (with-current-buffer chat-buffer
                (mevedel-worktree-session-directory branch))))
       (mevedel-plan--metadata-put session :implementation-retry prepared)
-      (mevedel-plan-handoff--persist session chat-buffer))
+      (mevedel-session-artifacts-save session chat-buffer))
     (let* ((result
             (with-current-buffer chat-buffer
               (mevedel-worktree-create-session
@@ -412,7 +398,7 @@ needs no session."
                      (plist-get result :directory))
         (error "Created Worktree directory does not match its reservation"))
       (condition-case err
-          (mevedel-plan-handoff--persist target-session target-buffer)
+          (mevedel-session-artifacts-save target-session target-buffer)
         (error
          (when-let* ((save-path (mevedel-session-save-path target-session))
                      (session-id (mevedel-session-session-id target-session)))
@@ -432,7 +418,7 @@ needs no session."
             (plist-put prepared :target-session-id
                        (mevedel-session-session-id target-session)))
       (mevedel-plan--metadata-put session :implementation-retry prepared)
-      (mevedel-plan-handoff--persist session chat-buffer)
+      (mevedel-session-artifacts-save session chat-buffer)
       prepared)))
 
 (defun mevedel-plan-handoff--prepare-worktree-target
@@ -445,7 +431,7 @@ needs no session."
           (buffer-local-value 'mevedel--session target-buffer))
          (source-artifact (plist-get record :accepted))
          (_body
-          (mevedel-plan-handoff--accepted-body session source-artifact))
+          (mevedel-plan-read-artifact session source-artifact))
          (target-metadata (mevedel-session-plan-metadata target-session))
          (existing
           (and (eq (plist-get target-metadata :status) 'accepted)
@@ -457,7 +443,7 @@ needs no session."
                 (unless (equal (plist-get existing :hash)
                                (plist-get source-artifact :hash))
                   (error "Prepared Worktree plan does not match source"))
-                (mevedel-plan-handoff--accepted-body target-session existing)
+                (mevedel-plan-read-artifact target-session existing)
                 existing)
             (mevedel-plan-archive-accepted
              source-artifact target-session
@@ -494,11 +480,11 @@ needs no session."
                 (unless (bolp) (insert "\n"))
                 (insert
                  (mevedel-session-artifacts-summary-block summary)))))))
-        (mevedel-plan-handoff--persist target-session target-buffer)))
+        (mevedel-session-artifacts-save target-session target-buffer)))
     (setq prepared (plist-put prepared :step 'submit))
     (setq prepared (plist-put prepared :target-accepted accepted))
     (mevedel-plan--metadata-put session :implementation-retry prepared)
-    (mevedel-plan-handoff--persist session chat-buffer)
+    (mevedel-session-artifacts-save session chat-buffer)
     prepared))
 
 (defun mevedel-plan-handoff--summary-focus (plan selection)
@@ -565,7 +551,7 @@ projected evidence.  CHAT-BUFFER is left unchanged."
                   session record 'prepare-worktree
                   (mevedel-plan-handoff--portable-paths
                    (plist-get result :summary) session))
-                 (mevedel-plan-handoff--persist session chat-buffer)
+                 (mevedel-session-artifacts-save session chat-buffer)
                  (mevedel-plan-handoff--dispatch-accepted
                   session chat-buffer))
                 ('aborted
@@ -647,7 +633,7 @@ authoritative plan; SOURCE-TRANSFORM filters the projected evidence."
      (lambda (summary)
        (mevedel-plan-handoff--advance-record
         session record 'prepare-summary summary)
-       (mevedel-plan-handoff--persist session chat-buffer)
+       (mevedel-session-artifacts-save session chat-buffer)
        summary)
      :target target
      :callback
@@ -664,7 +650,7 @@ CHAT-BUFFER under the ordinary compaction retry policy."
   (with-current-buffer chat-buffer
     (let* ((selection (plist-get record :selection))
            (plan
-            (mevedel-plan-handoff--accepted-body
+            (mevedel-plan-read-artifact
              session (plist-get record :accepted)))
            (target (mevedel-compact-target-main-target))
            (previous-summary (plist-get target :previous-summary))
@@ -681,7 +667,7 @@ CHAT-BUFFER under the ordinary compaction retry policy."
        ((plist-get record :summary)
         (mevedel-plan-handoff--advance-record
          session record 'prepare-worktree)
-        (mevedel-plan-handoff--persist session chat-buffer)
+        (mevedel-session-artifacts-save session chat-buffer)
         (mevedel-plan-handoff--dispatch-accepted session chat-buffer))
        (t
         (mevedel-plan-handoff--prepare-worktree-summary
@@ -702,7 +688,7 @@ CHAT-BUFFER under the ordinary compaction retry policy."
     (setq record (plist-put record :failure reason))
     (mevedel-plan--metadata-put session :implementation-retry record)
     (condition-case err
-        (mevedel-plan-handoff--persist session chat-buffer)
+        (mevedel-session-artifacts-save session chat-buffer)
       (error
        (display-warning
         'mevedel
@@ -729,7 +715,7 @@ CHAT-BUFFER under the ordinary compaction retry policy."
     (cl-remf metadata :implementation-retry)
     (setf (mevedel-session-plan-metadata session) metadata)
     (condition-case err
-        (mevedel-plan-handoff--persist session chat-buffer)
+        (mevedel-session-artifacts-save session chat-buffer)
       (error
        (setf (mevedel-session-plan-metadata session) old-metadata)
        (display-warning
@@ -773,7 +759,7 @@ the durable retry was retained"
     (cl-remf metadata :implementation-retry)
     (setf (mevedel-session-plan-metadata session) metadata)
     (condition-case err
-        (mevedel-plan-handoff--persist session chat-buffer)
+        (mevedel-session-artifacts-save session chat-buffer)
       (error
        (setf (mevedel-session-plan-metadata session) old-metadata)
        (signal (car err) (cdr err))))))
@@ -786,7 +772,7 @@ the durable retry was retained"
     (when (plist-member metadata :implementation-goal-id)
       (cl-remf metadata :implementation-goal-id)
       (setf (mevedel-session-plan-metadata target-session) metadata)
-      (mevedel-plan-handoff--persist target-session target-buffer))))
+      (mevedel-session-artifacts-save target-session target-buffer))))
 
 (defun mevedel-plan-handoff--prepare-context (session chat-buffer record)
   "Rotate CHAT-BUFFER once and return RECORD advanced to submission."
@@ -890,13 +876,13 @@ the durable retry was retained"
                            :target-accepted
                          :accepted)))
            (body
-            (mevedel-plan-handoff--accepted-body target-session accepted))
+            (mevedel-plan-read-artifact target-session accepted))
            (prompt
             (if goal-p
                 (mevedel-plan-handoff--goal-kickoff-prompt
-                 target-session accepted body selection)
+                 accepted body selection)
               (mevedel-plan-handoff--implementation-prompt
-               target-session accepted body selection)))
+               accepted body selection)))
            (display-text
             (if goal-p
                 "Implement accepted plan as Goal"
@@ -967,7 +953,7 @@ the durable retry was retained"
              result)
         (cl-remf record :failure)
         (mevedel-plan--metadata-put session :implementation-retry record)
-        (mevedel-plan-handoff--persist session chat-buffer)
+        (mevedel-session-artifacts-save session chat-buffer)
         (when (eq location 'here)
           (with-current-buffer chat-buffer
             (mevedel-permission-mode-transition
@@ -1022,7 +1008,7 @@ the durable retry was retained"
     (condition-case err
         (progn
           (when (eq (plist-get selection :execution) 'goal)
-            (mevedel-plan-handoff--persist session chat-buffer))
+            (mevedel-session-artifacts-save session chat-buffer))
           (when-let* ((view-buffer
                        (ignore-errors
                          (mevedel-view--interaction-target-buffer chat-buffer)))
