@@ -1251,7 +1251,7 @@ real user message."
              (hook-audit-only-p
               (and (eq type 'ignored)
                    seg-text
-                   (mevedel-view--hook-audit-only-text-p seg-text)))
+                   (mevedel-transcript-audit-only-p seg-text)))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
                    seg-scaffolding-only-p
@@ -2272,24 +2272,24 @@ A `:batch' value marks the calls of one concurrent join.  When some call
 ran in a batch every row gets a two-column glyph gutter so the join is
 visible as a group and every marker still lines up; a block that ran
 everything in sequence pays no gutter at all."
-  (let ((batches (mapcar (lambda (child) (plist-get child :batch)) children)))
-    (when (delq nil (copy-sequence batches))
+  (let ((batches (mapcar (lambda (child) (plist-get child :batch)) children))
+        previous)
+    (when (cl-some #'identity batches)
       (cl-loop
-       for batch in batches
-       for index from 0
+       for (batch next) on batches
        collect
        (concat
         mevedel-view--child-call-indent
         (if (null batch)
             "  "
-          (let ((first (or (zerop index)
-                           (not (equal batch (nth (1- index) batches)))))
-                (last (not (equal batch (nth (1+ index) batches)))))
+          (let ((first (not (equal batch previous)))
+                (last (not (equal batch next))))
             (concat (cond ((and first last) "\u2500")
                           (first "\u250c")
                           (last "\u2514")
                           (t "\u251c"))
-                    " "))))))))
+                    " "))))
+       do (setq previous batch)))))
 
 (defun mevedel-view--insert-child-call-block
     (child source &optional collapsed indent)
@@ -2355,10 +2355,9 @@ body of the block that ran them."
   "Insert one row per nested call in RENDERING under SOURCE."
   (let* ((children (plist-get rendering :child-calls))
          (prefixes (mevedel-view--child-call-prefixes children)))
-    (cl-loop for child in children
-             for index from 0
-             do (mevedel-view--insert-child-call-block
-                 child source 'derive (nth index prefixes)))))
+    (dolist (child children)
+      (mevedel-view--insert-child-call-block
+       child source 'derive (pop prefixes)))))
 
 (defun mevedel-view-render-child-calls-end (start limit)
   "Return the end of the nested call rows that begin at START, before LIMIT.
@@ -2755,14 +2754,10 @@ Completed blocks are cached globally; see
         (string-trim
          (mevedel-view--strip-render-data-display-text text)))))
 
-(defun mevedel-view--hook-audit-only-text-p (text)
-  "Return non-nil if TEXT is only hook audit scaffolding."
-  (mevedel-transcript-audit-only-p text))
-
 (defun mevedel-view--hook-audit-only-segment-p (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hook audit data."
   (with-current-buffer data-buf
-    (mevedel-view--hook-audit-only-text-p
+    (mevedel-transcript-audit-only-p
      (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--system-reminder-body-from-text (text)
@@ -3013,13 +3008,7 @@ Return the new data-buffer end position."
            (string-search "<action>review</action>" text)
            (string-empty-p
             (string-trim
-             (mevedel-view--strip-review-action-blocks text)))))))
-
-(defun mevedel-view--strip-review-action-blocks (text)
-  "Return TEXT without synthetic review `<user_action>' blocks.
-The review module is always loaded with mevedel, so its stripper is the
-one implementation; a second copy here had already started to drift."
-  (mevedel-review-strip-user-action-blocks text))
+             (mevedel-review-strip-user-action-blocks text)))))))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.
@@ -3833,7 +3822,7 @@ Empty string when the turn contains only whitespace or markers."
               ;; Strip synthetic review action blocks.  They stay in the data
               ;; buffer so the model can resolve follow-ups like "fix finding 2",
               ;; but the normal view should show only the user's visible prompt.
-              (setq text (mevedel-view--strip-review-action-blocks text))
+              (setq text (mevedel-review-strip-user-action-blocks text))
               ;; Strip model-only hook and Goal lifecycle context.
               (setq text (mevedel-view--strip-model-context-blocks text))
               ;; Strip prompt drawer content
