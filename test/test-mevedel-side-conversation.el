@@ -63,10 +63,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (goto-char (mevedel-view--input-start))
@@ -143,10 +141,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response))
         (insert "\n*** Active directive question\n")
         (let ((response-start (copy-marker (point) nil)))
           (setq-local
@@ -216,10 +212,8 @@
                           (lambda (callback contexts)
                             (setq formatter-callback callback
                                   formatter-contexts contexts)))
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -342,10 +336,8 @@
                           gptel-context-string-function
                           (lambda (callback _contexts)
                             (setq formatter-callback callback)))
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (cl-letf (((symbol-function 'pop-to-buffer)
                        (lambda (buffer &rest _)
                          (setq side-view buffer)))
@@ -406,10 +398,8 @@
                               (if (eq failure 'formatter-quit)
                                   (signal 'quit nil)
                                 (setq formatter-callback callback))))
-                (insert "*** Parent prompt\n")
-                (let ((start (point)))
-                  (insert "Parent answer\n")
-                  (put-text-property start (point) 'gptel 'response)))
+                (insert "*** Parent prompt\n"
+                        (propertize "Parent answer\n" 'gptel 'response)))
               (with-current-buffer view-buf
                 (setq-local mevedel--session session)
                 (goto-char (mevedel-view--input-start))
@@ -465,10 +455,8 @@
                           gptel-context-string-function
                           (lambda (callback _contexts)
                             (setq formatter-callback callback)))
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -513,10 +501,8 @@
                           gptel-context
                           (list (list media-file :mime "image/png"))
                           gptel-use-context 'user)
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -548,10 +534,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (goto-char (mevedel-view--input-start))
@@ -602,10 +586,8 @@
                     '("Base system message"
                       "Template user turn"
                       "Template assistant response"))
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (goto-char (mevedel-view--input-start))
@@ -637,10 +619,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (cl-letf (((symbol-function 'pop-to-buffer)
                  (lambda (buffer &rest _)
                    (setq side-view buffer)))
@@ -690,10 +670,8 @@
                           mevedel--session session
                           gptel-context (list context-file)
                           gptel-use-context 'user)
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -766,10 +744,8 @@
                           (list (list media-file :mime "image/png")
                                 (list second-media-file :mime "image/png"))
                           gptel-use-context 'user)
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -825,10 +801,8 @@
             (with-current-buffer data-buf
               (setq-local mevedel--workspace workspace
                           mevedel--session session)
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -963,10 +937,8 @@
                         mevedel--session session
                         mevedel-permission-rules nil
                         mevedel-protected-paths nil)
-            (insert "*** Parent prompt\n")
-            (let ((start (point)))
-              (insert "Parent answer\n")
-              (put-text-property start (point) 'gptel 'response)))
+            (insert "*** Parent prompt\n"
+                    (propertize "Parent answer\n" 'gptel 'response)))
           (with-current-buffer view-buf
             (setq-local mevedel--session session)
             (goto-char (mevedel-view--input-start))
@@ -1036,10 +1008,8 @@
                         mevedel--session session
                         mevedel-permission-rules nil
                         mevedel-protected-paths nil)
-            (insert "*** Parent prompt\n")
-            (let ((start (point)))
-              (insert "Parent answer\n")
-              (put-text-property start (point) 'gptel 'response)))
+            (insert "*** Parent prompt\n"
+                    (propertize "Parent answer\n" 'gptel 'response)))
           (with-current-buffer view-buf
             (setq-local mevedel--session session)
             (goto-char (mevedel-view--input-start))
@@ -1129,10 +1099,8 @@
                         mevedel--session session
                         mevedel-permission-rules nil
                         mevedel-protected-paths nil)
-            (insert "*** Parent prompt\n")
-            (let ((start (point)))
-              (insert "Parent answer\n")
-              (put-text-property start (point) 'gptel 'response)))
+            (insert "*** Parent prompt\n"
+                    (propertize "Parent answer\n" 'gptel 'response)))
           (with-current-buffer view-buf
             (setq-local mevedel--session session)
             (goto-char (mevedel-view--input-start))
@@ -1235,10 +1203,8 @@
                           mevedel--session session
                           mevedel-permission-rules nil
                           mevedel-protected-paths nil)
-              (insert "*** Parent prompt\n")
-              (let ((start (point)))
-                (insert "Parent answer\n")
-                (put-text-property start (point) 'gptel 'response)))
+              (insert "*** Parent prompt\n"
+                      (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (goto-char (mevedel-view--input-start))
@@ -1306,10 +1272,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (let ((gptel-send--handlers
              `((WAIT)
                (DONE ,(lambda (_fsm)
@@ -1366,10 +1330,8 @@
                     '(("/frozen/**" . inaccessible))
                     mevedel-memory-dirs (list frozen-memory)
                     temporary-file-directory frozen-temp)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response))
         (insert "\n*** Stored parent input\n")
         (let ((response-start (copy-marker (point) nil)))
           (let ((response (point)))
@@ -1581,10 +1543,8 @@
               (with-current-buffer data-buf
                 (setq-local mevedel--workspace workspace
                             mevedel--session session)
-                (insert "*** Parent prompt\n")
-                (let ((start (point)))
-                  (insert "Parent answer\n")
-                  (put-text-property start (point) 'gptel 'response))
+                (insert "*** Parent prompt\n"
+                        (propertize "Parent answer\n" 'gptel 'response))
                 (insert "\n*** Active question\n")
                 (let ((response-start (copy-marker (point) nil)))
                   (setq parent-request
@@ -1661,10 +1621,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response))
         (insert "\n*** Active question\n")
         (let ((response-start (copy-marker (point) nil)))
           (let ((start (point)))
@@ -1720,10 +1678,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (cl-letf (((symbol-function 'pop-to-buffer)
                  (lambda (buffer &rest _)
                    (setq side-view buffer))))
@@ -1770,10 +1726,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (cl-letf (((symbol-function 'pop-to-buffer)
                  (lambda (buffer &rest _)
                    (setq side-view buffer))))
@@ -1871,10 +1825,8 @@
       (with-current-buffer data-buf
         (setq-local mevedel--workspace workspace
                     mevedel--session session)
-        (insert "*** Parent prompt\n")
-        (let ((start (point)))
-          (insert "Parent answer\n")
-          (put-text-property start (point) 'gptel 'response)))
+        (insert "*** Parent prompt\n"
+                (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (goto-char (mevedel-view--input-start))
