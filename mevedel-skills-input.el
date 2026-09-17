@@ -113,9 +113,6 @@
 (declare-function mevedel-skills-invoke
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
-(declare-function mevedel-skills-prepare
-                  "mevedel-skills-invoke"
-                  (skill arguments callback &rest keys))
 (declare-function mevedel-skills-prepare-many
                   "mevedel-skills-invoke" (roots callback &rest keys))
 (autoload 'mevedel-skills-activate-context "mevedel-skills-invoke")
@@ -123,7 +120,6 @@
 (autoload 'mevedel-skills-format-attachment "mevedel-skills-invoke")
 (autoload 'mevedel-skills-format-model-input "mevedel-skills-invoke")
 (autoload 'mevedel-skills-invoke "mevedel-skills-invoke")
-(autoload 'mevedel-skills-prepare "mevedel-skills-invoke")
 (autoload 'mevedel-skills-prepare-many "mevedel-skills-invoke")
 
 ;; `mevedel-skills-syntax'
@@ -222,16 +218,8 @@ original `$skill' invocation compactly."
                                      :body
                                      (mevedel-skills-format-attachment
                                       attachment)))
-                             attachments)))
-         (block (mevedel-tool-render-data-format data)))
-    block))
-
-(defun mevedel-skills-input--insert-inline-user-skill-render-data
-    (skill arguments prompt attachments)
-  "Insert hidden render data for SKILL, ARGUMENTS, and PROMPT.
-ATTACHMENTS are the prepared required-attachment plists."
-  (insert (mevedel-skills-input--format-inline-render-data
-           skill arguments prompt attachments)))
+                             attachments))))
+    (mevedel-tool-render-data-format data)))
 
 (defun mevedel-skills-input--format-inline-attachment-render-data (attachments)
   "Return hidden render-data for inline skill ATTACHMENTS."
@@ -407,13 +395,8 @@ bodies are naturally multi-line."
 
 (defun mevedel-skills-input--quoted-inline-skill-p (text start end)
   "Return non-nil when TEXT START..END is inside single/double quotes."
-  (let ((line-start (or (and (> start 0)
-                             (string-match-p "\n"
-                                             (substring text 0 start))
-                             (1+ (cl-position ?\n text
-                                               :end start
-                                               :from-end t)))
-                        0))
+  (let ((line-start (1+ (or (cl-position ?\n text :end start :from-end t)
+                            -1)))
         (line-end (or (cl-position ?\n text :start end)
                       (length text)))
         quoted)
@@ -753,9 +736,10 @@ insert their result when the retained agent finishes."
                          (mevedel-skills-format-model-input outcome)
                        prompt)))
           (insert body)
-          (mevedel-skills-input--insert-inline-user-skill-render-data
-           skill (plist-get outcome :arguments) prompt
-           (plist-get outcome :required-attachments)))
+          (insert
+           (mevedel-skills-input--format-inline-render-data
+            skill (plist-get outcome :arguments) prompt
+            (plist-get outcome :required-attachments))))
         (when continue-fn
           (funcall continue-fn))
         'skill)
@@ -905,17 +889,6 @@ CALLBACK receives (:status ok :attachments LIST) or an error plist."
                       (list :status 'ok :attachments attachments)))))
        :origin 'user))))
 
-(defun mevedel-skills-input--prepare-inline-attachments-for-text
-    (text session callback &optional allow-root)
-  "Prepare inline `$skill' attachments in TEXT for SESSION.
-CALLBACK receives the prepared outcome.  Return `skill' when preparation
-took ownership or nil when TEXT has no inline attachments.  ALLOW-ROOT is
-forwarded to inline mention scanning."
-  (when-let* ((mentions (mevedel-skills-input--inline-skill-mentions
-                         text session allow-root)))
-    (mevedel-skills-input--prepare-inline-attachments mentions callback)
-    'skill))
-
 (defun mevedel-skills-input--stage-inline-attachments (attachments)
   "Store prepared inline ATTACHMENTS and return their render-data block."
   (setq-local mevedel-skills-input--pending-inline-attachments attachments)
@@ -948,10 +921,12 @@ without blocking the send."
                             mevedel--session))
               ((not (bound-and-true-p
                      mevedel-skills-input--pending-inline-attachments)))
-              (text (buffer-substring (car region) (cdr region))))
+              (text (buffer-substring (car region) (cdr region)))
+              (mentions (mevedel-skills-input--inline-skill-mentions
+                         text session allow-root)))
     (let ((buffer (current-buffer)))
-      (mevedel-skills-input--prepare-inline-attachments-for-text
-       text session
+      (mevedel-skills-input--prepare-inline-attachments
+       mentions
        (lambda (outcome)
          (when (buffer-live-p buffer)
            (with-current-buffer buffer
@@ -967,8 +942,8 @@ without blocking the send."
                 (mevedel-skills-input-clear-pending)
                 (message "Inline skill failed: %s"
                          (or (plist-get outcome :message)
-                             "unknown error")))))))
-       allow-root))))
+                             "unknown error"))))))))
+      'skill)))
 
 
 (provide 'mevedel-skills-input)
