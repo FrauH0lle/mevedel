@@ -1210,27 +1210,29 @@ When HISTORY-P is non-nil, include root and retained conversation histories."
         (signal 'mevedel-resource-unavailable
                 (list (format "JSON Pointer component is missing: %s" token)))))))
 
-(defun mevedel-resource--json-render (value)
-  "Render parsed JSON VALUE as readable scalar or deterministic JSON."
+(defun mevedel-resource--json-render (value &optional nested)
+  "Render parsed JSON VALUE as readable scalar or deterministic JSON.
+When NESTED in an array or object, retain JSON string quoting."
   (cond
    ((eq value mevedel-resource--json-null) "null")
    ((eq value mevedel-resource--json-false) "false")
    ((eq value t) "true")
    ((stringp value)
-    value)
+    (if nested (json-serialize value) value))
    ((numberp value) (number-to-string value))
    ((vectorp value)
     (concat "["
             (string-join
-             (mapcar #'mevedel-resource--json-render (append value nil)) ",")
+             (mapcar (lambda (item) (mevedel-resource--json-render item t))
+                     (append value nil)) ",")
              "]"))
    ((listp value)
     (concat "{"
             (string-join
              (mapcar (lambda (entry)
                        (format "%s:%s"
-                               (json-serialize (car entry))
-                               (mevedel-resource--json-render (cdr entry))))
+                               (json-serialize (symbol-name (car entry)))
+                               (mevedel-resource--json-render (cdr entry) t)))
                      (sort (copy-sequence value)
                            (lambda (left right)
                              (string-lessp (car left) (car right)))))
