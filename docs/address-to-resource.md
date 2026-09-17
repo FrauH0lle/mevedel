@@ -283,7 +283,8 @@ adding its SEGMENT selects a single saved source. Read of that source returns
 the filtered transcript, while Grep searches its projected text. Saved access
 includes archived segments, needs no live view buffer, and never resumes a
 session. Read and Grep line references address the same projection rather than
-raw Org file offsets. Unsaved changes remain available only through live history.
+raw Org file offsets. Search result order is unspecified. Unsaved changes remain
+available only through live history.
 
 After authorization, preparation runs in cooperative steps: discovery, pinned
 batch reads, canonical bounds restoration and classification, then temporary

@@ -595,25 +595,43 @@
                      (lambda (&rest args)
                        (cl-incf rewrites)
                        (apply native-rewrite args))))
-                   (let* ((first (car (sort (copy-sequence sources)
-                                           (lambda (one two)
-                                             (string< (mevedel-session-save-path (car one))
-                                                      (mevedel-session-save-path (car two)))))))
-                          (index (substring (mevedel-session-name (car first)) 6))
-                          (text (plist-get
-                                (test-mevedel-history-search--query
-                                 workspace 'grep '(:path "history://saved" :pattern "Dense evidence"
-                                                         :output_mode "content" :offset 1 :head_limit 2))
-                                :result)))
-                     (should (string-match-p
-                              (format "history://saved/[^\n]+:[0-9]+:Dense evidence %s/1" index)
-                              text))
-                     (should (string-search (format "Dense evidence %s/2" index) text))
-                     (should-not (string-search (format "Dense evidence %s/0" index) text))
-                     (should-not (string-search (format "Dense evidence %s/3" index) text))
-                     (should (string-search "Results truncated" text))
-                     ;; Two page lines, one skipped line, one truncation sentinel.
-                     (should (<= rewrites 4)))))
+            (let ((text (plist-get
+                         (test-mevedel-history-search--query
+                          workspace 'grep
+                          '(:path "history://saved" :pattern "Dense evidence"
+                            :output_mode "content" :offset 1 :head_limit 2))
+                         :result)))
+              ;; Native search may visit any source first.  Identify it from
+              ;; the returned page rather than imposing a directory order.
+              (should (string-match
+                       "^\\(history://saved/[^\n]+\\):[0-9]+:Dense evidence \\([0-5]\\)/1$"
+                       text))
+              (let* ((address (match-string 1 text))
+                     (index (match-string 2 text))
+                     (source (seq-find
+                              (lambda (entry)
+                                (equal (mevedel-session-name (car entry))
+                                       (concat "dense-" index)))
+                              sources)))
+                (should (equal address
+                               (concat "history://saved/"
+                                       (mevedel-resource-encode-component
+                                        (file-name-nondirectory
+                                         (directory-file-name
+                                          (mevedel-session-save-path (car source)))))
+                                       "/segment-0001.chat.org")))
+                (should (string-match-p
+                         (concat "^" (regexp-quote address)
+                                 ":[0-9]+:Dense evidence " index "/2$")
+                         text))
+                (should-not (string-search (format "Dense evidence %s/0" index) text))
+                (should-not (string-search (format "Dense evidence %s/3" index) text)))
+              (should (= 2 (length (seq-filter
+                                    (lambda (line) (string-prefix-p "history://saved/" line))
+                                    (split-string text "\n" t)))))
+              (should (string-search "Results truncated (limit: 2, offset: 1)" text))
+              ;; Two page lines, one skipped line, one truncation sentinel.
+              (should (<= rewrites 4)))))
       (dolist (source sources)
         (test-mevedel-session-persistence--release-and-kill (cdr source) (car source)))
       (mevedel-execution-teardown-all)
