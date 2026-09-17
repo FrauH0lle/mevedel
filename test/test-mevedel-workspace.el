@@ -205,48 +205,6 @@
     (should (equal (file-name-concat (expand-file-name root) ".mevedel/")
                    (mevedel-workspace-state-dir ws)))))
 
-(mevedel-deftest mevedel-workspace-find-state-file
-  (:doc "`mevedel-workspace-find-state-file' checks project then global")
-  ,test
-  (test)
-  :doc "returns project path when project file exists"
-  (let* ((dir (make-temp-file "mevedel-test-" t))
-         (mevedel-dir (file-name-concat dir ".mevedel/"))
-         (ws (mevedel-workspace--create :root (file-name-as-directory dir))))
-    (unwind-protect
-        (progn
-          (make-directory mevedel-dir t)
-          (write-region "" nil (file-name-concat mevedel-dir "config.el"))
-          (should (equal (file-name-concat mevedel-dir "config.el")
-                         (mevedel-workspace-find-state-file ws "config.el"))))
-      (delete-directory dir t)))
-
-  :doc "falls back to global path when project file missing"
-  (let* ((dir (make-temp-file "mevedel-test-" t))
-         (global-dir (make-temp-file "mevedel-global-" t))
-         (mevedel-user-dir (file-name-as-directory global-dir))
-         (ws (mevedel-workspace--create :root (file-name-as-directory dir))))
-    (unwind-protect
-        (progn
-          (write-region "" nil (file-name-concat global-dir "config.el"))
-          (should (equal (file-name-concat global-dir "config.el")
-                         (mevedel-workspace-find-state-file ws "config.el"))))
-      (delete-directory dir t)
-      (delete-directory global-dir t)))
-
-  :doc "returns project path when neither exists"
-  (let* ((dir (make-temp-file "mevedel-test-" t))
-         (root (file-name-as-directory
-                (file-name-concat dir "missing-project")))
-         (mevedel-user-dir
-          (file-name-as-directory
-           (file-name-concat dir "missing-global")))
-         (ws (mevedel-workspace--create :root root)))
-    (unwind-protect
-        (should (equal (file-name-concat root ".mevedel/config.el")
-                       (mevedel-workspace-find-state-file ws "config.el")))
-      (delete-directory dir t))))
-
 
 ;;
 ;;; Main workspace accessor
@@ -605,61 +563,6 @@
           (should-not (file-exists-p exclude)))
       (delete-directory root t)
       (delete-directory metadata t))))
-
-(mevedel-deftest mevedel-workspace-file-buffers ()
-  ,test
-  (test)
-  :doc "returns live buffers visiting files under the workspace root"
-  (let* ((root (make-temp-file "mevedel-wfb-" t))
-         (inside (file-name-concat root "inside.el"))
-         (outside (make-temp-file "mevedel-wfb-outside-" nil ".el"))
-         buffers)
-    (unwind-protect
-        (progn
-          (write-region "" nil inside nil 'silent)
-          (setq buffers (list (find-file-noselect inside)
-                              (find-file-noselect outside)))
-          (let ((workspace (mevedel-workspace-get-or-create
-                            'project root root "wfb")))
-            (let ((found (mevedel-workspace-file-buffers workspace)))
-              (should (memq (car buffers) found))
-              (should-not (memq (cadr buffers) found))))
-          ;; No workspace, no scan.
-          (should-not (mevedel-workspace-file-buffers nil)))
-      (dolist (buffer buffers)
-        (when (buffer-live-p buffer)
-          (set-buffer-modified-p nil)
-          (kill-buffer buffer)))
-      (mevedel-workspace-clear-registry)
-      (delete-file outside)
-      (delete-directory root t)))
-
-  :doc "a remote root selects buffers without touching the target"
-  (let* ((root "/mevedelmock:host:/srv/project/")
-         (workspace (mevedel-workspace--create
-                     :type 'project :id root :root root :name "remote-wfb"))
-         (inside (generate-new-buffer "wfb-inside"))
-         (outside (generate-new-buffer "wfb-outside"))
-         truenames)
-    (unwind-protect
-        ;; The scan runs on every tool call.  A `file-truename' here is a
-        ;; round trip per buffer on the connection the call is using.
-        (cl-letf (((symbol-function 'file-truename)
-                   (lambda (name &rest _)
-                     (push name truenames)
-                     name)))
-          (with-current-buffer inside
-            (setq buffer-file-name (file-name-concat root "src/main.el")))
-          (with-current-buffer outside
-            (setq buffer-file-name "/mevedelmock:host:/srv/other/main.el"))
-          (let ((found (mevedel-workspace-file-buffers workspace)))
-            (should (memq inside found))
-            (should-not (memq outside found)))
-          (should-not truenames))
-      (dolist (buffer (list inside outside))
-        (with-current-buffer buffer (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-workspace)
 ;;; test-mevedel-workspace.el ends here

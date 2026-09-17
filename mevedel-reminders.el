@@ -152,12 +152,6 @@
   "mevedel-utilities")
 (autoload 'mevedel-generate-diff "mevedel-utilities")
 
-;; `mevedel-workspace'
-(declare-function mevedel-workspace-file-buffers "mevedel-workspace"
-                  (workspace))
-(declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
-
-
 ;; Current prompt-transform context.
 (defvar mevedel-reminders--current-chat-buffer nil
   "Chat buffer whose reminders are currently being collected.
