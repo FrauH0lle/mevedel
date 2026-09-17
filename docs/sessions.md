@@ -417,10 +417,12 @@ whole-second resolution, so clients with skewed wall clocks cannot change one
 another's authority and lease durations are configured in whole seconds.  A
 lease observation reads that clock in the same process as the records it
 inspects, and one durable transaction may answer from a reading it already took
-for at most one second before taking another; local elapsed time only decides
-when to read the target again and never becomes a time value, so no deadline is
-ever derived from a client clock.  A
-client reclaims its own expired lease without a prompt, because renewal cannot
+for that control directory for at most one second before taking another.
+Nested transactions keep separate readings for different control directories,
+so one target's clock never supplies another target's deadline. Local elapsed
+time only decides when to read the target again and never becomes a time value,
+so no deadline is ever derived from a client clock. A client reclaims its own
+expired lease without a prompt, because renewal cannot
 run inside blocking target I/O and confirming a takeover from oneself is
 meaningless; the exclusive creation of the next generation still refuses the
 reclaim when another client claimed the lease meanwhile.  Taking over another
