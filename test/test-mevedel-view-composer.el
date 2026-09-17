@@ -1425,7 +1425,44 @@
        (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))))
     (should (= (point)
                (+ (point-min) (length "a much longer head this time ") 4)))
-    (should (eq (char-after) ?e))))
+    (should (eq (char-after) ?e)))
+
+  :doc "separate windows and mixed selections retain their coordinates after unwind"
+  (dolist (fail '(nil t))
+    (save-window-excursion
+      (mevedel-view-test--with-buffers
+        (switch-to-buffer view-buf)
+        (let ((other (split-window-below))
+              (draft "> quoted\nsecond line"))
+          (with-current-buffer view-buf
+            (let ((inhibit-read-only t))
+              (goto-char (point-min))
+              (mevedel-view--with-render-boundaries-advancing
+                (insert (propertize "rendered history\n"
+                                    'mevedel-view-source '(40 . 90)))))
+            (goto-char (mevedel-view--input-start))
+            (insert draft)
+            (set-window-point other (+ (mevedel-view--input-start) 4))
+            (goto-char (+ (point-min) 3))
+            (set-mark (+ (mevedel-view--input-start) 8))
+            (setq-local transient-mark-mode t)
+            (activate-mark)
+            (let ((redraw
+                   (lambda ()
+                     (mevedel-view--call-preserving-window-state
+                      (lambda ()
+                        (let ((inhibit-read-only t))
+                          (goto-char (point-min))
+                          (insert "new history\n"))
+                        (if fail (error "Injected redraw failure") 'result))))))
+              (if fail
+                  (should-error (funcall redraw) :type 'error)
+                (should (eq 'result (funcall redraw)))))
+            (should (= (point) (+ (point-min) (length "new history\n") 3)))
+            (should (= (window-point other) (+ (mevedel-view--input-start) 4)))
+            (should (= (mark) (+ (mevedel-view--input-start) 8)))
+            (should mark-active)
+            (should (equal draft (mevedel-view--input-text)))))))))
 
 (mevedel-deftest mevedel-view--position-render-anchor ()
   ,test
