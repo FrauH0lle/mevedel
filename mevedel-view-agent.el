@@ -638,13 +638,14 @@ retained projections that can follow another turn."
                (condition-case err
                    (progn
                      (mevedel-view-stream--stop-now)
-                     (setq mevedel-view--agent-transcript-info
-                           (append (list :live-buffer nil
-                                         :status status
-                                         :calls calls
-                                         :elapsed elapsed
-                                         :reason reason)
-                                   mevedel-view--agent-transcript-info))
+                     (let ((info (copy-sequence
+                                  mevedel-view--agent-transcript-info)))
+                       (setf (plist-get info :live-buffer) nil
+                             (plist-get info :status) status
+                             (plist-get info :calls) calls
+                             (plist-get info :elapsed) elapsed
+                             (plist-get info :reason) reason)
+                       (setq mevedel-view--agent-transcript-info info))
                      (when (buffer-live-p mevedel--data-buffer)
                        (atomic-change-group
                          (mevedel-view-render--full-now))))
