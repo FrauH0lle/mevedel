@@ -1,4 +1,18 @@
 ;;; test-mevedel-tool-render-data.el -- Tool render-data tests -*- lexical-binding: t -*-
+(defmacro test-mevedel-tool-render-data--with-image (tool-use-id &rest body)
+  "Run BODY with captured image media, raw result and tc for TOOL-USE-ID."
+  (declare (indent 1) (debug t))
+  `(let* ((media '((:path "/definitely/missing.png" :mime "image/png"
+                   :kind image :data "QUJD")))
+          (raw (concat "<media-file>\n"
+                       "path: /definitely/missing.png\n"
+                       "mime_type: image/png\n"
+                       "encoding: base64\ndata:\nQUJD\n</media-file>"
+                       (mevedel-tool-media--format-media-data-block
+                        media nil ,tool-use-id)))
+          (tc (list :id ,tool-use-id :name "Read" :args nil :result raw)))
+     ,@body))
+
 
 ;;; Commentary:
 
@@ -33,27 +47,6 @@
 (defvar test-mevedel-tool-render-data--read-eval-ran nil)
 (defvar warning-minimum-level)
 
-(defun test-mevedel-tool-render-data--format-media
-    (media &optional session _buffer tool-use-id)
-  "Format MEDIA for tests using SESSION, BUFFER, and TOOL-USE-ID."
-  (mevedel-tool-media--format-media-data-block
-   media
-   (and session
-        (mevedel-session-save-path session)
-        (file-name-concat (mevedel-session-save-path session)
-                          "tool-results"))
-   tool-use-id))
-
-(defun test-mevedel-tool-render-data--extract-media
-    (string &optional session _buffer expected-tool-use-id)
-  "Extract media from STRING for SESSION, BUFFER, and EXPECTED-TOOL-USE-ID."
-  (mevedel-tool-media-extract
-   string
-   (and session
-        (mevedel-session-save-path session)
-        (file-name-concat (mevedel-session-save-path session)
-                          "tool-results"))
-   expected-tool-use-id))
 
 
 ;;
@@ -95,15 +88,23 @@
          (extract (mevedel-tool-render-data-extract result)))
     (should (equal "visible body" (car extract)))
     (should (equal data (cdr extract))))
-  :doc "format strips text properties from render-data strings"
+  :doc "format strips nested text properties and replaces ownership without mutating input"
   (let* ((patch (propertize "some patch" 'fontified nil))
-         (result (mevedel-tool-render-data-format
-                  (list :kind 'diff :patch patch)))
-         (extract (mevedel-tool-render-data-extract result))
-         (extracted-patch (plist-get (cdr extract) :patch)))
-    (should (equal "some patch" extracted-patch))
-    (should-not (text-properties-at 0 extracted-patch))
-    (should-not (string-match-p "#(\"" result)))
+         (data (list :kind 'diff :patch patch :nested (vector (list patch))
+                     :mevedel-tool-use-id "old-owner"))
+         (original (copy-tree data t)))
+    (dolist (owner '(nil "new-owner"))
+      (let* ((result (mevedel-tool-render-data-format data owner))
+             (extracted (cdr (mevedel-tool-render-data-extract result nil owner)))
+             (extracted-patch (plist-get extracted :patch))
+             (nested-patch (car (aref (plist-get extracted :nested) 0))))
+        (should (equal "some patch" extracted-patch))
+        (should (equal "some patch" nested-patch))
+        (should-not (text-properties-at 0 extracted-patch))
+        (should-not (text-properties-at 0 nested-patch))
+        (should-not (string-match-p "#(\"" result))
+        (should-not (plist-member extracted :mevedel-tool-use-id))
+        (should (equal-including-properties original data)))))
   :doc "string with no delimiter returns (STRING . nil)"
   (let ((extract (mevedel-tool-render-data-extract "just text")))
     (should (equal "just text" (car extract)))
@@ -352,41 +353,24 @@
       (delete-directory tmpdir t)))
 
   :doc "strips hook-audit side channel from model-bound :result"
-  (let* ((block (mevedel--format-hook-audit-record
-                 '(:type tool-result-rewrite
-                         :event "PostToolUse"
-                         :original-result "SECRET"
-                         :updated-result "redacted")))
-         (raw (concat "redacted" block))
-         (tc (list :name "Read" :args nil :result raw))
-         (seen nil)
-         (orig-fun (lambda (_b tool-use)
-                     (setq seen (plist-get (car tool-use) :result))
-                     'ok)))
-    (mevedel-tool-render-data--provider-advice
-     orig-fun 'dummy-backend (list tc))
-    (should (equal "redacted" seen))
-    (should-not (string-match-p "SECRET" seen))
-    (should (equal raw (plist-get tc :result))))
-
-  :doc "strips hook-audit side channel from id Read model-bound :result"
-  (let* ((block (mevedel--format-hook-audit-record
-                 '(:type tool-result-rewrite
-                         :event "PostToolUse"
-                         :original-result "SECRET"
-                         :updated-result "redacted")))
-         (raw (concat "redacted" block))
-         (tc (list :id "toolu_1" :name "Read" :args nil
-                   :result raw))
-         (seen nil)
-         (orig-fun (lambda (_b tool-use)
-                     (setq seen (plist-get (car tool-use) :result))
-                     'ok)))
-    (mevedel-tool-render-data--provider-advice
-     orig-fun 'dummy-backend (list tc))
-    (should (equal "redacted" seen))
-    (should-not (string-match-p "SECRET" seen))
-    (should (equal raw (plist-get tc :result))))
+  (dolist (id '(nil "toolu_1"))
+    (let* ((block (mevedel--format-hook-audit-record
+                   '(:type tool-result-rewrite
+                           :event "PostToolUse"
+                           :original-result "SECRET"
+                           :updated-result "redacted")))
+           (raw (concat "redacted" block))
+           (tc (append (when id (list :id id))
+                       (list :name "Read" :args nil :result raw)))
+           (seen nil)
+           (orig-fun (lambda (_b tool-use)
+                       (setq seen (plist-get (car tool-use) :result))
+                       'ok)))
+      (mevedel-tool-render-data--provider-advice
+       orig-fun 'dummy-backend (list tc))
+      (should (equal "redacted" seen))
+      (should-not (string-match-p "SECRET" seen))
+      (should (equal raw (plist-get tc :result)))))
 
   :doc "non-string :result is left untouched and handed to ORIG-FUN verbatim"
   (let* ((tc (list :name "Edit" :args nil :result nil))
@@ -409,8 +393,8 @@
                       "data:\n"
                       "QUJD\n"
                       "</media-file>"
-                      (test-mevedel-tool-render-data--format-media
-                       media nil nil "toolu_1")))
+                      (mevedel-tool-media--format-media-data-block
+                       media nil "toolu_1")))
          (tc (list :id "toolu_1" :name "Read" :args nil
                    :result raw))
          (seen nil)
@@ -434,88 +418,60 @@
   (let* ((backend (gptel-make-anthropic
                    "mevedel-test-anthropic"
                    :key nil
-                   :models '(claude-test)))
-         (media '((:path "/definitely/missing.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (raw (concat "<media-file>\n"
-                      "path: /definitely/missing.png\n"
-                      "mime_type: image/png\n"
-                      "encoding: base64\n"
-                      "data:\n"
-                      "QUJD\n"
-                      "</media-file>"
-                      (test-mevedel-tool-render-data--format-media
-                       media nil nil "toolu_1")))
-         (tc (list :id "toolu_1" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) t)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (aref (plist-get parsed :content) 0))
-             (content (plist-get tool-result :content))
-             (text-block (aref content 0))
-             (media-block (aref content 1)))
-        (should (equal "tool_result" (plist-get tool-result :type)))
-        (should (string-match-p "native media block attached"
-                                (plist-get text-block :text)))
-        (should-not (string-match-p "QUJD"
-                                    (plist-get text-block :text)))
-        (should (equal "image" (plist-get media-block :type)))
-        (should (equal "QUJD"
-                       (plist-get
-                        (plist-get media-block :source)
-                        :data)))
-        (should (equal raw (plist-get tc :result))))))
+                   :models '(claude-test))))
+    (test-mevedel-tool-render-data--with-image "toolu_1"
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t)))
+        (let* ((parsed (mevedel-tool-render-data--provider-advice
+                        #'gptel--parse-tool-results backend (list tc)))
+               (tool-result (aref (plist-get parsed :content) 0))
+               (content (plist-get tool-result :content))
+               (text-block (aref content 0))
+               (media-block (aref content 1)))
+          (should (equal "tool_result" (plist-get tool-result :type)))
+          (should (string-match-p "native media block attached"
+                                  (plist-get text-block :text)))
+          (should-not (string-match-p "QUJD"
+                                      (plist-get text-block :text)))
+          (should (equal "image" (plist-get media-block :type)))
+          (should (equal "QUJD"
+                         (plist-get
+                          (plist-get media-block :source)
+                          :data)))
+          (should (equal raw (plist-get tc :result)))))))
 
   :doc "OpenAI Responses media replay appends gptel-style user image message"
   (skip-unless (fboundp 'gptel-make-openai-responses))
   (let* ((backend (gptel-make-openai-responses
                    "mevedel-test-openai-responses"
                    :key nil
-                   :models '(gpt-test)))
-         (media '((:path "/definitely/missing.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (raw (concat "<media-file>\n"
-                      "path: /definitely/missing.png\n"
-                      "mime_type: image/png\n"
-                      "encoding: base64\n"
-                      "data:\n"
-                      "QUJD\n"
-                      "</media-file>"
-                      (test-mevedel-tool-render-data--format-media
-                       media nil nil "call_1")))
-         (tc (list :id "call_1" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) t)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (car parsed))
-             (media-message (cadr parsed))
-             (tool-output (plist-get tool-result :output))
-             (content (plist-get media-message :content))
-             (text-block (aref content 0))
-             (image-block (aref content 1)))
-        (should (equal "function_call_output"
-                       (plist-get tool-result :type)))
-        (should (string-match-p "native media block attached"
-                                tool-output))
-        (should-not (string-match-p "QUJD" tool-output))
-        (should (equal "user" (plist-get media-message :role)))
-        (should (equal "input_text" (plist-get text-block :type)))
-        (should (equal "input_image" (plist-get image-block :type)))
-        (should (equal "data:image/png;base64,QUJD"
-                       (plist-get image-block :image_url)))
-        (should (equal raw (plist-get tc :result))))))
+                   :models '(gpt-test))))
+    (test-mevedel-tool-render-data--with-image "call_1"
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t)))
+        (let* ((parsed (mevedel-tool-render-data--provider-advice
+                        #'gptel--parse-tool-results backend (list tc)))
+               (tool-result (car parsed))
+               (media-message (cadr parsed))
+               (tool-output (plist-get tool-result :output))
+               (content (plist-get media-message :content))
+               (text-block (aref content 0))
+               (image-block (aref content 1)))
+          (should (equal "function_call_output"
+                         (plist-get tool-result :type)))
+          (should (string-match-p "native media block attached"
+                                  tool-output))
+          (should-not (string-match-p "QUJD" tool-output))
+          (should (equal "user" (plist-get media-message :role)))
+          (should (equal "input_text" (plist-get text-block :type)))
+          (should (equal "input_image" (plist-get image-block :type)))
+          (should (equal "data:image/png;base64,QUJD"
+                         (plist-get image-block :image_url)))
+          (should (equal raw (plist-get tc :result)))))))
 
   :doc "OpenAI media replay appends gptel-style user image message"
   (skip-unless (fboundp 'gptel-make-openai))
@@ -523,81 +479,53 @@
                    "mevedel-test-openai"
                    :host "api.example.test"
                    :key nil
-                   :models '(gpt-test)))
-         (media '((:path "/definitely/missing.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (raw (concat "<media-file>\n"
-                      "path: /definitely/missing.png\n"
-                      "mime_type: image/png\n"
-                      "encoding: base64\n"
-                      "data:\n"
-                      "QUJD\n"
-                      "</media-file>"
-                      (test-mevedel-tool-render-data--format-media
-                       media nil nil "call_1")))
-         (tc (list :id "call_1" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) t)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (car parsed))
-             (media-message (cadr parsed))
-             (tool-output (plist-get tool-result :content))
-             (content (plist-get media-message :content))
-             (text-block (aref content 0))
-             (image-block (aref content 1)))
-        (should (equal "tool" (plist-get tool-result :role)))
-        (should (string-match-p "native media block attached"
-                                tool-output))
-        (should-not (string-match-p "QUJD" tool-output))
-        (should (equal "user" (plist-get media-message :role)))
-        (should (equal "text" (plist-get text-block :type)))
-        (should (equal "image_url" (plist-get image-block :type)))
-        (should (equal "data:image/png;base64,QUJD"
-                       (plist-get
-                        (plist-get image-block :image_url)
-                        :url)))
-        (should (equal raw (plist-get tc :result))))))
+                   :models '(gpt-test))))
+    (test-mevedel-tool-render-data--with-image "call_1"
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t)))
+        (let* ((parsed (mevedel-tool-render-data--provider-advice
+                        #'gptel--parse-tool-results backend (list tc)))
+               (tool-result (car parsed))
+               (media-message (cadr parsed))
+               (tool-output (plist-get tool-result :content))
+               (content (plist-get media-message :content))
+               (text-block (aref content 0))
+               (image-block (aref content 1)))
+          (should (equal "tool" (plist-get tool-result :role)))
+          (should (string-match-p "native media block attached"
+                                  tool-output))
+          (should-not (string-match-p "QUJD" tool-output))
+          (should (equal "user" (plist-get media-message :role)))
+          (should (equal "text" (plist-get text-block :type)))
+          (should (equal "image_url" (plist-get image-block :type)))
+          (should (equal "data:image/png;base64,QUJD"
+                         (plist-get
+                          (plist-get image-block :image_url)
+                          :url)))
+          (should (equal raw (plist-get tc :result)))))))
 
   :doc "native media replay omits base64 when current model lacks media support"
   (skip-unless (fboundp 'gptel-make-anthropic))
   (let* ((backend (gptel-make-anthropic
                    "mevedel-test-model-unsupported"
                    :key nil
-                   :models '(claude-test)))
-         (media '((:path "/definitely/missing.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (raw (concat "<media-file>\n"
-                      "path: /definitely/missing.png\n"
-                      "mime_type: image/png\n"
-                      "encoding: base64\n"
-                      "data:\n"
-                      "QUJD\n"
-                      "</media-file>"
-                      (test-mevedel-tool-render-data--format-media
-                       media nil nil "toolu_1")))
-         (tc (list :id "toolu_1" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (_cap &optional _model) nil))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) nil)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (aref (plist-get parsed :content) 0))
-             (content (plist-get tool-result :content)))
-        (should (stringp content))
-        (should (string-match-p "current model does not support"
-                                content))
-        (should-not (string-match-p "QUJD" content))
-        (should (equal raw (plist-get tc :result))))))
+                   :models '(claude-test))))
+    (test-mevedel-tool-render-data--with-image "toolu_1"
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (_cap &optional _model) nil))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) nil)))
+        (let* ((parsed (mevedel-tool-render-data--provider-advice
+                        #'gptel--parse-tool-results backend (list tc)))
+               (tool-result (aref (plist-get parsed :content) 0))
+               (content (plist-get tool-result :content)))
+          (should (stringp content))
+          (should (string-match-p "current model does not support"
+                                  content))
+          (should-not (string-match-p "QUJD" content))
+          (should (equal raw (plist-get tc :result)))))))
 
   :doc "Bedrock media replay attaches native blocks from side-channel data"
   (skip-unless (fboundp 'gptel-make-bedrock))
@@ -605,49 +533,35 @@
                    "mevedel-test-bedrock"
                    :region "us-east-1"
                    :aws-bearer-token "dummy"
-                   :models '(claude-test)))
-         (media '((:path "/definitely/missing.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (raw (concat "<media-file>\n"
-                      "path: /definitely/missing.png\n"
-                      "mime_type: image/png\n"
-                      "encoding: base64\n"
-                      "data:\n"
-                      "QUJD\n"
-                      "</media-file>"
-                      (test-mevedel-tool-render-data--format-media
-                       media nil nil "toolu_1")))
-         (tc (list :id "toolu_1" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) t)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (plist-get
-                           (aref (plist-get parsed :content) 0)
-                           :toolResult))
-             (content (plist-get tool-result :content))
-             (text-block (aref content 0))
-             (media-block (aref content 1)))
-        (should (equal "toolu_1" (plist-get tool-result :toolUseId)))
-        (should (string-match-p "native media block attached"
-                                (plist-get text-block :text)))
-        (should-not (string-match-p "QUJD"
-                                    (plist-get text-block :text)))
-        (should (equal "png"
-                       (plist-get (plist-get media-block :image)
-                                  :format)))
-        (should (equal "QUJD"
-                       (plist-get
-                        (plist-get
-                         (plist-get media-block :image)
-                         :source)
-                        :bytes)))
-        (should (equal raw (plist-get tc :result))))))
+                   :models '(claude-test))))
+    (test-mevedel-tool-render-data--with-image "toolu_1"
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t)))
+        (let* ((parsed (mevedel-tool-render-data--provider-advice
+                        #'gptel--parse-tool-results backend (list tc)))
+               (tool-result (plist-get
+                             (aref (plist-get parsed :content) 0)
+                             :toolResult))
+               (content (plist-get tool-result :content))
+               (text-block (aref content 0))
+               (media-block (aref content 1)))
+          (should (equal "toolu_1" (plist-get tool-result :toolUseId)))
+          (should (string-match-p "native media block attached"
+                                  (plist-get text-block :text)))
+          (should-not (string-match-p "QUJD"
+                                      (plist-get text-block :text)))
+          (should (equal "png"
+                         (plist-get (plist-get media-block :image)
+                                    :format)))
+          (should (equal "QUJD"
+                         (plist-get
+                          (plist-get
+                           (plist-get media-block :image)
+                           :source)
+                          :bytes)))
+          (should (equal raw (plist-get tc :result)))))))
 
   :doc "literal non-Read media delimiter is not trusted as native media"
   (skip-unless (fboundp 'gptel-make-anthropic))
@@ -704,62 +618,35 @@
         (should (string-search "SECRETBASE64" content))
         (should (equal raw (plist-get tc :result))))))
 
-  :doc "copied persisted media ref for another tool id is not trusted"
+  :doc "copied media references with and without properties reject another tool id"
   (skip-unless (fboundp 'gptel-make-anthropic))
-  (let* ((backend (gptel-make-anthropic
-                   "mevedel-test-copied-ref"
-                   :key nil
-                   :models '(claude-test)))
-         (media '((:path "/tmp/a.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (copied (substring-no-properties
-                  (test-mevedel-tool-render-data--format-media
-                   media nil nil "toolu_original")))
-         (raw (concat "plain text" copied))
-         (tc (list :id "toolu_other" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) t)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (aref (plist-get parsed :content) 0))
-             (content (plist-get tool-result :content)))
-        (should (stringp content))
-        (should (string-search mevedel-tool-media--data-open
-                               content))
-        (should (equal raw (plist-get tc :result))))))
-
-  :doc "copied propertized media ref for another tool id is not trusted"
-  (skip-unless (fboundp 'gptel-make-anthropic))
-  (let* ((backend (gptel-make-anthropic
-                   "mevedel-test-copied-propertized-ref"
-                   :key nil
-                   :models '(claude-test)))
-         (media '((:path "/tmp/a.png"
-                         :mime "image/png"
-                         :kind image
-                         :data "QUJD")))
-         (copied (test-mevedel-tool-render-data--format-media
-                  media nil nil "toolu_original"))
-         (raw (concat "plain text" copied))
-         (tc (list :id "toolu_other" :name "Read" :args nil
-                   :result raw)))
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (_mime &optional _model) t)))
-      (let* ((parsed (mevedel-tool-render-data--provider-advice
-                      #'gptel--parse-tool-results backend (list tc)))
-             (tool-result (aref (plist-get parsed :content) 0))
-             (content (plist-get tool-result :content)))
-        (should (stringp content))
-        (should (string-search mevedel-tool-media--data-open
-                               content))
-        (should (equal raw (plist-get tc :result))))))
+  (dolist (strip-properties '(t nil))
+    (let* ((backend (gptel-make-anthropic
+                     "mevedel-test-copied-ref"
+                     :key nil
+                     :models '(claude-test)))
+           (media '((:path "/tmp/a.png"
+                           :mime "image/png"
+                           :kind image
+                           :data "QUJD")))
+           (stored (mevedel-tool-media--format-media-data-block
+                    media nil "toolu_original"))
+           (copied (if strip-properties (substring-no-properties stored) stored))
+           (raw (concat "plain text" copied))
+           (tc (list :id "toolu_other" :name "Read" :args nil
+                     :result raw)))
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t)))
+        (let* ((parsed (mevedel-tool-render-data--provider-advice
+                        #'gptel--parse-tool-results backend (list tc)))
+               (tool-result (aref (plist-get parsed :content) 0))
+               (content (plist-get tool-result :content)))
+          (should (stringp content))
+          (should (string-search mevedel-tool-media--data-open
+                                 content))
+          (should (equal raw (plist-get tc :result)))))))
 
   :doc "copied propertized media ref with no tool id is not trusted"
   (skip-unless (fboundp 'gptel-make-anthropic))
@@ -771,8 +658,8 @@
                          :mime "image/png"
                          :kind image
                          :data "QUJD")))
-         (copied (test-mevedel-tool-render-data--format-media
-                  media nil nil "toolu_original"))
+         (copied (mevedel-tool-media--format-media-data-block
+                  media nil "toolu_original"))
          (raw (concat "plain text" copied))
          (tc (list :name "Read" :args nil :result raw)))
     (cl-letf (((symbol-function 'gptel--model-capable-p)
@@ -800,8 +687,8 @@
                          :kind image
                          :data "QUJD")))
          (copied (substring-no-properties
-                  (test-mevedel-tool-render-data--format-media
-                   media nil nil "toolu_original")))
+                  (mevedel-tool-media--format-media-data-block
+                   media nil "toolu_original")))
          (rewritten
           (replace-regexp-in-string
            "toolu_original" "toolu_other" copied t t))
@@ -846,8 +733,8 @@
                        "data:\n"
                        "QUJD\n"
                        "</media-file>"
-                       (test-mevedel-tool-render-data--format-media
-                        media session nil "toolu_1"))))
+                       (mevedel-tool-media--format-media-data-block
+                        media (file-name-concat save-path "tool-results") "toolu_1"))))
          (tc (list :id "toolu_1" :name "Read" :args nil
                    :result raw)))
     (unwind-protect
