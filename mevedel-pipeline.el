@@ -831,16 +831,6 @@ permission or handler work begins."
   (when-let* ((issues (mevedel-tool-repair-validate tool args)))
     (mevedel-tool-repair-format-issues tool issues)))
 
-(defun mevedel-pipeline-record-hook-context (context decision &optional event)
-  "Append DECISION's additional hook context to CONTEXT.
-EVENT labels generated hook event blocks."
-  (if-let* ((entries (mevedel-hooks-context-entries
-                     decision (or event 'PreToolUse))))
-      (plist-put context :hook-additional-context
-                 (append (plist-get context :hook-additional-context)
-                         entries))
-    context))
-
 (defun mevedel-pipeline--append-hook-context-string (text context)
   "Append accumulated hook context from CONTEXT to TEXT."
   (let ((additional (plist-get context :hook-additional-context)))
@@ -850,18 +840,6 @@ EVENT labels generated hook event blocks."
                 "\n\n"
                 formatted)
       text)))
-
-(defun mevedel-pipeline-record-hook-audit (context records)
-  "Append hook audit RECORDS to CONTEXT."
-  (let ((records (if (and (listp records)
-                          (keywordp (car-safe records)))
-                     (list records)
-                   records)))
-    (if records
-        (plist-put context :hook-audit-records
-                   (append (plist-get context :hook-audit-records)
-                           records))
-      context)))
 
 (defun mevedel-pipeline--append-hook-audit-records (text records)
   "Append hidden hook audit RECORDS to TEXT."
@@ -875,21 +853,6 @@ EVENT labels generated hook event blocks."
   (mevedel-pipeline--append-hook-audit-records
    (mevedel-pipeline--append-hook-context-string text context)
    (plist-get context :hook-audit-records)))
-
-(defun mevedel-pipeline-hook-context-audit-records (decision event)
-  "Return audit records for DECISION additional context at EVENT."
-  (mevedel-hooks-context-audit-records decision event 'tool-context))
-
-(defun mevedel-pipeline-hook-permission-audit-record
-    (event outcome decision &optional reason)
-  "Return a permission audit record for hook EVENT and OUTCOME."
-  (append
-   (list :type 'tool-permission
-         :event (mevedel-hooks-event-display-name event)
-         :outcome (format "%s" outcome))
-   (when-let* ((reason (or reason
-                           (mevedel-hooks-decision-reason decision))))
-     (list :reason reason))))
 
 (defun mevedel-pipeline--hook-input-rewrite-audit-record
     (event original updated decision)
@@ -913,20 +876,6 @@ EVENT labels generated hook event blocks."
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))
      (list :reason reason))))
 
-(defun mevedel-pipeline-run-hook-event
-    (event event-plist callback context session workspace request invocation)
-  "Run hook EVENT with EVENT-PLIST in CONTEXT's live dispatch buffer.
-
-CALLBACK, SESSION, WORKSPACE, REQUEST, and INVOCATION are forwarded to
-the hook runner."
-  (let ((buffer (plist-get context :buffer)))
-    (if (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (mevedel-hooks-run-event
-           event event-plist callback session workspace request invocation))
-      (mevedel-hooks-run-event
-       event event-plist callback session workspace request invocation))))
-
 (defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
   "Run `PreToolUse' hooks for CONTEXT, then call NEXT or FAIL.
 
@@ -939,7 +888,7 @@ can tighten policy or skip a prompt without overriding explicit denies."
          (workspace (plist-get context :workspace))
          (request (plist-get context :request))
          (invocation (plist-get context :invocation)))
-    (mevedel-pipeline-run-hook-event
+    (mevedel-hooks-run-tool-event
      'PreToolUse
      (mevedel-hooks-tool-event-plist 'PreToolUse context)
      (lambda (decision)
@@ -959,15 +908,15 @@ can tighten policy or skip a prompt without overriding explicit denies."
                             "hook stopped tool execution"
                           "hook denied tool execution"))))
                 (updated
-                 (mevedel-pipeline-record-hook-audit
-                  (mevedel-pipeline-record-hook-context
+                 (mevedel-hooks-record-tool-audit
+                  (mevedel-hooks-record-tool-context
                    context decision 'PreToolUse)
                   (append
                    (list
-                    (mevedel-pipeline-hook-permission-audit-record
+                    (mevedel-hooks-tool-permission-audit-record
                      'PreToolUse 'deny decision reason))
-                    (mevedel-pipeline-hook-context-audit-records
-                    decision 'PreToolUse)))))
+                    (mevedel-hooks-context-audit-records
+                     decision 'PreToolUse 'tool-context)))))
              (mevedel-tool-permission-log-decision
               context
               (list :outcome 'deny
@@ -978,13 +927,13 @@ can tighten policy or skip a prompt without overriding explicit denies."
               (if stopped-p reason (format "Permission denied: %s" reason))
               reason 'PreToolUse)))
           (t
-           (let ((updated (mevedel-pipeline-record-hook-context
+           (let ((updated (mevedel-hooks-record-tool-context
                            context decision 'PreToolUse)))
              (setq updated
-                   (mevedel-pipeline-record-hook-audit
+                   (mevedel-hooks-record-tool-audit
                     updated
-                    (mevedel-pipeline-hook-context-audit-records
-                     decision 'PreToolUse)))
+                    (mevedel-hooks-context-audit-records
+                     decision 'PreToolUse 'tool-context)))
              (when (plist-member decision :permission-decision)
                (setq updated
                      (plist-put
@@ -1001,7 +950,7 @@ can tighten policy or skip a prompt without overriding explicit denies."
                        (funcall fail err updated 'validation)
                      (funcall next
                               (plist-put
-                               (mevedel-pipeline-record-hook-audit
+                               (mevedel-hooks-record-tool-audit
                                 updated
                                 (mevedel-pipeline--hook-input-rewrite-audit-record
                                  'PreToolUse
@@ -1446,7 +1395,7 @@ explicit `:updated-result' changes the model-visible tool result."
                   'PostToolUse))
          (session (plist-get context :session))
          (workspace (plist-get context :workspace)))
-    (mevedel-pipeline-run-hook-event
+    (mevedel-hooks-run-tool-event
      event
      (mevedel-hooks-tool-event-plist
       event context
@@ -1455,17 +1404,17 @@ explicit `:updated-result' changes the model-visible tool result."
       :tool-response model-result
       :error (and error-p result))
      (lambda (decision)
-       (let ((context (mevedel-pipeline-record-hook-context
+       (let ((context (mevedel-hooks-record-tool-context
                        context decision event)))
          (setq context
-               (mevedel-pipeline-record-hook-audit
+               (mevedel-hooks-record-tool-audit
                 context
-                (mevedel-pipeline-hook-context-audit-records
-                 decision event)))
+                (mevedel-hooks-context-audit-records
+                 decision event 'tool-context)))
          (cond
           ((plist-member decision :updated-result)
            (setq context
-                 (mevedel-pipeline-record-hook-audit
+                 (mevedel-hooks-record-tool-audit
                   context
                   (mevedel-pipeline--hook-result-rewrite-audit-record
                    event model-result

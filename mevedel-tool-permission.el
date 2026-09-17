@@ -3,38 +3,29 @@
 ;;; Commentary:
 
 ;; Owns tool permission-path fan-out, decision logging, permission hooks, and
-;; prompt orchestration.  The Pipeline owner supplies the shared hook-context
-;; operations and retains step ordering.
+;; prompt orchestration.  Shared tool-hook operations live in mevedel-hooks;
+;; the pipeline retains step ordering.
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x))
+(require 'cl-lib)
+(require 'subr-x)
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-path
-                  "mevedel-agents" (cl-x) t)
+(require 'mevedel-agents)
+(require 'mevedel-execution)
+(require 'mevedel-hooks)
+(require 'mevedel-permission-log)
+(require 'mevedel-permission-queue)
+(require 'mevedel-permission-rules)
+(require 'mevedel-permissions)
+(require 'mevedel-structs)
+(require 'mevedel-telemetry)
+(require 'mevedel-tool-registry)
 
 ;; `mevedel-bash-policy'
 (declare-function mevedel-bash-policy-decision-specifier-value
                   "mevedel-bash-policy" (command))
-
-;; `mevedel-execution'
-(declare-function mevedel-execution-mutation-refused-p
-                  "mevedel-execution" (session))
-(defvar mevedel-execution-mutation-blocked-message)
-
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-decision-reason
-                  "mevedel-hooks" (decision))
-(declare-function mevedel-hooks-tool-event-plist
-                  "mevedel-hooks" (event context &rest extra))
-
-;; `mevedel-permission-log'
-(declare-function mevedel-permission-log
-                  "mevedel-permission-log" (session event &rest props))
+(autoload 'mevedel-bash-policy-decision-specifier-value "mevedel-bash-policy")
 
 ;; `mevedel-permission-mode'
 (defvar mevedel-permission-mode)
@@ -48,100 +39,13 @@
                   "mevedel-permission-persistence"
                   (workspace continuation &optional on-cancel on-error))
 
-;; `mevedel-permission-queue'
-(declare-function mevedel-permission--enqueue
-                  "mevedel-permission-queue" (entry &optional session))
-
-;; `mevedel-permission-rules'
-(declare-function mevedel-permission-rules-path-protected-p
-                  "mevedel-permission-rules" (path &optional target))
-
-;; `mevedel-permissions'
-(declare-function mevedel-check-permission-async-with-metadata
-                  "mevedel-permissions" (tool-name cont &rest args))
-(declare-function mevedel-permission--apply-prompt-result
-                  "mevedel-permissions" (result tool-name &rest args))
-(declare-function mevedel-permission--checker-args
-                  "mevedel-permissions" (context))
-(declare-function mevedel-permission--invocation-context
-                  "mevedel-permissions" (&rest args))
-(declare-function mevedel-permission--normalize-outcome
-                  "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--one-shot-mutations-p
-                  "mevedel-permissions" (request &optional explicit))
-(declare-function mevedel-permission--one-shot-prompt-entry
-                  "mevedel-permissions" (entry &optional data-buffer))
-(declare-function mevedel-permission--one-shot-prompt-outcome
-                  "mevedel-permissions" (outcome))
-(declare-function mevedel-permission-decision-raw-outcome
-                  "mevedel-permissions" (decision))
-(defvar mevedel-permission--context-frozen-p)
-(defvar mevedel-permission--frozen-persistent-rules)
-(defvar mevedel-permission--frozen-resource-grants)
-
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-hook-context-audit-records
-                  "mevedel-pipeline" (decision event))
-(declare-function mevedel-pipeline-hook-permission-audit-record
-                  "mevedel-pipeline"
-                  (event outcome decision &optional reason))
-(declare-function mevedel-pipeline-record-hook-audit
-                  "mevedel-pipeline" (context records))
-(declare-function mevedel-pipeline-record-hook-context
-                  "mevedel-pipeline" (context decision &optional event))
-(declare-function mevedel-pipeline-run-hook-event
-                  "mevedel-pipeline"
-                  (event event-plist callback context session workspace
-                         request invocation))
-
-;; `mevedel-structs'
-(declare-function mevedel-request-id "mevedel-structs" (cl-x))
-(declare-function mevedel-request-origin "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-p "mevedel-structs" (cl-x))
-(declare-function mevedel-session-permission-mode
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-forwarded-audit-p
-                  "mevedel-telemetry" (session))
-(declare-function mevedel-telemetry-record-audit
-                  "mevedel-telemetry" (session event &rest props))
-
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch-get-paths-from-proposal
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-sanitize-error
                   "mevedel-tool-patch" (message proposal))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-paths "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
-
-(defvar mevedel-tool-permission--initialized nil
-  "Non-nil after runtime permission dependencies have loaded.")
-
-(defun mevedel-tool-permission--initialize ()
-  "Load runtime dependencies after the pipeline load cycle has closed."
-  (unless mevedel-tool-permission--initialized
-    (require 'mevedel-agents)
-    (require 'mevedel-execution)
-    (require 'mevedel-hooks)
-    (require 'mevedel-permission-log)
-    (require 'mevedel-permission-queue)
-    (require 'mevedel-permission-rules)
-    (require 'mevedel-permissions)
-    (require 'mevedel-pipeline)
-    (require 'mevedel-structs)
-    (require 'mevedel-telemetry)
-    (require 'mevedel-tool-registry)
-    (setq mevedel-tool-permission--initialized t)))
+(autoload 'mevedel-tool-patch-get-paths-from-proposal "mevedel-tool-patch")
+(autoload 'mevedel-tool-patch-sanitize-error "mevedel-tool-patch")
 
 (defun mevedel-tool-permission--origin (context &optional explicit-origin)
   "Return the canonical agent path for permission CONTEXT.
@@ -161,7 +65,6 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
   "Return log-safe PATTERN metadata for TOOL-NAME."
   (cond
    ((and (equal tool-name "Bash") pattern)
-    (require 'mevedel-bash-policy)
     (mevedel-bash-policy-decision-specifier-value pattern))
    (t pattern)))
 
@@ -195,7 +98,6 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
 (defun mevedel-tool-permission-log-decision
     (context decision &rest props)
   "Persist sanitized DECISION diagnostics for CONTEXT with PROPS."
-  (mevedel-tool-permission--initialize)
   (let ((session (plist-get context :session)))
     (when (and session
                (not (plist-get decision :logged)))
@@ -282,23 +184,22 @@ FAIL receives REASON, the hook-updated context, and
 `permission-denied'.
 
 MODEL-REASON and PROVENANCE are included in the hook event when available."
-  (mevedel-tool-permission--initialize)
   (let ((session (plist-get context :session))
         (workspace (plist-get context :workspace)))
-    (mevedel-pipeline-run-hook-event
+    (mevedel-hooks-run-tool-event
      'PermissionDenied
      (mevedel-hooks-tool-event-plist
       'PermissionDenied context
       :permission-reason (or model-reason reason)
       :permission-provenance provenance)
      (lambda (decision)
-       (let* ((updated (mevedel-pipeline-record-hook-context
+       (let* ((updated (mevedel-hooks-record-tool-context
                         context decision 'PermissionDenied))
               (updated
-               (mevedel-pipeline-record-hook-audit
+               (mevedel-hooks-record-tool-audit
                 updated
-                (mevedel-pipeline-hook-context-audit-records
-                 decision 'PermissionDenied)))
+                (mevedel-hooks-context-audit-records
+                 decision 'PermissionDenied 'tool-context)))
               (final-reason
                (or (plist-get decision :permission-reason)
                    reason)))
@@ -350,7 +251,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                           outcome)))
             settle))
          (workspace (plist-get context :workspace)))
-    (mevedel-pipeline-run-hook-event
+    (mevedel-hooks-run-tool-event
      'PermissionRequest
      (mevedel-hooks-tool-event-plist
       'PermissionRequest context
@@ -358,13 +259,13 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
       :specifier-value (plist-get entry :specifier-value))
      (lambda (decision)
        (let* ((updated
-               (mevedel-pipeline-record-hook-context
+               (mevedel-hooks-record-tool-context
                 context decision 'PermissionRequest))
               (updated
-               (mevedel-pipeline-record-hook-audit
+               (mevedel-hooks-record-tool-audit
                 updated
-                (mevedel-pipeline-hook-context-audit-records
-                 decision 'PermissionRequest)))
+                (mevedel-hooks-context-audit-records
+                 decision 'PermissionRequest 'tool-context)))
               (stop-p (and (plist-member decision :continue)
                            (not (plist-get decision :continue))))
               (permission-decision
@@ -377,9 +278,9 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                        "hook denied permission"))
                   (reason (format "blocked by PermissionRequest: %s" detail)))
              (setq updated
-                   (mevedel-pipeline-record-hook-audit
+                   (mevedel-hooks-record-tool-audit
                     updated
-                    (mevedel-pipeline-hook-permission-audit-record
+                    (mevedel-hooks-tool-permission-audit-record
                      'PermissionRequest 'deny decision reason)))
              (mevedel-tool-permission-log-decision
               updated
@@ -392,9 +293,9 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                       `(deny . ,reason))))
           ((and (eq permission-decision 'allow) (not one-shot-p))
            (setq updated
-                 (mevedel-pipeline-record-hook-audit
+                 (mevedel-hooks-record-tool-audit
                   updated
-                  (mevedel-pipeline-hook-permission-audit-record
+                  (mevedel-hooks-tool-permission-audit-record
                    'PermissionRequest 'allow decision)))
            (mevedel-tool-permission-log-decision
             updated
@@ -514,9 +415,9 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
                     (context
                      (if (eq hooked-outcome raw-outcome)
                          context
-                       (mevedel-pipeline-record-hook-audit
+                       (mevedel-hooks-record-tool-audit
                         context
-                        (mevedel-pipeline-hook-permission-audit-record
+                        (mevedel-hooks-tool-permission-audit-record
                          'PreToolUse hooked-outcome
                          (plist-get context :hook-permission-hook-decision)))))
                     (logged-decision
@@ -550,14 +451,11 @@ Addressed resource operands are already authorized by their resource
 attempt; a prepared writable resource contributes only the backing path its
 proposal records.  Ordinary paths retain the existing path extraction
 behavior."
-  (mevedel-tool-permission--initialize)
   (let* ((proposal (plist-get context :patch-proposal))
          (paths
           (condition-case nil
               (if proposal
-                  (progn
-                    (require 'mevedel-tool-patch)
-                    (mevedel-tool-patch-get-paths-from-proposal proposal))
+                  (mevedel-tool-patch-get-paths-from-proposal proposal)
                 (cond
                  ((mevedel-tool-get-paths tool)
                   (funcall (mevedel-tool-get-paths tool) args))
@@ -580,7 +478,6 @@ behavior."
 
 FAIL receives a reason string and may additionally receive an updated
 context and typed reason."
-  (mevedel-tool-permission--initialize)
   (let* ((tool (plist-get context :tool))
          (session (plist-get context :session))
          (workspace (or (plist-get context :workspace)
