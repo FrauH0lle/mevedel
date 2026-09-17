@@ -163,42 +163,29 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       :render-data render-data))
                (marker-table mevedel-execution-transcript--archived-rows))
           (when path
-            (if (file-remote-p path)
-                (let* ((session (or mevedel--session
-                                    (error "Remote transcript has no session")))
-                       (save-path (mevedel-session-save-path session))
-                       (logical (file-relative-name path save-path))
-                       (root-buffer
-                        (if (bound-and-true-p mevedel--agent-invocation)
-                            (mevedel-agent-invocation-parent-data-buffer
-                             mevedel--agent-invocation)
-                          data-buffer))
-                       (coding (or buffer-file-coding-system 'utf-8-unix)))
-                  (with-temp-buffer
-                    (setq buffer-file-coding-system coding)
-                    (insert
-                     (decode-coding-string
-                      (mevedel-session-artifacts-read-artifact
-                       session logical)
-                      coding))
-                    (let ((org-agenda-file-menu-enabled nil))
-                      (org-mode))
-                    (mevedel-transcript-restore-properties)
-                    (unless
-                        (or
-                         (mevedel-execution-transcript--replace-archived-record
-                          tool-use-id replacement)
-                         (mevedel-execution-transcript--completion-record-p
-                          tool-use-id replacement))
-                      (error "Persisted execution record missing: %s"
-                             tool-use-id))
-                    (mevedel-session-artifacts-stabilize-gptel-bounds)
-                    (mevedel-session-artifacts-publish-transcript-state
-                     session root-buffer path
-                     (buffer-substring-no-properties (point-min) (point-max))
-                     coding)))
+            (let* ((remote (file-remote-p path))
+                   (session (and remote
+                                 (or mevedel--session
+                                     (error "Remote transcript has no session"))))
+                   (root-buffer
+                    (and remote
+                         (if (bound-and-true-p mevedel--agent-invocation)
+                             (mevedel-agent-invocation-parent-data-buffer
+                              mevedel--agent-invocation)
+                           data-buffer)))
+                   (coding (or buffer-file-coding-system 'utf-8-unix)))
               (with-temp-buffer
-                (insert-file-contents path)
+                (if remote
+                    (progn
+                      (setq buffer-file-coding-system coding)
+                      (insert
+                       (decode-coding-string
+                        (mevedel-session-artifacts-read-artifact
+                         session
+                         (file-relative-name
+                          path (mevedel-session-save-path session)))
+                        coding)))
+                  (insert-file-contents path))
                 (let ((org-agenda-file-menu-enabled nil))
                   (org-mode))
                 (mevedel-transcript-restore-properties)
@@ -210,8 +197,13 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       tool-use-id replacement))
                   (error "Persisted execution record missing: %s" tool-use-id))
                 (mevedel-session-artifacts-stabilize-gptel-bounds)
-                (mevedel-session-persistence-write-current-buffer-atomically
-                 path)))
+                (if remote
+                    (mevedel-session-artifacts-publish-transcript-state
+                     session root-buffer path
+                     (buffer-substring-no-properties (point-min) (point-max))
+                     coding)
+                  (mevedel-session-persistence-write-current-buffer-atomically
+                   path))))
             ;; The atomic rename changed the visited file.  Refresh the
             ;; buffer's baseline before applying the same replacement in
             ;; memory, otherwise Emacs may report a spurious file-supersession
