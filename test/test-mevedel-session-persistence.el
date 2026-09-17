@@ -2840,7 +2840,7 @@
                                    actual-session artifacts))))
                     (should
                      (eq 'portable
-                         (mevedel-session-codec-authority-mode
+                         (mevedel-session-authority-mode-for-session
                           session)))
                     (with-current-buffer buffer
                       (mevedel-save-session t))
