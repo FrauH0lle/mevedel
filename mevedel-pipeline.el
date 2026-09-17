@@ -1782,21 +1782,5 @@ not applied.  Return a zero-argument cancellation thunk for the call."
   (mevedel-pipeline--run-tool tool callback args t metadata))
 
 
-;;
-;;; Args conversion
-
-(defun mevedel-pipeline--positional-to-plist (arg-values arg-specs)
-  "Convert positional ARG-VALUES to a keyword plist using ARG-SPECS.
-
-ARG-SPECS is the mevedel args format: ((name type ...) ...).
-ARG-VALUES is a list of values in the same order.
-Returns a plist like (:name1 val1 :name2 val2 ...)."
-  (let ((plist nil))
-    (cl-loop for spec in arg-specs
-             for val in arg-values
-             do (push (intern (format ":%s" (car spec))) plist)
-             (push val plist))
-    (nreverse plist)))
-
 (provide 'mevedel-pipeline)
 ;;; mevedel-pipeline.el ends here
