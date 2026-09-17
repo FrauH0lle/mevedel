@@ -466,6 +466,49 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(mevedel-deftest mevedel-view-agent-live-transcript-finalize ()
+  ,test
+  (test)
+  :doc "successive turns replace visible status without mutating earlier snapshots"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Agent answer\n" 'response)
+    (let* ((original (list :agent-path "/root/worker" :live-buffer t
+                           :status 'running :session-label "parent"))
+           (before (copy-sequence original))
+           (invocation (mevedel-agent-invocation--create :buffer data-buf))
+           previous)
+      (with-current-buffer view-buf
+        (setq mevedel-view--agent-transcript-p t
+              mevedel-view--agent-transcript-info original))
+      (dolist (status '(error completed aborted))
+        (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
+        (mevedel-view-agent-live-transcript-start invocation)
+        (setf (mevedel-agent-invocation-transcript-status invocation) status
+              (mevedel-agent-invocation-call-count invocation) 3
+              (mevedel-agent-invocation-terminal-reason invocation)
+              (and (eq status 'error) "failed"))
+        (should (equal (list view-buf)
+                       (mevedel-view-agent-live-transcript-finalize invocation)))
+        (with-current-buffer view-buf
+          (let ((info (mevedel-view--agent-transcript-current-info)))
+            (should (eq status (plist-get info :status)))
+            (should (= 3 (plist-get info :calls)))
+            (should-not (plist-get info :elapsed))
+            (should (equal (and (eq status 'error) "failed")
+                           (plist-get info :reason)))
+            (should (equal "parent" (plist-get info :session-label)))
+            (should-not (plist-get info :live-buffer)))
+          (should-not mevedel-view--data-turn-start)
+          (should-not mevedel-view--in-flight-turn-start)
+          (when previous
+            (should (equal (car previous) (cdr previous)))
+            (should (= (length (car previous))
+                       (length mevedel-view--agent-transcript-info))))
+          (setq previous
+                (cons mevedel-view--agent-transcript-info
+                      (copy-sequence mevedel-view--agent-transcript-info)))))
+      (should (equal before original)))))
+
 (mevedel-deftest mevedel-view-agent-cleanup-parent
   (:doc "cleans up saved transcript views without tearing down the session")
   ,test
