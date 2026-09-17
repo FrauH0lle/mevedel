@@ -621,20 +621,26 @@
 (mevedel-deftest mevedel-compact-evidence-region-with-tool-output-cap ()
   ,test
   (test)
-  :doc "caps tool output spans while preserving surrounding text"
+  :doc "caps raw tool spans at the boundary and preserves surrounding text"
   (with-temp-buffer
     (insert "before\n")
     (let ((tool-start (point)))
       (insert "abcdef")
       (put-text-property tool-start (point) 'gptel '(tool . "call-1")))
     (insert "\nafter\n")
-    (let ((text (mevedel-compact-evidence-region-with-tool-output-cap
-                 (point-min) (point-max) 3 t)))
-      (should (string-match-p "before" text))
-      (should (string-match-p "abc" text))
-      (should-not (string-match-p "def" text))
-      (should (string-match-p "omitted 3 chars" text))
-      (should (string-match-p "after" text))))
+    (dolist (cap '(nil 3 6 7))
+      (dolist (no-properties '(nil t))
+        (let ((text (mevedel-compact-evidence-region-with-tool-output-cap
+                     (point-min) (point-max) cap no-properties)))
+          (should (equal text
+                         (if (eq cap 3)
+                             (concat "before\nabc\n[mevedel: tool output truncated; "
+                                     "omitted 3 chars]\n\nafter\n")
+                           "before\nabcdef\nafter\n")))
+          (should (equal (get-text-property 7 'gptel text)
+                         (unless no-properties '(tool . "call-1"))))
+          (should-not (get-text-property 0 'gptel text))
+          (should-not (get-text-property (1- (length text)) 'gptel text))))))
 
   :doc "restores tool property only on parseable org tool sexp and result"
   (with-temp-buffer

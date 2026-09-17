@@ -216,15 +216,11 @@ parseable as a persisted org tool span."
                    (body-end (or (car close) (length suffix)))
                    (body (substring suffix 0 body-end))
                    (close-text (and close
-                                    (substring suffix (car close) (cdr close))))
-                   (trailing (if close
-                                 (substring suffix (cdr close))
-                               "")))
+                                    (substring suffix (car close) (cdr close)))))
               (concat prefix
                       (prin1-to-string safe-sexp)
                       (mevedel-compact-evidence--truncate-tool-body body cap)
-                      close-text
-                      trailing))))
+                      close-text))))
       (error nil))))
 
 (defun mevedel-compact-evidence--tool-sexp-start (text)
@@ -302,7 +298,9 @@ CAP limits the visible result body.  When NO-PROPERTIES is non-nil, return
 plain text."
   (mevedel-compact-evidence--propertize-tool-span
    (or (mevedel-compact-evidence--structural-tool-span text cap)
-       (mevedel-compact-evidence--raw-tool-truncation text cap))
+       (if (> (length text) cap)
+           (mevedel-compact-evidence--raw-tool-truncation text cap)
+         text))
    prop no-properties))
 
 (defun mevedel-compact-evidence-region-with-tool-output-cap (beg end cap
@@ -316,25 +314,14 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
       (let* ((next (next-single-property-change pos 'gptel nil end))
              (prop (get-text-property pos 'gptel))
              (tool-output-p (mevedel-compact-evidence--tool-output-prop-p prop))
-             (span-len (- next pos))
              (text-fn (if no-properties
                           #'buffer-substring-no-properties
                         #'buffer-substring))
              (text (funcall text-fn pos next)))
         (push (cond
-               ((and tool-output-p
-                     (integerp cap)
-                     (> span-len cap))
+               ((and tool-output-p (integerp cap))
                 (mevedel-compact-evidence--tool-span-with-output-cap
                  (substring-no-properties text) prop cap no-properties))
-               ((and tool-output-p (integerp cap))
-                (if-let* ((compacted
-                           (mevedel-compact-evidence--structural-tool-span
-                            (substring-no-properties text) cap)))
-                    (mevedel-compact-evidence--propertize-tool-span
-                     compacted prop no-properties)
-                  (mevedel-compact-evidence--propertize-tool-span
-                   (substring-no-properties text) prop no-properties)))
                ((and (integerp cap)
                      (null prop)
                      (< next end)
