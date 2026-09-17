@@ -488,8 +488,11 @@ notification server may ignore the timeout hint.
 
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian
-and dangerous-command presentation, and Eval presentation. The queue retains
-ordering and outcome semantics; the shared interaction primitive retains
+and dangerous-command presentation, and Eval presentation. The queue passes
+the entry, attribution, pending count, and settlement callback through
+`mevedel-permission-prompt-render`; the UI owner selects its presentation.
+Rendering an Eval card does not load the execution-policy adapter. The queue
+retains ordering and outcome semantics; the shared interaction primitive retains
 overlay settlement and request cancellation.
 
 A Bash command longer than `mevedel-permission-command-display-limit` (400

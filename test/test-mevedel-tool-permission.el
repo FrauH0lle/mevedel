@@ -476,7 +476,7 @@
           (lambda (text &rest _args)
             (setq content
                   (substring-no-properties text)))))
-      (mevedel-permission-queue--render-bash
+      (mevedel-permission-queue--render-entry
        (car (mevedel-session-permission-queue session))))
     (should (string-match-p "Authority" content))
     (should (string-match-p "\\[ \\] Command" content))

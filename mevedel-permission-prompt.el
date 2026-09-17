@@ -311,6 +311,12 @@ a remote collaborator always receives the whole command."
   :type 'integer
   :group 'mevedel)
 
+(defcustom mevedel-eval-expression-display-limit 20
+  "Maximum number of lines to show inline in the Eval permission prompt.
+Expressions longer than this are truncated with a toggle to expand."
+  :type 'integer
+  :group 'mevedel)
+
 (defun mevedel-permission--elide (text entry &optional line-limit char-limit)
   "Return TEXT for prompt display, elided unless ENTRY is expanded.
 LINE-LIMIT caps the collapsed line count and CHAR-LIMIT the collapsed
@@ -581,6 +587,27 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
          (and resources "\n(p selects a path and remembering scope)\n")
          "\n")))))
 
+(defun mevedel-permission-prompt-render (entry origin cont count)
+  "Render permission ENTRY with ORIGIN attribution and pending COUNT.
+CONT receives the user's outcome; the caller owns queue settlement."
+  (pcase (plist-get entry :kind)
+    ('generic
+     (mevedel-permission--prompt-async-attributed
+      (plist-get entry :tool-name) (plist-get entry :specifier-value)
+      (plist-get entry :include-always) origin cont count entry))
+    ('bash
+     (mevedel-permission--prompt-async-bash
+      (plist-get entry :command) (plist-get entry :command-class)
+      (plist-get entry :include-always) origin cont count entry))
+    ('eval
+     (mevedel-permission--prompt-async-eval
+      (plist-get entry :expression) origin cont count entry))
+    ('sandbox
+     (mevedel-permission--prompt-async-sandbox
+      (plist-get entry :tool-name) (plist-get entry :detail)
+      (plist-get entry :justification) origin cont count entry))
+    (_ (error "Unknown permission card kind: %s" (plist-get entry :kind)))))
+
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
   "Display an attributed permission prompt and call CONT with its outcome."
@@ -755,13 +782,49 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
      cont count entry rule-creating-disabled-p once-only)))
 
 (defun mevedel-permission--prompt-async-eval
-    (content cont &optional count entry)
-  "Display an Eval permission prompt and call CONT with its outcome."
-  (mevedel-permission--prompt-async-with-content
-   content (plist-get entry :include-always)
-   cont count entry
-   (not (plist-get entry :remember-authority-cell))
-   (not (plist-get entry :remember-authority-cell))))
+    (expression origin cont count entry)
+  "Display EXPRESSION from ENTRY with ORIGIN attribution and queue COUNT.
+Call CONT with the chosen outcome.  Local elision retains the full expression
+in the remote descriptor; ENTRY supplies execution mode and remembering scope."
+  (let* ((mode (plist-get entry :mode))
+         (preserve-ui (plist-get entry :preserve-ui))
+         (faced-expr (propertize expression
+                                'font-lock-face 'font-lock-string-face))
+         ;; Built twice: once elided for the prompt, once whole for the
+         ;; remote descriptor, whose reader has no TAB to expand with.
+         (build
+          (lambda (display-expr)
+            (concat
+             "The LLM is requesting permission to evaluate elisp.\n\n"
+             (mevedel--prompt-attribution-line origin)
+             (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
+             (format "%s" (or mode "live"))
+             (when (equal (or mode "live") "live")
+               (format " (inherently unconfined; preserve_ui: %s)"
+                       (if preserve-ui "true" "false")))
+             "\n"
+             (when entry
+               (concat
+                (mevedel-permission--format-authority-capabilities entry)
+                (mevedel-permission--format-remember-authority entry)))
+             "\n"
+             (propertize "Expression:\n"
+                         'font-lock-face 'font-lock-escape-face)
+             display-expr
+             "\n\n")))
+         (content
+          (funcall build
+                   (mevedel-permission--elide
+                    faced-expr entry
+                    mevedel-eval-expression-display-limit))))
+    (when entry
+      (mevedel-queue--entry-metadata-put
+       entry :remote-body
+       (substring-no-properties (funcall build faced-expr))))
+    (mevedel-permission--prompt-async-with-content
+     content (plist-get entry :include-always) cont count entry
+     (not (plist-get entry :remember-authority-cell))
+     (not (plist-get entry :remember-authority-cell)))))
 
 (defun mevedel-permission--prompt-async-sandbox
     (tool-name detail justification origin cont &optional count entry)

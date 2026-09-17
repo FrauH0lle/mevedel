@@ -933,10 +933,52 @@
            '(:origin "/root" :call-source ptc
              :tool-use-id "ptc-1/2" :parent-tool-use-id "ptc-1")))))
 
-(mevedel-deftest mevedel-permission-queue--render-generic
-  (:quiet t :doc "renders generic permission queue entries")
+(mevedel-deftest mevedel-permission-queue--render-entry
+  (:quiet t :doc "renders and settles every kind through its captured queue")
   ,test
   (test)
+
+  :doc "every card preserves attribution, depth and exactly-once settlement across buffers"
+  (dolist (kind '(generic bash eval sandbox))
+    (let* ((session (test-pq--make-session))
+           (other-session (test-pq--make-session))
+           outcomes
+           (entry (list :kind kind :session session :origin "/root/worker"
+                        :tool-name "Read" :specifier-value "/tmp/input"
+                        :command "git status" :command-class 'read-only
+                        :expression "(+ 1 2)" :mode "batch"
+                        :detail "cat /tmp/input" :justification "Read input"
+                        :callback (lambda (outcome) (push outcome outcomes))))
+           (sibling (list :kind 'generic :session session :tool-name "Read"
+                          :callback #'ignore))
+           rendered)
+      (setf (mevedel-session-permission-queue session) (list entry sibling))
+      (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+                 (lambda (body _always callback count card &rest _)
+                   (push (list body callback count card) rendered))))
+        (mevedel-permission-queue--render-entry entry)
+        (let ((card (car rendered)))
+          (should (eq entry (nth 3 card)))
+          (should (= 2 (nth 2 card)))
+          (should (string-match-p "from /root/worker" (car card)))
+          (should (string-match-p
+                   (regexp-quote
+                    (pcase kind
+                      ('generic "Path: /tmp/input")
+                      ('bash "Command: git status")
+                      ('eval "Mode: batch")
+                      ('sandbox "Justification: Read input")))
+                   (car card)))
+          (with-temp-buffer
+            (setq-local mevedel--session other-session)
+            (funcall (nth 1 card) 'deny-once)
+            (funcall (nth 1 card) 'deny-once)))
+        (should (equal '(deny-once) outcomes))
+        (should (equal (list sibling)
+                       (mevedel-session-permission-queue session)))
+        (should (= 1 (nth 2 (car rendered))))
+        (should-not (mevedel-session-permission-queue other-session)))
+      (mevedel-permission-queue-abort-all session)))
 
   :doc "ToolCall prompts show the envelope and child identity"
   (let* ((session (test-pq--make-session))
@@ -950,7 +992,7 @@
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
                (lambda (_tool _path _always origin _cont _count _entry)
                  (setq attribution origin))))
-      (mevedel-permission-queue--render-generic entry))
+      (mevedel-permission-queue--render-entry entry))
     (should (equal "ToolCall ptc-1 (child ptc-1/2)" attribution)))
 
   :doc "no-workspace entries still render through the generic prompt adapter"
@@ -969,7 +1011,7 @@
                  (setq captured
                        (list tool path include-always cont count
                              rendered-entry)))))
-      (mevedel-permission-queue--render-generic entry))
+      (mevedel-permission-queue--render-entry entry))
     (should (equal "Read" (nth 0 captured)))
     (should (null (nth 1 captured)))
     (should (= 1 (nth 4 captured)))
@@ -1053,7 +1095,231 @@
                 (should (gethash interaction-id
                                  mevedel-view--interaction-overlays))))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "missing Bash UI helper produces the pinned denial outcome"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         (entry (list :kind 'bash
+                      :command "sudo ls"
+                      :command-class 'dangerous
+                      :include-always nil
+                      :session session))
+         (outcome nil)
+         (saved (and (fboundp 'mevedel-permission--prompt-async-bash)
+                     (symbol-function
+                      'mevedel-permission--prompt-async-bash))))
+    (setq entry (plist-put entry :callback (lambda (o) (setq outcome o))))
+    (unwind-protect
+        (progn
+          (when saved
+            (fmakunbound 'mevedel-permission--prompt-async-bash))
+          (setf (mevedel-session-permission-queue session) (list entry))
+          (mevedel-permission-queue--render-head session)
+          (should (equal '(deny . "Bash permission UI unavailable")
+                         outcome))
+          (should (null (mevedel-session-permission-queue session))))
+          (when saved
+            (fset 'mevedel-permission--prompt-async-bash saved))))
+
+  :doc "Bash approval resumes exactly once"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'bash
+                      :command "git status"
+                      :command-class 'read-only
+                      :include-always nil
+                      :session session))
+         (outcomes nil)
+         rendered)
+    (setq entry (plist-put entry :callback
+                           (lambda (o) (push o outcomes))))
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               (lambda (next-entry) (push next-entry rendered))))
+      (mevedel-permission-queue--on-head-outcome entry 'allow-once)
+      (mevedel-permission-queue--on-head-outcome entry 'allow-once))
+    (should (equal '(allow-once) outcomes))
+    (should (null rendered))
+    (should (null (mevedel-session-permission-queue session))))
+
+  :doc "missing live view aborts the visible head"
+  (with-temp-buffer
+    (let* ((session (test-pq--make-session))
+           (mevedel--session session)
+           (outcome nil)
+           (entry (list :kind 'eval
+                        :expression "(message \"hi\")"
+                        :session session
+                        :callback (lambda (o) (setq outcome o)))))
+      (setf (mevedel-session-permission-queue session) (list entry))
+      (mevedel-permission-queue--render-head session)
+      (should (eq 'aborted outcome))
+      (should (null (mevedel-session-permission-queue session)))))
+
+  :doc "agent Eval permission renders in the parent interaction view"
+  (let ((parent-data (generate-new-buffer " *test-pq-parent-data*"))
+        (parent-view (generate-new-buffer " *test-pq-parent-view*"))
+        (agent-data (generate-new-buffer " *test-pq-agent-data*"))
+        (session (test-pq--make-session)))
+    (setf (mevedel-session-agent-transcripts session)
+          '(("/root/verifier"
+             :status running)))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :agent-id
+                         "/root/verifier")))
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
+                     (lambda () 'ask)))
+            (with-current-buffer agent-data
+              (mevedel-permission--enqueue
+               (list :kind 'eval
+                     :expression "(message \"hi\")"
+                     :mode "batch"
+                     :origin "/root/verifier"
+                     :callback #'ignore)
+               session)))
+          (with-current-buffer parent-view
+            (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                    (buffer-string)))
+            (should (string-match-p "from /root/verifier"
+                                    (buffer-string)))
+            (should (string-match-p "Mode: batch"
+                                    (buffer-string)))))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
+
+  :doc "agent Eval permissions survive blocked status redraw and rebuild"
+  (let ((parent-data (generate-new-buffer " *test-pq-parent-status-data*"))
+        (parent-view (generate-new-buffer " *test-pq-parent-status-view*"))
+        (agent-data (generate-new-buffer " *test-pq-agent-status-data*"))
+        (session (test-pq--make-session))
+        outcomes)
+    (setf (mevedel-session-agent-transcripts session)
+          '(("/root/verifier"
+             :status running)))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :agent-id
+                         "/root/verifier")))
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
+                     (lambda () 'ask))
+                    ((symbol-function 'mevedel-view--agent-status-collect)
+                     (lambda ()
+                       (list (list :path
+                                   "/root/verifier"
+                                   :status 'blocked
+                                   :role "verifier"
+                                   :description "Verify tracked diff"
+                                   :calls 18)))))
+            (with-current-buffer parent-view
+              (mevedel-view--render-agent-status))
+            (with-current-buffer agent-data
+              (dotimes (i 3)
+                (mevedel-permission--enqueue
+                 (list :kind 'eval
+                       :expression (format "(+ %d 1)" i)
+                       :mode "batch"
+                       :origin
+                       "/root/verifier"
+                       :callback (lambda (outcome)
+                                   (push outcome outcomes)))
+                 session)))
+            (with-current-buffer parent-view
+              (mevedel-view--render-agent-status)
+              (mevedel-view--interaction-rebuild)
+              (should-not outcomes)
+              (should (= 3 (length (mevedel-session-permission-queue session))))
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) mevedel-view--input-marker))
+                     (agent-pos (string-search
+                                 "Blocked /root/verifier" text))
+                     (prompt-pos (string-search
+                                  "The LLM is requesting permission to evaluate elisp"
+                                  text)))
+                (should agent-pos)
+                (should prompt-pos)
+                (should (< agent-pos prompt-pos))
+                (should (equal "3 permissions pending"
+                               (mevedel-view--interaction-count-label)))
+                (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "3 permissions pending"
+                                  mevedel-view--input-marker)
+                  (should (eq 'interaction
+                              (get-text-property
+                               (match-beginning 0)
+                               'mevedel-view-zone-namespace)))
+                  (should (eq :separator
+                              (get-text-property
+                               (match-beginning 0)
+                               'mevedel-view-zone-id))))
+                (should (string-search "from /root/verifier" text))
+                (should (string-search "Mode: batch" text))))))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
+
+  :doc "network request uses the once-only sandbox prompt adapter"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'sandbox
+                      :tool-name "Bash"
+                      :detail "curl https://example.test"
+                      :justification "Download the requested page?"
+                      :additional-permissions '(:network t)
+                      :origin "/root"
+                      :session session
+                      :callback #'ignore))
+         captured)
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-sandbox)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission-queue--render-entry entry))
+    (should (equal "Bash" (nth 0 captured)))
+    (should (equal "curl https://example.test" (nth 1 captured)))
+    (should (equal "Download the requested page?" (nth 2 captured)))
+    (should (= 1 (nth 5 captured)))
+    (should (eq entry (nth 6 captured))))
+
+  :doc "filesystem request preserves its exact resource metadata"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'sandbox
+                      :tool-name "Bash"
+                      :detail "cat /tmp/secret"
+                      :justification "Read the requested file?"
+                      :resource-path "/tmp/secret"
+                      :resource-access 'read
+                      :origin "/root"
+                      :session session
+                      :callback #'ignore))
+         captured)
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-sandbox)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission-queue--render-entry entry))
+    (should (equal "cat /tmp/secret" (nth 1 captured)))
+    (should (= 1 (nth 5 captured)))
+    (should (eq entry (nth 6 captured)))))
 
 (mevedel-deftest mevedel-permission-queue--allow-once-advance
   (:doc "allow-once settles only the visible head and renders the next prompt")
@@ -1618,244 +1884,9 @@
         (delete-directory outside-root t))
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-permission-queue--render-bash
-  (:quiet t :doc "renders queued Bash permission prompts")
-  ,test
-  (test)
 
-  :doc "missing Bash UI helper produces the pinned denial outcome"
-  (let* ((session (test-pq--make-session))
-         (mevedel--session session)
-         (entry (list :kind 'bash
-                      :command "sudo ls"
-                      :command-class 'dangerous
-                      :include-always nil
-                      :session session))
-         (outcome nil)
-         (saved (and (fboundp 'mevedel-permission--prompt-async-bash)
-                     (symbol-function
-                      'mevedel-permission--prompt-async-bash))))
-    (setq entry (plist-put entry :callback (lambda (o) (setq outcome o))))
-    (unwind-protect
-        (progn
-          (when saved
-            (fmakunbound 'mevedel-permission--prompt-async-bash))
-          (setf (mevedel-session-permission-queue session) (list entry))
-          (mevedel-permission-queue--render-head session)
-          (should (equal '(deny . "Bash permission UI unavailable")
-                         outcome))
-          (should (null (mevedel-session-permission-queue session))))
-          (when saved
-            (fset 'mevedel-permission--prompt-async-bash saved))))
 
-  :doc "Bash approval resumes exactly once"
-  (let* ((session (test-pq--make-session))
-         (entry (list :kind 'bash
-                      :command "git status"
-                      :command-class 'read-only
-                      :include-always nil
-                      :session session))
-         (outcomes nil)
-         rendered)
-    (setq entry (plist-put entry :callback
-                           (lambda (o) (push o outcomes))))
-    (setf (mevedel-session-permission-queue session) (list entry))
-    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
-               (lambda (next-entry) (push next-entry rendered))))
-      (mevedel-permission-queue--on-head-outcome entry 'allow-once)
-      (mevedel-permission-queue--on-head-outcome entry 'allow-once))
-    (should (equal '(allow-once) outcomes))
-    (should (null rendered))
-    (should (null (mevedel-session-permission-queue session)))))
 
-(mevedel-deftest mevedel-permission-queue--render-eval
-  (:quiet t :doc "renders queued Eval permission prompts")
-  ,test
-  (test)
-
-  :doc "missing live view aborts the visible head"
-  (with-temp-buffer
-    (let* ((session (test-pq--make-session))
-           (mevedel--session session)
-           (outcome nil)
-           (entry (list :kind 'eval
-                        :expression "(message \"hi\")"
-                        :session session
-                        :callback (lambda (o) (setq outcome o)))))
-      (setf (mevedel-session-permission-queue session) (list entry))
-      (mevedel-permission-queue--render-head session)
-      (should (eq 'aborted outcome))
-      (should (null (mevedel-session-permission-queue session)))))
-
-  :doc "agent Eval permission renders in the parent interaction view"
-  (let ((parent-data (generate-new-buffer " *test-pq-parent-data*"))
-        (parent-view (generate-new-buffer " *test-pq-parent-view*"))
-        (agent-data (generate-new-buffer " *test-pq-agent-data*"))
-        (session (test-pq--make-session)))
-    (setf (mevedel-session-agent-transcripts session)
-          '(("/root/verifier"
-             :status running)))
-    (unwind-protect
-        (progn
-          (with-current-buffer parent-data
-            (org-mode)
-            (setq-local mevedel--session session))
-          (mevedel-view--setup parent-view parent-data)
-          (with-current-buffer agent-data
-            (org-mode)
-            (setq-local mevedel--session session)
-            (setq-local mevedel--view-buffer parent-view)
-            (setq-local mevedel--agent-invocation
-                        (mevedel-agent-invocation--create
-                         :agent-id
-                         "/root/verifier")))
-          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
-                     (lambda () 'ask)))
-            (with-current-buffer agent-data
-              (mevedel-permission--enqueue
-               (list :kind 'eval
-                     :expression "(message \"hi\")"
-                     :mode "batch"
-                     :origin "/root/verifier"
-                     :callback #'ignore)
-               session)))
-          (with-current-buffer parent-view
-            (should (string-match-p "The LLM is requesting permission to evaluate elisp"
-                                    (buffer-string)))
-            (should (string-match-p "from /root/verifier"
-                                    (buffer-string)))
-            (should (string-match-p "Mode: batch"
-                                    (buffer-string)))))
-      (when (buffer-live-p agent-data) (kill-buffer agent-data))
-      (when (buffer-live-p parent-view) (kill-buffer parent-view))
-      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
-
-  :doc "agent Eval permissions survive blocked status redraw and rebuild"
-  (let ((parent-data (generate-new-buffer " *test-pq-parent-status-data*"))
-        (parent-view (generate-new-buffer " *test-pq-parent-status-view*"))
-        (agent-data (generate-new-buffer " *test-pq-agent-status-data*"))
-        (session (test-pq--make-session))
-        outcomes)
-    (setf (mevedel-session-agent-transcripts session)
-          '(("/root/verifier"
-             :status running)))
-    (unwind-protect
-        (progn
-          (with-current-buffer parent-data
-            (org-mode)
-            (setq-local mevedel--session session))
-          (mevedel-view--setup parent-view parent-data)
-          (with-current-buffer agent-data
-            (org-mode)
-            (setq-local mevedel--session session)
-            (setq-local mevedel--view-buffer parent-view)
-            (setq-local mevedel--agent-invocation
-                        (mevedel-agent-invocation--create
-                         :agent-id
-                         "/root/verifier")))
-          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
-                     (lambda () 'ask))
-                    ((symbol-function 'mevedel-view--agent-status-collect)
-                     (lambda ()
-                       (list (list :path
-                                   "/root/verifier"
-                                   :status 'blocked
-                                   :role "verifier"
-                                   :description "Verify tracked diff"
-                                   :calls 18)))))
-            (with-current-buffer parent-view
-              (mevedel-view--render-agent-status))
-            (with-current-buffer agent-data
-              (dotimes (i 3)
-                (mevedel-permission--enqueue
-                 (list :kind 'eval
-                       :expression (format "(+ %d 1)" i)
-                       :mode "batch"
-                       :origin
-                       "/root/verifier"
-                       :callback (lambda (outcome)
-                                   (push outcome outcomes)))
-                 session)))
-            (with-current-buffer parent-view
-              (mevedel-view--render-agent-status)
-              (mevedel-view--interaction-rebuild)
-              (should-not outcomes)
-              (should (= 3 (length (mevedel-session-permission-queue session))))
-              (let* ((text (buffer-substring-no-properties
-                            (point-min) mevedel-view--input-marker))
-                     (agent-pos (string-search
-                                 "Blocked /root/verifier" text))
-                     (prompt-pos (string-search
-                                  "The LLM is requesting permission to evaluate elisp"
-                                  text)))
-                (should agent-pos)
-                (should prompt-pos)
-                (should (< agent-pos prompt-pos))
-                (should (equal "3 permissions pending"
-                               (mevedel-view--interaction-count-label)))
-                (save-excursion
-                  (goto-char (point-min))
-                  (search-forward "3 permissions pending"
-                                  mevedel-view--input-marker)
-                  (should (eq 'interaction
-                              (get-text-property
-                               (match-beginning 0)
-                               'mevedel-view-zone-namespace)))
-                  (should (eq :separator
-                              (get-text-property
-                               (match-beginning 0)
-                               'mevedel-view-zone-id))))
-                (should (string-search "from /root/verifier" text))
-                (should (string-search "Mode: batch" text))))))
-      (when (buffer-live-p agent-data) (kill-buffer agent-data))
-      (when (buffer-live-p parent-view) (kill-buffer parent-view))
-      (when (buffer-live-p parent-data) (kill-buffer parent-data)))))
-
-(mevedel-deftest mevedel-permission-queue--render-sandbox
-  (:doc "renders additive sandbox permission prompts")
-  ,test
-  (test)
-
-  :doc "network request uses the once-only sandbox prompt adapter"
-  (let* ((session (test-pq--make-session))
-         (entry (list :kind 'sandbox
-                      :tool-name "Bash"
-                      :detail "curl https://example.test"
-                      :justification "Download the requested page?"
-                      :additional-permissions '(:network t)
-                      :origin "/root"
-                      :session session
-                      :callback #'ignore))
-         captured)
-    (setf (mevedel-session-permission-queue session) (list entry))
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-sandbox)
-               (lambda (&rest args) (setq captured args))))
-      (mevedel-permission-queue--render-sandbox entry))
-    (should (equal "Bash" (nth 0 captured)))
-    (should (equal "curl https://example.test" (nth 1 captured)))
-    (should (equal "Download the requested page?" (nth 2 captured)))
-    (should (= 1 (nth 5 captured)))
-    (should (eq entry (nth 6 captured))))
-
-  :doc "filesystem request preserves its exact resource metadata"
-  (let* ((session (test-pq--make-session))
-         (entry (list :kind 'sandbox
-                      :tool-name "Bash"
-                      :detail "cat /tmp/secret"
-                      :justification "Read the requested file?"
-                      :resource-path "/tmp/secret"
-                      :resource-access 'read
-                      :origin "/root"
-                      :session session
-                      :callback #'ignore))
-         captured)
-    (setf (mevedel-session-permission-queue session) (list entry))
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-sandbox)
-               (lambda (&rest args) (setq captured args))))
-      (mevedel-permission-queue--render-sandbox entry))
-    (should (equal "cat /tmp/secret" (nth 1 captured)))
-    (should (= 1 (nth 5 captured)))
-    (should (eq entry (nth 6 captured)))))
 
 
 ;;

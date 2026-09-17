@@ -3,16 +3,16 @@
 ;;; Commentary:
 
 ;; Heterogeneous FIFO on the session struct holding generic
-;; permission, Bash, Eval, and execution-authority entries.  Render-head
-;; dispatches on `:kind' so a single visible prompt covers all cases at any
+;; permission, Bash, Eval, and execution-authority entries.  The prompt UI
+;; renders the head so a single visible prompt covers all cases at any
 ;; moment.  Coalesce on rule-creating outcomes
 ;; (`allow-session', `deny-session', `always-allow') re-evaluates
 ;; queued entries through the decision chain; protected paths skip
-;; allow rules but coalesce on deny.  Per-agent terminal-state sweep
-;; fires `'aborted' on entries owned by an agent that has unwound.
+;; allow rules but coalesce on deny.  Request teardown sweeps its entries
+;; with `aborted' while unrelated retained-agent prompts remain queued.
 ;;
 ;; The queue is transient runtime state: never persisted to the
-;; sidecar, empty at every completed-turn boundary.
+;; sidecar, cleared when the root session is torn down.
 
 ;;; Code:
 
@@ -30,23 +30,9 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-permission-prompt'
-(declare-function mevedel-permission--prompt-async-attributed
-                  "mevedel-permission-prompt"
-                  (tool-name path include-always origin cont
-                             &optional count entry))
-(declare-function mevedel-permission--prompt-async-bash
-                  "mevedel-permission-prompt"
-                  (command dangerous include-always origin cont
-                           &optional count entry))
-(declare-function mevedel-permission--prompt-async-sandbox
-                  "mevedel-permission-prompt"
-                  (tool-name detail justification origin cont
-                             &optional count entry))
-(autoload 'mevedel-permission--prompt-async-attributed
-  "mevedel-permission-prompt")
-(autoload 'mevedel-permission--prompt-async-bash "mevedel-permission-prompt")
-(autoload 'mevedel-permission--prompt-async-sandbox
-  "mevedel-permission-prompt")
+(declare-function mevedel-permission-prompt-render
+                  "mevedel-permission-prompt" (entry origin cont count))
+(autoload 'mevedel-permission-prompt-render "mevedel-permission-prompt")
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
@@ -84,14 +70,8 @@
 (autoload 'mevedel-telemetry-record-audit "mevedel-telemetry")
 
 ;; `mevedel-tool-exec-permission'
-(declare-function mevedel-tool-exec-permission-prompt-eval
-                  "mevedel-tool-exec-permission"
-                  (expression callback &optional origin count entry
-                              mode preserve-ui))
 (declare-function mevedel-tool-exec-permission-reevaluate
                   "mevedel-tool-exec-permission" (entry context))
-(autoload 'mevedel-tool-exec-permission-prompt-eval
-  "mevedel-tool-exec-permission")
 (autoload 'mevedel-tool-exec-permission-reevaluate "mevedel-tool-exec-permission")
 
 ;; `mevedel-utilities'
@@ -370,18 +350,15 @@ ENTRY plist keys:
          (signal (car err) (cdr err)))))))
 
 (defun mevedel-permission-queue--render-entry (entry)
-  "Render ENTRY directly via the kind-specific dispatcher.
-Used by the permission queue's head renderer."
-  (pcase (plist-get entry :kind)
-    ('generic (mevedel-permission-queue--render-generic entry))
-    ('bash (mevedel-permission-queue--render-bash entry))
-    ('eval (mevedel-permission-queue--render-eval entry))
-    ('sandbox (mevedel-permission-queue--render-sandbox entry))
-    (_ (error "Unknown permission card kind: %s" (plist-get entry :kind)))))
+  "Render ENTRY with settlement bound to its owning session."
+  (mevedel-permission-prompt-render
+   entry (mevedel-permission-queue--attribution-origin entry)
+   (lambda (outcome)
+     (mevedel-permission-queue--on-head-outcome entry outcome))
+   (length (mevedel-permission-queue--get (plist-get entry :session)))))
 
 (defun mevedel-permission-queue--render-head (&optional session)
-  "Render the current head of SESSION's permission queue.
-Dispatches on entry's `:kind' via `--render-entry'."
+  "Render the current head of SESSION's permission queue."
   (when-let* ((session (or session
                            (mevedel-permission-queue--current-session)))
               (head (car (mevedel-permission-queue--get session))))
@@ -425,73 +402,6 @@ Dispatches on entry's `:kind' via `--render-entry'."
               'permission-queue-coalesce
               "permission-queue: coalesce error: %S" err))))
         (mevedel-permission-queue--render-head session))))))
-
-(defun mevedel-permission-queue--render-generic (entry)
-  "Render a generic-kind permission ENTRY as the visible head."
-  (let ((tool-name (plist-get entry :tool-name))
-        (path (plist-get entry :specifier-value))
-        (include-always (plist-get entry :include-always))
-        (count (length (mevedel-permission-queue--get
-                        (plist-get entry :session))))
-        (origin (mevedel-permission-queue--attribution-origin entry))
-        (cb (lambda (outcome)
-              (mevedel-permission-queue--on-head-outcome entry outcome))))
-    (mevedel-permission--prompt-async-attributed
-     tool-name path include-always origin cb count entry)))
-
-(defun mevedel-permission-queue--render-bash (entry)
-  "Render a bash-kind permission ENTRY using the Bash permission UI.
-
-Bash uses the same FIFO machinery as generic permissions.  Read-only and
-unknown commands may offer rule-creating outcomes; dangerous and complex
-commands do not.  If the helper is unavailable, signal so the permission queue
-removes the head and returns the pinned tool-level denial."
-  (let ((command (plist-get entry :command))
-        (command-class (plist-get entry :command-class))
-        (include-always (plist-get entry :include-always))
-        (count (length (mevedel-permission-queue--get
-                        (plist-get entry :session)))))
-    (unless (fboundp 'mevedel-permission--prompt-async-bash)
-      (error "Bash permission UI unavailable"))
-    (mevedel-permission--prompt-async-bash
-     command command-class include-always
-     (mevedel-permission-queue--attribution-origin entry)
-     (lambda (outcome)
-       (mevedel-permission-queue--on-head-outcome entry outcome))
-     count entry)))
-
-(defun mevedel-permission-queue--render-eval (entry)
-  "Render an eval-kind permission ENTRY using the specialized Eval UI.
-Calls `mevedel-tool-exec-permission-prompt-eval' with the entry's
-`:expression'.  The UI returns one of `'allow-once' / `'deny-once' /
-`(feedback . TEXT)' / `'aborted'; the queue passes these through
-unchanged to the entry's callback (the eval slot adapter does the
-final mapping)."
-  (let ((expr (plist-get entry :expression))
-        (mode (plist-get entry :mode))
-        (preserve-ui (plist-get entry :preserve-ui))
-        (origin (mevedel-permission-queue--attribution-origin entry))
-        (count (length (mevedel-permission-queue--get
-                        (plist-get entry :session)))))
-    (mevedel-tool-exec-permission-prompt-eval
-     expr
-     (lambda (outcome)
-       (mevedel-permission-queue--on-head-outcome entry outcome))
-     origin count entry mode preserve-ui)))
-
-(defun mevedel-permission-queue--render-sandbox (entry)
-  "Render a child-execution permission ENTRY."
-  (unless (fboundp 'mevedel-permission--prompt-async-sandbox)
-    (error "Additional permission UI unavailable"))
-  (mevedel-permission--prompt-async-sandbox
-   (plist-get entry :tool-name)
-   (plist-get entry :detail)
-   (plist-get entry :justification)
-   (mevedel-permission-queue--attribution-origin entry)
-   (lambda (outcome)
-     (mevedel-permission-queue--on-head-outcome entry outcome))
-   (length (mevedel-permission-queue--get (plist-get entry :session)))
-   entry))
 
 (defun mevedel-permission-queue--on-head-outcome (entry outcome)
   "Settle ENTRY with OUTCOME, then advance ENTRY's session queue.
