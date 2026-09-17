@@ -277,7 +277,8 @@
            (concat "visible"
                    (mevedel-tool-render-data-format '(:kind probe)))))))
 
-(mevedel-deftest mevedel-tool-render-data--provider-advice ()
+(mevedel-deftest mevedel-tool-render-data--provider-advice
+  (:vars ((mevedel-tool-media--store nil) (gptel--known-backends nil)))
   ,test
   (test)
   :doc "strips render-data from :result before ORIG-FUN, restores after"
