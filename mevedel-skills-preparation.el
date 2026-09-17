@@ -379,9 +379,6 @@ shadow `$0'/`$1' shorthand."
 ;;
 ;;; Body injections
 
-(define-error 'mevedel-skills-shell-abort
-  "Skill body shell expansion failed; skill must abort.")
-
 (defun mevedel-skills-preparation--classify-injection
     (result marker kind reason callback)
   "Report RESULT for MARKER to CALLBACK as an injection outcome.
