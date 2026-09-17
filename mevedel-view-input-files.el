@@ -13,6 +13,7 @@
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
+(declare-function cl-remove "cl-seq" (cl-item cl-seq &rest cl-keys))
 
 ;; `dnd'
 (declare-function dnd-get-local-file-name "dnd"
@@ -154,16 +155,12 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
         (insert " "))
       (font-lock-flush (mevedel-view--input-start) (point-max)))))
 
-(defun mevedel-view--mentioned-file-paths (input)
-  "Return expanded @file paths mentioned in INPUT."
-  (mevedel-mentions-file-paths-in-text input))
-
 (defun mevedel-view--pop-dropped-file-grants-for-input (input session)
   "Consume SESSION's pending drag/drop grants referenced by INPUT."
   (when session
     (mevedel-session-pop-dropped-file-grants
      session
-     (mevedel-view--mentioned-file-paths input))))
+     (mevedel-mentions-file-paths-in-text input))))
 
 (defun mevedel-view--activate-dropped-file-grants (paths session)
   "Activate exact-file drag/drop grant PATHS for SESSION."
@@ -273,13 +270,10 @@ ARG is passed through from the interactive prefix."
 
 (defun mevedel-view--install-dnd ()
   "Install local file drag/drop support for the current view buffer."
-  (let (rest)
-    (dolist (entry dnd-protocol-alist)
-      (unless (eq (cdr entry) 'mevedel-view--dnd-handle-files)
-        (push entry rest)))
-    (setq-local dnd-protocol-alist
-                (cons '("^file:" . mevedel-view--dnd-handle-files)
-                      (nreverse rest)))))
+  (setq-local dnd-protocol-alist
+              (cons '("^file:" . mevedel-view--dnd-handle-files)
+                    (cl-remove #'mevedel-view--dnd-handle-files
+                               dnd-protocol-alist :key #'cdr))))
 
 (provide 'mevedel-view-input-files)
 ;;; mevedel-view-input-files.el ends here

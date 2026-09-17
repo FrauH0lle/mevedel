@@ -71,8 +71,11 @@
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-expand-user-input
                   "mevedel-mentions" (text session))
+(declare-function mevedel-mentions-file-paths-in-text
+                  "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
+(autoload 'mevedel-mentions-file-paths-in-text "mevedel-mentions")
 (autoload 'mevedel-mentions-file-token "mevedel-mentions")
 
 ;; `mevedel-prompt-submission'
@@ -214,8 +217,6 @@
 ;; `mevedel-view-input-files'
 (declare-function mevedel-view--activate-dropped-file-grants
                   "mevedel-view-input-files" (paths session))
-(declare-function mevedel-view--mentioned-file-paths
-                  "mevedel-view-input-files" (input))
 (declare-function mevedel-view--pop-dropped-file-grants-for-input
                   "mevedel-view-input-files" (input session))
 
@@ -493,7 +494,7 @@ or nil without a live session view."
 
 (defun mevedel-view--steering-validation-expansion (text session)
   "Expand TEXT for steering validation without committing its effects."
-  (let* ((paths (mevedel-view--mentioned-file-paths text))
+  (let* ((paths (mevedel-mentions-file-paths-in-text text))
          (pending (mevedel-session-dropped-file-grants session))
          (temporary-grants (cl-intersection paths pending :test #'equal))
          (active (mevedel-session-active-dropped-file-grants session)))
