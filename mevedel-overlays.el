@@ -1222,14 +1222,7 @@ Returns: t if A and B are congruent, nil otherwise."
 
 Optionally return only instructions of specific TYPE.  Also returns
 bodyless overlays located right before the point."
-  (cl-remove-if-not (lambda (ov)
-                      (and (overlay-get ov 'mevedel-instruction)
-                           (or (and type
-                                    (eq (overlay-get ov 'mevedel-instruction-type)
-                                        type))
-                               (null type))))
-                    (overlays-in point
-                                 (min (point-max) (1+ point)))))
+  (mevedel--instructions-in point (min (point-max) (1+ point)) type))
 
 (defun mevedel--instructions-in (start end &optional type)
   "Return a list of instructions in region delimited by START and END.
@@ -1411,7 +1404,6 @@ specified DIRECTIVE and tag QUERY."
                                                     (when directive
                                                       (overlay-get directive
                                                                    'mevedel-directive-prefix-tag-query))))))
-         (used-commentary-refs (make-hash-table))
          (toplevel-refs (mevedel--foreach-instruction instr
                           when (and (mevedel--referencep instr)
                                     (eq (mevedel--topmost-instruction instr 'reference pred)
@@ -1498,7 +1490,6 @@ specified DIRECTIVE and tag QUERY."
 
                           (let ((commentary (mevedel--commentary-text ref)))
                             (unless (string-empty-p commentary)
-                              (puthash ref t used-commentary-refs)
                               (format "\n\nCommentary:\n\n%s"
                                       (mevedel--markdown-enquote commentary))))))))))
       (list :summary (if reference-alist (buffer-string) "")
