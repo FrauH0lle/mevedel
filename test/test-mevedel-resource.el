@@ -631,6 +631,53 @@
       (mevedel-resource-prepare
        'read "agent://root/reviewer#/findings/1/path"
        (list :session session)))))
+  :doc "renders structured JSON selections without losing keys or string quoting"
+  (let* ((record (mevedel-agent-record--create
+                  :path "/root/reviewer" :role "reviewer" :activity 'idle
+                  :settled-outcome 'completed))
+         (session (mevedel-session--create)))
+    (mevedel-session--set-agent-registry
+     session (list (cons "/root/reviewer" record)))
+    (dolist (entry '(("{\"z\":2,\"a\":\"hello\"}" "" "{\"a\":\"hello\",\"z\":2}")
+                     ("[\"hello\",\"a\\\"b\",\"line\\nend\"]" ""
+                      "[\"hello\",\"a\\\"b\",\"line\\nend\"]")
+                     ("{\"nested\":{\"z\":[false,null,true,0,{},[]],\"a\":\"hello\"}}"
+                      "/nested" "{\"a\":\"hello\",\"z\":[false,null,true,0,{},[]]}")
+                     ("{\"nested\":[{\"z\":\"last\",\"a\":\"first\"}]}"
+                      "/nested" "[{\"a\":\"first\",\"z\":\"last\"}]")
+                     ("{\"z\":0,\"\":\"empty key\",\"a\\\"b\":1}" ""
+                      "{\"\":\"empty key\",\"a\\\"b\":1,\"z\":0}")))
+      (setf (mevedel-agent-record-settled-result record) (car entry))
+      (ert-info ((format "JSON selection %S" entry))
+        (should (equal (nth 2 entry)
+                       (plist-get
+                        (mevedel-resource-execute
+                         (mevedel-resource-prepare
+                          'read (concat "agent://root/reviewer#" (nth 1 entry))
+                          (list :session session)))
+                        :result))))))
+  :doc "keeps selected scalars readable and null distinct from missing"
+  (let* ((record (mevedel-agent-record--create
+                  :path "/root/reviewer" :role "reviewer" :activity 'idle
+                  :settled-result "[\"hello\\nworld\",\"\",null,false,true,0,3.5,{},[]]"
+                  :settled-outcome 'completed))
+         (session (mevedel-session--create)))
+    (mevedel-session--set-agent-registry
+     session (list (cons "/root/reviewer" record)))
+    (cl-loop for expected in '("hello\nworld" "" "null" "false" "true" "0" "3.5" "{}" "[]")
+             for index from 0 do
+             (should (equal expected
+                            (plist-get
+                             (mevedel-resource-execute
+                              (mevedel-resource-prepare
+                               'read (format "agent://root/reviewer#/%d" index)
+                               (list :session session)))
+                             :result))))
+    (should-error
+     (mevedel-resource-execute
+      (mevedel-resource-prepare
+       'read "agent://root/reviewer#/9" (list :session session)))
+     :type 'mevedel-resource-unavailable))
   :doc "lists retained agent paths with readiness"
   (let* ((record (mevedel-agent-record--create
                   :path "/root/reviewer" :role "reviewer" :activity 'idle
