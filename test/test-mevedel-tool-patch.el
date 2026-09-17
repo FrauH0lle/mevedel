@@ -20,6 +20,19 @@
             "helpers"))
 (require 'mevedel-session-persistence)
 
+(defun test-mevedel-tool-patch--read-text (path)
+  "Read decoded text from PATH for filesystem assertions."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (buffer-string)))
+
+(defun test-mevedel-tool-patch--read-bytes (path)
+  "Read literal bytes from PATH for coding and rollback assertions."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally path)
+    (buffer-string)))
+
 (defvar mevedel-session--read-only-mode nil)
 
 (mevedel-deftest mevedel-tool-patch-handler
@@ -79,25 +92,19 @@
        (lambda (value) (setq result value))
        (list :patch patch)))
     (should (equal "alpha\nnew\nomega\n"
-                   (with-temp-buffer
-                     (insert-file-contents update-path)
-                     (buffer-string))))
+                   (test-mevedel-tool-patch--read-text update-path)))
     (should (equal "created\n"
-                   (with-temp-buffer
-                     (insert-file-contents added-path)
-                     (buffer-string))))
+                   (test-mevedel-tool-patch--read-text added-path)))
     (should-not (file-exists-p delete-path))
     (should-not (file-exists-p move-path))
     (should (equal "after move\n"
-                   (with-temp-buffer
-                     (insert-file-contents moved-path)
-                     (buffer-string))))
+                   (test-mevedel-tool-patch--read-text moved-path)))
     (should (= #o751 (file-modes moved-path)))
     (should (equal "alpha\nnew\nomega\n"
                    (mevedel-file-state-content
                     (mevedel-file-cache-get
                      (mevedel-workspace-file-cache workspace) update-path))))
-    (should (string-match-p "Applied patch" (plist-get result :result)))
+    (should (string-prefix-p "Applied patch: 4 changes" (plist-get result :result)))
     (should (eq 'patch (plist-get (plist-get result :render-data) :kind))))
 
   :doc "Direct path authority auto-applies while the session remains in ask mode"
@@ -109,9 +116,7 @@
        (list :patch patch)))
     (should result)
     (should (equal "alpha\nnew\nomega\n"
-                   (with-temp-buffer
-                     (insert-file-contents update-path)
-                     (buffer-string))))))
+                   (test-mevedel-tool-patch--read-text update-path)))))
 
 (mevedel-deftest mevedel-tool-patch-resource-handler
   (:vars* ((root (file-name-as-directory
@@ -150,9 +155,7 @@
            (local-path (file-name-concat save-path "local" "notes" "new.txt")))
       (should save-path)
       (should (equal "created\n"
-                     (with-temp-buffer
-                       (insert-file-contents local-path)
-                       (buffer-string))))
+                     (test-mevedel-tool-patch--read-text local-path)))
       (should (string-match-p "work://notes/new.txt"
                               (plist-get result :result)))
       (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))))
@@ -538,9 +541,7 @@
           (should-not continued)
           (should (buffer-modified-p buffer))
           (should (equal "disk\n"
-                         (with-temp-buffer
-                           (insert-file-contents path)
-                           (buffer-string))))
+                         (test-mevedel-tool-patch--read-text path)))
           (should (equal "disk\nunsaved\n"
                          (with-current-buffer buffer (buffer-string)))))
       (when (buffer-live-p buffer)
@@ -600,10 +601,7 @@
              :type 'error))
           (should
            (equal (encode-coding-string original 'iso-latin-1)
-                  (with-temp-buffer
-                    (set-buffer-multibyte nil)
-                    (insert-file-contents-literally path)
-                    (buffer-string)))))
+                  (test-mevedel-tool-patch--read-bytes path))))
       (when (file-directory-p root) (delete-directory root t))))
 
   :doc "Synchronizes a buffer visiting the same file through another name"
@@ -1312,10 +1310,7 @@
             (mevedel-tool-patch-commit changes)
             (should
              (equal (encode-coding-string expected 'iso-latin-1)
-                    (with-temp-buffer
-                      (set-buffer-multibyte nil)
-                      (insert-file-contents-literally path)
-                      (buffer-string)))))
+                    (test-mevedel-tool-patch--read-bytes path))))
             (setq changes
                   (mevedel-tool-patch-planned-changes
                    (list :operations
@@ -1325,10 +1320,7 @@
             (should-not (file-exists-p path))
             (should
              (equal (encode-coding-string expected 'iso-latin-1)
-                    (with-temp-buffer
-                      (set-buffer-multibyte nil)
-                      (insert-file-contents-literally destination)
-                      (buffer-string))))))
+                    (test-mevedel-tool-patch--read-bytes destination)))))
       (when (file-exists-p path) (delete-file path))
       (when (file-exists-p destination) (delete-file destination))))
 
@@ -1362,10 +1354,7 @@
           (mevedel-tool-patch--write-file path bytes nil t)
           (should
            (equal bytes
-                  (with-temp-buffer
-                    (set-buffer-multibyte nil)
-                    (insert-file-contents-literally path)
-                    (buffer-string)))))
+                  (test-mevedel-tool-patch--read-bytes path))))
       (when (file-exists-p path) (delete-file path)))))
 
 (mevedel-deftest mevedel-tool-patch--restore-snapshots
@@ -1380,10 +1369,7 @@
             (mevedel-tool-patch--restore-snapshots snapshots (list (mevedel-tool-patch--snapshot path)))
             (should
              (equal bytes
-                    (with-temp-buffer
-                      (set-buffer-multibyte nil)
-                      (insert-file-contents-literally path)
-                      (buffer-string))))))
+                    (test-mevedel-tool-patch--read-bytes path)))))
       (delete-file path)))
 
   :doc "Returns every failed restoration in snapshot order"
@@ -1436,20 +1422,6 @@
           (should called)
           (should (equal "x" (mevedel-tool-patch--read-file path))))
       (delete-file path))))
-
-(mevedel-deftest mevedel-tool-patch--selected-count
-  (:doc "Counts Update hunks and whole operations as user changes") ,test (test)
-  (should (= 2 (mevedel-tool-patch--selected-count
-                '(:operations ((:kind update
-                                :hunks ((:selected t :diff-lines ("-x" "+y"))
-                                        (:selected nil :diff-lines ("-a" "+b"))))
-                               (:kind move :selected t))))))
-  :doc "Locator hunks are not changes"
-  (should (= 1 (mevedel-tool-patch--selected-count
-                '(:operations ((:kind update
-                                :hunks ((:selected t :diff-lines (" kept"))
-                                        (:selected t
-                                         :diff-lines ("-x" "+y"))))))))))
 
 (mevedel-deftest mevedel-tool-patch--selected-file-data
   (:doc "Builds a selected-only Update file block") ,test (test)
@@ -1607,7 +1579,19 @@
   (should (equal '(:selected 0 :total 0 :added 0 :deleted 0
                    :files-selected 0 :comments 1)
                  (mevedel-tool-patch-proposal-stats
-                  '(:feedback "split it" :operations nil)))))
+                  '(:feedback "split it" :operations nil))))
+  :doc "Counts changing Update hunks and whole operations, excluding locators"
+  (dolist (entry
+           '((2 :operations ((:kind update
+                              :hunks ((:selected t :diff-lines ("-x" "+y"))
+                                      (:selected nil :diff-lines ("-a" "+b"))))
+                             (:kind move :selected t)))
+             (1 :operations ((:kind update
+                              :hunks ((:selected t :diff-lines (" kept"))
+                                      (:selected t :diff-lines ("-x" "+y"))))))))
+    (should (= (car entry)
+               (plist-get (mevedel-tool-patch-proposal-stats (cdr entry))
+                          :selected)))))
 
 (mevedel-deftest mevedel-tool-patch-status
   (:doc "Maps operation kinds to display status") ,test (test)
