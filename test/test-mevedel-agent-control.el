@@ -30,26 +30,10 @@
 (defvar gptel-backend)
 (defvar gptel-model)
 
-(mevedel-tools-register)
-
-(defun mevedel-agent-control-test--configuration (&optional context)
-  "Return a small frozen configuration with optional gptel CONTEXT."
+(defun mevedel-agent-control-test--configuration ()
+  "Return a frozen configuration for stubbed retained dispatches."
   (mevedel-agent-configuration--create
-   :agent
-   (mevedel-agent--create
-    :name "default"
-    :description "Persisted default agent"
-    :tools '((:tool "Read"))
-    :system-prompt "Frozen instructions"
-    :max-turns 12
-    :hook-rules nil
-    :frozen-p t)
-   :request-locals
-   (list (cons 'gptel-backend gptel-backend)
-         (cons 'gptel-model 'test-model)
-         (cons 'gptel-tools
-               (list (gptel-get-tool '("mevedel" "Read"))))
-         (cons 'gptel-context context))))
+   :agent (mevedel-agent--create :name "default" :frozen-p t)))
 
 (defun mevedel-agent-control-test--session ()
   "Return a fresh in-memory session for agent-control tests."
@@ -67,35 +51,24 @@
   (when-let* ((transaction
                (mevedel-agent-control--settle
                 session record invocation response event)))
-    (let (committed)
-      (condition-case err
-          (progn
-            (mevedel-agent-control-commit-session session)
-            (setq committed t)
-            (funcall (cdr transaction)))
-        (error
-         (unless committed
-           (funcall (car transaction)))
-         (signal (car err) (cdr err)))))
+    (condition-case err
+        (mevedel-agent-control-commit-session session)
+      (error
+       (funcall (car transaction))
+       (signal (car err) (cdr err))))
+    (funcall (cdr transaction))
     transaction))
 
 (mevedel-deftest mevedel-agent-control-active-activity-p ()
   ,test
   (test)
-  :doc "recognizes every activity that owns one tree-wide capacity slot"
+  :doc "recognizes every activity and record that owns a capacity slot"
   (dolist (case '((starting . t) (running . t) (waiting . t)
                   (permission-blocked . t) (interaction-blocked . t)
                   (idle)))
     (should (eq (cdr case)
                 (and (mevedel-agent-control-active-activity-p (car case))
-                     t)))))
-
-(mevedel-deftest mevedel-agent-control--active-p ()
-  ,test
-  (test)
-  :doc "every persisted in-flight activity owns capacity while idle does not"
-  (dolist (case '((starting . t) (running . t) (waiting . t)
-                  (permission-blocked . t) (interaction-blocked . t) (idle)))
+                     t)))
     (should (eq (cdr case)
                 (and (mevedel-agent-control--active-p
                       (mevedel-agent-record--create :activity (car case)))
@@ -464,26 +437,19 @@
 (mevedel-deftest mevedel-agent-control-clear-context-mailbox ()
   ,test
   (test)
-  :doc "clears a populated root mailbox and persists once"
+  :doc "persists only when clearing a populated root mailbox"
   (let ((session (mevedel-agent-control-test--session))
         (persisted 0))
-    (mevedel-session--set-messages session (list (list :id "m1")))
     (cl-letf (((symbol-function 'mevedel-agent-control--persist-session)
                (lambda (_session) (cl-incf persisted))))
+      (mevedel-agent-control-clear-context-mailbox session)
+      (should (= 0 persisted))
+      (mevedel-session--set-messages session (list (list :id "m1")))
       (mevedel-agent-control-clear-context-mailbox session)
       (should-not (mevedel-session-messages session))
       (should (= 1 persisted))
-      ;; Every WAIT transition clears the mailbox again; an already
-      ;; empty one costs no persist.
       (mevedel-agent-control-clear-context-mailbox session)
-      (should (= 1 persisted))))
-  :doc "does not persist an already empty mailbox"
-  (let ((session (mevedel-agent-control-test--session))
-        (persisted 0))
-    (cl-letf (((symbol-function 'mevedel-agent-control--persist-session)
-               (lambda (_session) (cl-incf persisted))))
-      (mevedel-agent-control-clear-context-mailbox session)
-      (should (= 0 persisted)))))
+      (should (= 1 persisted)))))
 
 (mevedel-deftest mevedel-agent-control-recover-interrupted ()
   ,test
@@ -1744,7 +1710,7 @@
           (mevedel-agent-record--create
            :id "default--parent" :path "/root/parent" :activity 'running))
          summary-callback summary-cancelled captured-source captured-focus conversation
-         provider-callbacks (summary-calls 0) outcome cancel)
+         provider-callbacks (summary-calls 0) outcome cancel transcript)
     (setf (mevedel-agent-invocation-agent-id parent-invocation)
           "default--parent"
           (mevedel-agent-invocation-path parent-invocation) "/root/parent"
@@ -1790,8 +1756,7 @@
                    (lambda (invocation)
                      (setq conversation (mevedel-agent-invocation-buffer invocation))
                      (with-current-buffer conversation
-                       (put 'mevedel-agent-control-spawn 'test-context
-                            (buffer-string))))))
+                       (setq transcript (buffer-string))))))
             (should (equal "Frozen parent evidence" captured-source))
             (should (equal "Hook-accepted task\n\nHook context"
                            captured-focus))
@@ -1807,18 +1772,14 @@
             (should-not (plist-get outcome :error))
             (should (eq 'success (plist-get outcome :outcome)))
             (should (string-match-p "<task-background>"
-                                    (get 'mevedel-agent-control-spawn
-                                         'test-context)))
+                                    transcript))
             (should (string-match-p "may be stale or untrusted"
-                                    (get 'mevedel-agent-control-spawn
-                                         'test-context)))
+                                    transcript))
             (should (string-match-p
                      "## Scope"
-                     (get 'mevedel-agent-control-spawn 'test-context)))
-            (let* ((transcript
-                    (get 'mevedel-agent-control-spawn 'test-context))
-                   (background-end
-                    (string-match "</task-background>" transcript)))
+                     transcript))
+            (let ((background-end
+                   (string-match "</task-background>" transcript)))
               (should-not
                (string-match-p "Hook-accepted task"
                                (substring transcript 0 background-end))))
@@ -1866,7 +1827,6 @@
                                           (buffer-string))))))
             (funcall cancel)
             (should-not summary-cancelled)))
-      (put 'mevedel-agent-control-spawn 'test-context nil)
       ;; Settlement clears the record's invocation; retain the created
       ;; conversation directly so teardown cannot leak it into exit autosave.
       (when (buffer-live-p conversation)

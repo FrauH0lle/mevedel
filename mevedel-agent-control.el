@@ -538,23 +538,19 @@ Return the caller path when suspended, and nil after an immediate release."
     (session recipient record &optional wake-reason)
   "Durably queue RECORD for RECIPIENT, then wake a matching wait."
   (let ((previous
-         (mevedel-agent-control--mailbox-queue session recipient))
-        committed)
+         (mevedel-agent-control--mailbox-queue session recipient)))
     (mevedel-agent-control--set-mailbox-queue
      session recipient (cons record previous))
     (condition-case err
-        (progn
-          (mevedel-agent-control-commit-session session)
-          (setq committed t)
-          (unless mevedel-agent-control-suppress-persistence
-            (mevedel-agent-control--wake
-             session recipient (or wake-reason 'mailbox)))
-          record)
+        (mevedel-agent-control-commit-session session)
       (error
-       (unless committed
-         (mevedel-agent-control--set-mailbox-queue
-          session recipient previous))
-       (signal (car err) (cdr err))))))
+       (mevedel-agent-control--set-mailbox-queue
+        session recipient previous)
+       (signal (car err) (cdr err))))
+    (unless mevedel-agent-control-suppress-persistence
+      (mevedel-agent-control--wake
+       session recipient (or wake-reason 'mailbox)))
+    record))
 
 (defun mevedel-agent-control-steer-user
     (session message &optional before-wake metadata)
@@ -673,9 +669,8 @@ unregistered child is a normal transient state, not an error."
                (buffer-local-value 'mevedel--agent-invocation buffer)))
          (partial
           (and identity
-               (progn
-                 (ignore-errors
-                   (mevedel-agent-conversation-final-response identity)))))
+               (ignore-errors
+                 (mevedel-agent-conversation-final-response identity))))
          (location (mevedel-agent-record-conversation-location record)))
     (concat
      "Agent turn was interrupted by session recovery."
