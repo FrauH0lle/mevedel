@@ -21,6 +21,14 @@
                byte-compile-current-file))
           "helpers"))
 
+(defmacro test-mevedel-tool-fs-search--with-directory (&rest body)
+  "Run BODY with tmp-dir a fresh directory and result initially nil."
+  (declare (indent 0) (debug t))
+  `(let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+          (result nil))
+     (unwind-protect (progn ,@body)
+       (delete-directory tmp-dir t))))
+
 (mevedel-deftest mevedel-tool-fs-search--scrub-resource-search-output ()
   ,test
   (test)
@@ -502,35 +510,27 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                                      :timed-out-p nil :output-limit-p t)))))
       (delete-directory tmp-dir t)))
   :doc "finds files matching pattern"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "foo.el")
-            (insert "content"))
-          (with-temp-file (file-name-concat tmp-dir "bar.el")
-            (insert "content"))
-          (with-temp-file (file-name-concat tmp-dir "baz.txt")
-            (insert "content"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-glob
-                 (list :pattern "*.el" :path tmp-dir)))
-          (should (string-match-p "foo\\.el" result))
-          (should (string-match-p "bar\\.el" result))
-          (should-not (string-match-p "baz\\.txt" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "foo.el")
+      (insert "content"))
+    (with-temp-file (file-name-concat tmp-dir "bar.el")
+      (insert "content"))
+    (with-temp-file (file-name-concat tmp-dir "baz.txt")
+      (insert "content"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-glob
+           (list :pattern "*.el" :path tmp-dir)))
+    (should (string-match-p "foo\\.el" result))
+    (should (string-match-p "bar\\.el" result))
+    (should-not (string-match-p "baz\\.txt" result)))
   :doc "returns message when no files match"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-glob
-                 (list :pattern "*.xyz" :path tmp-dir)))
-          (should (string-match-p "No files found" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-glob
+           (list :pattern "*.xyz" :path tmp-dir)))
+    (should (string-match-p "No files found" result)))
   :doc "errors on empty pattern"
   (should-error
    (mevedel-tool-fs-search-glob #'ignore (list :pattern ""))
@@ -555,20 +555,16 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
           (should (string-match-p "test\\.el" result)))
       (delete-directory tmp-dir t)))
   :doc "limits output to 100 entries by default"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (dotimes (i 101)
-            (with-temp-file (file-name-concat tmp-dir (format "f%03d.el" i))
-              (insert "content")))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-glob
-                 (list :pattern "*.el" :path tmp-dir)))
-          (should (= 101 (length (split-string result "\n" t))))
-          (should (string-match-p "Results truncated (limit: 100)" result)))
-      (delete-directory tmp-dir t))))
+  (test-mevedel-tool-fs-search--with-directory
+    (dotimes (i 101)
+      (with-temp-file (file-name-concat tmp-dir (format "f%03d.el" i))
+        (insert "content")))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-glob
+           (list :pattern "*.el" :path tmp-dir)))
+    (should (= 101 (length (split-string result "\n" t))))
+    (should (string-match-p "Results truncated (limit: 100)" result))))
 
 ;;
 ;;; Grep handler
@@ -815,104 +811,80 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                         1))))
       (delete-directory tmp-dir t)))
   :doc "files_with_matches: returns matching file paths"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "match.el")
-            (insert "hello world\n"))
-          (with-temp-file (file-name-concat tmp-dir "nomatch.el")
-            (insert "goodbye\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "hello"
-                       :path tmp-dir)))
-          (should (string-match-p "match\\.el" result))
-          (should-not (string-match-p "nomatch\\.el" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "match.el")
+      (insert "hello world\n"))
+    (with-temp-file (file-name-concat tmp-dir "nomatch.el")
+      (insert "goodbye\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "hello"
+                 :path tmp-dir)))
+    (should (string-match-p "match\\.el" result))
+    (should-not (string-match-p "nomatch\\.el" result)))
   :doc "content mode: returns matching lines with headings"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "code.el")
-            (insert "line one\nfind me\nline three\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "find me"
-                       :path tmp-dir
-                       :output_mode "content")))
-          (should (string-match-p "2:find me" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "code.el")
+      (insert "line one\nfind me\nline three\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "find me"
+                 :path tmp-dir
+                 :output_mode "content")))
+    (should (string-match-p "2:find me" result)))
   :doc "count mode: returns match count"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "data.txt")
-            (insert "foo\nbar\nfoo\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "foo"
-                       :path tmp-dir
-                       :output_mode "count")))
-          (should (string-match-p ":2" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "data.txt")
+      (insert "foo\nbar\nfoo\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "foo"
+                 :path tmp-dir
+                 :output_mode "count")))
+    (should (string-match-p ":2" result)))
   :doc "returns no-matches message for exit code 1"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "empty.txt")
-            (insert "nothing here\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "zzzznotfound"
-                       :path tmp-dir)))
-          (should (string-match-p "No matches found" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "empty.txt")
+      (insert "nothing here\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "zzzznotfound"
+                 :path tmp-dir)))
+    (should (string-match-p "No matches found" result)))
   :doc "errors on non-readable path"
   (should-error
    (mevedel-tool-fs-search-grep #'ignore (list :pattern "test"
                                           :path "/nonexistent/dir"))
    :type 'error)
   :doc "glob filter restricts file types"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "code.el")
-            (insert "target\n"))
-          (with-temp-file (file-name-concat tmp-dir "notes.txt")
-            (insert "target\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "target"
-                       :path tmp-dir
-                       :glob "*.el")))
-          (should (string-match-p "code\\.el" result))
-          (should-not (string-match-p "notes\\.txt" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "code.el")
+      (insert "target\n"))
+    (with-temp-file (file-name-concat tmp-dir "notes.txt")
+      (insert "target\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "target"
+                 :path tmp-dir
+                 :glob "*.el")))
+    (should (string-match-p "code\\.el" result))
+    (should-not (string-match-p "notes\\.txt" result)))
   :doc "case insensitive search"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "test.txt")
-            (insert "Hello World\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "hello"
-                       :path tmp-dir
-                       :-i t)))
-          (should (string-match-p "test\\.txt" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "test.txt")
+      (insert "Hello World\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "hello"
+                 :path tmp-dir
+                 :-i t)))
+    (should (string-match-p "test\\.txt" result)))
   :doc "rejects a negative head_limit and offset"
   ;; A negative head_limit deleted every match and reported "truncated";
   ;; a negative offset was silently ignored.
@@ -929,57 +901,49 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
      :type 'error))
   :doc "reports an offset past the last result"
   ;; An empty success is indistinguishable from no matches.
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (dotimes (i 3)
-            (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
-              (insert "match\n")))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "match"
-                       :path tmp-dir
-                       :offset 99)))
-          (should-not (string-empty-p result))
-          (should (string-match-p "after the last" result))
-          (should (string-prefix-p "Error:" result))
-          ;; A head limit alongside must not append a contradictory
-          ;; truncation notice to the answer.
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "match"
-                       :path tmp-dir
-                       :offset 99
-                       :head_limit 1)))
-          (should (string-match-p "after the last" result))
-          (should-not (string-match-p "Results truncated" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (dotimes (i 3)
+      (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
+        (insert "match\n")))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "match"
+                 :path tmp-dir
+                 :offset 99)))
+    (should-not (string-empty-p result))
+    (should (string-match-p "after the last" result))
+    (should (string-prefix-p "Error:" result))
+    ;; A head limit alongside must not append a contradictory
+    ;; truncation notice to the answer.
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "match"
+                 :path tmp-dir
+                 :offset 99
+                 :head_limit 1)))
+    (should (string-match-p "after the last" result))
+    (should-not (string-match-p "Results truncated" result)))
   :doc "head_limit truncates output"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (dotimes (i 10)
-            (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
-              (insert "match\n")))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "match"
-                       :path tmp-dir
-                       :head_limit 3)))
-          (should (string-match-p "Results truncated" result))
-          ;; Count non-empty, non-truncation lines
-          (let ((lines (seq-filter
-                        (lambda (l)
-                          (and (not (string-empty-p l))
-                               (not (string-match-p "truncated" l))))
-                        (split-string result "\n"))))
-            (should (= 3 (length lines)))))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (dotimes (i 10)
+      (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
+        (insert "match\n")))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "match"
+                 :path tmp-dir
+                 :head_limit 3)))
+    (should (string-match-p "Results truncated" result))
+    ;; Count non-empty, non-truncation lines
+    (let ((lines (seq-filter
+                  (lambda (l)
+                    (and (not (string-empty-p l))
+                         (not (string-match-p "truncated" l))))
+                  (split-string result "\n"))))
+      (should (= 3 (length lines)))))
   :doc "offset skips initial results"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (result-full nil)
@@ -1009,39 +973,31 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
             (should (= (- (length full-lines) 2) (length offset-lines)))))
       (delete-directory tmp-dir t)))
   :doc "context lines in content mode"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "ctx.txt")
-            (insert "before\ntarget\nafter\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "target"
-                       :path tmp-dir
-                       :output_mode "content"
-                       :context 1)))
-          (should (string-match-p "before" result))
-          (should (string-match-p "target" result))
-          (should (string-match-p "after" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "ctx.txt")
+      (insert "before\ntarget\nafter\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "target"
+                 :path tmp-dir
+                 :output_mode "content"
+                 :context 1)))
+    (should (string-match-p "before" result))
+    (should (string-match-p "target" result))
+    (should (string-match-p "after" result)))
   :doc "multiline mode matches across lines"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "multi.txt")
-            (insert "start\nend\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "start.*end"
-                       :path tmp-dir
-                       :multiline t
-                       :output_mode "content")))
-          (should (string-match-p "start" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "multi.txt")
+      (insert "start\nend\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "start.*end"
+                 :path tmp-dir
+                 :multiline t
+                 :output_mode "content")))
+    (should (string-match-p "start" result)))
   :doc "single file search"
   (let* ((tmp (make-temp-file "mevedel-test-"))
          (result nil))
@@ -1059,56 +1015,44 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
       (delete-file tmp)))
 
   :doc "empty :glob string is treated as nil, not passed to rg"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "code.el")
-            (insert "target\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "target"
-                       :path tmp-dir
-                       :glob "")))
-          (should (string-match-p "code\\.el" result))
-          (should-not (string-match-p "Error" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "code.el")
+      (insert "target\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "target"
+                 :path tmp-dir
+                 :glob "")))
+    (should (string-match-p "code\\.el" result))
+    (should-not (string-match-p "Error" result)))
 
   :doc "empty :type string is treated as nil, not passed to rg"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "code.el")
-            (insert "target\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "target"
-                       :path tmp-dir
-                       :type "")))
-          (should (string-match-p "code\\.el" result))
-          (should-not (string-match-p "unrecognized file type" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "code.el")
+      (insert "target\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "target"
+                 :path tmp-dir
+                 :type "")))
+    (should (string-match-p "code\\.el" result))
+    (should-not (string-match-p "unrecognized file type" result)))
 
   :doc "empty :output_mode falls back to default files_with_matches"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "m.el")
-            (insert "target\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "target"
-                       :path tmp-dir
-                       :output_mode "")))
-          ;; files_with_matches: prints the path, not the line content.
-          (should (string-match-p "m\\.el" result))
-          (should-not (string-match-p "target" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "m.el")
+      (insert "target\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "target"
+                 :path tmp-dir
+                 :output_mode "")))
+    ;; files_with_matches: prints the path, not the line content.
+    (should (string-match-p "m\\.el" result))
+    (should-not (string-match-p "target" result)))
 
   :doc "empty :path falls back to default current directory"
   (let* ((default-directory (make-temp-file "mevedel-test-" t))
@@ -1126,43 +1070,35 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
       (delete-directory default-directory t)))
 
   :doc ":json-false context args are ignored, not passed as -A%d"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "c.el")
-            (insert "line one\nfind me\nline three\n"))
-          ;; Without the integer guard these would crash `format'.
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "find me"
-                       :path tmp-dir
-                       :output_mode "content"
-                       :-A :json-false
-                       :-B :json-false
-                       :-C :json-false)))
-          (should (string-match-p "find me" result))
-          (should-not (string-match-p "Error" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "c.el")
+      (insert "line one\nfind me\nline three\n"))
+    ;; Without the integer guard these would crash `format'.
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "find me"
+                 :path tmp-dir
+                 :output_mode "content"
+                 :-A :json-false
+                 :-B :json-false
+                 :-C :json-false)))
+    (should (string-match-p "find me" result))
+    (should-not (string-match-p "Error" result)))
 
   :doc "non-integer :context is ignored"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file (file-name-concat tmp-dir "q.el")
-            (insert "hit\n"))
-          (setq result
-                (test-mevedel-tool-fs-search--await-callback
-                 #'mevedel-tool-fs-search-grep
-                 (list :pattern "hit"
-                       :path tmp-dir
-                       :output_mode "content"
-                       :context "5")))
-          (should (string-match-p "hit" result))
-          (should-not (string-match-p "Error" result)))
-      (delete-directory tmp-dir t)))
+  (test-mevedel-tool-fs-search--with-directory
+    (with-temp-file (file-name-concat tmp-dir "q.el")
+      (insert "hit\n"))
+    (setq result
+          (test-mevedel-tool-fs-search--await-callback
+           #'mevedel-tool-fs-search-grep
+           (list :pattern "hit"
+                 :path tmp-dir
+                 :output_mode "content"
+                 :context "5")))
+    (should (string-match-p "hit" result))
+    (should-not (string-match-p "Error" result)))
 
   :doc "searches session and shared work with real helpers and address-only results"
   (let* ((root (make-temp-file "mevedel-work-search-" t))
@@ -1187,6 +1123,52 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
               (should (string-search "work://plan.md" result))
               (should (string-search "work://shared/decision.md" result))
               (should-not (string-search root result)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs-search/resource-callback ()
+  ,test
+  (test)
+  :doc "returns cancellation unchanged and rewrites delayed results without mutating arguments"
+  (let* ((root (make-temp-file "mevedel-search-callback-" t))
+         (session (mevedel-session--create :save-path root))
+         (artifacts (file-name-concat root "tool-results"))
+         (file (file-name-concat artifacts "hit.txt"))
+         (address "artifact://hit.txt"))
+    (unwind-protect
+        (progn
+          (make-directory artifacts)
+          (with-temp-file file (insert "needle\n"))
+          (dolist (mode '(glob "files_with_matches" "content" "count"))
+            (let* ((operation (if (eq mode 'glob) 'glob 'grep))
+                   (handler (if (eq operation 'glob)
+                                #'mevedel-tool-fs-search-glob
+                              #'mevedel-tool-fs-search-grep))
+                   (args (list :path address :pattern "*" :output_mode mode))
+                   (original (copy-sequence args))
+                   (attempt (mevedel-resource-prepare operation address
+                                                      (list :session session)))
+                   (mevedel-resource-current-attempts (list (cons address attempt)))
+                   (cancel (lambda ()))
+                   deliver result)
+              (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                         (lambda (callback &rest _)
+                           (should (equal address mevedel-tool-fs-search--resource-address))
+                           (setq deliver callback)
+                           cancel)))
+                (should (eq cancel (funcall handler (lambda (value) (setq result value)) args))))
+              (should-not result)
+              (should (equal original args))
+              (should-not mevedel-tool-fs-search--resource-address)
+              (funcall deliver
+                       (list :exit-code 0 :output
+                             (concat file "\0" (pcase mode
+                                                   ("content" "1:needle\n")
+                                                   ("count" "1\n")))))
+              (should (equal (concat "artifact://hit.txt"
+                                     (pcase mode
+                                       ("content" "\n1:needle\n")
+                                       ("count" ":1\n")))
+                             (plist-get result :result))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-fs-search/artifact-discovery ()
