@@ -90,8 +90,7 @@ is display metadata only; it never replaces the provider's call identity."
     (cons (mevedel-tool-render-data--plain (car value))
           (mevedel-tool-render-data--plain (cdr value))))
    ((vectorp value)
-    (apply #'vector
-           (mapcar #'mevedel-tool-render-data--plain value)))
+    (vconcat (mapcar #'mevedel-tool-render-data--plain value)))
    (t value)))
 
 (defun mevedel-tool-render-data-size (data)
@@ -113,7 +112,6 @@ the single chokepoint where tool result strings become the LLM-bound
 API message, without touching the callback that drives chat-buffer
 display."
   (let ((data (mevedel-tool-render-data--plain render-data)))
-    (setq data (copy-sequence data))
     (if tool-use-id
         (setq data
               (plist-put data :mevedel-tool-use-id tool-use-id))
