@@ -781,22 +781,14 @@ Routes through the lifecycle-aware permission transition path."
        (mevedel-cmd--skills--help
         mevedel--session
         (mevedel-cmd--skills--require-name name "help")))
-      ("enable"
-       (setq name (mevedel-cmd--skills--require-name name "enable"))
+      ((or "enable" "disable")
+       (setq name (mevedel-cmd--skills--require-name name action))
        (mevedel-skills-set-enabled
         (or (mevedel-session-get-skill mevedel--session name)
             (user-error "Unknown skill: %s" name))
-        t mevedel--session)
+        (equal action "enable") mevedel--session)
        (mevedel-view-refresh-associated-input-prompt)
-       (message "Skill %s enabled" name))
-      ("disable"
-       (setq name (mevedel-cmd--skills--require-name name "disable"))
-       (mevedel-skills-set-enabled
-        (or (mevedel-session-get-skill mevedel--session name)
-            (user-error "Unknown skill: %s" name))
-        nil mevedel--session)
-       (mevedel-view-refresh-associated-input-prompt)
-       (message "Skill %s disabled" name))
+       (message "Skill %s %sd" name action))
       (_
        (message "Usage: /skills [list|help NAME|enable NAME|disable NAME]")))))
 
@@ -1053,14 +1045,6 @@ When INLINE-ONLY is non-nil, return only inline-context skills."
                 (eq (mevedel-skill-context skill) 'inline))))
      (mevedel-session-skills session))))
 
-(defun mevedel-skills--slash-candidates (buffer session local-commands)
-  "Return fresh slash command completion candidates.
-BUFFER and SESSION are accepted for call-site symmetry with skill
-completion.  LOCAL-COMMANDS is the slash command alist captured when
-the CAPF table was created."
-  (ignore buffer session)
-  (mapcar #'car local-commands))
-
 (defun mevedel-skills--skill-candidates
     (buffer session &optional inline-only)
   "Return fresh `$' skill completion candidates for BUFFER and SESSION.
@@ -1082,13 +1066,12 @@ When INLINE-ONLY is non-nil, include only inline-context skills."
            :key #'mevedel-skill-name
            :test #'equal))
 
-(defun mevedel-skills--slash-completion-table
-    (buffer session local-commands)
-  "Return dynamic completion table for BUFFER, SESSION, and LOCAL-COMMANDS."
+(defun mevedel-skills--slash-completion-table (local-commands)
+  "Return a dynamic completion table for LOCAL-COMMANDS."
   (lambda (string pred action)
     (complete-with-action
      action
-     (mevedel-skills--slash-candidates buffer session local-commands)
+     (mapcar #'car local-commands)
      string pred)))
 
 (defun mevedel-skills--skill-completion-table
@@ -1106,8 +1089,7 @@ When INLINE-ONLY is non-nil, include only inline-context skills."
   (or (cdr (assoc name mevedel-skills--slash-command-annotations))
       " [command]"))
 
-(defun mevedel-skills--slash-annotation
-    (name _buffer _session local-commands)
+(defun mevedel-skills--slash-annotation (name local-commands)
   "Return completion annotation for slash command NAME.
 LOCAL-COMMANDS is the slash-command alist."
   (and (assoc name local-commands)
@@ -1438,13 +1420,12 @@ line when called from the view buffer."
         ('root
          (list (plist-get slash-context :start)
                (plist-get slash-context :end)
-               (mevedel-skills--slash-completion-table
-                buffer session local-commands)
+               (mevedel-skills--slash-completion-table local-commands)
                :exclusive 'no
                :annotation-function
                (lambda (name)
                  (mevedel-skills--slash-annotation
-                  name buffer session local-commands))
+                  name local-commands))
                :exit-function
                #'mevedel-skills--slash-root-exit-function))
         ('argument
