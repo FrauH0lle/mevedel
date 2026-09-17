@@ -83,10 +83,10 @@
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
                   (entry &optional session))
-(declare-function mevedel-permission-queue--current-session
-                  "mevedel-permission-queue" ())
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission--enqueue "mevedel-permission-queue")
+(autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
 
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-persistence-load-resource-grants
@@ -129,6 +129,10 @@
 (declare-function mevedel-permission-decision-raw-outcome
                   "mevedel-permissions" (decision))
 
+;; `mevedel-queue'
+(declare-function mevedel-queue--current-session "mevedel-queue" ())
+(autoload 'mevedel-queue--current-session "mevedel-queue")
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target
@@ -164,12 +168,6 @@
 (defvar mevedel-tool-exec-permission-approved-resources nil
   "Prompt-selected resources bound only while the authorized handler starts.
 The pipeline supplies these invocation-only capabilities, never model input.")
-
-(defun mevedel-tool-exec-permission-session ()
-  "Return the session visible to a Bash/Eval permission adapter."
-  (require 'mevedel-permission-queue)
-  (or (and (boundp 'mevedel--session) mevedel--session)
-      (mevedel-permission-queue--current-session)))
 
 (defun mevedel-tool-exec-permission-current-context
     (tool-name args &optional session)
@@ -208,7 +206,7 @@ The pipeline supplies these invocation-only capabilities, never model input.")
     (unless (plist-member context :session)
       (setq context
             (plist-put context :session
-                       (mevedel-tool-exec-permission-session))))
+                       (mevedel-queue--current-session))))
     (unless (plist-member context :execution-directory)
       (setq context
             (plist-put context :execution-directory
@@ -335,7 +333,7 @@ Fall back to direct queue admission for callers outside the tool pipeline."
   "Persist TOOL-NAME OUTCOME via VIA from PERMISSION-CONTEXT and PROPS."
   (when-let* ((session
                (or (plist-get permission-context :session)
-                   (mevedel-tool-exec-permission-session))))
+                   (mevedel-queue--current-session))))
     (let* ((origin (mevedel-tool-exec-permission--permission-origin permission-context))
            (mode (mevedel-bash-policy-effective-permission-mode
                   permission-context))
@@ -1199,8 +1197,7 @@ an optional guardian review fills the card while it waits.  CONT receives
          (metadata-p (plist-get input :permission-decision-metadata))
          (source-buffer (current-buffer))
          (session (or (plist-get permission-context :session)
-                      (and (boundp 'mevedel--session) mevedel--session)
-                      (mevedel-permission-queue--current-session)))
+                      (mevedel-queue--current-session)))
          (guardian-pending t)
          (workspace (or (plist-get permission-context :workspace)
                         (and session (mevedel-session-workspace session))))
@@ -1569,7 +1566,7 @@ CONT follows the async permission slot contract."
              (permission-context (plist-get input :permission-context))
              (metadata-p (plist-get input :permission-decision-metadata))
              (session (or (plist-get permission-context :session)
-                          (mevedel-tool-exec-permission-session)))
+                          (mevedel-queue--current-session)))
              (target (and session
                           (mevedel-session-execution-target session))))
         (cond

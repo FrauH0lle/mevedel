@@ -112,28 +112,20 @@ docs/permissions.md."
   "Entry identity table for exactly-once permission settlement.")
 
 
-(defun mevedel-permission-queue--current-session ()
-  "Resolve the session struct that owns the permission queue.
-
-Reads `mevedel--session' from the current buffer, falling back
-to `mevedel--data-buffer''s buffer-local binding when present.
-View buffers expose the data buffer reference but not the session struct."
-  (mevedel-queue--current-session))
-
 (defun mevedel-permission-queue--get (&optional session)
   "Return SESSION's permission-queue slot, or nil.
 SESSION defaults to the current session resolved via
-`mevedel-permission-queue--current-session'.  Caller must `setf'
+`mevedel-queue--current-session'.  Caller must `setf'
 the slot through `mevedel-session-permission-queue' to mutate."
   (when-let* ((sess (or session
-                        (mevedel-permission-queue--current-session))))
+                        (mevedel-queue--current-session))))
     (mevedel-session-permission-queue sess)))
 
 (defun mevedel-permission-queue--set (queue &optional session)
   "Set SESSION's permission-queue slot to QUEUE.
 SESSION defaults to the current session."
   (when-let* ((sess (or session
-                        (mevedel-permission-queue--current-session))))
+                        (mevedel-queue--current-session))))
     (setf (mevedel-session-permission-queue sess) queue)))
 
 (defun mevedel-permission-queue--ensure-settled-cell (entry)
@@ -235,7 +227,7 @@ Return non-nil when this call delivered or consumed the outcome."
   "Log permission queue EVENT for ENTRY in SESSION with PROPS."
   (when-let* ((sess (or session
                         (plist-get entry :session)
-                        (mevedel-permission-queue--current-session))))
+                        (mevedel-queue--current-session))))
     (let* ((queue-depth
             (+ (length (mevedel-session-permission-queue sess))
                (if (eq event 'permission-enqueued) 1 0)))
@@ -295,7 +287,7 @@ ENTRY plist keys:
   (let ((origin (plist-get entry :origin)))
     (unless (mevedel-agent-path-p origin)
       (error "Invalid permission queue origin: %S" origin)))
-  (let ((session (or session (mevedel-permission-queue--current-session))))
+  (let ((session (or session (mevedel-queue--current-session))))
     (setq entry
           (append
            (list :permission-id (format "%s-%s" (format-time-string "%s%N")
@@ -360,7 +352,7 @@ ENTRY plist keys:
 (defun mevedel-permission-queue--render-head (&optional session)
   "Render the current head of SESSION's permission queue."
   (when-let* ((session (or session
-                           (mevedel-permission-queue--current-session)))
+                           (mevedel-queue--current-session)))
               (head (car (mevedel-permission-queue--get session))))
     (condition-case err
         (mevedel-permission-queue--render-entry head)
@@ -520,7 +512,7 @@ cannot be cleared by a remembered sibling approval."
 (defun mevedel-permission-queue-abort-all (&optional session)
   "Flush SESSION's queue, firing `'aborted' on every entry's callback.
 Called from `mevedel-abort' / request-cancel-fn."
-  (let* ((session (or session (mevedel-permission-queue--current-session)))
+  (let* ((session (or session (mevedel-queue--current-session)))
          (queue (and session (mevedel-permission-queue--get session))))
     (when session
       (mevedel-permission-queue--set nil session))
@@ -534,7 +526,7 @@ Called from `mevedel-abort' / request-cancel-fn."
 When NO-RENDER is non-nil, do not render the next head entry after
 sweeping."
   (when request-id
-    (let* ((session (or session (mevedel-permission-queue--current-session)))
+    (let* ((session (or session (mevedel-queue--current-session)))
            (queue (and session (mevedel-permission-queue--get session)))
            (head-before (car queue))
            kept swept)

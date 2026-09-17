@@ -64,6 +64,24 @@
                   (lambda (result) (setq outcome result)))
                  (unless (eq 'allow outcome)
                    (error "Execution permission owner did not allow Eval")))
+               (when (featurep 'mevedel-permission-queue)
+                 (error "Automatic Eval loaded the permission queue"))
+               (let ((mevedel-permission-rules nil)
+                     (session (mevedel-session--create
+                               :name "cold-prompt" :permission-mode 'ask))
+                     outcome)
+                 (with-temp-buffer
+                   (setq-local mevedel--session session)
+                   (cl-letf (((symbol-function 'mevedel-permission-prompt-render)
+                              (lambda (_entry _origin cont _count)
+                                (funcall cont 'deny-once))))
+                     (mevedel-tool-exec-permission-check-eval-async
+                      nil '(:expression "(+ 1 2)")
+                      (lambda (result) (setq outcome result)))))
+                 (unless (and (eq 'deny outcome)
+                              (featurep 'mevedel-permission-queue)
+                              (null (mevedel-session-permission-queue session)))
+                   (error "Cold Eval prompt did not settle through the queue")))
                (unless
                    (string-suffix-p
                     "mevedel-tool-exec-permission.elc"
