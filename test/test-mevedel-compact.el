@@ -240,91 +240,54 @@
       (when (buffer-live-p prompt-buf)
         (kill-buffer prompt-buf))))
 
-  :doc "auto threshold uses source-buffer API baseline"
-  (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
-        (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
-        (ran nil)
-        (continued nil))
-    (unwind-protect
-        (progn
-          (with-current-buffer source-buf
-            (org-mode)
-            (setq-local mevedel-compact-run-in-flight nil)
-            (insert "Old prompt\n")
-            (insert (propertize "Old response\n" 'gptel 'response))
-            (insert "Small pending\n")
-            (setq-local mevedel-compact-estimation--known-token-baseline
-                        (list :tokens 100
-                              :position (copy-marker (point-max)))))
-          (with-current-buffer prompt-buf
-            (org-mode)
-            (insert "tiny\n"))
-          (let ((fsm (gptel-make-fsm
-                      :info (list :buffer source-buf))))
-            (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
-                       (lambda () t))
-                      ((symbol-function 'mevedel-compact-run-start)
-                       (lambda (&rest args)
-                         (setq ran t)
-                         (funcall (plist-get args :callback) :skip))))
-              (with-current-buffer prompt-buf
-                (let ((mevedel-compact-estimation-token-threshold 0.5)
-                      (mevedel-model-context-limit 200)
-                      (gptel-backend nil)
-                      (gptel-model nil)
-                      (gptel-max-tokens nil)
-                      (gptel--request-params nil))
-                  (mevedel--compact-transform-auto
-                   (lambda () (setq continued t))
-                   fsm)))))
-          (should ran)
-          (should continued))
-      (when (buffer-live-p source-buf)
-        (kill-buffer source-buf))
-      (when (buffer-live-p prompt-buf)
-        (kill-buffer prompt-buf))))
-
-  :doc "auto threshold uses transformed prompt buffer size"
-  (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
-        (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
-        (ran nil)
-        (continued nil))
-    (unwind-protect
-        (progn
-          (with-current-buffer source-buf
-            (org-mode)
-            (setq-local mevedel-compact-run-in-flight nil)
-            (insert "Old prompt\n")
-            (insert (propertize "Old response\n" 'gptel 'response))
-            (insert "Small pending\n"))
-          (with-current-buffer prompt-buf
-            (org-mode)
-            (insert-buffer-substring source-buf)
-            (insert (make-string 400 ?x)))
-          (let ((fsm (gptel-make-fsm
-                      :info (list :buffer source-buf))))
-            (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
-                       (lambda () t))
-                      ((symbol-function 'mevedel-compact-run-start)
-                       (lambda (&rest args)
-                         (setq ran t)
-                         (funcall (plist-get args :callback) :skip))))
-              (with-current-buffer prompt-buf
-                (let ((mevedel-compact-estimation-token-threshold 0.5)
-                      (mevedel-model-context-limit 200)
-                      (gptel-backend nil)
-                      (gptel-model nil)
-                      (gptel-max-tokens nil)
-                      (gptel--request-params nil))
-                  (mevedel--compact-transform-auto
-                   (lambda () (setq continued t))
-                   fsm)))))
-          (should ran)
-          (should continued))
-      (when (buffer-live-p source-buf)
-        (kill-buffer source-buf))
-      (when (buffer-live-p prompt-buf)
-        (kill-buffer prompt-buf))))
+  :doc "auto threshold uses source baselines and transformed prompt growth"
+  (dolist (baseline '(t nil))
+    (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
+          (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
+          (ran nil)
+          (continued nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer source-buf
+              (org-mode)
+              (setq-local mevedel-compact-run-in-flight nil)
+              (insert "Old prompt\n")
+              (insert (propertize "Old response\n" 'gptel 'response))
+              (insert "Small pending\n")
+              (when baseline
+                (setq-local mevedel-compact-estimation--known-token-baseline
+                            (list :tokens 100
+                                  :position (copy-marker (point-max))))))
+            (with-current-buffer prompt-buf
+              (org-mode)
+              (if baseline
+                  (insert "tiny\n")
+                (insert-buffer-substring source-buf)
+                (insert (make-string 400 ?x))))
+            (let ((fsm (gptel-make-fsm
+                        :info (list :buffer source-buf))))
+              (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
+                         (lambda () t))
+                        ((symbol-function 'mevedel-compact-run-start)
+                         (lambda (&rest args)
+                           (setq ran t)
+                           (funcall (plist-get args :callback) :skip))))
+                (with-current-buffer prompt-buf
+                  (let ((mevedel-compact-estimation-token-threshold 0.5)
+                        (mevedel-model-context-limit 200)
+                        (gptel-backend nil)
+                        (gptel-model nil)
+                        (gptel-max-tokens nil)
+                        (gptel--request-params nil))
+                    (mevedel--compact-transform-auto
+                     (lambda () (setq continued t))
+                     fsm)))))
+            (should ran)
+            (should continued))
+        (when (buffer-live-p source-buf)
+          (kill-buffer source-buf))
+        (when (buffer-live-p prompt-buf)
+          (kill-buffer prompt-buf)))))
 
   :doc "summarizer pressure triggers before target-model pressure"
   (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
