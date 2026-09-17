@@ -662,6 +662,18 @@ for the next turn."
                 :mevedel-reminder-commits nil)
                :mevedel-reminders-wait-seen t))))))
 
+(defun mevedel-reminders--stage-batch (fsm entries commits)
+  "Append ENTRIES and deferred COMMITS to FSM in delivery order.
+Entries are already collected; body validation belongs to their producer."
+  (let ((info (gptel-fsm-info fsm)))
+    (setf (gptel-fsm-info fsm)
+          (plist-put
+           (plist-put info :mevedel-reminder-entries
+                      (append (plist-get info :mevedel-reminder-entries)
+                              entries))
+           :mevedel-reminder-commits
+           (append (plist-get info :mevedel-reminder-commits) commits)))))
+
 (defun mevedel-reminders--transform (fsm)
   "Stage system reminders for separate injection into FSM.
 
@@ -706,29 +718,22 @@ Runs after `mevedel--transform-expand-mentions'."
             (remove-text-properties
              start (point)
              '(gptel nil response nil invisible nil front-sticky nil))))
-        (let* ((staged (mevedel-reminders--collect-from
-                        (mevedel-session-reminders session)
-                        (mevedel-session-turn-count session)
-                        session))
-               (info (gptel-fsm-info fsm)))
+        (let ((staged (mevedel-reminders--collect-from
+                       (mevedel-session-reminders session)
+                       (mevedel-session-turn-count session)
+                       session)))
           ;; Append: transforms at earlier depths (mentions,
           ;; skills-input) may already have staged entries.
-          (setf (gptel-fsm-info fsm)
-                (plist-put
-                 (plist-put info :mevedel-reminder-entries
-                            (append
-                             (plist-get info :mevedel-reminder-entries)
-                             (plist-get staged :entries)))
-                 :mevedel-reminder-commits
-                 (append (plist-get info :mevedel-reminder-commits)
-                         commits (plist-get staged :commits)))))))))
+          (mevedel-reminders--stage-batch
+           fsm (plist-get staged :entries)
+           (append commits (plist-get staged :commits))))))))
 
 (defun mevedel-reminders--agent-transform (fsm)
   "Stage agent-invocation reminders for separate injection into FSM.
 
 Agent conversation buffers carry no session; their reminder roster
-lives on the invocation struct (max-turns, read-only roles, deferred
-tool roster).  Runs once per agent request in gptel's temporary prompt
+lives on the invocation struct (configured reminders and max-turns
+warning).  Runs once per agent request in gptel's temporary prompt
 buffer and stages entries exactly like `mevedel-reminders--transform'
 does for sessions, so `mevedel-reminders--handle-inject' delivers and
 records them identically.
@@ -746,17 +751,9 @@ FSM is mandatory for the same arity-dispatch reason as
       (let ((staged (mevedel-reminders--collect-from
                      (mevedel-agent-invocation-reminders invocation)
                      (mevedel-agent-invocation-turn-count invocation)
-                     invocation))
-            (info (gptel-fsm-info fsm)))
-        (setf (gptel-fsm-info fsm)
-              (plist-put
-               (plist-put info :mevedel-reminder-entries
-                          (append
-                           (plist-get info :mevedel-reminder-entries)
-                           (plist-get staged :entries)))
-               :mevedel-reminder-commits
-               (append (plist-get info :mevedel-reminder-commits)
-                       (plist-get staged :commits))))))))
+                     invocation)))
+        (mevedel-reminders--stage-batch
+         fsm (plist-get staged :entries) (plist-get staged :commits))))))
 
 (defun mevedel-reminders-stage-commit (fsm commit)
   "Defer COMMIT until FSM's request payload provably exists.
@@ -779,15 +776,8 @@ The entry joins the synthetic user-role reminder message that
 COMMIT, when non-nil, runs once the payload exists.  Callable from any
 prompt transform and from WAIT-time handlers that run before injection."
   (when (and (stringp body) (not (string-empty-p body)))
-    (let ((info (gptel-fsm-info fsm)))
-      (setf (gptel-fsm-info fsm)
-            (plist-put
-             (plist-put info :mevedel-reminder-entries
-                        (append (plist-get info :mevedel-reminder-entries)
-                                (list (list :type type :body body))))
-             :mevedel-reminder-commits
-             (append (plist-get info :mevedel-reminder-commits)
-                     (and commit (list commit))))))))
+    (mevedel-reminders--stage-batch
+     fsm (list (list :type type :body body)) (and commit (list commit)))))
 
 
 ;;

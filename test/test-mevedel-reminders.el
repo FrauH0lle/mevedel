@@ -528,6 +528,22 @@ this collapses both shapes to the delivered text."
       '((:type demo :body "REMIND")) 'mid-turn))
     (should (equal "user prompt\n" (buffer-string)))))
 
+(mevedel-deftest mevedel-reminders--stage-batch
+  (:doc "preserves collected empty bodies and defers commits in batch order")
+  (let* ((fsm (gptel-make-fsm :info (list :untouched t)))
+         (ran nil))
+    (mevedel-reminders-stage-commit fsm (lambda () (push 'first ran)))
+    (mevedel-reminders--stage-batch
+     fsm '((:type empty :body "")) (list (lambda () (push 'second ran))))
+    (mevedel-reminders--stage-batch
+     fsm '((:type last :body "last")) nil)
+    (should-not ran)
+    (should (plist-get (gptel-fsm-info fsm) :untouched))
+    (should (equal '((:type empty :body "") (:type last :body "last"))
+                   (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
+    (mapc #'funcall (plist-get (gptel-fsm-info fsm) :mevedel-reminder-commits))
+    (should (equal '(second first) ran))))
+
 (mevedel-deftest mevedel-reminders-stage-entry
   ()
   ,test
@@ -593,6 +609,11 @@ this collapses both shapes to the delivered text."
               :content (lambda (_) "REMIND"))))
           (with-current-buffer prompt-buf
             (insert "user prompt body")
+            (mevedel-reminders-stage-entry
+             fsm 'earlier "EARLIER"
+             (lambda ()
+               (with-current-buffer chat-buf
+                 (should mevedel-reminders--reserved-hook-context))))
             (mevedel-reminders--transform fsm)
             (should
              (equal
@@ -600,9 +621,18 @@ this collapses both shapes to the delivered text."
               (buffer-string)))
             (should
              (equal
-              '((:type demo :body "REMIND"))
+              '((:type earlier :body "EARLIER")
+                (:type demo :body "REMIND"))
               (plist-get (gptel-fsm-info fsm)
-                         :mevedel-reminder-entries)))))
+                         :mevedel-reminder-entries)))
+            (let ((commits (plist-get (gptel-fsm-info fsm)
+                                      :mevedel-reminder-commits)))
+              (should (= 3 (length commits)))
+              (mapc #'funcall commits)
+              (with-current-buffer chat-buf
+                (should-not mevedel-reminders--reserved-hook-context))
+              (should (equal 0 (mevedel-reminder-last-fired
+                                (car (mevedel-session-reminders session))))))))
       (kill-buffer chat-buf)
       (kill-buffer prompt-buf)))
 
@@ -656,9 +686,15 @@ this collapses both shapes to the delivered text."
         (progn
           (with-current-buffer agent-buf
             (setq-local mevedel--agent-invocation inv))
+          (mevedel-reminders-stage-entry
+           fsm 'earlier "EARLIER"
+           (lambda ()
+             (should-not (mevedel-reminder-last-fired
+                          (car (mevedel-agent-invocation-reminders inv))))))
           (mevedel-reminders--agent-transform fsm)
           (should (eq seen-ctx inv))
-          (should (equal '((:type agent-demo :body "AGENT REMIND"))
+          (should (equal '((:type earlier :body "EARLIER")
+                           (:type agent-demo :body "AGENT REMIND"))
                          (plist-get (gptel-fsm-info fsm)
                                     :mevedel-reminder-entries)))
           ;; The fired mark is a deferred commit, exactly as on the
