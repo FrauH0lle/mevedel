@@ -210,6 +210,14 @@
         (unintern symbol obarray))
       (delete-directory directory t)))
 
+  :doc "source tools leave unknown names uninterned and return no source"
+  (let ((name (make-temp-name "mevedel-introspect-missing-")))
+    (should-not (intern-soft name))
+    (dolist (tool '("function_source" "variable_source"))
+      (should (equal (gptel--to-string nil)
+                     (test-mevedel-tool-introspect--call tool name))))
+    (should-not (intern-soft name)))
+
   :doc "all four native Info tools return installed manual content"
   (let ((before (buffer-list))
         (Info-history nil)
