@@ -147,10 +147,8 @@
   (should (= 3 (mevedel-context-summary--estimated-tokens "1234" "5678")))
 
   :doc "charges a multibyte character at least one token"
-  ;; The gate this feeds promises not to dispatch an oversized request, and a
-  ;; provider counts tokens over UTF-8 bytes.  Counting characters instead
-  ;; under-reads CJK several-fold and emoji further still, so the estimate
-  ;; must not fall below one token per multibyte character.
+  ;; Non-ASCII evidence receives a higher local charge than chars/4.
+  ;; This checks the heuristic, not a provider token bound.
   (dolist (text (list "\u3053\u3093\u306b\u3061\u306f\u4e16\u754c"
                       "\U0001F600\U0001F601\U0001F602\U0001F603"
                       "\u00e4\u00f6\u00fc\u00df\u00e9\u00e8"))
@@ -667,7 +665,7 @@
                  '(:backend test-backend :model test-model)))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                ;; Comfortably above what counting characters reports for this
-               ;; evidence, and below what its bytes actually cost.
+               ;; evidence, and below the byte-aware local estimate.
                (lambda (_policy) 900))
               ((symbol-function 'gptel-request)
                (lambda (&rest _) (setq request-called t))))
