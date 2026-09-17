@@ -203,17 +203,13 @@ still does: it has no terminal at all and `make-frame' signals there."
 Each element is (START END . DIRECTIVE-ID), where DIRECTIVE-ID is nil for
 ordinary chat turns.  Content before the first turn, such as the header,
 is not covered by any span."
-  (let* ((limit (mevedel-view--input-marker-position))
-         (starts (mevedel-view--rendered-turn-starts))
-         spans)
-    (while starts
-      (let* ((start (car starts))
-             (end (or (cadr starts) limit))
-             (directive (get-text-property start 'mevedel-view-directive)))
-        (push (cons start (cons end (plist-get directive :directive-id)))
-              spans))
-      (setq starts (cdr starts)))
-    (nreverse spans)))
+  (let ((limit (mevedel-view--input-marker-position)))
+    (cl-loop for (start next) on (mevedel-view--rendered-turn-starts)
+             collect
+             (cons start
+                   (cons (or next limit)
+                         (plist-get (get-text-property start 'mevedel-view-directive)
+                                    :directive-id))))))
 
 (defun mevedel-directive-frame--filter-elsewhere-p (view-buffer)
   "Return non-nil when VIEW-BUFFER is shown outside the directive frame.
