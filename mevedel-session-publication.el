@@ -134,7 +134,11 @@
   "Delete BATCH's local recovery directory."
   (when-let* ((directory (plist-get batch :directory))
               ((file-directory-p directory))
-              ((file-in-directory-p directory temporary-file-directory)))
+              ;; Parent metadata can change between the two stat calls in
+              ;; `file-in-directory-p'.  Compare resolved names instead.
+              ((string-prefix-p
+                (file-name-as-directory (file-truename temporary-file-directory))
+                (file-name-as-directory (file-truename directory)))))
     (condition-case err
         (delete-directory directory t)
       (file-error

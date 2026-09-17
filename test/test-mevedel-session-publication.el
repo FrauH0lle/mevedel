@@ -13,6 +13,38 @@
           "mevedel-session-test-support"))
 (require 'mevedel-journal-pins)
 
+(mevedel-deftest mevedel-session-publication--delete-batch ()
+  ,test
+  (test)
+  :doc "removes contained recovery while preserving outside and escaping paths"
+  (dolist (kind '(inside outside sibling escape alias))
+    (let* ((root (make-temp-file "mevedel-batch-containment-" t))
+           (temp (file-name-concat root "staging"))
+           (outside (file-name-concat root "staging-other"))
+           (inside (file-name-concat temp "batch"))
+           (escape (file-name-concat temp "escape"))
+           (alias (file-name-concat root "alias"))
+           (temporary-file-directory (file-name-as-directory temp)))
+      (unwind-protect
+          (progn
+            (make-directory inside t)
+            (make-directory outside)
+            (make-symbolic-link outside escape)
+            (make-symbolic-link temp alias)
+            (when (eq kind 'alias)
+              (setq temporary-file-directory (file-name-as-directory alias)))
+            (let ((path (pcase kind
+                          ((or 'inside 'alias) inside)
+                          ('outside root)
+                          ('sibling outside)
+                          ('escape escape))))
+              (mevedel-session-publication--delete-batch (list :directory path))
+              (if (memq kind '(inside alias))
+                  (should-not (file-exists-p path))
+                (should (file-directory-p path)))
+              (should (file-directory-p outside))))
+        (delete-directory root t)))))
+
 (defun test-mevedel-session-publication--with-published
     (host prefix client-id body)
   "Call BODY with a leased portable session fixture.
