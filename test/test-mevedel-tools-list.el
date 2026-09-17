@@ -95,19 +95,6 @@
                   '(:state active :category "mevedel" :name "Read"))
                  '(active "mevedel" "Read"))))
 
-(mevedel-deftest mevedel-tools-list--tool-matches-item-p ()
-  ,test
-  (test)
-
-  :doc "matches tools by both category and name"
-  (let ((tool (mevedel-tools-list-test--make-fake-gptel-tool "Run" "cat-a")))
-    (should (mevedel-tools-list--tool-matches-item-p
-             tool '(:category "cat-a" :name "Run")))
-    (should-not (mevedel-tools-list--tool-matches-item-p
-                 tool '(:category "cat-b" :name "Run")))
-    (should-not (mevedel-tools-list--tool-matches-item-p
-                 tool '(:category "cat-a" :name "Read")))))
-
 (mevedel-deftest mevedel-tools-list--description-cell ()
   ,test
   (test)
@@ -156,11 +143,10 @@
   ,test
   (test)
 
-  :doc "collects active, discoverable, pending, and loaded items"
+  :doc "collects active and discoverable items"
   (let* ((session (mevedel-tools-list-test--make-session))
          (data-buffer (generate-new-buffer " *mt-tools-items*"))
-         (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read"))
-         (pending-tool (mevedel-tools-list-test--make-fake-gptel-tool "Edit")))
+         (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -246,11 +232,10 @@
   ,test
   (test)
 
-  :doc "renders active, discoverable, pending, and loaded tool rows"
+  :doc "renders active and discoverable tool rows"
   (let* ((session (mevedel-tools-list-test--make-session))
          (data-buffer (generate-new-buffer " *mt-tools-data*"))
-         (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read"))
-         (pending-tool (mevedel-tools-list-test--make-fake-gptel-tool "Edit")))
+         (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -276,7 +261,24 @@
 
   :doc "rejects opening without a cockpit context"
   (with-temp-buffer
-    (should-error (mevedel-tools-list-open) :type 'user-error)))
+    (should-error (mevedel-tools-list-open) :type 'user-error))
+
+  :doc "distinguishes same-name rows by category"
+  (let* ((session (mevedel-tools-list-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-state-category*")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-tool-catalog session)
+                '((("cat-a" "Edit") . "A")
+                  (("cat-b" "Edit") . "B")))
+          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
+            (with-current-buffer buffer
+              (mevedel-cockpit-goto-id '(discoverable "cat-b" "Edit"))
+              (let ((item (mevedel-cockpit-surface-selected)))
+                (should (eq (plist-get item :state) 'discoverable))
+                (should (equal (plist-get item :category) "cat-b"))
+                (should (equal (plist-get item :description) "B"))))))
+      (mevedel-tools-list-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list-refresh
   (:after-each (mevedel-tools-list-test--cleanup-list))
@@ -305,48 +307,6 @@
                                '("discoverable" "Edit" "mevedel"
                                  "Updated")))))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
-
-(mevedel-deftest mevedel-tools-list--selected-item-for-state
-  (:after-each (mevedel-tools-list-test--cleanup-list))
-  ,test
-  (test)
-
-  :doc "returns selected row item only for the requested state"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-state-name*"))
-         (tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list tool)))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(active "mevedel" "Read"))
-              (let ((item (mevedel-tools-list--selected-item-for-state
-                           'active)))
-                (should (equal (plist-get item :name) "Read")))
-              (should-not (mevedel-tools-list--selected-item-for-state
-                           'discoverable)))))
-      (mevedel-tools-list-test--cleanup-list data-buffer)))
-
-  :doc "distinguishes same-name rows by category"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-state-category*")))
-    (unwind-protect
-        (progn
-          (setf (mevedel-session-tool-catalog session)
-                '((("cat-a" "Edit") . "A")
-                  (("cat-b" "Edit") . "B")))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(discoverable "cat-b" "Edit"))
-              (let ((item (mevedel-tools-list--selected-item-for-state
-                           'discoverable)))
-                (should (equal (plist-get item :category) "cat-b"))
-                (should (equal (plist-get item :description) "B"))))))
-      (mevedel-tools-list-test--cleanup-list data-buffer))))
-
-
 
 (mevedel-deftest mevedel-tools-list--detail-report ()
   ,test

@@ -150,15 +150,11 @@
            (list :id 'tail :title "Live output tail"
                  :body (if (string-empty-p tail) "(no output yet)" tail))))))
 
-(defun mevedel-executions-list--selected ()
-  "Return the selected live execution snapshot."
-  (mevedel-cockpit-surface-selected))
-
 (defun mevedel-executions-list--call-control (function &rest args)
   "Call user control FUNCTION with selected execution and ARGS."
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-executions-list--session context))
-         (item (mevedel-executions-list--selected))
+         (item (mevedel-cockpit-surface-selected))
          (id (plist-get item :execution-id)))
     (condition-case nil
         (apply function session id args)
@@ -169,7 +165,7 @@
 (defun mevedel-executions-list-send-input ()
   "Send one newline-terminated input line to the selected PTY execution."
   (interactive)
-  (let ((item (mevedel-executions-list--selected)))
+  (let ((item (mevedel-cockpit-surface-selected)))
     (unless (plist-get item :tty)
       (user-error "Selected execution uses closed pipe input"))
     (mevedel-executions-list--call-control
@@ -192,7 +188,7 @@
 (defun mevedel-executions-list-open-artifact ()
   "Open the selected execution's live retained artifact."
   (interactive)
-  (let ((path (plist-get (mevedel-executions-list--selected)
+  (let ((path (plist-get (mevedel-cockpit-surface-selected)
                          :artifact-path)))
     (unless (and path (file-readable-p path))
       (user-error "Execution artifact is no longer available"))
