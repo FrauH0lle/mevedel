@@ -1349,6 +1349,71 @@ a broad read grant keeps an inaccessible descendant masked"
                 (should (equal "protected contents" (buffer-string))))))
         (mevedel-sandbox-cleanup prepared)
         (delete-directory root t))))
+  :doc "mixed grant ordering preserves ancestor masks, later grants, and stdin"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (plist-get availability :reason))))
+    (let* ((parent (make-temp-file "mevedel-sandbox-mixed-mounts-" t))
+           (root (file-name-concat parent "workspace"))
+           (tree (file-name-concat parent "tree"))
+           (secret (file-name-concat tree "secret"))
+           (hidden (file-name-concat parent "hidden"))
+           (readable (file-name-concat hidden "readable"))
+           (sibling (file-name-concat hidden "sibling"))
+           (writable (file-name-concat parent "writable"))
+           (masked (file-name-concat root "masked"))
+           (mevedel-protected-paths
+            `((,secret . inaccessible)
+              (,(concat hidden "/**") . inaccessible)
+              (,masked . inaccessible)))
+           prepared)
+      (unwind-protect
+          (progn
+            (dolist (directory (list root tree hidden))
+              (make-directory directory))
+            (dolist (file (list secret readable sibling writable masked))
+              (with-temp-file file (insert "original")))
+            (setq prepared
+                  (mevedel-sandbox-prepare
+                   (list "sh" "-c"
+                         (concat
+                          "set -eu; read -r line; test \"$line\" = 'child stdin'; "
+                          "test \"$(cat \"$2\")\" = original; "
+                          "printf tree > \"$1/new\"; printf changed > \"$3\"; "
+                          "if (printf denied > \"$2\") 2>/dev/null; then exit 41; fi; "
+                          "for path in \"$4\" \"$5\" \"$6\"; do "
+                          "if cat \"$path\" 2>/dev/null; then exit 42; fi; "
+                          "if chmod 600 \"$path\" 2>/dev/null; then exit 43; fi; "
+                          "done; printf 'mixed mounts complete'")
+                         "mixed-mounts" tree readable writable secret sibling masked)
+                   root (list root)
+                   ;; The ancestor must be mounted first even though it is
+                   ;; between two later grants in the requested profile.
+                   (list :file-system
+                         (list (list :path readable :access 'read)
+                               (list :path tree :access 'write :recursive t)
+                               (list :path writable :access 'write)))))
+            (should (eq 'confined (plist-get prepared :state)))
+            (with-temp-buffer
+              (insert "child stdin\n")
+              (let ((status
+                     (apply #'call-process-region
+                            (point-min) (point-max)
+                            (car (plist-get prepared :command)) t t nil
+                            (cdr (plist-get prepared :command)))))
+                (ert-info ((buffer-string)) (should (zerop status))))
+              (should (string-match-p "mixed mounts complete" (buffer-string))))
+            (dolist (pair `((,writable . "changed")
+                           (,(file-name-concat tree "new") . "tree")
+                           (,secret . "original") (,readable . "original")
+                           (,sibling . "original") (,masked . "original")))
+              (with-temp-buffer
+                (insert-file-contents (car pair))
+                (should (equal (cdr pair) (buffer-string))))))
+        (mevedel-sandbox-cleanup prepared)
+        (delete-directory parent t))))
   :doc "real protected paths:
 `mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"
   (let ((mevedel-sandbox-mode 'required)

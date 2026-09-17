@@ -142,22 +142,15 @@ the base read-only filesystem already allows them."
 ;;; Bubblewrap arguments
 
 (defun mevedel-sandbox--additional-filesystem-mounts
-    (permissions &optional first-fd)
-  "Return FD-backed mounts for normalized filesystem PERMISSIONS.
+    (grants &optional first-fd)
+  "Return FD-backed mount arguments for normalized filesystem GRANTS.
 FIRST-FD defaults to 10."
-  (let (arguments grants)
-    (dolist (grant (plist-get permissions :file-system))
-      (let ((path (plist-get grant :path))
-            (access (plist-get grant :access))
-            (fd (+ (or first-fd 10) (length grants))))
-        (setq arguments
-              (append arguments
-                      (list (if (eq access 'write)
-                                "--bind-fd"
-                              "--ro-bind-fd")
-                            (number-to-string fd) path))
-              grants (append grants (list grant)))))
-    (list :arguments arguments :grants grants)))
+  (cl-loop for grant in grants
+           for fd from (or first-fd 10)
+           append (list (if (eq (plist-get grant :access) 'write)
+                            "--bind-fd"
+                          "--ro-bind-fd")
+                        (number-to-string fd) (plist-get grant :path))))
 
 (defun mevedel-sandbox--grant-identity (grant)
   "Return the target-native device/inode identity recorded in GRANT."
@@ -272,11 +265,10 @@ backing private empty file masks."
          (ordered (append ancestors
                           (cl-set-difference grants ancestors :test #'eq)))
          (ancestor-mounts
-          (mevedel-sandbox--additional-filesystem-mounts
-           (list :file-system ancestors)))
+          (mevedel-sandbox--additional-filesystem-mounts ancestors))
          (later-mounts
           (mevedel-sandbox--additional-filesystem-mounts
-           (list :file-system (nthcdr (length ancestors) ordered))
+           (nthcdr (length ancestors) ordered)
            (+ 10 (length ancestors))))
          (next-fd (+ 10 (length grants)))
          protections remounts directories symlinks mask-fds)
@@ -327,14 +319,14 @@ backing private empty file masks."
                                      "--tmpfs" path)))))))))))
     (list :arguments
           (append
-           (plist-get ancestor-mounts :arguments)
+           ancestor-mounts
            protections
            (mapcan (lambda (directory) (list "--dir" directory))
                    (sort (delete-dups directories)
                          (lambda (left right) (< (length left) (length right)))))
            (mapcan (lambda (link) (list "--symlink" (cdr link) (car link)))
                    (delete-dups (nreverse symlinks)))
-           (plist-get later-mounts :arguments)
+           later-mounts
            remounts)
           :grants ordered
           :mask-fds (nreverse mask-fds))))
