@@ -71,8 +71,9 @@
     (setq-local gptel-tools
                 (test-mevedel-ptc-driver--gptel-tools "PTCProbe"))))
 
-(defun test-mevedel-ptc-driver--run (buffer script)
-  "Run SCRIPT through ToolCall in BUFFER and return its visible result."
+(defun test-mevedel-ptc-driver--run (buffer script &optional raw-p)
+  "Run SCRIPT through ToolCall in BUFFER and return its visible result.
+With RAW-P, retain the full pipeline result including hidden render data."
   (let ((deadline (+ (float-time) 10.0))
         done result)
     (with-current-buffer buffer
@@ -83,7 +84,7 @@
       (while (and (not done) (< (float-time) deadline))
         (accept-process-output nil 0.01)))
     (should done)
-    (test-mevedel-ptc-driver--visible result)))
+    (if raw-p result (test-mevedel-ptc-driver--visible result))))
 
 (defun test-mevedel-ptc-driver--telemetry (session)
   "Return persisted and pending telemetry entries for SESSION."
@@ -207,9 +208,15 @@
   (progn
     (mevedel-tool-fs--register)
     (let ((tool (mevedel-tool-get "Read")))
-      (should-error (mevedel-ptc-driver--convert-args tool '("positional")))
-      (should-error (mevedel-ptc-driver--convert-args
-                     tool (list (intern ":file_path" (obarray-make))))))))
+      (dolist (case `((("positional") . "must be :keyword value pairs")
+                      ((,(intern ":file_path" (obarray-make))) . "has no value")
+                      ((:unknown) . "has no value")
+                      ((:unknown "x") . "has no argument")))
+        (should (string-match-p
+                 (cdr case)
+                 (error-message-string
+                  (should-error
+                   (mevedel-ptc-driver--convert-args tool (car case))))))))))
 
 
 ;;
@@ -313,19 +320,13 @@
 
   :doc "direct non-text calls retain child identity in the provider transcript"
   (dolist (raw '(37 nil (:count 3) [1 2]))
-    (let (result done)
+    (let (result)
       (test-mevedel-ptc-driver--register-probe
        (lambda (_args) (list :result raw)))
       (test-mevedel-ptc-driver--select-probe buffer)
-      (with-current-buffer buffer
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-ensure "ToolCall")
-         (lambda (value) (setq result value done t))
-         (list :expression "(PTCProbe :value \"x\")")))
-      (let ((deadline (+ (float-time) 2)))
-        (while (and (not done) (< (float-time) deadline))
-          (accept-process-output nil 0.01)))
-      (should done)
+      (setq result
+            (test-mevedel-ptc-driver--run
+             buffer "(PTCProbe :value \"x\")" t))
       (let* ((parsed (mevedel-tool-render-data-extract result))
              (child (car (plist-get (cdr parsed) :calls))))
         (should (equal (gptel--to-string raw) (car parsed)))
@@ -366,8 +367,11 @@
       (should (string-search "path-helper"
                              (prin1-to-string mevedel-reminders--turn-events)))))
 
-  :doc "runs a script with no tool calls and returns its final value"
-  (should (equal "3" (test-mevedel-ptc-driver--run buffer "(+ 1 2)")))
+  :doc "runs scripts with no tool calls and returns their final values"
+  (dolist (case '(("(+ 1 2)" . "3") ("nil" . "nil")
+                  ("\"text\"" . "text") ("'(1 2)" . "(1 2)")))
+    (should (equal (cdr case)
+                   (test-mevedel-ptc-driver--run buffer (car case)))))
 
   :doc "rejects a closure as the script's final value"
   (should
@@ -402,7 +406,7 @@
 
   :doc "settles errors raised by an asynchronous child callback"
   (let ((mevedel-ptc-parallelism 1)
-        done result)
+        result)
     (test-mevedel-ptc-driver--register-probe
      (lambda (child-callback _args)
        (run-at-time 0 nil
@@ -413,16 +417,10 @@
     (let ((mevedel-ptc-composable-tools '("PTCProbe")))
       (cl-letf (((symbol-function 'mevedel-ptc-driver--classify-outcome)
                  (lambda (&rest _) (error "Async completion failed"))))
-        (with-current-buffer buffer
-          (mevedel-pipeline-run-tool
-           (mevedel-tool-ensure "ToolCall")
-           (lambda (value) (setq result value done t))
-           '(:expression "(parallel (PTCProbe :value \"one\")
-                                (PTCProbe :value \"two\"))")))
-        (let ((deadline (+ (float-time) 2.0)))
-          (while (and (not done) (< (float-time) deadline))
-            (accept-process-output nil 0.01)))
-        (should done)
+        (setq result
+              (test-mevedel-ptc-driver--run
+               buffer "(parallel (PTCProbe :value \"one\")
+                                (PTCProbe :value \"two\"))" t))
         (should (string-match-p "Async completion failed" result))
         (let* ((render-data (cdr (mevedel-tool-render-data-extract result)))
                (calls (plist-get render-data :calls)))
@@ -677,21 +675,15 @@
 
   :doc "bounds cumulative parallel results before audit retention"
   (let ((mevedel-ptc-max-retained-bytes 200)
-        done result)
+        result)
     (test-mevedel-ptc-driver--register-probe
      (lambda (_args) (list :result (make-string 120 ?x))))
     (test-mevedel-ptc-driver--select-probe buffer)
     (let ((mevedel-ptc-composable-tools '("PTCProbe")))
-      (with-current-buffer buffer
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-ensure "ToolCall")
-         (lambda (value) (setq result value done t))
-         '(:expression "(parallel (PTCProbe :value \"a\")
-                              (PTCProbe :value \"b\"))")))
-      (let ((deadline (+ (float-time) 2.0)))
-        (while (and (not done) (< (float-time) deadline))
-          (accept-process-output nil 0.01)))
-      (should done)
+      (setq result
+            (test-mevedel-ptc-driver--run
+             buffer "(parallel (PTCProbe :value \"a\")
+                              (PTCProbe :value \"b\"))" t))
       (let* ((render-data (cdr (mevedel-tool-render-data-extract result)))
              (calls (plist-get render-data :calls)))
         (should (= 2 (length calls)))
@@ -766,7 +758,7 @@
 
   :doc "records active siblings cancelled after a batch denial"
   (let ((mevedel-ptc-parallelism 2)
-        done result)
+        result)
     (test-mevedel-ptc-driver--register-probe
      (lambda (_callback _args) nil)
      t
@@ -776,16 +768,10 @@
                        'allow))))
     (test-mevedel-ptc-driver--select-probe buffer)
     (let ((mevedel-ptc-composable-tools '("PTCProbe")))
-      (with-current-buffer buffer
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-ensure "ToolCall")
-         (lambda (value) (setq result value done t))
-         '(:expression "(parallel (PTCProbe :value \"pending\")
-                              (PTCProbe :value \"deny\"))")))
-      (let ((deadline (+ (float-time) 2.0)))
-        (while (and (not done) (< (float-time) deadline))
-          (accept-process-output nil 0.01)))
-      (should done)
+      (setq result
+            (test-mevedel-ptc-driver--run
+             buffer "(parallel (PTCProbe :value \"pending\")
+                              (PTCProbe :value \"deny\"))" t))
       (let* ((render-data (cdr (mevedel-tool-render-data-extract result)))
              (calls (plist-get render-data :calls)))
         (should (equal '(cancelled denied)
@@ -794,23 +780,17 @@
 
   :doc "marks the calls of one concurrent join and leaves sequential ones bare"
   (let ((mevedel-ptc-parallelism 2)
-        done result)
+        result)
     (test-mevedel-ptc-driver--register-probe
      (lambda (args) (list :result (plist-get args :value))))
     (test-mevedel-ptc-driver--select-probe buffer)
     (let ((mevedel-ptc-composable-tools '("PTCProbe")))
-      (with-current-buffer buffer
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-ensure "ToolCall")
-         (lambda (value) (setq result value done t))
-         '(:expression "(progn (PTCProbe :value \"lead\")
+      (setq result
+            (test-mevedel-ptc-driver--run
+             buffer "(progn (PTCProbe :value \"lead\")
                            (parallel (PTCProbe :value \"a\")
                                      (PTCProbe :value \"b\"))
-                           (parallel (PTCProbe :value \"lone\")))")))
-      (let ((deadline (+ (float-time) 2.0)))
-        (while (and (not done) (< (float-time) deadline))
-          (accept-process-output nil 0.01)))
-      (should done)
+                           (parallel (PTCProbe :value \"lone\")))" t))
       (let* ((render-data (cdr (mevedel-tool-render-data-extract result)))
              (batches (mapcar (lambda (call) (plist-get call :batch))
                               (plist-get render-data :calls))))
@@ -819,7 +799,7 @@
         (should (equal '(nil 1 1 nil) batches)))))
 
   :doc "preserves child media references without payload data"
-  (let (done result)
+  (let (result)
     (test-mevedel-ptc-driver--register-probe
      (lambda (_args)
        '(:result "image"
@@ -827,15 +807,9 @@
                   :data "QUJD")))))
     (test-mevedel-ptc-driver--select-probe buffer)
     (let ((mevedel-ptc-composable-tools '("PTCProbe")))
-      (with-current-buffer buffer
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-ensure "ToolCall")
-         (lambda (value) (setq result value done t))
-         '(:expression "(PTCProbe :value \"image\")")))
-      (let ((deadline (+ (float-time) 2.0)))
-        (while (and (not done) (< (float-time) deadline))
-          (accept-process-output nil 0.01)))
-      (should done)
+      (setq result
+            (test-mevedel-ptc-driver--run
+             buffer "(PTCProbe :value \"image\")" t))
       (let* ((render-data (cdr (mevedel-tool-render-data-extract result)))
              (media (plist-get (car (plist-get render-data :calls)) :media)))
         (should (equal '((:mime "image/png" :kind image :path "image.png"))
