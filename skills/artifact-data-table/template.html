@@ -288,7 +288,7 @@
     return;
   }
 
-  let sortKey = null, sortDir = 1;
+  let sortColumn = null, sortDir = 1;
 
   const isMissing = v =>
     v == null || (typeof v === 'string' && v.trim() === '');
@@ -319,8 +319,8 @@
     arrow.textContent = '↑';
     button.append(arrow);
     button.addEventListener('click', () => {
-      sortDir = sortKey === column.key ? -sortDir : 1;
-      sortKey = column.key;
+      sortDir = sortColumn === column ? -sortDir : 1;
+      sortColumn = column;
       draw();
     });
     th.append(button);
@@ -328,15 +328,14 @@
   });
 
   function compare(a, b) {
-    const column = columns.find(c => c.key === sortKey);
-    const x = cell(a, sortKey), y = cell(b, sortKey);
+    const x = cell(a, sortColumn.key), y = cell(b, sortColumn.key);
     // Missing values sort last in both directions: they are absent, not
     // extreme, so flipping the arrow should not parade them to the top.
     const xGone = isMissing(x), yGone = isMissing(y);
     if (xGone && yGone) return 0;
     if (xGone) return 1;
     if (yGone) return -1;
-    if (column && column.type === 'num') {
+    if (sortColumn.type === 'num') {
       const nx = numeric(x), ny = numeric(y);
       if (nx === null && ny === null) return 0;
       if (nx === null) return 1;
@@ -361,7 +360,7 @@
     const query = (filter && filter.value || '').trim();
     const needle = query.toLowerCase();
     const visible = rows.filter(row => matches(row, needle));
-    if (sortKey) visible.sort(compare);
+    if (sortColumn) visible.sort(compare);
 
     body.replaceChildren();
     if (!visible.length) {
@@ -390,7 +389,7 @@
     }
 
     head.querySelectorAll('th').forEach((th, i) => {
-      const active = columns[i] && columns[i].key === sortKey;
+      const active = columns[i] === sortColumn;
       th.classList.toggle('sorted', active);
       th.setAttribute('aria-sort', active
         ? (sortDir > 0 ? 'ascending' : 'descending') : 'none');

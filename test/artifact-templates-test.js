@@ -110,16 +110,10 @@ function render(spec) {
           details: byId['chart-values'], tooltip: byId['chart-tooltip']};
 }
 
-/* Every geometry attribute the renderer emits, flattened. */
-function attrValues(node) {
-  return Object.values(node.attributes)
-    .map(String)
-    .concat(node.children.flatMap(child =>
-      typeof child === 'string' ? [] : attrValues(child)));
-}
-
 function assertNoBadGeometry(svg, label) {
-  const bad = attrValues(svg).filter(v => /NaN|Infinity|undefined/.test(v));
+  const bad = [svg, ...svg.descendants()]
+    .flatMap(node => Object.values(node.attributes))
+    .map(String).filter(v => /NaN|Infinity|undefined/.test(v));
   assert.deepEqual(bad, [], `${label}: emitted unusable geometry`);
 }
 
@@ -657,7 +651,7 @@ function runTableTests() {
 
   /* Native buttons own click activation, and column semantics remain on th. */
   {
-    const t = renderTable(columns, [{name: 'b', size: 2}, {name: 'a', size: 1}]);
+    const t = renderTable(columns, [{name: 'b', size: 1}, {name: 'a', size: 2}]);
     const [name, size] = t.headRow.children;
     for (const th of [name, size]) {
       assert.equal(th.scope || th.getAttribute('scope'), 'col');
@@ -677,6 +671,10 @@ function runTableTests() {
     t.sortBy('Name');
     assert.equal(name.getAttribute('aria-sort'), 'ascending');
     assert.equal(size.getAttribute('aria-sort'), 'none');
+    assert.deepEqual(t.cells(), [['a', '2'], ['b', '1']]);
+    t.sortBy('Size');
+    assert.equal(size.getAttribute('aria-sort'), 'ascending');
+    assert.deepEqual(t.cells(), [['b', '1'], ['a', '2']]);
     const html = fs.readFileSync(templateOf('artifact-data-table'), 'utf8');
     assert.match(html, /<span\b[^>]*id="dt-count"[^>]*aria-live="polite"/);
   }
