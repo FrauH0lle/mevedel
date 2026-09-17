@@ -86,13 +86,13 @@
               (mevedel-skills-listing-budget 0.02))
           (should (= 640 (mevedel-skills--listing-budget-chars))))))))
 
-(mevedel-deftest mevedel-skills--format-listing ()
+(mevedel-deftest mevedel-skills--format-listing-result ()
   ,test
   (test)
   :doc "includes roster header and one line per skill"
   (let* ((skills (list (mevedel-skill--create :name "s1" :description "d1")
                        (mevedel-skill--create :name "s2" :description "d2")))
-         (listing (mevedel-skills--format-listing skills)))
+         (listing (plist-get (mevedel-skills--format-listing-result skills) :text)))
     (should (string-match-p "### Available skills" listing))
     (should (string-match-p "^- s1: d1$" listing))
     (should (string-match-p "^- s2: d2$" listing)))
@@ -208,7 +208,7 @@
       (should (string-search "ListSkills by purpose" section))
       (should (string-search "omitted from this budgeted roster" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))))
 
-  :doc "path discovery changes neither baseline text nor its acknowledged snapshot"
+  :doc "path discovery leaves the roster unchanged across activation resets"
   (let* ((session (mevedel-skills-test--make-session))
          (scoped (mevedel-skill--create :name "scoped" :description "Elisp guidance"
                                         :path-patterns '("*.el") :active-p nil))
@@ -217,12 +217,10 @@
     (dolist (skills (list (list scoped) (list ordinary scoped)))
       (setf (mevedel-session-skills session) skills
             (mevedel-skill-active-p scoped) nil)
-      (let ((section (mevedel-skills-prompt-section session))
-            (snapshot (mevedel-skills-prompt-section session)))
+      (let ((section (mevedel-skills-prompt-section session)))
         (mevedel-skills-maybe-activate session "sample.el")
         (should (mevedel-skill-active-p scoped))
         (should (equal section (mevedel-skills-prompt-section session)))
-        (should (equal snapshot (mevedel-skills-prompt-section session)))
         ;; Rediscovery after restart resets catalogue path activity.
         (setf (mevedel-skill-active-p scoped) nil)
         (should (equal section (mevedel-skills-prompt-section session)))))

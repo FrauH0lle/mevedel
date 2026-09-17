@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Owns request-time skill visibility: the budgeted system-prompt roster,
-;; roster-change reminders, and path-activation notices.  It installs only
-;; session-owned reminders and buffer-local activation hooks.
+;; Owns the budgeted skill roster and optional path-discovery notices.
+;; Catalog delivery uses retained context observations; path notices use
+;; turn events and buffer-local activation hooks.
 
 ;;; Code:
 
@@ -32,9 +32,6 @@
 (defvar mevedel-model-context-limit)
 (autoload 'mevedel-model-effective-context-window "mevedel-models")
 
-;; `mevedel-reminders'
-(defvar mevedel-reminders--current-chat-buffer)
-
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--current-invocation
                   "mevedel-skills-invoke" ())
@@ -44,8 +41,6 @@
                   "mevedel-skills-invoke" (skill &optional dormant))
 (declare-function mevedel-skills--listing-candidates
                   "mevedel-skills-invoke" (session))
-(declare-function mevedel-skills--listing-describe
-                  "mevedel-skills-invoke" (skill &optional dormant))
 (declare-function mevedel-skills--model-visible-p
                   "mevedel-skills-invoke" (skill &optional active-only))
 (declare-function mevedel-skills--truncate-text
@@ -152,27 +147,25 @@ omitted only when name-only entries cannot fit in
                 (used (length (body name-lines
                                     (and short-note-fits
                                          (list short-note)))))
-                (index 0)
                 (shortened nil))
-            (dolist (skill skills)
+            (cl-loop for tail on lines
+                     for skill in skills do
               (let* ((desc (mevedel-skills--short-purpose skill))
                      (remaining (- budget used)))
                 (cond
                  ((string-empty-p desc))
                  ((<= (length desc) remaining)
-                  (setf (nth index lines)
-                        (concat (nth index lines) desc))
+                  (setf (car tail) (concat (car tail) desc))
                   (cl-incf used (length desc)))
                  ((> remaining 0)
-                  (setf (nth index lines)
-                        (concat (nth index lines)
+                  (setf (car tail)
+                        (concat (car tail)
                                 (mevedel-skills--truncate-text
                                  desc remaining)))
                   (setq used budget
                         shortened t))
                  (t
-                  (setq shortened t))))
-              (cl-incf index))
+                  (setq shortened t)))))
             (list
              :text (body lines
                          (and shortened short-note-fits
@@ -197,10 +190,6 @@ omitted only when name-only entries cannot fit in
                                 (list note)))
                :status (and (> omitted 0) 'omitted)
                :omitted omitted)))))))))
-
-(defun mevedel-skills--format-listing (skills)
-  "Format SKILLS as the budgeted active roster."
-  (plist-get (mevedel-skills--format-listing-result skills) :text))
 
 (defun mevedel-skills--system-roster-candidates (session)
   "Return SESSION's active model-visible skills without path restrictions.
