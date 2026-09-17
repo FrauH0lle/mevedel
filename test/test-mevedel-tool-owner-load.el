@@ -29,6 +29,7 @@
                    "mevedel-tool-fs-read.el"
                    "mevedel-tool-fs-search.el"
                    "mevedel-tool-fs.el"
+                   "mevedel-tool-patch.el"
                    "mevedel-tool-permission.el"
                    "mevedel-tool-render-data.el"))
          (cases
@@ -251,6 +252,31 @@
                  (error "Render behavior has the wrong owner"))
                (when (featurep 'mevedel-pipeline)
                  (error "Render owner loaded Pipeline"))))
+            (patch-paths
+             (progn
+               (require 'mevedel-tool-patch)
+               (require 'mevedel-tool-permission)
+               (when (featurep 'mevedel-pipeline)
+                 (error "Patch path test started with Pipeline loaded"))
+               (let* ((directory (make-temp-file "mevedel-cold-patch-paths-" t))
+                      (default-directory (file-name-as-directory directory))
+                      (tool (mevedel-tool--create
+                             :name "ApplyPatch"
+                             :get-paths #'mevedel-tool-patch--get-paths)))
+                 (unwind-protect
+                     (unless
+                         (equal
+                          (list (expand-file-name "lib/foo.el" directory)
+                                (expand-file-name "README.md" directory))
+                          (mevedel-tool-permission-paths
+                           tool
+                           '(:patch "*** Begin Patch\n*** Add File: lib/foo.el\n+x\n*** Add File: README.md\n+docs\n*** End Patch")))
+                       (error "Cold patch extraction lost affected paths"))
+                   (delete-directory directory t)))
+               (unless (string-suffix-p
+                        "mevedel-tool-patch.elc"
+                        (or (symbol-file 'mevedel-tool-patch--get-paths 'defun) ""))
+                 (error "Patch path extraction has the wrong owner"))))
             (permission
              (progn
                (require 'mevedel-structs)
