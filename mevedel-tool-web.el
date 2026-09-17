@@ -34,7 +34,6 @@
 (declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 
 ;; `mevedel-view'
-(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
 
