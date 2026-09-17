@@ -543,8 +543,23 @@
                      "a" "c" "n" "p" "s" "A" "d" "D" "f"))
     (should-not (lookup-key mevedel-view-mode-map key))))
 
+(mevedel-deftest mevedel-permission-prompt-render ()
+  ,test
+  (test)
+  :doc "rejects unknown kinds before creating a permission interaction"
+  (let (rendered)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest _) (setq rendered t))))
+      (should-error
+       (mevedel-permission-prompt-render '(:kind unknown) nil #'ignore 1)
+       :type 'error))
+    (should-not rendered)))
+
 (mevedel-deftest mevedel-permission--prompt-async-eval
-  (:doc "accepts RET for allow-once")
+  ()
+  ,test
+  (test)
+  :doc "accepts RET for allow-once"
   (with-temp-buffer
     (let ((target (current-buffer))
           captured-body
@@ -562,7 +577,7 @@
                    (make-overlay (point-min) (point-min))))
                 ((symbol-function 'mevedel--prompt--register-canceller)
                  #'ignore))
-        (mevedel-permission--prompt-async-eval "Eval\n" #'ignore))
+        (mevedel-permission--prompt-async-eval "(+ 1 2)" nil #'ignore nil nil))
       (should (string-match-p "RET" captured-body))
       (should (eq (lookup-key captured-keymap (kbd "RET"))
                   #'mevedel-permission--prompt-approve-once))
@@ -570,7 +585,29 @@
       (should-not (string-match-p "deny-session" captured-body))
       (should-not (lookup-key captured-keymap "s"))
       (should-not (lookup-key captured-keymap "A"))
-      (should-not (lookup-key captured-keymap "D")))))
+      (should-not (lookup-key captured-keymap "D"))))
+
+  :doc "renders requested live mode and preserve_ui value"
+  (let (content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (body _always _callback &rest _)
+                 (setq content body))))
+      (mevedel-permission--prompt-async-eval
+       "(delete-other-windows)" nil #'ignore nil
+       '(:mode "live" :preserve-ui nil)))
+    (should
+     (string-match-p
+      "Mode: live (inherently unconfined; preserve_ui: false)"
+      content)))
+  :doc "renders requested batch mode"
+  (let (content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (body _always _callback &rest _)
+                 (setq content body))))
+      (mevedel-permission--prompt-async-eval
+       "(+ 1 2)" nil #'ignore nil '(:mode "batch" :preserve-ui t)))
+    (should (string-match-p "Mode: batch" content))
+    (should-not (string-match-p "preserve_ui" content))))
 
 (mevedel-deftest mevedel-permission--prompt-async-attributed
   ()

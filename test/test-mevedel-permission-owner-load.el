@@ -24,6 +24,8 @@
          (emacs (expand-file-name invocation-name invocation-directory))
          (owners '("mevedel-bash-policy.el"
                    "mevedel-permission-mode.el"
+                   "mevedel-permission-prompt.el"
+                   "mevedel-permission-queue.el"
                    "mevedel-permission-persistence.el"
                    "mevedel-permission-rules.el"
                    "mevedel-permissions.el"
@@ -70,6 +72,27 @@
                 default-directory nil)
                (unless (featurep 'mevedel-permission-rules)
                  (error "Rules consumer did not load its owner"))))
+            (prompt-consumer
+             (progn
+               (require 'mevedel-permission-queue)
+               (let* ((session (mevedel-session--create :name "cold-prompt"))
+                      (entry (list :kind 'eval :expression "(+ 1 2)"
+                                   :session session :mode "batch"))
+                      body)
+                 (setf (mevedel-session-permission-queue session) (list entry))
+                 (cl-letf
+                     (((symbol-function 'mevedel-view--interaction-target-buffer)
+                       (lambda (&optional _) (current-buffer)))
+                      ((symbol-function 'mevedel-view--interaction-register)
+                       (lambda (descriptor)
+                         (setq body (plist-get descriptor :body))
+                         (make-overlay (point-min) (point-min)))))
+                   (mevedel-permission-queue--render-entry entry))
+                 (unless (and (string-match-p "Mode: batch" body)
+                              (string-search "(+ 1 2)" body)
+                              (featurep 'mevedel-permission-prompt)
+                              (not (featurep 'mevedel-tool-exec-permission)))
+                   (error "Eval prompt did not load through its UI owner")))))
             (facade-consumer
              (progn
                (require 'mevedel-permissions)
@@ -102,17 +125,25 @@
           (dolist (case cases)
             (with-temp-buffer
               (ert-info ((format "cold permission owner: %s" (car case)))
-                (should
-                 (= 0
-                    (call-process
-                     emacs nil t nil
-                     "--batch" "-Q" "-L" compiled-root "-L" root
-                     "--eval"
-                     (prin1-to-string
-                      `(progn
-                         ,(cadr case)
-                         (when (featurep 'mevedel)
-                           (error "Permission owner loaded the umbrella")))))))
+                (let ((status
+                       (call-process
+                        emacs nil t nil
+                        "--batch" "-Q" "-L" compiled-root "-L" root
+                        "--eval"
+                        (prin1-to-string
+                         `(progn
+                            ,(cadr case)
+                            (dolist (owner ',owners)
+                              (when (featurep (intern (file-name-base owner)))
+                                (unless (assoc (concat (file-name-concat
+                                                        ,compiled-root owner) "c")
+                                               load-history)
+                                  (error "Owner did not load compiled code: %s"
+                                         owner))))
+                            (when (featurep 'mevedel)
+                              (error "Permission owner loaded the umbrella")))))))
+                  (ert-info ((buffer-string))
+                    (should (= 0 status))))
                 (should
                  (string-empty-p (string-trim (buffer-string))))))))
       (delete-directory compiled-root t))))

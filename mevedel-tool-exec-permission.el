@@ -76,27 +76,9 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
-;; `mevedel-interaction-prompt'
-(declare-function mevedel--prompt-attribution-line
-                  "mevedel-interaction-prompt" (origin))
-
-(autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
-
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log
                   "mevedel-permission-log" (session event &rest props))
-
-;; `mevedel-permission-prompt'
-(declare-function mevedel-permission--format-authority-capabilities
-                  "mevedel-permission-prompt" (entry))
-(declare-function mevedel-permission--elide
-                  "mevedel-permission-prompt"
-                  (text entry &optional line-limit char-limit))
-(declare-function mevedel-permission--format-remember-authority
-                  "mevedel-permission-prompt" (entry))
-(declare-function mevedel-permission--prompt-async-eval
-                  "mevedel-permission-prompt"
-                  (content cont &optional count entry))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
@@ -146,11 +128,6 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission-decision-raw-outcome
                   "mevedel-permissions" (decision))
-
-;; `mevedel-queue'
-(declare-function mevedel-queue--entry-metadata-put
-                  "mevedel-queue" (entry key value))
-(autoload 'mevedel-queue--entry-metadata-put "mevedel-queue")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
@@ -1023,69 +1000,6 @@ once with the applied prompt result."
          (mevedel-tool-exec-permission--apply-full-escalation-prompt-result
           outcome tool-name detail level session workspace metadata-p))))
      permission-context session)))
-
-;;
-
-;;; Eval Prompt UI
-
-(defcustom mevedel-eval-expression-display-limit 20
-  "Maximum number of lines to show inline in the Eval permission prompt.
-Expressions longer than this are truncated with a toggle to expand."
-  :type 'integer
-  :group 'mevedel)
-
-(defun mevedel-tool-exec-permission-prompt-eval
-    (expression callback &optional origin count entry mode preserve-ui)
-  "Display Eval permission overlay for EXPRESSION and CALLBACK.
-
-CALLBACK is invoked once with `allow-once', `deny-once', a feedback cons,
-or `aborted'.  Long expressions are elided in the display and toggled
-with TAB.  ORIGIN, when non-main,
-renders the same attribution line used by generic and Bash permission
-prompts.  COUNT is the permission queue depth for the composite
-interaction-zone counter.  ENTRY identifies the queued prompt.  MODE and
-PRESERVE-UI describe the requested execution scope."
-  (unless (fboundp 'mevedel-permission--prompt-async-eval)
-    (require 'mevedel-permission-prompt))
-  (let* ((faced-expr (propertize expression
-                                'font-lock-face 'font-lock-string-face))
-         ;; Built twice: once elided for the prompt, once whole for the
-         ;; remote descriptor, whose reader has no TAB to expand with.
-         (build
-          (lambda (display-expr)
-            (concat
-             "The LLM is requesting permission to evaluate elisp.\n\n"
-             (mevedel--prompt-attribution-line origin)
-             (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
-             (format "%s" (or mode "live"))
-             (when (equal (or mode "live") "live")
-               (format " (inherently unconfined; preserve_ui: %s)"
-                       (if preserve-ui "true" "false")))
-             "\n"
-             (when entry
-               (concat
-                (mevedel-permission--format-authority-capabilities entry)
-                (mevedel-permission--format-remember-authority entry)))
-             "\n"
-             (propertize "Expression:\n"
-                         'font-lock-face 'font-lock-escape-face)
-             display-expr
-             "\n\n")))
-         (content
-          (funcall build
-                   (mevedel-permission--elide
-                    faced-expr entry
-                    mevedel-eval-expression-display-limit))))
-    (when entry
-      (mevedel-queue--entry-metadata-put
-       entry :remote-body
-       (substring-no-properties (funcall build faced-expr))))
-    (if (fboundp 'mevedel-permission--prompt-async-eval)
-        (mevedel-permission--prompt-async-eval content callback count entry)
-      (mevedel--warn-once 'eval-permission-ui
-                          "Eval permission UI unavailable")
-      (funcall callback 'aborted))))
-
 
 ;;
 ;;; Eval permission adapter

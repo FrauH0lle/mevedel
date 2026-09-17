@@ -2931,30 +2931,6 @@ default Bash keeps bare dot inspection automatic"
     (should (eq :pattern (plist-get result :specifier-key)))
     (should (equal "make" (plist-get result :specifier-value)))))
 
-(mevedel-deftest mevedel-tool-exec-permission-prompt-eval ()
-  ,test
-  (test)
-  :doc "renders requested live mode and preserve_ui value"
-  (let (content)
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-eval)
-               (lambda (body _callback &rest _)
-                 (setq content body))))
-      (mevedel-tool-exec-permission-prompt-eval
-       "(delete-other-windows)" #'ignore nil nil nil "live" nil))
-    (should
-     (string-match-p
-      "Mode: live (inherently unconfined; preserve_ui: false)"
-      content)))
-  :doc "renders requested batch mode"
-  (let (content)
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-eval)
-               (lambda (body _callback &rest _)
-                 (setq content body))))
-      (mevedel-tool-exec-permission-prompt-eval
-       "(+ 1 2)" #'ignore nil nil nil "batch" t))
-    (should (string-match-p "Mode: batch" content))
-    (should-not (string-match-p "preserve_ui" content))))
-
 (provide 'test-mevedel-tool-exec-permission)
 
 ;;; test-mevedel-tool-exec-permission.el ends here
