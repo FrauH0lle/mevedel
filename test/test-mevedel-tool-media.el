@@ -32,7 +32,20 @@
     '((:mime "text/plain" :kind document :data "QUJD"))))
   (should-not
    (mevedel-tool-media-normalize-items
-   '((:mime "image/png" :kind image :data "")))))
+   '((:mime "image/png" :kind image :data ""))))
+  :doc "retains only correctly typed metadata without mutating input"
+  (let* ((item '(:mime "image/png" :kind image :data "QUJD"
+                :path 42 :source "capture" :page 0 :unknown secret))
+         (original (copy-tree item)))
+    (should (equal '((:mime "image/png" :kind image :data "QUJD"
+                     :source "capture" :page 0))
+                   (mevedel-tool-media-normalize-items (list item))))
+    (should (equal original item)))
+  :doc "rejects the whole collection when one item is invalid"
+  (should-not
+   (mevedel-tool-media-normalize-items
+    '((:mime "image/png" :kind image :data "QUJD")
+      (:mime "image/png" :kind image :data "")))))
 
 (mevedel-deftest mevedel-tool-media-reference-items ()
   ,test
@@ -258,21 +271,22 @@
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-tool-media-prepare-tool-result
-    (:vars ((mevedel-tool-media--store nil)))
+    (:vars ((mevedel-tool-media--store nil) (raw nil))
+     :before-each
+     (setq raw (mevedel-tool-media-attach-result
+                (concat "<media-file>\n"
+                        "mime_type: image/png\n"
+                        "encoding: base64\n"
+                        "data:\nQUJD\n</media-file>")
+                '((:mime "image/png" :kind image :data "QUJD"))
+                nil "toolu_original")))
   ,test
   (test)
   :doc "keeps provider-independent model text free of captured base64"
-  (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
-         (raw (mevedel-tool-media-attach-result
-               (concat "<media-file>\n"
-                       "mime_type: image/png\n"
-                       "encoding: base64\n"
-                       "data:\nQUJD\n</media-file>")
-               media nil "toolu_1"))
-         (prepared
+  (let* ((prepared
           (mevedel-tool-media-prepare-tool-result
            'unknown-backend
-           (list :id "toolu_1" :name "Read" :result raw)
+           (list :id "toolu_original" :name "Read" :result raw)
            nil)))
     (should (string-search "media omitted" (car prepared)))
     (should-not (string-search "QUJD" (car prepared)))
@@ -282,18 +296,11 @@
   ;; The store is empty and no durable record exists, so the reference
   ;; cannot resolve.  The model used to keep both the internal block and
   ;; the now-false "native media block attached" note.
-  (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
-         (raw (mevedel-tool-media-attach-result
-               (concat "<media-file>\n"
-                       "mime_type: image/png\n"
-                       "encoding: base64\n"
-                       "data:\nQUJD\n</media-file>")
-               media nil "toolu_gone"))
-         (mevedel-tool-media--store nil)
+  (let* ((mevedel-tool-media--store nil)
          (prepared
           (mevedel-tool-media-prepare-tool-result
            'unknown-backend
-           (list :id "toolu_gone" :name "Read" :result raw)
+           (list :id "toolu_original" :name "Read" :result raw)
            nil)))
     (should-not (string-search "mevedel-media-data" (car prepared)))
     (should (string-search "<media no longer available>" (car prepared)))
@@ -301,14 +308,7 @@
     (should-not (cdr prepared)))
 
   :doc "a foreign-id reference block stays literal even when unresolvable"
-  (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
-         (raw (mevedel-tool-media-attach-result
-               (concat "<media-file>\n"
-                       "mime_type: image/png\n"
-                       "encoding: base64\n"
-                       "data:\nQUJD\n</media-file>")
-               media nil "toolu_original"))
-         (mevedel-tool-media--store nil)
+  (let* ((mevedel-tool-media--store nil)
          (prepared
           (mevedel-tool-media-prepare-tool-result
            'unknown-backend
