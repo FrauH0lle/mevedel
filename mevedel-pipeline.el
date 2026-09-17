@@ -598,7 +598,17 @@ ignoring duplicate outcome"
                  (lambda ()
                    (funcall callback
                             (mevedel-pipeline--settlement
-                             context 'cancelled "Request cancelled"))))))))
+                             context 'cancelled "Request cancelled")))))))
+           (signal-failure
+            (lambda (error-class reason message)
+              (funcall clear-cancel)
+              (funcall finish-telemetry 'error error-class)
+              (mevedel-pipeline--with-context-default-directory
+               context
+               (lambda ()
+                 (funcall callback
+                          (mevedel-pipeline--settlement
+                           context reason message)))))))
       (when cancel-cell
         (setcar cancel-cell cancel-cont))
       (condition-case err
@@ -607,57 +617,22 @@ ignoring duplicate outcome"
            (lambda ()
              (funcall step context next-cont fail-cont)))
         (mevedel-validation-error
-         (funcall clear-cancel)
-         (funcall finish-telemetry 'error 'validation)
-         (mevedel-pipeline--with-context-default-directory
-          context
-          (lambda ()
-            (funcall callback
-                     (mevedel-pipeline--settlement
-                      context 'validation
-                      (or (cadr err) "Validation error"))))))
+         (funcall signal-failure 'validation 'validation
+                  (or (cadr err) "Validation error")))
         (mevedel-resource-error
-         (funcall clear-cancel)
-         (funcall finish-telemetry 'error 'validation)
-         (mevedel-pipeline--with-context-default-directory
-          context
-          (lambda ()
-            (funcall callback
-                     (mevedel-pipeline--settlement
-                      context 'invalid-resource
-                      (or (cadr err) "Invalid resource address"))))))
+         (funcall signal-failure 'validation 'invalid-resource
+                  (or (cadr err) "Invalid resource address")))
         (mevedel-permission-denied
-         (funcall clear-cancel)
-         (funcall finish-telemetry 'error 'permission-denied)
-         (mevedel-pipeline--with-context-default-directory
-          context
-          (lambda ()
-            (funcall callback
-                     (mevedel-pipeline--settlement
-                      context 'permission-denied
-                      (if (cadr err)
-                          (format "Permission denied: %s" (cadr err))
-                        "Permission denied"))))))
+         (funcall signal-failure 'permission-denied 'permission-denied
+                  (if (cadr err)
+                      (format "Permission denied: %s" (cadr err))
+                    "Permission denied")))
         (mevedel-pipeline-error
-         (funcall clear-cancel)
-         (funcall finish-telemetry 'error 'pipeline)
-         (mevedel-pipeline--with-context-default-directory
-          context
-          (lambda ()
-            (funcall callback
-                     (mevedel-pipeline--settlement
-                      context 'pipeline-error
-                      (or (cadr err) "Pipeline error"))))))
+         (funcall signal-failure 'pipeline 'pipeline-error
+                  (or (cadr err) "Pipeline error")))
         (error
-         (funcall clear-cancel)
-         (funcall finish-telemetry 'error (car-safe err))
-         (mevedel-pipeline--with-context-default-directory
-          context
-          (lambda ()
-            (funcall callback
-                     (mevedel-pipeline--settlement
-                      context 'pipeline-error
-                      (mevedel-resource-error-message err)))))))))))
+         (funcall signal-failure (car-safe err) 'pipeline-error
+                  (mevedel-resource-error-message err))))))))
 
 
 ;;
