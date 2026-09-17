@@ -223,49 +223,34 @@ run once this state replaces it."
     (add-hook 'transient-post-exit-hook
               #'mevedel-gptel-bridge--return-to-view)))
 
-(defun mevedel-gptel-bridge--edit-directive-args (args)
-  "Return ARGS with a bridge-restoring `:callback' wrapper when needed."
-  (if (not (memq (current-buffer)
-                 (list mevedel-gptel-bridge--return-view-buffer
-                       mevedel-gptel-bridge--return-data-buffer)))
-      ;; The pending restoration belongs to another view, or to none: its
-      ;; data buffer is not where this edit's settings belong.
-      args
-    (let* ((leading (and args (not (keywordp (car args)))))
-           (sym (and leading (car args)))
-           (plist (if leading (cdr args) args))
-           (callback (plist-get plist :callback))
-           (data-buffer mevedel-gptel-bridge--return-data-buffer)
-           (wrapped-callback
-            (lambda (message)
-              (mevedel-gptel-bridge--restore-window-buffers)
-              (if callback
-                  (if (buffer-live-p data-buffer)
-                      (with-current-buffer data-buffer
-                        (funcall callback message))
-                    (funcall callback message))
-                (mevedel-gptel-bridge--clear-return-state)))))
-      (setq plist (plist-put (copy-sequence plist)
-                             :callback wrapped-callback))
-      (if leading
-          (cons sym plist)
-        plist))))
-
 (defun mevedel-gptel-bridge--edit-directive-advice (orig-fn &rest args)
   "Wrap gptel directive edit callback while the bridge is active."
-  (let* ((args (mevedel-gptel-bridge--edit-directive-args args))
-         (leading (and args (not (keywordp (car args)))))
+  (let* ((leading (and args (not (keywordp (car args)))))
          (sym (and leading (car args)))
          (plist (if leading (cdr args) args))
-         (callback (plist-get plist :callback)))
-    (when callback
+         (callback (plist-get plist :callback))
+         (data-buffer mevedel-gptel-bridge--return-data-buffer)
+         (restore-p
+          (memq (current-buffer)
+                (list mevedel-gptel-bridge--return-view-buffer data-buffer))))
+    (when (or callback restore-p)
       (setq plist
             (plist-put
              (copy-sequence plist)
              :callback
              (lambda (message)
                (unwind-protect
-                   (funcall callback message)
+                   (if restore-p
+                       (progn
+                         (mevedel-gptel-bridge--restore-window-buffers)
+                         (if callback
+                             (if (buffer-live-p data-buffer)
+                                 (with-current-buffer data-buffer
+                                   (funcall callback message))
+                               (funcall callback message))
+                           (mevedel-gptel-bridge--clear-return-state)))
+                     ;; Unrelated edits keep their own callback buffer.
+                     (funcall callback message))
                  (unless (bound-and-true-p transient--prefix)
                    (mevedel-gptel-bridge--return-to-view)
                    (mevedel-gptel-bridge--cleanup-advice)))))))
