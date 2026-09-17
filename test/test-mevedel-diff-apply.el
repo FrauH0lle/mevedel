@@ -331,9 +331,7 @@ Lorem ipsum dolor sit amet, consetetur
             (should (equal expected-ref3
                            (mevedel-test--overlay-text reference-3))))
           (should (equal new-text
-                         (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string)))))
+                         (mevedel-test--read-file file))))
       (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
       (kill-buffer file-buffer)
       (delete-file file)))
@@ -378,9 +376,7 @@ Lorem ipsum dolor sit amet, consetetur
             (should (equal original (buffer-string)))
             (should-not (buffer-modified-p)))
           (should (equal original
-                         (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string)))))
+                         (mevedel-test--read-file file))))
       (kill-buffer diff-buffer)
       (kill-buffer file-buffer)
       (delete-file file)))
@@ -418,9 +414,7 @@ Lorem ipsum dolor sit amet, consetetur
                            (buffer-substring-no-properties
                             (overlay-start reference) (overlay-end reference)))))
           (should (equal expected
-                         (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string)))))
+                         (mevedel-test--read-file file))))
       (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
       (kill-buffer file-buffer)
       (delete-file file)))
@@ -491,9 +485,7 @@ Lorem ipsum dolor sit amet, consetetur
         (progn
           (mevedel-test--apply-diff diff-buffer file)
           (should (equal "created\n"
-                         (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string))))
+                         (mevedel-test--read-file file)))
           (with-current-buffer file-buffer
             (should (equal "created\n" (buffer-string)))))
       (kill-buffer diff-buffer)
@@ -528,57 +520,60 @@ Lorem ipsum dolor sit amet, consetetur
       (kill-buffer file-buffer)
       (when (file-exists-p file) (delete-file file))))
   :doc "rolls back create placeholders when a later write fails"
-  (let* ((root (make-temp-file "mevedel-test-write-rollback-" t))
-         (first-dir (file-name-concat root "created" "first"))
-         (sibling-dir (file-name-concat root "created" "sibling"))
-         (second-dir (file-name-concat root "second"))
-         (first (file-name-concat first-dir "one.txt"))
-         (sibling (file-name-concat sibling-dir "sibling.txt"))
-         (second (file-name-concat second-dir "two.txt"))
-         first-buffer sibling-buffer second-buffer diff-buffer first-modtime
-         prompted)
-    (unwind-protect
-        (progn
-          (make-directory second-dir)
-          (write-region "two\n" nil second nil 'silent)
-          (setq first-buffer (find-file-noselect first)
-                sibling-buffer (find-file-noselect sibling)
-                second-buffer (find-file-noselect second)
-                first-modtime
-                (with-current-buffer first-buffer (visited-file-modtime))
-                diff-buffer
-                (mevedel-test--create-multi-diff-buffer
-                 `(("ONE\n" ,first-buffer)
-                   ("SIBLING\n" ,sibling-buffer)
-                   ("TWO\n" ,second-buffer))
-                 root))
-          (mevedel-workspace-clear-registry)
-          (set-file-modes second-dir #o500)
-          (cl-letf (((symbol-function 'read-file-name)
-                     (lambda (&rest _)
-                       (setq prompted t)
-                       first)))
-            (should-error (mevedel-test--apply-diff diff-buffer first root)))
-          (should-not prompted)
-          (should-not (file-exists-p first))
-          (should-not (file-exists-p sibling))
-          (should-not (file-exists-p (file-name-concat root "created")))
-          (should (equal "two\n"
-                         (with-temp-buffer
-                           (insert-file-contents second)
-                           (buffer-string))))
-          (with-current-buffer first-buffer
-            (should (equal "" (buffer-string)))
-            (should (equal first-modtime (visited-file-modtime)))
-            (should (verify-visited-file-modtime first-buffer)))
-          (with-current-buffer second-buffer
-            (should (equal "two\n" (buffer-string)))))
-      (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
-      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
-      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
-      (when (buffer-live-p sibling-buffer) (kill-buffer sibling-buffer))
-      (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
-      (when (file-directory-p root) (delete-directory root t))))
+  (dolist (visit-sibling '(t nil))
+    (let* ((root (make-temp-file "mevedel-test-write-rollback-" t))
+           (first-dir (file-name-concat root "created" "first"))
+           (sibling-dir (file-name-concat root "created" "sibling"))
+           (second-dir (file-name-concat root "second"))
+           (first (file-name-concat first-dir "one.txt"))
+           (sibling (file-name-concat sibling-dir "sibling.txt"))
+           (second (file-name-concat second-dir "two.txt"))
+           first-buffer sibling-buffer second-buffer diff-buffer first-modtime
+           prompted)
+      (unwind-protect
+          (progn
+            (make-directory second-dir)
+            (write-region "two\n" nil second nil 'silent)
+            (setq first-buffer (find-file-noselect first)
+                  sibling-buffer (find-file-noselect sibling)
+                  second-buffer (find-file-noselect second)
+                  first-modtime
+                  (with-current-buffer first-buffer (visited-file-modtime))
+                  diff-buffer
+                  (mevedel-test--create-multi-diff-buffer
+                   `(("ONE\n" ,first-buffer)
+                     ("SIBLING\n" ,sibling-buffer)
+                     ("TWO\n" ,second-buffer))
+                   root))
+            (unless visit-sibling (kill-buffer sibling-buffer))
+            (mevedel-workspace-clear-registry)
+            (set-file-modes second-dir #o500)
+            (cl-letf (((symbol-function 'read-file-name)
+                       (lambda (&rest _)
+                         (setq prompted t)
+                         first)))
+              (should-error (mevedel-test--apply-diff diff-buffer first root)))
+            (should-not prompted)
+            (should (eq (buffer-live-p sibling-buffer) visit-sibling))
+            (should (eq (find-buffer-visiting sibling)
+                        (and visit-sibling sibling-buffer)))
+            (should-not (file-exists-p first))
+            (should-not (file-exists-p sibling))
+            (should-not (file-exists-p (file-name-concat root "created")))
+            (should (equal "two\n"
+                           (mevedel-test--read-file second)))
+            (with-current-buffer first-buffer
+              (should (equal "" (buffer-string)))
+              (should (equal first-modtime (visited-file-modtime)))
+              (should (verify-visited-file-modtime first-buffer)))
+            (with-current-buffer second-buffer
+              (should (equal "two\n" (buffer-string)))))
+        (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
+        (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+        (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+        (when (buffer-live-p sibling-buffer) (kill-buffer sibling-buffer))
+        (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+        (when (file-directory-p root) (delete-directory root t)))))
   :doc "restores earlier deletions when a later deletion fails"
   (let* ((root (make-temp-file "mevedel-test-delete-rollback-" t))
          (first-dir (file-name-concat root "first"))
@@ -600,13 +595,9 @@ Lorem ipsum dolor sit amet, consetetur
           (set-file-modes second-dir #o500)
           (should-error (mevedel-test--apply-diff diff-buffer first))
           (should (equal "one\n"
-                         (with-temp-buffer
-                           (insert-file-contents first)
-                           (buffer-string))))
+                         (mevedel-test--read-file first)))
           (should (equal "two\n"
-                         (with-temp-buffer
-                           (insert-file-contents second)
-                           (buffer-string)))))
+                         (mevedel-test--read-file second))))
       (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
       (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
       (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
@@ -647,13 +638,9 @@ Lorem ipsum dolor sit amet, consetetur
                      (alist-get first-buffer
                                 (mevedel--instruction-alist-value))))))
           (should (equal "one\n"
-                         (with-temp-buffer
-                           (insert-file-contents first)
-                           (buffer-string))))
+                         (mevedel-test--read-file first)))
           (should (equal "two\n"
-                         (with-temp-buffer
-                           (insert-file-contents second)
-                           (buffer-string))))
+                         (mevedel-test--read-file second)))
           (with-current-buffer first-buffer
             (should (equal "one\n" (buffer-string)))
             (should (eq first-buffer (overlay-buffer directive)))
