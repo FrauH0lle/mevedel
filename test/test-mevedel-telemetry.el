@@ -1034,7 +1034,42 @@
     (mevedel-telemetry--gptel-log-raw
      (lambda (data type no-json) (setq seen (list data type no-json)))
      "{\"a\":1}" "response body" nil)
-    (should (equal seen '("{\"a\":1}" "response body" t)))))
+    (should (equal seen '("{\"a\":1}" "response body" t))))
+
+  :doc "analyzes native raw and pretty log entries in streaming order"
+  (let* ((root (make-temp-file "mevedel-native-log-" t))
+         (path (file-name-concat root "synthetic.log"))
+         (script (file-name-concat
+                  (file-name-directory (locate-library "mevedel-telemetry"))
+                  "scripts" "analyze-gptel-log.py"))
+         (gptel--log-buffer-name (generate-new-buffer-name " *native-log-test*")))
+    (unwind-protect
+        (dolist (raw '(nil t))
+          (with-current-buffer (get-buffer-create gptel--log-buffer-name)
+            (erase-buffer))
+          (dolist (entry '(("request body" . "{\"messages\":[{\"role\":\"user\",\"content\":\"First\"}]}")
+                           ("response body" . "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n")
+                           ("request body" . "{\"messages\":[{\"role\":\"user\",\"content\":\"Second\"}]}")))
+            (if raw
+                (mevedel-telemetry--gptel-log-raw #'gptel--log (cdr entry) (car entry))
+              (gptel--log (cdr entry) (car entry))))
+          (with-current-buffer gptel--log-buffer-name
+            (write-region (point-min) (point-max) path nil 'silent))
+          (with-temp-buffer
+            (should (zerop (call-process "python3" nil (list (current-buffer) t)
+                                         nil "-B" script path "--json")))
+            (goto-char (point-min))
+            (let ((events (json-parse-buffer :object-type 'plist :array-type 'list)))
+              (should (equal '("request" "stream_finish" "request")
+                             (mapcar (lambda (event) (plist-get event :type)) events)))
+              (should (equal "First" (plist-get (car events) :last_user)))
+              (should (equal "Second" (plist-get (nth 2 events) :last_user)))
+              (should (< (plist-get (car events) :line)
+                         (plist-get (nth 1 events) :line)
+                         (plist-get (nth 2 events) :line))))))
+      (when-let* ((buffer (get-buffer gptel--log-buffer-name)))
+        (kill-buffer buffer))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-debug
   (:quiet t :doc "toggles profiling and persists captured gptel and view debug logs")
