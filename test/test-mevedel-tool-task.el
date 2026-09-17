@@ -47,13 +47,10 @@
 (defmacro test-mevedel-tool-task--with-session (session-var &rest body)
   "Bind SESSION-VAR to a fresh session, install it buffer-locally, run BODY."
   (declare (indent 1))
-  `(let ((,session-var (test-mevedel-tool-task--make-session))
-         (buf (generate-new-buffer " *task-test*")))
-     (unwind-protect
-         (with-current-buffer buf
-           (setq-local mevedel--session ,session-var)
-           ,@body)
-       (kill-buffer buf))))
+  `(let ((,session-var (test-mevedel-tool-task--make-session)))
+     (with-temp-buffer
+       (setq-local mevedel--session ,session-var)
+       ,@body)))
 
 (defmacro test-mevedel-tool-task--with-view (session-var data-var view-var
                                                          &rest body)
@@ -106,24 +103,13 @@
   (:doc "`mevedel-tool-task--parse-status' maps strings and symbols to status symbols")
   ,test
   (test)
-  :doc "nil and empty string default to pending"
-  (progn
-    (should (eq 'pending (mevedel-tool-task--parse-status nil)))
-    (should (eq 'pending (mevedel-tool-task--parse-status "")))
-    (should (eq 'pending (mevedel-tool-task--parse-status :json-false))))
-
-  :doc "string forms parse to symbols"
-  (progn
-    (should (eq 'pending (mevedel-tool-task--parse-status "pending")))
-    (should (eq 'in-progress (mevedel-tool-task--parse-status "in_progress")))
-    (should (eq 'in-progress (mevedel-tool-task--parse-status "in-progress")))
-    (should (eq 'completed (mevedel-tool-task--parse-status "completed"))))
-
-  :doc "symbols pass through when valid"
-  (progn
-    (should (eq 'pending (mevedel-tool-task--parse-status 'pending)))
-    (should (eq 'in-progress (mevedel-tool-task--parse-status 'in-progress)))
-    (should (eq 'completed (mevedel-tool-task--parse-status 'completed))))
+  :doc "maps absent, string, and symbol forms to canonical statuses"
+  (dolist (entry '((nil . pending) ("" . pending) (:json-false . pending)
+                   ("pending" . pending) ("in_progress" . in-progress)
+                   ("in-progress" . in-progress) ("completed" . completed)
+                   (pending . pending) (in-progress . in-progress)
+                   (completed . completed)))
+    (should (eq (cdr entry) (mevedel-tool-task--parse-status (car entry)))))
 
   :doc "unknown strings and symbols signal an error"
   (progn
@@ -590,6 +576,33 @@
 
 ;;
 ;;; Grouped display
+
+(mevedel-deftest mevedel-tool-task--sort-active-tasks
+  (:doc "orders priority then ID, keeping equal keys and input order stable")
+  (let* ((tasks (mapcar (lambda (spec) (apply #'mevedel-task--create spec))
+                        '((:id 1 :status pending :blocked-by (9))
+                          (:id 2 :status pending)
+                          (:id 3 :status in-progress)
+                          (:id 2 :status pending)
+                          (:id 1 :status pending))))
+         (original (copy-sequence tasks))
+         (sorted (mevedel-tool-task--sort-active-tasks tasks)))
+    (should (equal (mapcar (lambda (task) (cl-position task original :test #'eq))
+                           sorted)
+                   '(2 4 1 3 0)))
+    (should (equal tasks original))))
+
+(mevedel-deftest mevedel-tool-task--sort-completed-tasks
+  (:doc "orders by ID without reversing ties or modifying the input list")
+  (let* ((tasks (mapcar (lambda (id)
+                         (mevedel-task--create :id id :status 'completed))
+                        '(3 1 2 1)))
+         (original (copy-sequence tasks))
+         (sorted (mevedel-tool-task--sort-completed-tasks tasks)))
+    (should (equal (mapcar (lambda (task) (cl-position task original :test #'eq))
+                           sorted)
+                   '(1 3 2 0)))
+    (should (equal tasks original))))
 
 (mevedel-deftest mevedel-tool-task--format-groups
   (:doc "`mevedel-tool-task--format-groups' orders, groups, and caps rows")
