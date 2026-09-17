@@ -107,7 +107,65 @@
       (with-timeout (2 (error "Process did not exit"))
         (while (not done)
           (accept-process-output nil 0.01))))
-    (should (eq 'required captured-mode))))
+    (should (eq 'required captured-mode)))
+  :doc "shares one terminal contract for direct and confined child attempts"
+  (skip-unless (plist-get (mevedel-sandbox-probe) :available))
+  (dolist (mode '(off required))
+    (dolist (cancel-p '(nil t))
+      (let* ((root (make-temp-file "mevedel-one-shot-contract-" t))
+             (ready (file-name-concat root "ready"))
+             (protected (file-name-concat root "protected-missing"))
+             (mevedel-protected-paths
+              `((,(concat protected "/**") . inaccessible)))
+             (mevedel-sandbox-mode mode)
+             (mevedel-execution-process--child-kill-delay 0.05)
+             (mevedel-execution-telemetry-summary-cell (list nil))
+             (settlements 0)
+             result cancel callback-saw-placeholder)
+        (unwind-protect
+            (progn
+              (setq cancel
+                    (mevedel-execution-start-one-shot
+                     (lambda (value)
+                       (cl-incf settlements)
+                       (setq result value
+                             callback-saw-placeholder
+                             (file-exists-p protected)))
+                     :name "mevedel-one-shot-contract"
+                     :command
+                     (list "sh" "-c"
+                           (if cancel-p
+                               "printf ready; touch ready; exec sleep 30"
+                             "printf ready; touch ready; printf done"))
+                     :workdir root :writable-roots (list root)))
+              (should (functionp cancel))
+              (when cancel-p
+                (test-mevedel-execution--wait
+                 (lambda () (file-exists-p ready)))
+                (when (eq mode 'required)
+                  (should (file-directory-p protected)))
+                (funcall cancel)
+                (funcall cancel))
+              (test-mevedel-execution--wait (lambda () result))
+              (should (= 1 settlements))
+              (should-not callback-saw-placeholder)
+              (should (equal (if cancel-p "ready" "readydone")
+                             (plist-get result :output)))
+              (if cancel-p
+                  (should (eq 'aborted (plist-get result :termination)))
+                (should (= 0 (plist-get result :exit-code))))
+              (let ((summary (plist-get result :sandbox-summary)))
+                (should (= 1 (plist-get summary :attempt-count)))
+                (should (= 1 (plist-get summary :started-count)))
+                (should (= 0 (plist-get summary :refused-count)))
+                (should (eq (if (eq mode 'off) 'off 'bubblewrap)
+                            (plist-get summary :sandbox)))
+                (should (equal summary
+                               (car mevedel-execution-telemetry-summary-cell))))
+              (funcall cancel)
+              (should (= 1 settlements)))
+          (mevedel-execution-teardown-all)
+          (delete-directory root t))))))
 
 (mevedel-deftest mevedel-execution-run-one-shot ()
   ,test
