@@ -252,8 +252,10 @@ contains the corresponding operational details.
 - **A later 53-record profile found 4,068 control programs and 213
   authentications of one accepted pass.** Recovery/expiry took 2.72/5.56 seconds.
   One authenticated immutable pass is now reused within an observation, discarded
-  after publication and between operations. Carrying authenticated hashes and
-  reading each public decision once reduced those times to 1.34/2.89 seconds
+  after publication and between operations. Rejection evidence likewise reuses
+  the decision reader's authenticated bundle, removing a second authentication;
+  subsequent observations still detect changed bytes. Carrying authenticated hashes
+  and reading each public decision once reduced those times to 1.34/2.89 seconds
   without shrinking history or parallelizing the test. Deletion still rechecks
   accepted hashes; tests verify later corruption and edits remain errors.
 - **Cancellation and storage rejection lost received usage.** A read-only usage

@@ -261,8 +261,7 @@ authority and promises no permanent semantic suppression."
                    (not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get entry :pass-id))))
           (let ((row
                  (condition-case nil
-                     (let* ((_ (mevedel-memory-decision--published workspace entry))
-                            (accepted (mevedel-memory-store-accepted workspace (plist-get entry :pass-id)))
+                     (let* ((accepted (plist-get (mevedel-memory-decision--published workspace entry) :accepted))
                             (proposal (seq-find (lambda (proposal) (equal (plist-get entry :proposal-id) (plist-get proposal :id)))
                                                 (plist-get accepted :proposals)))
                             (root (mevedel-memory-scope--root (plist-get (plist-get accepted :prepared) :scope)
