@@ -13,6 +13,8 @@ cannot start until their remote transaction succeeds.
 
 A renewable, generation-based session lease gives one client mutation
 authority while allowing other clients to inspect the last published state.
+Transfer path resolution is read-only; protocol writers create their required
+mailbox and fence directories explicitly.
 Every ownership claim exclusively creates the next generation and activates
 only after validating its unchanged predecessor, so a stale renew or release
 cannot overwrite or delete a newer owner.  Validation covers the record's
@@ -67,6 +69,10 @@ co-located session history, and requires serialized publication rather than
 asynchronous callbacks writing directly through TRAMP.
 
 ## Decision history
+
+The simplification audit reproduced lease-status and decision reads creating
+absent control directories through shared path helpers. Directory creation now
+belongs to protocol writes, removing that hidden effect from observation.
 
 An injected adoption-time acquisition failure
 showed that reacquiring after live mutation could leave neither parent nor

@@ -151,7 +151,7 @@ target directories would mutate the session on behalf of an observer."
   "Return the immutable release-fence path for GENERATION in DIRECTORY."
   (let ((path
          (file-name-concat
-          (mevedel-session-transfer--directory directory "fences")
+          (mevedel-session-transfer--path directory "fences")
           (format "fence-%020d.el" generation))))
     (mevedel-session-control-fs-physical-path path)))
 
@@ -206,7 +206,7 @@ target directories would mutate the session on behalf of an observer."
   "Return the immutable request path for lease GENERATION in DIRECTORY."
   (let ((path
          (file-name-concat
-          (mevedel-session-transfer--directory directory "requests")
+          (mevedel-session-transfer--path directory "requests")
           (format "request-%020d.el" generation))))
     (mevedel-session-control-fs-physical-path path)))
 
@@ -215,7 +215,7 @@ target directories would mutate the session on behalf of an observer."
   "Return the immutable decision path for lease GENERATION in DIRECTORY."
   (let ((path
          (file-name-concat
-          (mevedel-session-transfer--directory directory "requests")
+          (mevedel-session-transfer--path directory "requests")
           (format "decision-%020d.el" generation))))
     (mevedel-session-control-fs-physical-path path)))
 
@@ -460,6 +460,7 @@ explicitly decides and releases its lease."
                           (+ now mevedel-session-transfer-prompt-timeout))))
               (unless (mevedel-session-transfer--valid-request-p request now)
                 (error "Invalid control-transfer request"))
+              (mevedel-session-transfer--directory directory "requests")
               (if (mevedel-session-durability--create-plist
                    request-path request)
                   request
@@ -573,6 +574,7 @@ transfer authority."
                        (plist-get request :requester-client-id)
                        :decision 'grant
                        :decided-at now)))
+            (mevedel-session-transfer--directory directory "requests")
             (unless (mevedel-session-durability--create-plist
                      decision-path candidate)
               (setq candidate
@@ -639,6 +641,7 @@ attempting to rewrite an existing decision fails."
                      (> (plist-get current :expires-at) now)
                      request)
           (error "No current control-transfer request"))
+        (mevedel-session-transfer--directory directory "requests")
         (let* ((path (mevedel-session-transfer--decision-path
                       directory (plist-get request :generation)))
                (candidate
@@ -754,6 +757,7 @@ acceptance alone never changes the lease owner."
                             (plist-get current :client-id)))
           (error "Control transfer is not ready to release")))
       (setq release-generation (plist-get current :generation))
+      (mevedel-session-transfer--directory directory "fences")
       (let* ((path (mevedel-session-transfer--fence-path
                     directory release-generation))
              (candidate
