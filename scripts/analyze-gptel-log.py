@@ -111,22 +111,19 @@ def summarize_user_content(content) -> str:
     return text[:120]
 
 
-def _parse_next_json(lines: list, start: int) -> Optional[dict]:
-    """Parse the next JSON object starting from line index start."""
+def _parse_next_json(lines: list, start: int, stop: int) -> Optional[dict]:
+    """Parse the next JSON object between start and stop line indices."""
     i = start
-    while i < len(lines) and lines[i].strip() != "{":
+    while i < stop and not lines[i].lstrip().startswith("{"):
         i += 1
-    if i >= len(lines):
+    if i >= stop:
         return None
 
-    text = "\n".join(lines[i:])
+    text = "".join(lines[i:stop]).lstrip()
     decoder = json.JSONDecoder()
     try:
-        body, end = decoder.raw_decode(text)
-        consumed_text = text[:end]
-        lines_consumed = consumed_text.count("\n")
-        body["_end_line"] = i + lines_consumed + 1
-        return body
+        body, _ = decoder.raw_decode(text)
+        return body if isinstance(body, dict) else None
     except json.JSONDecodeError:
         return None
 
@@ -186,38 +183,44 @@ def parse_log(filepath: str) -> list:
     events = []
 
     # Find all marker lines: { "gptel": "...", "timestamp": "..." }
-    # Each marker is a small JSON object spanning 3-4 lines.
+    # Native raw capture uses one line; ordinary gptel logs pretty-print it.
     markers = []
     i = 0
     while i < len(lines):
-        if lines[i].strip() == "{" and i + 1 < len(lines) and '"gptel"' in lines[i + 1]:
+        stripped = lines[i].strip()
+        if stripped.startswith("{") and '"gptel"' in stripped:
+            j = i
+        elif stripped == "{" and i + 1 < len(lines) and '"gptel"' in lines[i + 1]:
             j = i + 1
             while j < len(lines) and lines[j].strip() != "}":
                 j += 1
-            marker_text = "".join(lines[i : j + 1])
-            try:
-                marker = json.loads(marker_text)
-                markers.append((i, j + 1, marker))
-            except json.JSONDecodeError:
-                pass
-            i = j + 1
         else:
             i += 1
+            continue
+        marker_text = "".join(lines[i : j + 1])
+        try:
+            marker = json.loads(marker_text)
+            if isinstance(marker, dict) and "gptel" in marker:
+                markers.append((i, j + 1, marker))
+        except json.JSONDecodeError:
+            pass
+        i = j + 1
 
     # Track the last-seen HTTP status per response-headers marker, so that
     # when we process the next response body we can attach the status.
     pending_status = None
 
-    for start_line, after_marker_line, marker in markers:
+    for index, (start_line, after_marker_line, marker) in enumerate(markers):
+        next_marker_line = markers[index + 1][0] if index + 1 < len(markers) else len(lines)
         gptel_type = marker.get("gptel", "")
         timestamp = marker.get("timestamp", "?")
 
         if gptel_type == "response headers":
             # Extract status from the string that follows the marker.
             idx = after_marker_line
-            while idx < len(lines) and not lines[idx].lstrip().startswith('"HTTP'):
+            while idx < next_marker_line and not lines[idx].lstrip().startswith('"HTTP'):
                 idx += 1
-            if idx < len(lines):
+            if idx < next_marker_line:
                 try:
                     parts = lines[idx].lstrip().split()
                     pending_status = int(parts[1])
@@ -225,7 +228,7 @@ def parse_log(filepath: str) -> list:
                     pass
             continue
 
-        body = _parse_next_json(lines, after_marker_line)
+        body = _parse_next_json(lines, after_marker_line, next_marker_line)
         if not body:
             continue
 
@@ -338,7 +341,7 @@ def parse_log(filepath: str) -> list:
     # Pick up streaming finishes from SSE `data:` lines (both APIs).
     pending_tool_calls = []
     pending_content = ""
-    for line in lines:
+    for line_number, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped.startswith("data: {"):
             continue
@@ -355,6 +358,7 @@ def parse_log(filepath: str) -> list:
                 usage = data.get("usage", {})
                 events.append({
                     "type": "stream_finish",
+                    "line": line_number,
                     "finish_reason": fr,
                     "prompt_tokens": usage.get("prompt_tokens", 0),
                     "completion_tokens": usage.get("completion_tokens", 0),
@@ -377,6 +381,7 @@ def parse_log(filepath: str) -> list:
             usage = resp.get("usage", {})
             events.append({
                 "type": "stream_finish",
+                "line": line_number,
                 "finish_reason": "completed",
                 "tool_calls": list(pending_tool_calls),
                 "content_preview": pending_content[:200],
@@ -390,13 +395,13 @@ def parse_log(filepath: str) -> list:
             err = resp.get("error") or {}
             events.append({
                 "type": "error",
-                "line": 0,
+                "line": line_number,
                 "timestamp": "?",
                 "error_code": str(err.get("code", "?")),
                 "error_message": str(err.get("message", "response.failed"))[:200],
             })
 
-    return events
+    return sorted(events, key=lambda event: event["line"])
 
 
 def format_trace(events: list, verbose: bool = False) -> str:

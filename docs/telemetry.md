@@ -222,6 +222,11 @@ telemetry still follows the bounded metadata policy. See
 [ADR 0118](adr/0118-keep-diagnostics-observational-and-bounded.md) for the
 instrumentation tradeoffs.
 
+From the repository checkout, `python3 scripts/analyze-gptel-log.py LOG_FILE`
+analyzes raw or pretty-printed gptel captures. Add `--json` for structured events.
+Requests, responses and streaming completions retain source line numbers and
+appear in log order.
+
 Each profiler run gets a directory containing:
 
 ```text
