@@ -26,41 +26,12 @@
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
 
-;; `mevedel-ptc-checkpoint'
-(declare-function mevedel-ptc-checkpoint-note
-                  "mevedel-ptc-checkpoint" (session id updates))
-(declare-function mevedel-ptc-checkpoint-start
-                  "mevedel-ptc-checkpoint" (session buffer id script))
-(declare-function mevedel-ptc-checkpoint-update
-                  "mevedel-ptc-checkpoint" (session buffer id updates))
-
-;; `mevedel-ptc-interpreter'
-(declare-function mevedel-ptc-check-value
-                  "mevedel-ptc-interpreter"
-                  (state value &optional retain-p count-shared-p serializable-p))
-(declare-function mevedel-ptc-close "mevedel-ptc-interpreter" (state))
-(declare-function mevedel-ptc-intern "mevedel-ptc-interpreter" (state name))
-(declare-function mevedel-ptc-keyword-p "mevedel-ptc-interpreter" (value))
-(declare-function mevedel-ptc-start "mevedel-ptc-interpreter" (script roster &optional standalone-tools))
-(declare-function mevedel-ptc-step
-                  "mevedel-ptc-interpreter"
-                  (state &optional resume-value resume-retained-p))
-(defvar mevedel-ptc-max-value-bytes)
-(defvar mevedel-ptc-max-value-nodes)
-
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-active-tool-use-id "mevedel-pipeline" ())
 (declare-function mevedel-pipeline-run-tool-outcome
                   "mevedel-pipeline" (tool callback args &optional metadata))
 (autoload 'mevedel-pipeline-active-tool-use-id "mevedel-pipeline")
 (autoload 'mevedel-pipeline-run-tool-outcome "mevedel-pipeline")
-
-;; `mevedel-structs'
-(declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
-(declare-function mevedel-session-execution-target
-                  "mevedel-structs" (session))
-(defvar mevedel--current-request)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-current-session
@@ -146,8 +117,7 @@ declared arguments and only then interned.  An undeclared argument is an
 error naming what the tool does accept, which is also the script's
 earliest chance to learn it got the contract wrong."
   (mevedel-ptc-check-value nil guest-args nil nil t)
-  (let ((declared (mapcar (lambda (spec) (symbol-name (car spec)))
-                          (mevedel-tool-args tool)))
+  (let ((specs (mevedel-tool-args tool))
         (name (mevedel-tool-name tool))
         (rest guest-args)
         (out nil))
@@ -157,15 +127,15 @@ earliest chance to learn it got the contract wrong."
           (error "%s: arguments must be :keyword value pairs" name))
         (unless rest
           (error "%s: argument %s has no value" name (symbol-name key)))
-        (let ((bare (substring (symbol-name key) 1))
-              (value (pop rest)))
-          (unless (member bare declared)
+        (let* ((bare (substring (symbol-name key) 1))
+               (value (pop rest))
+               (spec (cl-find bare specs :test #'equal
+                              :key (lambda (arg) (symbol-name (car arg))))))
+          (unless spec
             (error "%s has no argument `%s'; it accepts: %s"
-                   name bare (string-join declared ", ")))
-          (let* ((spec (cl-find bare (mevedel-tool-args tool)
-                                :key (lambda (arg) (symbol-name (car arg)))
-                                :test #'equal))
-                 (schema (append (list :type (cadr spec)) (nthcdr 4 spec))))
+                   name bare
+                   (mapconcat (lambda (arg) (symbol-name (car arg))) specs ", ")))
+          (let ((schema (append (list :type (cadr spec)) (nthcdr 4 spec))))
             (setq out (append out (list (intern (concat ":" bare))
                                        (mevedel-ptc-driver--argument-value value schema))))))))
     out))
@@ -231,10 +201,7 @@ render worse than no value at all."
 
 (defun mevedel-ptc-driver--render-value (value)
   "Return the model-visible rendering of a script's final VALUE."
-  (cond
-   ((stringp value) value)
-   ((null value) "nil")
-   (t (prin1-to-string value))))
+  (if (stringp value) value (prin1-to-string value)))
 
 (defun mevedel-ptc-driver--partial-summary (calls)
   "Return a bounded model-visible summary of the partial child CALLS audit."
@@ -244,12 +211,10 @@ render worse than no value at all."
        (string-join
         (mapcar
          (lambda (call)
-           (format "- %s %s (%s)"
+           (format "- %s %s %s (%s)"
                    (plist-get call :id)
-                   (format "%s %s"
-                           (plist-get call :tool)
-                           (mevedel-ptc-driver--preview
-                            (plist-get call :args)))
+                   (plist-get call :tool)
+                   (mevedel-ptc-driver--preview (plist-get call :args))
                    (plist-get call :status)))
          calls)
         "\n"))
@@ -369,8 +334,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                (child-cancellers nil)
                (batch-number 0)
                (pending nil)
-               (active nil)
-               (dispatch-many nil))
+               (active nil))
           (when checkpoint-session
             (unless (mevedel-ptc-checkpoint-start
                      checkpoint-session data-buffer envelope-id script)
@@ -578,7 +542,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                         (:tool
                          (funcall dispatch (nth 1 step) (nth 2 step)))
                         (:tools
-                         (funcall dispatch-many (nth 1 step))))))))
+                         (funcall dispatch-batch (nth 1 step))))))))
                (launch-child
                 (lambda (task known-total complete)
                   (let ((name (plist-get task :name))
@@ -820,7 +784,6 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                            total)))))))
                       (funcall progress 'progress nil total)
                       (funcall schedule-batch))))))
-            (setq dispatch-many dispatch-batch)
             (when (bound-and-true-p mevedel--current-request)
               (mevedel-request-push-canceller
                mevedel--current-request
