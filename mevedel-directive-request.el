@@ -43,7 +43,6 @@
 (declare-function gptel-request "ext:gptel-request")
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-prompt-transform-functions)
-(defvar gptel-response-separator)
 (defvar gptel-stream)
 
 ;; `mevedel-chat'
@@ -234,9 +233,9 @@
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-		  "mevedel-utilities" (start end))
-(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(declare-function mevedel--insert-user-turn
+                  "mevedel-utilities" (input))
+(autoload 'mevedel--insert-user-turn "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--agent-invocation)
@@ -530,22 +529,8 @@ be inserted."
             :directive-id directive-id
             :action action
             :turn turn)))
-    (let ((user-turn-start (point)))
-      (unless (bobp)
-        (insert gptel-response-separator))
-      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-        (let ((prefix-length (length prefix)))
-          (unless (and (>= (point) (+ (point-min) prefix-length))
-                       (string=
-                        (buffer-substring-no-properties
-                         (- (point) prefix-length) (point))
-                        prefix))
-            (unless (bolp)
-              (insert "\n"))
-            (insert prefix))))
-      (insert (format "%s%s%s\n"
-                      header-prefix truncated-summary header-postfix))
-      (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
+    (mevedel--insert-user-turn
+     (format "%s%s%s" header-prefix truncated-summary header-postfix))
     (let ((cur-pt (point)))
       (insert (if (derived-mode-p 'markdown-mode)
                   (propertize full-prompt-str

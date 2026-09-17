@@ -18,8 +18,6 @@
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
-(defvar gptel-prompt-prefix-alist)
-(defvar gptel-response-separator)
 
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
@@ -35,9 +33,9 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-                  "mevedel-utilities" (start end))
-(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(declare-function mevedel--insert-user-turn
+                  "mevedel-utilities" (input))
+(autoload 'mevedel--insert-user-turn "mevedel-utilities")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--forward-input
@@ -150,18 +148,7 @@
   (with-current-buffer data-buffer
     (mevedel-init--ensure-sendable)
     (goto-char (point-max))
-    (let ((user-turn-start (point)))
-      (insert gptel-response-separator)
-      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-        (let ((prefix-length (length prefix)))
-          (unless (and (>= (point) (+ (point-min) prefix-length))
-                       (string= (buffer-substring-no-properties
-                                 (- (point) prefix-length) (point))
-                                prefix))
-            (unless (bolp) (insert "\n"))
-            (insert prefix))))
-      (insert prompt "\n")
-      (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
+    (mevedel--insert-user-turn prompt)
     (gptel-send)))
 
 (defun mevedel-init--dispatch (focus)

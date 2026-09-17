@@ -1243,11 +1243,13 @@ as a zero-width overlay near point from `argument-hint` or remaining
 `arguments` names. They are not buffer text and are never sent to the
 model.
 
-Text inserted as a user turn must be plain transcript text. User send and
-queued-drain paths strip copied view,
-tool, read-only, and `gptel` text properties, then restore only internal
-render-data blocks as `'gptel 'mevedel-render-data`; UI properties copied
-from the view must not become model-visible transcript state.
+Root prompt producers share `mevedel--insert-user-turn`, which applies the
+configured gptel separator and prompt prefix and clears copied view, tool,
+read-only, and `gptel` properties. Atomic mention bindings and live structural
+provenance survive this cleanup; the transcript grammar restores internal
+blocks' ignored properties. UI properties copied from the view must not become
+model-visible transcript state. Callers retain request admission, response
+markers, and view updates.
 
 ## File Drag/Drop And Clipboard Images
 
