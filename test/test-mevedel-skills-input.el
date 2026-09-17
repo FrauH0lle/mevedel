@@ -514,12 +514,9 @@ spanning lines")))
                               :invoked-skills))))))))
 
 (defun test-mevedel-skills-input--staged-bodies (fsm)
-  "Return and clear reminder bodies staged on FSM."
-  (let* ((info (gptel-fsm-info fsm))
-         (entries (plist-get info :mevedel-reminder-entries)))
-    (setf (gptel-fsm-info fsm)
-          (plist-put info :mevedel-reminder-entries nil))
-    (mapcar (lambda (entry) (plist-get entry :body)) entries)))
+  "Return reminder bodies staged on FSM."
+  (mapcar (lambda (entry) (plist-get entry :body))
+          (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
 
 (mevedel-deftest mevedel-skills-input-transform-inline-attachments ()
   ,test
