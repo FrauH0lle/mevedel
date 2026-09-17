@@ -526,11 +526,7 @@ connection charges for, so the program path is proved here too."
               (should (plist-get result :timed-out-p))
               (should (eq 'timed-out (plist-get result :termination)))
               (setq child-pid
-                    (string-to-number
-                     (string-trim
-                      (with-temp-buffer
-                        (insert-file-contents pid-file)
-                        (buffer-string)))))
+                    (test-mevedel-execution--read-pid pid-file))
               (should (> child-pid 0))
               (should
                (cl-some
@@ -578,11 +574,7 @@ connection charges for, so the program path is proved here too."
                     :timeout 0.05
                     :session session)))
               (setq group-id
-                    (string-to-number
-                     (string-trim
-                      (with-temp-buffer
-                        (insert-file-contents pid-file)
-                        (buffer-string)))))
+                    (test-mevedel-execution--read-pid pid-file))
               (should (eq 'unknown (plist-get result :termination)))
               (should (mevedel-execution-mutation-blocked-p session))))
       (when session
@@ -1034,11 +1026,7 @@ connection charges for, so the program path is proved here too."
             (test-mevedel-execution--wait
              (lambda () (file-exists-p holder-file)))
             (setq holder-pid
-                  (string-to-number
-                   (string-trim
-                    (with-temp-buffer
-                      (insert-file-contents holder-file)
-                      (buffer-string)))))
+                  (test-mevedel-execution--read-pid holder-file))
             ;; Let the short-lived child become the held zombie.
             (let ((deadline (+ (float-time) 0.3)))
               (while (< (float-time) deadline)
@@ -1998,7 +1986,7 @@ work in flight genuinely unprovable rather than merely finished."
      (tramp-cleanup-connection vec nil t)))
 
 (defun test-mevedel-execution-remote--read-group-identity (path)
-  "Return the process-group, child PID, and child start time stored at PATH."
+  "Return the numeric process identity fields stored at PATH."
   (mapcar
    #'string-to-number
    (split-string
@@ -2205,13 +2193,8 @@ work in flight genuinely unprovable rather than merely finished."
                             (buffer-string)))))
           (pcase-let
               ((`(,group ,child ,child-start ,parent ,parent-start)
-                (mapcar
-                 #'string-to-number
-                 (split-string
-                  (string-trim
-                   (with-temp-buffer
-                     (insert-file-contents identity-file)
-                     (buffer-string)))))))
+                (test-mevedel-execution-remote--read-group-identity
+                 identity-file)))
             (setq group-id group
                   child-pid child
                   child-start-time child-start
@@ -2227,13 +2210,8 @@ work in flight genuinely unprovable rather than merely finished."
         (ignore-errors
           (pcase-let
               ((`(,group ,child ,child-start ,parent ,parent-start)
-                (mapcar
-                 #'string-to-number
-                 (split-string
-                  (string-trim
-                   (with-temp-buffer
-                     (insert-file-contents identity-file)
-                     (buffer-string)))))))
+                (test-mevedel-execution-remote--read-group-identity
+                 identity-file)))
             (setq group-id group
                   child-pid child
                   child-start-time child-start
