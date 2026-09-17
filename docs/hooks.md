@@ -373,6 +373,10 @@ the feedback they modify.  The hidden audit block is stripped at
 
 Hook steps must read session/workspace/default-directory from the pipeline
 context, matching the existing rule for all post-handler steps.
+The hook owner supplies tool-context accumulation, audit construction, and
+dispatch in the captured buffer. Both the pipeline and permission orchestration
+use those operations; permission handling can load and run without loading the
+execution pipeline.
 
 ## Lifecycle integration
 

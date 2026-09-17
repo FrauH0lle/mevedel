@@ -22,6 +22,7 @@
          (compiled-root (make-temp-file "mevedel-tool-owner-" t))
          (emacs (expand-file-name invocation-name invocation-directory))
          (owners '("mevedel-bash-policy.el"
+                   "mevedel-hooks.el"
                    "mevedel-pipeline.el"
                    "mevedel-tool-exec-permission.el"
                    "mevedel-tool-exec.el"
@@ -212,17 +213,49 @@
                                :name "cold" :permission-mode 'ask)))
                  (mevedel-tool-permission-step
                   (list :tool tool :args nil :session session)
-                  (lambda (_context) (setq called t)) #'ignore)
+                 (lambda (_context) (setq called t)) #'ignore)
                  (unless called
-                   (error "Permission owner did not advance")))
+                   (error "Permission owner did not advance"))
+                 (let ((owner (current-buffer))
+                       (context (list :tool tool :session session
+                                      :buffer (current-buffer)))
+                       denied)
+                   (setq-local mevedel-permission-denied-functions
+                               (list
+                                (lambda (payload)
+                                  (unless (and (eq owner (current-buffer))
+                                               (eq 'test (plist-get payload
+                                                                    :permission-provenance)))
+                                    (error "Denial hook lost its caller context"))
+                                  '(:additional-context "cold denial"))))
+                   (with-temp-buffer
+                     (mevedel-tool-permission-deny
+                      context
+                      (lambda (reason updated outcome)
+                        (setq denied
+                              (and (eq owner (current-buffer))
+                                   (equal "policy denied" reason)
+                                   (eq 'permission-denied outcome)
+                                   (equal "cold denial"
+                                          (plist-get
+                                           (car (plist-get updated
+                                                           :hook-additional-context))
+                                           :body))
+                                   (eq 'tool-context
+                                       (plist-get
+                                        (car (plist-get updated :hook-audit-records))
+                                        :type)))))
+                      "policy denied" nil 'test))
+                   (unless denied
+                     (error "Cold permission denial lost hook context or audit"))))
                (unless
                    (string-suffix-p
                     "mevedel-tool-permission.elc"
                     (or (symbol-file 'mevedel-tool-permission-step 'defun)
                         ""))
                  (error "Permission behavior has the wrong owner"))
-               (unless (featurep 'mevedel-pipeline)
-                 (error "Permission step did not load Pipeline")))))))
+               (when (featurep 'mevedel-pipeline)
+                 (error "Permission step loaded Pipeline")))))))
     (unwind-protect
         (progn
           (dolist (owner owners)

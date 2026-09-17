@@ -1234,6 +1234,16 @@ When ATTRIBUTE is non-nil, also escape double quotes."
         "\n")
        "\n</hook-context>"))))
 
+(defun mevedel-hooks-record-tool-context (context decision &optional event)
+  "Append DECISION's additional hook context to CONTEXT.
+EVENT labels generated hook event blocks."
+  (if-let* ((entries (mevedel-hooks-context-entries
+                     decision (or event 'PreToolUse))))
+      (plist-put context :hook-additional-context
+                 (append (plist-get context :hook-additional-context)
+                         entries))
+    context))
+
 (defun mevedel-hooks-record-session-context (session decision &optional event)
   "Append DECISION's additional context for EVENT to SESSION's next prompt."
   (when-let* ((decision (mevedel-hooks--safe-decision decision))
@@ -1509,6 +1519,29 @@ EVENT labels each generated hook event block."
       (when-let* ((reason (mevedel-hooks-decision-reason decision)))
         (setq contribution (plist-put contribution :reason reason)))
       contribution)))
+
+(defun mevedel-hooks-record-tool-audit (context records)
+  "Append hook audit RECORDS to CONTEXT."
+  (let ((records (if (and (listp records)
+                          (keywordp (car-safe records)))
+                     (list records)
+                   records)))
+    (if records
+        (plist-put context :hook-audit-records
+                   (append (plist-get context :hook-audit-records)
+                           records))
+      context)))
+
+(defun mevedel-hooks-tool-permission-audit-record
+    (event outcome decision &optional reason)
+  "Return a permission audit record for hook EVENT and OUTCOME."
+  (append
+   (list :type 'tool-permission
+         :event (mevedel-hooks-event-display-name event)
+         :outcome (format "%s" outcome))
+   (when-let* ((reason (or reason
+                           (mevedel-hooks-decision-reason decision))))
+     (list :reason reason))))
 
 (defun mevedel-hooks-context-audit-records
     (decision event type &optional omit-context)
@@ -2123,6 +2156,20 @@ stable public event payload."
                     event event-plist handler 'error :error reason))
                   (advance (mevedel-hooks--block-decision event reason))))))
             (_ (advance nil))))))))
+
+(defun mevedel-hooks-run-tool-event
+    (event event-plist callback context session workspace request invocation)
+  "Run hook EVENT with EVENT-PLIST in CONTEXT's live dispatch buffer.
+
+CALLBACK, SESSION, WORKSPACE, REQUEST, and INVOCATION are forwarded to
+the hook runner."
+  (let ((buffer (plist-get context :buffer)))
+    (if (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (mevedel-hooks-run-event
+           event event-plist callback session workspace request invocation))
+      (mevedel-hooks-run-event
+       event event-plist callback session workspace request invocation))))
 
 (defun mevedel-hooks-run-event
     (event event-plist callback &optional session workspace request invocation)
