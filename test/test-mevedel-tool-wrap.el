@@ -29,15 +29,8 @@
                byte-compile-current-file))
           "helpers"))
 
-(defvar test-mevedel-tool-wrap--counter 0
-  "Monotonically increasing suffix for unique source-tool names.")
-(defvar mevedel-preset--registry)
 (defvar mevedel-preset-extra-tool-specs)
 (declare-function mevedel-preset--setup-extras "mevedel-presets" (preset))
-
-(defun test-mevedel-tool-wrap--unique (base)
-  "Return a unique tool name derived from BASE for this test run."
-  (format "%s_%d" base (cl-incf test-mevedel-tool-wrap--counter)))
 
 (cl-defun test-mevedel-tool-wrap--make-source
     (&key (name "src_tool") function (args nil)
@@ -123,7 +116,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   ,test
   (test)
   :doc "sync path calls source function and forwards result"
-  (let* ((name (test-mevedel-tool-wrap--unique "sync"))
+  (let* ((name "test-wrap-sync")
          (source (test-mevedel-tool-wrap--make-source
                   :name name
                   :function (lambda (a b) (format "%s+%s" a b))
@@ -133,11 +126,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (got nil))
     (funcall handler (lambda (r) (setq got r))
              (list :a "x" :b "y"))
-    (should (equal '(:result "x+y") got))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+    (should (equal '(:result "x+y") got)))
 
   :doc "async path receives callback as first arg"
-  (let* ((name (test-mevedel-tool-wrap--unique "async"))
+  (let* ((name "test-wrap-async")
          (source (test-mevedel-tool-wrap--make-source
                   :name name
                   :async t
@@ -146,11 +138,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (handler (mevedel-tool--call-wrapped-handler source))
          (got nil))
     (funcall handler (lambda (r) (setq got r)) (list :v "hi"))
-    (should (equal '(:result "async:hi") got))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+    (should (equal '(:result "async:hi") got)))
 
   :doc "sync source error propagates to callback as Error: string"
-  (let* ((name (test-mevedel-tool-wrap--unique "err"))
+  (let* ((name "test-wrap-err")
          (source (test-mevedel-tool-wrap--make-source
                   :name name
                   :function (lambda (_v) (error "Boom"))
@@ -159,11 +150,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (got nil))
     (funcall handler (lambda (r) (setq got r)) (list :v "x"))
     (should (string-prefix-p "Error:" (plist-get got :result)))
-    (should (string-match-p "boom" (plist-get got :result)))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+    (should (string-match-p "boom" (plist-get got :result))))
 
   :doc "source replaced: dispatcher picks up fresh :function on next call"
-  (let* ((name (test-mevedel-tool-wrap--unique "replace"))
+  (let* ((name "test-wrap-replace")
          (source (test-mevedel-tool-wrap--make-source
                   :name name
                   :function (lambda (_v) "one")
@@ -178,11 +168,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
      :function (lambda (_v) "two")
      :args '((:name "v" :type string :description "v")))
     (funcall handler (lambda (r) (setq second r)) (list :v "x"))
-    (should (equal '(:result "two") second))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+    (should (equal '(:result "two") second)))
 
   :doc "in-place nested schema drift is rejected before dispatch"
-  (let* ((name (test-mevedel-tool-wrap--unique "nested_drift"))
+  (let* ((name "test-wrap-nested_drift")
          (source (test-mevedel-tool-wrap--make-source
                   :name name
                   :function (lambda (_mode) "called")
@@ -193,11 +182,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
     (aset (plist-get (car (gptel-tool-args source)) :enum) 0 "changed")
     (funcall handler (lambda (result) (setq got result)) '(:mode "one"))
     (should (string-match-p "contract changed; re-wrap"
-                            (plist-get got :result)))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                            (plist-get got :result))))
 
   :doc "source unregistered: dispatcher returns actionable error"
-  (let* ((name (test-mevedel-tool-wrap--unique "gone"))
+  (let* ((name "test-wrap-gone")
          (source (test-mevedel-tool-wrap--make-source
                   :name name
                   :function (lambda () "ok")))
@@ -220,7 +208,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   (test)
 
   :doc "wrap derives name/args, forces async-p=t, defaults category to mevedel-<src>"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_default"))
+  (let* ((name "test-wrap-wrap_default")
          (src (test-mevedel-tool-wrap--make-source
                :name name
                :description "src desc"
@@ -241,11 +229,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       (should (= 12345 (mevedel-tool-max-result-size tool)))
       (should (equal "src desc" (mevedel-tool-description tool)))
       (should (memq 'web (mevedel-tool-groups tool)))
-      (should (equal '(x) (mapcar #'car (mevedel-tool-args tool)))))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+      (should (equal '(x) (mapcar #'car (mevedel-tool-args tool))))))
 
   :doc "description override applies to copy but not source"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_desc"))
+  (let* ((name "test-wrap-wrap_desc")
          (src (test-mevedel-tool-wrap--make-source
                :name name :description "src-side")))
     (mevedel-define-tool
@@ -257,11 +244,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       (should (equal "mevedel-side" (mevedel-tool-description tool))))
     (should (equal "src-side"
                    (gptel-tool-description
-                    (gptel-get-tool (list "test-src" name)))))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                    (gptel-get-tool (list "test-src" name))))))
 
   :doc "explicit :category override wins"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_cat"))
+  (let* ((name "test-wrap-wrap_cat")
          (src (test-mevedel-tool-wrap--make-source :name name)))
     (mevedel-define-tool
       :wrap src
@@ -269,33 +255,30 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       :groups (web)
       :read-only-p t)
     (should (mevedel-tool-get name "customcat"))
-    (should-not (mevedel-tool-get name "mevedel-test-src"))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+    (should-not (mevedel-tool-get name "mevedel-test-src")))
 
   :doc "rejects redeclared :name"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_reject_name"))
+  (let* ((name "test-wrap-wrap_reject_name")
          (src (test-mevedel-tool-wrap--make-source :name name)))
     (should-error (macroexpand
                    `(mevedel-define-tool
                       :wrap ,src
                       :name "other"
                       :read-only-p t))
-                  :type 'error)
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                  :type 'error))
 
   :doc "rejects redeclared :args"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_reject_args"))
+  (let* ((name "test-wrap-wrap_reject_args")
          (src (test-mevedel-tool-wrap--make-source :name name)))
     (should-error (macroexpand
                    `(mevedel-define-tool
                       :wrap ,src
                       :args ((x string :required "x"))
                       :read-only-p t))
-                  :type 'error)
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                  :type 'error))
 
   :doc "double-wrap at the same (category name) replaces the registry entry"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_double"))
+  (let* ((name "test-wrap-wrap_double")
          (src (test-mevedel-tool-wrap--make-source :name name)))
     (mevedel-define-tool
       :wrap src
@@ -321,21 +304,19 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                       (and (equal name (mevedel-tool-name tool))
                            (equal "mevedel-test-src"
                                   (mevedel-tool-category tool))))
-                    (mevedel-tool-all))))))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                    (mevedel-tool-all)))))))
 
   :doc "second wrap under a different :category is legal"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_sibling"))
+  (let* ((name "test-wrap-wrap_sibling")
          (src (test-mevedel-tool-wrap--make-source :name name)))
     (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
     (mevedel-define-tool
       :wrap src :category "sibling" :groups (web) :read-only-p t)
     (should (mevedel-tool-get name "mevedel-test-src"))
-    (should (mevedel-tool-get name "sibling"))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+    (should (mevedel-tool-get name "sibling")))
 
   :doc "source struct :function stays untouched after wrap"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_untouched"))
+  (let* ((name "test-wrap-wrap_untouched")
          (orig (lambda (_v) "source"))
          (src (test-mevedel-tool-wrap--make-source
                :name name
@@ -343,11 +324,10 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                :args '((:name "v" :type string :description "v")))))
     (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
     (should (eq orig (gptel-tool-function
-                      (gptel-get-tool (list "test-src" name)))))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                      (gptel-get-tool (list "test-src" name))))))
 
   :doc "wrapped provider and internal schemas do not alias the source"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_schema_isolated"))
+  (let* ((name "test-wrap-wrap_schema_isolated")
          (src (test-mevedel-tool-wrap--make-source
                :name name
                :args '((:name "tasks" :type array :description "tasks"
@@ -362,21 +342,19 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       (should (eq 'object
                   (plist-get (plist-get (car (mevedel-tool-args wrapped))
                                         :items)
-                             :type))))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                             :type)))))
 
   :doc "wrapped gptel-tool preserves the source include slot"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_include"))
+  (let* ((name "test-wrap-wrap_include")
          (src (test-mevedel-tool-wrap--make-source
                :name name
                :include nil)))
     (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
     (should-not (gptel-tool-include
-                 (gptel-get-tool (list "mevedel-test-src" name))))
-    (test-mevedel-tool-wrap--remove-source "test-src" name))
+                 (gptel-get-tool (list "mevedel-test-src" name)))))
 
   :doc "sync source runs end-to-end through the mevedel pipeline"
-  (let* ((name (test-mevedel-tool-wrap--unique "wrap_sync_e2e"))
+  (let* ((name "test-wrap-wrap_sync_e2e")
          (src (test-mevedel-tool-wrap--make-source
                :name name
                :function (lambda (v) (format "got:%s" v))
@@ -388,8 +366,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       (funcall (gptel-tool-function gtool)
                (lambda (r) (setq result r))
                "hello")
-      (should (equal "got:hello" result)))
-    (test-mevedel-tool-wrap--remove-source "test-src" name)))
+      (should (equal "got:hello" result)))))
 
 
 ;;
@@ -402,7 +379,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   (test)
 
   :doc "deferred extras augment the session's tool-catalog at :post time"
-  (let* ((extra-name (test-mevedel-tool-wrap--unique "extra"))
+  (let* ((extra-name "test-wrap-extra")
          (src (test-mevedel-tool-wrap--make-source
                :name extra-name
                :description "extra desc")))
@@ -411,8 +388,6 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                      :workspace (mevedel-workspace--create :root "/tmp")))
            (mevedel--session session)
            (gptel-tools nil))
-      (setf (alist-get 'extratest mevedel-preset--registry)
-            (list :agents nil :tool-specs nil))
       (let ((mevedel-preset-extra-tool-specs
              '((extratest . ((:discoverable xtra))))))
         (mevedel-preset--setup-extras 'extratest)
@@ -420,8 +395,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
           (should (cl-some
                    (lambda (entry)
                      (equal extra-name (cadr (car entry))))
-                   set)))))
-    (test-mevedel-tool-wrap--remove-source "test-src" extra-name)))
+                   set)))))))
 
 
 ;;
