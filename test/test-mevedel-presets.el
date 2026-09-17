@@ -220,15 +220,21 @@
         (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel--add-termination-handler
-  (:doc "adds a terminal handler to graph terminals and explicit abort")
+  (:doc "appends once to graph terminals and abort without changing the input")
   (let* ((gptel-request--transitions
           '((INIT . ((t . WAIT)))
-            (WAIT . ((t . DONE)))))
-         (result
-          (mevedel--add-termination-handler
-           #'ignore '((DONE done) (ABRT abort)))))
+            (WAIT . ((error-p . ERRS) (t . DONE)))))
+         (handlers '((WAIT waiting) (DONE done) (ABRT abort)))
+         (before (copy-tree handlers))
+         (result (mevedel--add-termination-handler #'ignore handlers))
+         (repeated (mevedel--add-termination-handler #'ignore result)))
     (should (equal '(done ignore) (cdr (assq 'DONE result))))
-    (should (equal '(abort ignore) (cdr (assq 'ABRT result))))))
+    (should (equal '(abort ignore) (cdr (assq 'ABRT result))))
+    (should (equal '(ignore) (cdr (assq 'ERRS result))))
+    (should (equal before handlers))
+    (should (equal result repeated))
+    (should (eq (assq 'WAIT handlers) (assq 'WAIT result)))
+    (should (eq (assq 'DONE result) (assq 'DONE repeated)))))
 
 
 
