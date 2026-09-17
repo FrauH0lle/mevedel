@@ -66,6 +66,7 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-canonical-path
                   "mevedel-pipeline" (path))
+(autoload 'mevedel-pipeline-canonical-path "mevedel-pipeline")
 (defvar mevedel-pipeline--auto-apply-edit-p)
 
 ;; `mevedel-resource'
