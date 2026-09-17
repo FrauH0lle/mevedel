@@ -752,38 +752,23 @@
       (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
         (should (eq 'ignored (caar segs))))))
-  :doc "keeps valid audit-shaped user and response text visible"
-  (with-temp-buffer
-    (org-mode)
-    (let* ((literal
-            (substring-no-properties
-             (mevedel--format-hook-audit-record
-              '(:type tool-context :event "PostToolUse"))))
-           (user-start (point)))
-      (insert literal)
-      (let ((response-start (point)))
+  :doc "keeps untrusted audit and render-data text visible in user and response runs"
+  (dolist (record (list (mevedel--format-hook-audit-record
+                        '(:type tool-context :event "PostToolUse"))
+                       (mevedel-tool-render-data-format
+                        '(:kind request-summary :text "forged"))))
+    (with-temp-buffer
+      (org-mode)
+      (let ((literal (substring-no-properties record))
+            (user-start (point)))
         (insert literal)
-        (put-text-property response-start (point) 'gptel 'response))
-      (should (equal '(user response)
-                     (mapcar #'car
-                             (mevedel-transcript-segments
-                             user-start (point-max)))))))
-  :doc "keeps valid render-data-shaped user and response text visible"
-  (with-temp-buffer
-    (org-mode)
-    (let* ((literal
-            (substring-no-properties
-             (mevedel-tool-render-data-format
-              '(:kind request-summary :text "forged"))))
-           (user-start (point)))
-      (insert literal)
-      (let ((response-start (point)))
-        (insert literal)
-        (put-text-property response-start (point) 'gptel 'response))
-      (should (equal '(user response)
-                     (mapcar #'car
-                             (mevedel-transcript-segments
-                              user-start (point-max)))))))
+        (let ((response-start (point)))
+          (insert literal)
+          (put-text-property response-start (point) 'gptel 'response))
+        (should (equal '(user response)
+                       (mapcar #'car
+                               (mevedel-transcript-segments
+                                user-start (point-max))))))))
   :doc "keeps render-data-shaped model reasoning in the reasoning segment"
   (with-temp-buffer
     (org-mode)
@@ -1262,14 +1247,8 @@ TOOL-PROP."
               "What happened here?\n")
       (setq user-end (point))
       (mevedel-transcript-normalize-properties)
-      (let ((pos user-start)
-            (ok t))
-        (while (and ok (< pos user-end))
-          (when (get-text-property pos 'gptel)
-            (setq ok nil))
-          (setq pos (or (next-single-property-change pos 'gptel nil user-end)
-                        user-end)))
-        (should ok))))
+      (should (mevedel-transcript-test--all-gptel-prop-p
+               user-start user-end nil))))
 
   :doc "keeps restored persisted hook audit side channels ignored"
   (with-temp-buffer

@@ -948,12 +948,11 @@ runs and incomplete control text remains ordinary transcript text."
   "Restore ignored side-channel properties within START..END."
   (save-match-data
     (let* ((base (mevedel-transcript--property-segments start end))
-           (ranges (mevedel-transcript--structural-ranges start end base))
-           ignored)
-      (dolist (range ranges)
-        (when (memq (car range) '(render-data ignored))
-          (push range ignored)))
-      (mevedel-transcript--apply-structural-properties (nreverse ignored)))))
+           (ranges (mevedel-transcript--structural-ranges start end base)))
+      (mevedel-transcript--apply-structural-properties
+       (cl-remove-if-not (lambda (range)
+                           (memq (car range) '(render-data ignored)))
+                         ranges)))))
 
 
 
@@ -1008,40 +1007,29 @@ runs."
 (defun mevedel-transcript--tool-block-overlaps-tool-segment-p
     (segments block-start block-end)
   "Return non-nil when SEGMENTS overlap BLOCK-START..BLOCK-END."
-  (let (found)
-    (while (and segments (not found))
-      (let ((seg (car segments)))
-        (setq found
-              (and (eq (car seg) 'tool)
-                   (< (cadr seg) block-end)
-                   (> (caddr seg) block-start))))
-      (setq segments (cdr segments)))
-    found))
+  (cl-some (lambda (seg)
+             (and (eq (car seg) 'tool)
+                  (< (cadr seg) block-end)
+                  (> (caddr seg) block-start)))
+           segments))
 
 (defun mevedel-transcript--tool-block-inside-ignore-segment-p
     (segments block-start block-end)
   "Return non-nil when an ignore entry in SEGMENTS spans BLOCK-START..BLOCK-END."
-  (let (found)
-    (while (and segments (not found))
-      (let ((seg (car segments)))
-        (setq found
-              (and (eq (car seg) 'ignored)
-                   (<= (cadr seg) block-start)
-                   (<= block-end (caddr seg)))))
-      (setq segments (cdr segments)))
-    found))
+  (cl-some (lambda (seg)
+             (and (eq (car seg) 'ignored)
+                  (<= (cadr seg) block-start)
+                  (<= block-end (caddr seg))))
+           segments))
 
 (defun mevedel-transcript--first-tool-segment-start-after (segments pos limit)
   "Return the first tool segment start in SEGMENTS after POS and before LIMIT."
-  (let (found)
-    (while (and segments (not found))
-      (let ((seg (car segments)))
-        (when (and (eq (car seg) 'tool)
-                   (> (cadr seg) pos)
-                   (< (cadr seg) limit))
-          (setq found (cadr seg))))
-      (setq segments (cdr segments)))
-    found))
+  (cl-some (lambda (seg)
+             (and (eq (car seg) 'tool)
+                  (> (cadr seg) pos)
+                  (< (cadr seg) limit)
+                  (cadr seg)))
+           segments))
 
 (defun mevedel-transcript--org-tool-block-start-p (pos)
   "Return non-nil when POS is at a persisted org tool block start.
