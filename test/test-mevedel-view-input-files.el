@@ -154,5 +154,24 @@
         (mevedel-view-yank-dwim))
       (should (equal "plain text" (buffer-string))))))
 
+(mevedel-deftest mevedel-view--install-dnd ()
+  ,test
+  (test)
+  :doc "installs one local handler while preserving other protocols and defaults"
+  (let* ((original '(("^https:" . browse-url)
+                     ("^file:" . mevedel-view--dnd-handle-files)
+                     ("^ftp:" . browse-url)
+                     ("^old-file:" . mevedel-view--dnd-handle-files)))
+         (dnd-protocol-alist (copy-tree original)))
+    (with-temp-buffer
+      (mevedel-view--install-dnd)
+      (mevedel-view--install-dnd)
+      (should (local-variable-p 'dnd-protocol-alist))
+      (should (equal '(("^file:" . mevedel-view--dnd-handle-files)
+                       ("^https:" . browse-url)
+                       ("^ftp:" . browse-url))
+                     dnd-protocol-alist)))
+    (should (equal original dnd-protocol-alist))))
+
 (provide 'test-mevedel-view-input-files)
 ;;; test-mevedel-view-input-files.el ends here

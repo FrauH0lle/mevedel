@@ -122,11 +122,14 @@
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-expand-user-input
 		  "mevedel-mentions" (text session))
+(declare-function mevedel-mentions-file-paths-in-text
+                  "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions"
 		  (path))
 (declare-function mevedel-mentions-install "mevedel-mentions" nil)
 (declare-function mevedel-mentions-prepare-user-input
 		  "mevedel-mentions" (text &optional session))
+(autoload 'mevedel-mentions-file-paths-in-text "mevedel-mentions")
 (autoload 'mevedel-mentions-install "mevedel-mentions")
 (defvar mevedel-mentions-agent-enabled-p)
 
@@ -425,8 +428,6 @@
                   "mevedel-view-input-files" (paths session))
 (declare-function mevedel-view--install-dnd
                   "mevedel-view-input-files" ())
-(declare-function mevedel-view--mentioned-file-paths
-                  "mevedel-view-input-files" (input))
 (declare-function mevedel-view--pop-dropped-file-grants-for-input
                   "mevedel-view-input-files" (input session))
 (autoload 'mevedel-view--install-dnd "mevedel-view-input-files")
@@ -2075,7 +2076,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
           (buffer-local-value 'mevedel--data-buffer source-view))
          (referenced-grants
           (cl-intersection
-           (mevedel-view--mentioned-file-paths input)
+           (mevedel-mentions-file-paths-in-text input)
            (plist-get snapshot :dropped-file-grants)
            :test #'equal))
          (child-data
