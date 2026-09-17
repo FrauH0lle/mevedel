@@ -111,6 +111,12 @@ A muted call returns the text it would have shown, as `message' does."
         text
       (apply original format args))))
 
+(defun mevedel-test--read-file (path)
+  "Read decoded text from PATH for filesystem assertions."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (buffer-string)))
+
 (defun mevedel-test--read (args)
   "Await the public Read handler for ARGS, preserving its result envelope."
   (let (done result cancel)

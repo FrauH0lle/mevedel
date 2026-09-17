@@ -130,16 +130,8 @@ Feedback anywhere outside a file or hunk targets the whole patch."
   "C-c C-c" #'mevedel-patch-review-submit
   "C-c C-k" #'mevedel-patch-review-reject)
 
-(defvar-keymap mevedel-patch-review-file-map
-  :doc "Keymap for file rows and their content in an ApplyPatch review."
-  :parent mevedel-patch-review-map
-  "TAB" #'mevedel-patch-review-toggle-fold
-  "RET" #'mevedel-patch-review-visit
-  "<return>" #'mevedel-patch-review-visit
-  "SPC" #'mevedel-patch-review-toggle-selection)
-
-(defvar-keymap mevedel-patch-review-hunk-map
-  :doc "Keymap for hunk rows and their diff lines in an ApplyPatch review."
+(defvar-keymap mevedel-patch-review-row-map
+  :doc "Keymap for file and hunk rows and their content in an ApplyPatch review."
   :parent mevedel-patch-review-map
   "TAB" #'mevedel-patch-review-toggle-fold
   "RET" #'mevedel-patch-review-visit
@@ -369,7 +361,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
                                 (t 'partial)))
                    (dim-p (eq state 'none))
                    (expanded (plist-get operation :expanded))
-                   (row-props (list 'keymap mevedel-patch-review-file-map
+                   (row-props (list 'keymap mevedel-patch-review-row-map
                                     'help-echo
                                     "TAB folds · SPC selects · RET visits"
                                     'mevedel-patch-operation operation
@@ -377,7 +369,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
                                     ;; objects so adjacent rows keep a
                                     ;; property boundary for n/p movement.
                                     'mevedel-patch-row operation))
-                   (content-props (list 'keymap mevedel-patch-review-file-map
+                   (content-props (list 'keymap mevedel-patch-review-row-map
                                         'mevedel-patch-operation operation))
                    (letter
                     (propertize (mevedel-tool-patch-status operation)
@@ -454,7 +446,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
                               (hcounts (mevedel-tool-patch-hunk-counts
                                         hunk))
                               (hunk-props
-                               (list 'keymap mevedel-patch-review-hunk-map
+                               (list 'keymap mevedel-patch-review-row-map
                                      'mevedel-patch-operation operation
                                      'mevedel-patch-hunk hunk)))
                          (apply #'ins
