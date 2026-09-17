@@ -231,14 +231,11 @@ ordered component list."
 When NAME is nil, clear all prompt component cache entries."
   (if (null name)
       (clrhash mevedel-system--prompt-component-cache)
-    (let (keys)
-      (maphash
-       (lambda (key _value)
-         (when (eq (car-safe key) name)
-           (push key keys)))
-       mevedel-system--prompt-component-cache)
-      (dolist (key keys)
-        (remhash key mevedel-system--prompt-component-cache)))))
+    (maphash
+     (lambda (key _value)
+       (when (eq (car-safe key) name)
+         (remhash key mevedel-system--prompt-component-cache)))
+     mevedel-system--prompt-component-cache)))
 
 (defun mevedel-system--component-cache-key (component context)
   "Return cache key for COMPONENT and CONTEXT, or nil when uncached."
@@ -354,16 +351,11 @@ round trip per file to discover."
 
 (defun mevedel-system--read-memory-index (memory-file)
   "Return the first 200 lines from MEMORY-FILE."
-  (string-join
-   (with-temp-buffer
-     (insert-file-contents memory-file)
-     (cl-loop repeat 200
-              unless (eobp)
-              collect (prog1 (buffer-substring-no-properties
-                              (line-beginning-position)
-                              (line-end-position))
-                        (forward-line 1))))
-   "\n"))
+  (with-temp-buffer
+    (insert-file-contents memory-file)
+    (forward-line 200)
+    (string-remove-suffix
+     "\n" (buffer-substring-no-properties (point-min) (point)))))
 
 (defun mevedel-system--memory-root-content (root)
   "Return prompt content for memory ROOT, or nil when its index is absent."
@@ -548,10 +540,8 @@ present."
   "Return the compact resource roster usable in CONTEXT."
   (let* ((session (mevedel-system--context-session context))
          (metadata (mevedel-system--resource-metadata context))
-         (retained (catch 'found
-                     (dolist (entry (plist-get metadata :agents))
-                       (when (plist-get entry :record)
-                         (throw 'found t)))))
+         (retained (seq-some (lambda (entry) (plist-get entry :record))
+                             (plist-get metadata :agents)))
          (memory (plist-get metadata :memory-roots))
          (lines nil))
     (push (concat "- `mevedel://` - packaged documentation for Mevedel; use "

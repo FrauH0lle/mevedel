@@ -111,21 +111,20 @@
     (should (string-match-p "final permission denial" main))
     (should (string-match-p "automatic compaction" main))
     (should (string-match-p "VERDICT: PASS" main))
-    (dolist (prompt (list main))
-      (should (string-match-p "Resource addresses" prompt))
-      (should (string-match-p "Read`, `Glob`, `Grep" prompt))
-      (should (string-match-p "permitted `ApplyPatch`" prompt))
-      (should (string-match-p "not an attachment, skill invocation, or delegation"
-                             prompt))
-      (should (string-match-p "user-composer syntax and[[:space:]]+do not execute"
-                             prompt))
-      (should (string-match-p "mevedel://" prompt))
-      (should-not (string-match-p "mevedel://docs" prompt))
-      (should-not (string-search "- `work://`" prompt))
-      (dolist (scheme '("artifact://" "skill://" "agent://"
-                        "history://" "mcp://"))
-        (should-not (string-match-p (regexp-quote scheme) prompt)))
-      (should-not (string-match-p "omp://" prompt)))
+    (should (string-match-p "Resource addresses" main))
+    (should (string-match-p "Read`, `Glob`, `Grep" main))
+    (should (string-match-p "permitted `ApplyPatch`" main))
+    (should (string-match-p "not an attachment, skill invocation, or delegation"
+                           main))
+    (should (string-match-p "user-composer syntax and[[:space:]]+do not execute"
+                           main))
+    (should (string-match-p "mevedel://" main))
+    (should-not (string-match-p "mevedel://docs" main))
+    (should-not (string-search "- `work://`" main))
+    (dolist (scheme '("artifact://" "skill://" "agent://"
+                      "history://" "mcp://"))
+      (should-not (string-match-p (regexp-quote scheme) main)))
+    (should-not (string-match-p "omp://" main))
     (should-error (mevedel-system-build-prompt 'revise))))
 
 
@@ -143,10 +142,10 @@
              (file-name-directory (locate-library "mevedel"))
              "docs" "guardian-prompts.md"))
            (buffer-string))))
-    (dolist (prompt-path '("prompts/permissions/bash-guardian-system.md"))
-      (let ((prompt (mevedel-system-render-prompt-file prompt-path)))
-        (should-not (string-empty-p (string-trim prompt)))
-        (should (string-search prompt-path guardian-doc))))))
+    (let* ((prompt-path "prompts/permissions/bash-guardian-system.md")
+           (prompt (mevedel-system-render-prompt-file prompt-path)))
+      (should-not (string-empty-p (string-trim prompt)))
+      (should (string-search prompt-path guardian-doc)))))
 
 (mevedel-deftest mevedel-inspect-effective-prompt ()
   ,test
@@ -883,6 +882,7 @@
          (make-hash-table :test #'equal))
         (cache-key 'same)
         (calls 0))
+    (puthash '(other :global) "unrelated" mevedel-system--prompt-component-cache)
     (mevedel-define-prompt-component cached
       :cache 'keyed
       :cache-key (lambda (_context) cache-key)
@@ -899,7 +899,10 @@
     (should (equal (mevedel-system-build-prompt 'sample) "call-2"))
     (mevedel-define-prompt-component cached
       :producer (lambda (_context) "replacement"))
-    (should (equal (mevedel-system-build-prompt 'sample) "replacement")))
+    (should (equal (mevedel-system-build-prompt 'sample) "replacement"))
+    (should (= 1 (hash-table-count mevedel-system--prompt-component-cache)))
+    (should (equal "unrelated" (gethash '(other :global)
+                                       mevedel-system--prompt-component-cache))))
 
   :doc "rejects unknown, duplicate, malformed, and incomplete profiles"
   (let ((mevedel-system--prompt-components nil)
