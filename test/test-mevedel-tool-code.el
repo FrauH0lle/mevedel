@@ -234,53 +234,23 @@ formatter without a compiled grammar."
   ,test
   (test)
 
-  :doc "formats file locations without visiting their files"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (location (xref-make-file-location tmp 2 0))
-         (item (xref-make "matching line" location)))
+  :doc "formats file and fallback-marker locations with quiet visits and cleanup"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+        (enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        mevedel-tool-code-test-open-state)
     (unwind-protect
         (progn
           (with-temp-file tmp
             (insert "first line\nmatching line\n"))
-          (should (equal (format "%s:2: matching line" tmp)
-                         (mevedel-tool-code--format-xref-items
-                          (list item))))
-          (should-not (find-buffer-visiting tmp)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
-
-  :doc "cleans fallback marker buffers opened during formatting"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (location (mevedel-tool-code-test-location-create tmp))
-         (item (xref-make "matching line" location)))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert "first line\nmatching line\n"))
-          (should (equal (format "%s:2: matching line" tmp)
-                         (mevedel-tool-code--format-xref-items
-                          (list item))))
-          (should-not (find-buffer-visiting tmp)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
-
-  :doc "resolves fallback marker locations without prompting for unsafe local variables"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (location (mevedel-tool-code-test-location-create tmp))
-         (item (xref-make "matching line" location))
-         (enable-local-variables t)
-         (find-file-hook '(sentinel-find-file-hook))
-         (hack-local-variables-hook '(sentinel-local-variables-hook))
-         mevedel-tool-code-test-open-state)
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert "first line\nmatching line\n"))
-          (mevedel-tool-code--format-xref-items (list item))
-          (should (equal '(:safe nil nil)
-                         mevedel-tool-code-test-open-state)))
+          (dolist (location (list (xref-make-file-location tmp 2 0)
+                                  (mevedel-tool-code-test-location-create tmp)))
+            (should (equal (format "%s:2: matching line" tmp)
+                           (mevedel-tool-code--format-xref-items
+                            (list (xref-make "matching line" location)))))
+            (should-not (find-buffer-visiting tmp)))
+          (should (equal '(:safe nil nil) mevedel-tool-code-test-open-state)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
       (delete-file tmp)))
@@ -644,164 +614,128 @@ formatter without a compiled grammar."
 ;;
 ;;; Imenu
 
-(mevedel-deftest mevedel-tool-code--imenu ()
+(mevedel-deftest mevedel-tool-code--imenu
+  (:vars ((tmp (make-temp-file "mevedel-test-" nil ".el")) result)
+   :after-each
+   (progn
+     (when-let* ((buf (find-buffer-visiting tmp)))
+       (kill-buffer buf))
+     (delete-file tmp)))
   ,test
   (test)
   :doc "lists symbols in an elisp file"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";;; test -*- lexical-binding: t -*-\n"
-                    "(defun my-test-alpha () nil)\n"
-                    "(defun my-test-beta () nil)\n"
-                    "(defvar my-test-gamma 42)\n"))
-          (mevedel-tool-code--imenu
-           (lambda (r)
-             (setq result (test-mevedel-tool-code--handler-result r)))
-           (list :file_path tmp))
-          (should (stringp result))
-          (should (string-match-p "my-test-alpha" result))
-          (should (string-match-p "my-test-beta" result))
-          (should (string-match-p "my-test-gamma" result))
-          (should-not (find-buffer-visiting tmp)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";;; test -*- lexical-binding: t -*-\n"
+              "(defun my-test-alpha () nil)\n"
+              "(defun my-test-beta () nil)\n"
+              "(defvar my-test-gamma 42)\n"))
+    (mevedel-tool-code--imenu
+     (lambda (r)
+       (setq result (test-mevedel-tool-code--handler-result r)))
+     (list :file_path tmp))
+    (should (stringp result))
+    (should (string-match-p "my-test-alpha" result))
+    (should (string-match-p "my-test-beta" result))
+    (should (string-match-p "my-test-gamma" result))
+    (should-not (find-buffer-visiting tmp)))
   :doc "returns message for empty file"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";; empty file\n"))
-          (mevedel-tool-code--imenu
-           (lambda (r)
-             (setq result (test-mevedel-tool-code--handler-result r)))
-           (list :file_path tmp))
-          (should (stringp result))
-          (should (string-match-p "No.*symbols\\|No imenu\\|Error" result)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";; empty file\n"))
+    (mevedel-tool-code--imenu
+     (lambda (r)
+       (setq result (test-mevedel-tool-code--handler-result r)))
+     (list :file_path tmp))
+    (should (stringp result))
+    (should (string-match-p "No.*symbols\\|No imenu\\|Error" result)))
   :doc "includes line numbers"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";; line 1\n"
-                    ";; line 2\n"
-                    "(defun my-test-fn-line3 () nil)\n"))
-          (mevedel-tool-code--imenu
-           (lambda (r)
-             (setq result (test-mevedel-tool-code--handler-result r)))
-           (list :file_path tmp))
-          (should (stringp result))
-          (should (string-match-p ":3:.*my-test-fn-line3" result)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"
+              "(defun my-test-fn-line3 () nil)\n"))
+    (mevedel-tool-code--imenu
+     (lambda (r)
+       (setq result (test-mevedel-tool-code--handler-result r)))
+     (list :file_path tmp))
+    (should (stringp result))
+    (should (string-match-p ":3:.*my-test-fn-line3" result)))
   :doc "lists leaves nested below the first category"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";; line 1\n"
-                    ";; line 2\n"
-                    ";; line 3\n"))
-          (cl-letf (((symbol-function 'imenu--make-index-alist)
-                     (lambda (&optional _noerror)
-                       (setq imenu--index-alist
-                             (list (cons "*Rescan*" -99)
-                                   (cons "Class"
-                                         (list (cons "Group"
-                                                     (list (cons "method"
-                                                                 21)))
-                                               (cons "field" 11)))
-                                   (cons "top" 1))))))
-            (mevedel-tool-code--imenu
-             (lambda (r)
-               (setq result (test-mevedel-tool-code--handler-result r)))
-             (list :file_path tmp)))
-          (should (stringp result))
-          (should (string-match-p ":1:.*top" result))
-          (should (string-match-p ":2:.*\\[Class\\] field" result))
-          (should (string-match-p ":3:.*\\[Class > Group\\] method" result))
-          (should-not (string-match-p "Rescan" result)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"
+              ";; line 3\n"))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist
+                       (list (cons "*Rescan*" -99)
+                             (cons "Class"
+                                   (list (cons "Group"
+                                               (list (cons "method"
+                                                           21)))
+                                         (cons "field" 11)))
+                             (cons "top" 1))))))
+      (mevedel-tool-code--imenu
+       (lambda (r)
+         (setq result (test-mevedel-tool-code--handler-result r)))
+       (list :file_path tmp)))
+    (should (stringp result))
+    (should (string-match-p ":1:.*top" result))
+    (should (string-match-p ":2:.*\\[Class\\] field" result))
+    (should (string-match-p ":3:.*\\[Class > Group\\] method" result))
+    (should-not (string-match-p "Rescan" result)))
   :doc "keeps a starred symbol below a category and skips only top-level specials"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";; line 1\n"
-                    ";; line 2\n"))
-          (cl-letf (((symbol-function 'imenu--make-index-alist)
-                     (lambda (&optional _noerror)
-                       (setq imenu--index-alist
-                             (list (cons "*Rescan*" -99)
-                                   (cons "Variables"
-                                         (list (cons "*global-thing*" 11))))))))
-            (mevedel-tool-code--imenu
-             (lambda (r)
-               (setq result (test-mevedel-tool-code--handler-result r)))
-             (list :file_path tmp)))
-          (should (string-match-p ":2:.*\\[Variables\\] \\*global-thing\\*"
-                                  result))
-          (should-not (string-match-p "Rescan" result)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist
+                       (list (cons "*Rescan*" -99)
+                             (cons "Variables"
+                                   (list (cons "*global-thing*" 11))))))))
+      (mevedel-tool-code--imenu
+       (lambda (r)
+         (setq result (test-mevedel-tool-code--handler-result r)))
+       (list :file_path tmp)))
+    (should (string-match-p ":2:.*\\[Variables\\] \\*global-thing\\*"
+                            result))
+    (should-not (string-match-p "Rescan" result)))
   :doc "reports whole-buffer line numbers for a narrowed buffer"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";; line 1\n"
-                    ";; line 2\n"
-                    ";; line 3\n"))
-          (let ((buffer (find-file-noselect tmp)))
-            (with-current-buffer buffer
-              (narrow-to-region 11 (point-max)))
-            (cl-letf (((symbol-function 'imenu--make-index-alist)
-                       (lambda (&optional _noerror)
-                         (setq imenu--index-alist
-                               (list (cons "narrowed" 21))))))
-              (mevedel-tool-code--imenu
-               (lambda (r)
-                 (setq result (test-mevedel-tool-code--handler-result r)))
-               (list :file_path tmp))))
-          (should (string-match-p ":3:.*narrowed" result)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"
+              ";; line 3\n"))
+    (let ((buffer (find-file-noselect tmp)))
+      (with-current-buffer buffer
+        (narrow-to-region 11 (point-max)))
+      (cl-letf (((symbol-function 'imenu--make-index-alist)
+                 (lambda (&optional _noerror)
+                   (setq imenu--index-alist
+                         (list (cons "narrowed" 21))))))
+        (mevedel-tool-code--imenu
+         (lambda (r)
+           (setq result (test-mevedel-tool-code--handler-result r)))
+         (list :file_path tmp))))
+    (should (string-match-p ":3:.*narrowed" result)))
   :doc "lists an item carrying a position, function, and arguments"
-  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
-         (result nil))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert ";; line 1\n"
-                    ";; line 2\n"))
-          (cl-letf (((symbol-function 'imenu--make-index-alist)
-                     (lambda (&optional _noerror)
-                       (setq imenu--index-alist
-                             (list (list "callable" 11 #'ignore "arg"))))))
-            (mevedel-tool-code--imenu
-             (lambda (r)
-               (setq result (test-mevedel-tool-code--handler-result r)))
-             (list :file_path tmp)))
-          (should (string-match-p ":2:.*callable" result)))
-      (when-let* ((buf (find-buffer-visiting tmp)))
-        (kill-buffer buf))
-      (delete-file tmp)))
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist
+                       (list (list "callable" 11 #'ignore "arg"))))))
+      (mevedel-tool-code--imenu
+       (lambda (r)
+         (setq result (test-mevedel-tool-code--handler-result r)))
+       (list :file_path tmp)))
+    (should (string-match-p ":2:.*callable" result)))
   :doc "errors on non-existent file"
   (should-error
    (mevedel-tool-code--imenu
@@ -835,20 +769,13 @@ formatter without a compiled grammar."
 (mevedel-deftest mevedel-tool-code--line-column-to-point ()
   ,test
   (test)
-  :doc "converts line 1 column 0 to beginning of buffer"
+  :doc "converts one-based lines and zero-based columns"
   (with-temp-buffer
     (insert "first line\nsecond line\nthird line\n")
-    (should (= (mevedel-tool-code--line-column-to-point 1 0) 1)))
-  :doc "converts line 2 column 0 to beginning of second line"
-  (with-temp-buffer
-    (insert "first line\nsecond line\nthird line\n")
-    (let ((pos (mevedel-tool-code--line-column-to-point 2 0)))
-      (should (= pos 12))))
-  :doc "converts line 2 column 3 correctly"
-  (with-temp-buffer
-    (insert "first line\nsecond line\nthird line\n")
-    (let ((pos (mevedel-tool-code--line-column-to-point 2 3)))
-      (should (= pos 15))))
+    (dolist (case '((1 0 1) (2 0 12) (2 3 15)))
+      (should (= (mevedel-tool-code--line-column-to-point
+                  (nth 0 case) (nth 1 case))
+                 (nth 2 case)))))
   :doc "rejects a line before the first one instead of clamping"
   (with-temp-buffer
     (insert "first line\nsecond line\n")
@@ -943,6 +870,18 @@ formatter without a compiled grammar."
           (should (string-match-p (regexp-quote native-file) result))
           (should-not (string-match-p "/mevedelmock:" result)))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-code--location-count ()
+  (should (= ,count (mevedel-tool-code--location-count ,result)))
+  (result count)
+  nil 0
+  42 0
+  "" 0
+  "\n\n" 0
+  "Error: lookup failed\nDetails" 0
+  "No symbols found" 0
+  "file.el:1: first\n\nfile.el:2: second\n" 2
+  "Nope.el:1: valid location" 1)
 
 (provide 'test-mevedel-tool-code)
 ;;; test-mevedel-tool-code.el ends here
