@@ -457,6 +457,8 @@
 
 (mevedel-deftest mevedel-telemetry--take-bounded
   (:doc "takes at most the requested number of list elements")
+  ,test
+  (test)
   (should (equal '(a b :truncated)
                  (mevedel-telemetry--take-bounded '(a b c) 2)))
   (should (equal '(a b) (mevedel-telemetry--take-bounded '(a b) 2))))
@@ -534,6 +536,8 @@
 
 (mevedel-deftest mevedel-telemetry--process-output
   (:doc "captures successful process output and returns nil on failure")
+  ,test
+  (test)
   (should (string-match-p "git version"
                           (mevedel-telemetry--process-output
                            "git" "--version")))
@@ -541,6 +545,8 @@
 
 (mevedel-deftest mevedel-telemetry--git-snapshot
   (:doc "captures local and remote commit and dirty-content identity")
+  ,test
+  (test)
   (let ((snapshot (mevedel-telemetry--git-snapshot default-directory)))
     (should (stringp (plist-get snapshot :git-head)))
     (should (numberp (plist-get snapshot :dirty-file-count)))

@@ -249,6 +249,8 @@
 
 (mevedel-deftest mevedel-journal-store-directory
   (:doc "requires an absolute workspace path without creating state")
+  ,test
+  (test)
   (should-error (mevedel-journal-store-directory "relative"))
   (should (equal "/tmp/workspace/.mevedel/journal"
                  (mevedel-journal-store-directory "/tmp/workspace/"))))

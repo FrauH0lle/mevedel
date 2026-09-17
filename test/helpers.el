@@ -644,7 +644,8 @@ having its placeholders replaced by the corresponding values from
 BINDINGS.  Each template is paired with its documentation string.
 
 Implementation Details:
-- If no VARS or BINDINGS are provided, returns just the TEMPLATE
+- If neither VARS nor BINDINGS are provided, returns just the TEMPLATE
+- Rejects incomplete templates rather than silently dropping their forms
 - Normalizes BINDINGS to ensure each test case has a docstring
 - Validates that BINDINGS match VARS structure
 - Processes BINDINGS into environment variables
@@ -671,8 +672,9 @@ This would generate:
   (should
    (equal 3 9))))"
   (declare (indent 1) (debug t))
-  ;; If no vars or bindings provided, return just the template
-  (if (or (null vars) (null bindings))
+  (unless (eq (null vars) (null bindings))
+    (error "Test templates require both variables and case values"))
+  (if (null vars)
       (list `("" ,template))
     ;; Ensure that each binding is preceeded by :doc "DOCSTRING" (or empty) and
     ;; assing them to docstrings and bindings
