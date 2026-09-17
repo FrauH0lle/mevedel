@@ -33,8 +33,7 @@
 
 (mevedel-deftest mevedel-file-interaction--create
   (:doc "`mevedel-file-interaction--create' creates with defaults")
-  (let ((entry (mevedel-file-interaction--create :path "/tmp/foo")))
-    (should (equal "/tmp/foo" (mevedel-file-interaction-path entry)))
+  (let ((entry (mevedel-file-interaction--create)))
     (should (null (mevedel-file-interaction-read-turn entry)))
     (should (null (mevedel-file-interaction-modified-turn entry)))))
 
@@ -222,8 +221,8 @@
          (session (mevedel-session-create "main" ws))
          (entry (mevedel-session-record-interaction session "/tmp/a" 'read 3)))
     (should (mevedel-file-interaction-p entry))
-    (should (equal (expand-file-name "/tmp/a")
-                   (mevedel-file-interaction-path entry)))
+    (should (eq entry (gethash (expand-file-name "/tmp/a")
+                               (mevedel-session-touched-files session))))
     (should (= 3 (mevedel-file-interaction-read-turn entry)))
     (should (null (mevedel-file-interaction-modified-turn entry))))
 

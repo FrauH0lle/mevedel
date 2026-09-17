@@ -293,7 +293,7 @@ the range arguments and are stored to support read deduplication."
   (let* ((key (expand-file-name path))
          (table (mevedel-session-touched-files session))
          (entry (or (gethash key table)
-                    (mevedel-file-interaction--create :path key))))
+                    (mevedel-file-interaction--create))))
     (pcase kind
       ('read
        (setf (mevedel-file-interaction-read-turn entry) turn-count

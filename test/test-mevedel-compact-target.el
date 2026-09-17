@@ -55,16 +55,13 @@
     (let ((mevedel-compact-evidence-tail-turns 2))
       (setf (mevedel-session-turn-count session) 10)
       (puthash "/tmp/p/old.el"
-               (mevedel-file-interaction--create
-                :path "/tmp/p/old.el" :read-turn 4)
+               (mevedel-file-interaction--create :read-turn 4)
                (mevedel-session-touched-files session))
       (puthash "/tmp/p/boundary.el"
-               (mevedel-file-interaction--create
-                :path "/tmp/p/boundary.el" :read-turn 8)
+               (mevedel-file-interaction--create :read-turn 8)
                (mevedel-session-touched-files session))
       (puthash "/tmp/p/recent.el"
-               (mevedel-file-interaction--create
-                :path "/tmp/p/recent.el" :read-turn 9)
+               (mevedel-file-interaction--create :read-turn 9)
                (mevedel-session-touched-files session))
       (let ((body (mevedel-compact-target-file-reference-reminder-body
                    session 2 nil)))
@@ -77,8 +74,7 @@
          (session (mevedel-session-create "main" ws)))
     (setf (mevedel-session-turn-count session) 10)
     (puthash "/tmp/q/recent.el"
-             (mevedel-file-interaction--create
-              :path "/tmp/q/recent.el" :read-turn 9)
+             (mevedel-file-interaction--create :read-turn 9)
              (mevedel-session-touched-files session))
     (let ((body (mevedel-compact-target-file-reference-reminder-body
                  session 0 nil)))
@@ -99,8 +95,7 @@
           (setf (mevedel-session-turn-count session) 10)
           ;; An older modification must not mask the later in-flight read.
           (puthash path
-                   (mevedel-file-interaction--create
-                    :path path :modified-turn 5)
+                   (mevedel-file-interaction--create :modified-turn 5)
                    (mevedel-session-touched-files session))
           (let ((mevedel--current-request
                  (mevedel-request--create :session session :turn 11)))
