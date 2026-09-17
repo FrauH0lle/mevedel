@@ -51,6 +51,35 @@
 ;;
 ;;; Request-scoped skill context
 
+(mevedel-deftest mevedel-skills-activate-context
+  (:doc "model and internal grants append only to the innermost owner")
+  (dolist (origin '(model internal))
+    (dolist (request-p '(nil t))
+      (dolist (invocation-p '(nil t))
+        (let ((request (mevedel-request--create
+                        :skill-permission-rules '(existing-rule)
+                        :hook-rules '(existing-hook)))
+              (invocation (mevedel-agent-invocation--create
+                           :skill-permission-rules '(existing-rule)
+                           :hook-rules '(existing-hook))))
+          (with-temp-buffer
+            (setq-local mevedel--current-request (and request-p request)
+                        mevedel--agent-invocation (and invocation-p invocation))
+            (mevedel-skills-activate-context
+             origin :permission-rules '(new-rule) :hook-rules '(new-hook)))
+          (should (equal (if invocation-p '(existing-rule new-rule)
+                           '(existing-rule))
+                         (mevedel-agent-invocation-skill-permission-rules invocation)))
+          (should (equal (if invocation-p '(existing-hook new-hook)
+                           '(existing-hook))
+                         (mevedel-agent-invocation-hook-rules invocation)))
+          (should (equal (if (and request-p (not invocation-p))
+                             '(existing-rule new-rule) '(existing-rule))
+                         (mevedel-request-skill-permission-rules request)))
+          (should (equal (if (and request-p (not invocation-p))
+                             '(existing-hook new-hook) '(existing-hook))
+                         (mevedel-request-hook-rules request))))))))
+
 (mevedel-deftest mevedel-skills-commit-invoked-records ()
   ,test
   (test)
@@ -68,12 +97,7 @@
   ,test
   (test)
   :doc "drain commits non-policy context and clears the buffer-local stash"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "d" :root "/tmp/d" :name "d"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/d"))
          (request (mevedel-request--create :session session))
          (rules '(("Bash" :pattern "echo *" :action allow)))
          (records (list (mevedel-skill-invocation-record--create
@@ -98,12 +122,7 @@
       (should (null mevedel-skills--pending-request-context))))
 
   :doc "drain is a no-op when no stash present"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "d" :root "/tmp/d" :name "d"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/d"))
          (request (mevedel-request--create :session session)))
     (with-temp-buffer
       (setq-local mevedel--session session)
@@ -1052,12 +1071,7 @@ hooks:
   ,test
   (test)
   :doc "inline skill yields :status ok :kind inline with prepared body"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "i" :root "/tmp/i" :name "i"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/i"))
          (skill (mevedel-skill--create
                  :name "shout"
                  :body "YELL $ARGUMENTS"))
@@ -1073,12 +1087,7 @@ hooks:
     (should (equal "YELL loudly" (plist-get outcome :body))))
 
   :doc "user origin installs the pending stash"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "s" :root "/tmp/s" :name "s"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/s"))
          (skill (mevedel-skill--create
                  :name "demo"
                  :body "Hello"
@@ -1102,13 +1111,7 @@ hooks:
     (should (eq 'ok (plist-get outcome :status))))
 
   :doc "UserPromptExpansion can rewrite user-origin inline skill output"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "slash-expansion" :root "/tmp/slash-expansion"
-              :name "slash-expansion"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/slash-expansion"))
          (skill (mevedel-skill--create
                  :name "demo"
                  :body "Original body"
@@ -1195,13 +1198,7 @@ hooks:
     (should (equal "blocked expansion" (plist-get outcome :message))))
 
   :doc "user-origin preparation failure leaves the pending stash empty"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "slash-fail" :root "/tmp/slash-fail"
-              :name "slash-fail"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/slash-fail"))
          (skill (mevedel-skill--create
                  :name "demo"
                  :body "Hello"
@@ -1226,12 +1223,7 @@ hooks:
     (should (eq 'injection-failed (plist-get outcome :reason))))
 
   :doc "model inline origin installs additive context but ignores policy"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "t" :root "/tmp/t" :name "t"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/t"))
          (request (mevedel-request--create :session session))
          (skill (mevedel-skill--create
                  :name "demo"
@@ -1636,12 +1628,7 @@ hooks:
   ,test
   (test)
   :doc "unknown skill returns an error"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "u" :root "/tmp/u" :name "u"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/u"))
          received)
     (with-temp-buffer
       (setq mevedel--session session)
@@ -2052,12 +2039,7 @@ description: Yell
   ,test
   (test)
   :doc "returns only active, model-invocable skills"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "l" :root "/tmp/l" :name "l"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
+  (let* ((session (mevedel-skills-test--make-session nil "/tmp/l"))
          (active-invocable
           (mevedel-skill--create :name "a" :description "A"
                                  :model-invocable-p t :active-p t))
