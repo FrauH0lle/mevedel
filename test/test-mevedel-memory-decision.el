@@ -192,6 +192,15 @@
     (write-region (concat original "\n") nil path nil 'silent)
     (should-error (mevedel-memory-decision-reject workspace pass (plist-get proposal :id)))
     (should (equal (list review digest) (mevedel-journal-store-entries root))))
+  :doc "each rejection-evidence observation revalidates the accepted private bundle"
+  (let ((path (file-name-concat (mevedel-memory-store--directory workspace pass) "accepted.el")))
+    (mevedel-memory-decision-reject workspace pass (plist-get proposal :id))
+    (should (string-match-p "PRIVATE PROPOSED TOPIC" (mevedel-memory-decision-rejections workspace)))
+    (write-region "\n" nil path t 'silent)
+    (let* ((text (mevedel-memory-decision-rejections workspace)) (data (json-parse-string text)))
+      (should-not (string-match-p "PRIVATE PROPOSED TOPIC" text))
+      (should (= 1 (gethash "omitted" data)))
+      (should (= 0 (length (gethash "rejections" data))))))
   :doc "retargeting the configured memory root makes rejection unavailable"
   (let ((elsewhere (file-name-concat root "elsewhere")))
     (rename-file memory elsewhere)
