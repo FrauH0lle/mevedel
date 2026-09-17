@@ -281,9 +281,8 @@ collections, so they are allocated and validated against the union."
         (let* ((turns (mevedel-directive-planning directive))
                (latest (car (last turns)))
                (proposal-turn
-                (car (last (cl-remove-if-not
-                            (lambda (turn) (plist-get turn :proposal))
-                            turns)))))
+                (cl-find-if (lambda (turn) (plist-get turn :proposal))
+                            turns :from-end t)))
           (setf (mevedel-directive-plan directive)
                 (and latest
                      (list :status (if (plist-get latest :proposal)
