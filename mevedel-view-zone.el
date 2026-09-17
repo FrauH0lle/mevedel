@@ -416,27 +416,15 @@ Return point when movement succeeds, otherwise nil.  LIMIT defaults to
                       end))))
     (nreverse spans)))
 
-(defun mevedel-view-zone--fragment< (left right)
-  "Return non-nil when LEFT should render before RIGHT."
-  (let ((left-priority (or (plist-get left :priority) 0))
-        (right-priority (or (plist-get right :priority) 0))
-        (left-order (or (plist-get left :mevedel-view-zone--order) 0))
-        (right-order (or (plist-get right :mevedel-view-zone--order) 0)))
-    (if (= left-priority right-priority)
-        (< left-order right-order)
-      (> left-priority right-priority))))
-
 (defun mevedel-view-zone--reconcile (region namespace fragments)
   "Reconcile FRAGMENTS for NAMESPACE inside managed REGION.
 FRAGMENTS are sorted by descending priority and caller order for equal
 priorities."
   (let* ((region-id (mevedel-view-zone--region-id region))
          (fragments
-          (cl-loop for fragment in fragments
-                   for order from 0
-                   collect (plist-put (mevedel-view-zone--normalize fragment)
-                                      :mevedel-view-zone--order order)))
-         (fragments (sort fragments #'mevedel-view-zone--fragment<))
+          (sort (mapcar #'mevedel-view-zone--normalize fragments)
+                :key (lambda (fragment) (or (plist-get fragment :priority) 0))
+                :lessp #'> :in-place t))
          (text (mapconcat (lambda (fragment)
                             (unless (eq (plist-get fragment :namespace) namespace)
                               (error "Fragment namespace mismatch: %S" fragment))
