@@ -340,31 +340,16 @@ Return BUFFER so lifecycle hooks can use this as their value."
 (defun mevedel-session-control-transfer-drained-p (session)
   "Return non-nil when SESSION has no work that blocks lease handoff.
 
-The coordinator owns the session-state part of this decision.  UI and other
-transient owners contribute through the registered drain predicates; a failed
-predicate is conservatively treated as still draining."
-  (and (not (mevedel-turn-busy-p
-             (mevedel-session-control-transfer-root-buffer session)))
-       (not (mevedel-session-pending-publication session))
-       (not (mevedel-session-publication-active-p session))
-       (not (mevedel-session-pending-input-p session))
-       (not (mevedel-session-pending-plan-approval session))
-       (not (mevedel-session-permission-queue session))
-       (not (mevedel-execution-session-live-p session))
-       (not (mevedel-execution-unsettled-mutation-p session))
-       (not (mevedel-agent-control-active-turn-p session))
-       (seq-every-p (lambda (predicate)
-                      (not (condition-case nil
-                               (funcall predicate)
-                             (error t))))
-                    (mevedel-session-control-transfer-drains session))))
+Admission and its user-visible explanation share the same blocker policy."
+  (null (mevedel-session-control-transfer-drain-blocker session)))
 
 (defun mevedel-session-control-transfer-drain-blocker (session)
   "Return a short phrase naming what blocks SESSION's handoff, or nil.
 
 Only the owner can answer this: a requester sees `quiescing' and nothing
 about why.  The first blocker is enough -- the user wants to know whether the
-wait is theirs to end, not an inventory."
+wait is theirs to end, not an inventory.  A failed transient drain predicate
+is conservatively treated as still draining."
   (cond
    ((mevedel-request-active-p
      (mevedel-session-control-transfer-root-buffer session))
@@ -381,7 +366,11 @@ wait is theirs to end, not an inventory."
    ((or (mevedel-session-pending-publication session)
         (mevedel-session-publication-active-p session))
     "a publication")
-   ((not (mevedel-session-control-transfer-drained-p session))
+   ((seq-some (lambda (predicate)
+                (condition-case nil
+                    (funcall predicate)
+                  (error t)))
+              (mevedel-session-control-transfer-drains session))
     "the view")))
 
 (defun mevedel-session-control-transfer-observe (session)

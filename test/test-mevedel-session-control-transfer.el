@@ -124,7 +124,39 @@
         (should-not (mevedel-session-control-transfer-drained-p session))
         (should (equal "a settling turn"
                        (mevedel-session-control-transfer-drain-blocker
-                        session)))))))
+                        session))))))
+
+  :doc "admission and explanation agree for queued and active session work"
+  (with-temp-buffer
+    (dolist (case '(("a publication" :pending-publication (:reason "pending"))
+                    ("a publication" :publication-active-p t)
+                    ("queued input" :pending-steering ("steering"))
+                    ("queued input" :pending-follow-ups ("follow-up"))
+                    ("a plan approval" :pending-plan-approval t)
+                    ("a permission prompt" :permission-queue (prompt))
+                    ("an agent turn" :agent-reservations (reservation))))
+      (let ((session (apply #'mevedel-session--create
+                            :root-buffer (current-buffer) (cdr case))))
+        (should-not (mevedel-session-control-transfer-drained-p session))
+        (should (equal (car case)
+                       (mevedel-session-control-transfer-drain-blocker
+                        session)))))
+    (let ((session (mevedel-session--create :root-buffer (current-buffer))))
+      (setq-local mevedel--current-request 'request)
+      (should-not (mevedel-session-control-transfer-drained-p session))
+      (should (equal "a running request"
+                     (mevedel-session-control-transfer-drain-blocker session)))))
+
+  :doc "a failing transient drain blocks both handoff and its explanation"
+  (let* ((session (mevedel-session--create))
+         (predicate (lambda () (error "Injected drain failure"))))
+    (mevedel-session-control-transfer-register-drain session predicate)
+    (should-not (mevedel-session-control-transfer-drained-p session))
+    (should (equal "the view"
+                   (mevedel-session-control-transfer-drain-blocker session)))
+    (mevedel-session-control-transfer-unregister-drain session predicate)
+    (should (mevedel-session-control-transfer-drained-p session))
+    (should-not (mevedel-session-control-transfer-drain-blocker session))))
 
 (mevedel-deftest mevedel-session-control-transfer-descriptor ()
   ,test
