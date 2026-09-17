@@ -3902,28 +3902,6 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-self-heal-segment-counter ()
   ,test
   (test)
-  :doc "trusts filesystem when sidecar disagrees"
-  (let ((tempdir (file-name-as-directory
-                  (make-temp-file "mevedel-selfheal-" t))))
-    (unwind-protect
-        (let ((session (mevedel-session-create
-                        "x"
-                        (mevedel-workspace-get-or-create
-                         'project "id" "/" "x"))))
-          (setf (mevedel-session-current-segment session) 1)
-          (write-region "" nil
-                        (file-name-concat tempdir "segment-0001.chat.org")
-                        nil 'silent)
-          (write-region "" nil
-                        (file-name-concat tempdir "segment-0002.chat.org")
-                        nil 'silent)
-          ;; Suppress display-warning popup during the test.
-          (cl-letf (((symbol-function 'display-warning) #'ignore))
-            (mevedel-session-artifacts-self-heal-segment-counter
-             session tempdir))
-                  (should (= 2 (mevedel-session-current-segment session))))
-              (delete-directory tempdir t)
-              (mevedel-workspace-clear-registry)))
   :doc "finalizes predecessor when healing upward"
   (let ((tempdir (file-name-as-directory
                   (make-temp-file "mevedel-selfheal-" t))))
@@ -3941,39 +3919,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (cl-letf (((symbol-function 'display-warning) #'ignore))
             (mevedel-session-artifacts-self-heal-segment-counter
              session tempdir))
+          (should (= 2 (mevedel-session-current-segment session)))
           (with-temp-buffer
             (insert-file-contents seg1)
             (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
                                     (buffer-string)))))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "returns an unmodified predecessor when finalization is deferred"
-  (let ((tempdir (file-name-as-directory
-                  (make-temp-file "mevedel-selfheal-deferred-" t))))
-    (unwind-protect
-        (let* ((session
-                (mevedel-session-create
-                 "x"
-                 (mevedel-workspace-get-or-create
-                  'project "deferred-id" "/" "x")))
-               (segment-1
-                (file-name-concat tempdir "segment-0001.chat.org")))
-          (setf (mevedel-session-current-segment session) 1)
-          (write-region "* Chat\n" nil segment-1 nil 'silent)
-          (write-region
-           "* Current\n" nil
-           (file-name-concat tempdir "segment-0002.chat.org") nil 'silent)
-          (cl-letf (((symbol-function 'display-warning) #'ignore))
-            (should
-             (equal
-              segment-1
-              (mevedel-session-artifacts-self-heal-segment-counter
-               session tempdir t))))
-          (with-temp-buffer
-            (insert-file-contents segment-1)
-            (should-not
-             (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
-                             (buffer-string)))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
