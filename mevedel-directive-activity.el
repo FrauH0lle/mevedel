@@ -335,36 +335,27 @@
                 (cond (attempt-p (mevedel-directive-attempt-outcome entry))
                       (planning-p (plist-get entry :outcome))
                       (t (mevedel-directive-discussion-turn-outcome entry))))
+               (action (cond
+                        (attempt-p (mevedel-directive-attempt-action entry))
+                        (planning-p 'plan)
+                        (t 'discuss)))
                (start
                 (mevedel--format-hook-audit-record
                  (list :type 'directive-turn-boundary :edge 'start
                        :directive-id id
-                       :action (cond
-                                (attempt-p
-                                 (mevedel-directive-attempt-action entry))
-                                (planning-p 'plan)
-                                (t 'discuss))
+                       :action action
                        :turn turn)))
                (end
                 (mevedel--format-hook-audit-record
                  (list :type 'directive-turn-boundary :edge 'end
                        :directive-id id
-                       :action (cond
-                                (attempt-p
-                                 (mevedel-directive-attempt-action entry))
-                                (planning-p 'plan)
-                                (t 'discuss))
+                       :action action
                        :turn turn :outcome outcome
                        :activity-kind kind :sequence sequence))))
           (insert start)
           (insert (format "*** %s :%s:\n:PROMPT:\n%s\n:END:\n"
                           (or message "Directive activity")
-                          (cond
-                           (attempt-p
-                              (symbol-name
-                               (mevedel-directive-attempt-action entry)))
-                           (planning-p "plan")
-                           (t "discuss"))
+                          (symbol-name action)
                           (org-escape-code-in-string (or request ""))))
           (let ((response-start (point)))
             (insert (or result ""))
