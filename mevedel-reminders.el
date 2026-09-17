@@ -304,13 +304,11 @@ read-safe list whose first element names a trusted constructor in
 Trigger, content, and interval are shared by reference; only the
 per-invocation state (LAST-FIRED) is reset so cloned reminders track
 their own firing history."
-  (mevedel-reminder--create
-   :type (mevedel-reminder-type reminder)
-   :trigger (mevedel-reminder-trigger reminder)
-   :content (mevedel-reminder-content reminder)
-   :interval (mevedel-reminder-interval reminder)
-   :last-fired nil
-   :recipe (copy-tree (mevedel-reminder-recipe reminder))))
+  (let ((clone (copy-mevedel-reminder reminder)))
+    (setf (mevedel-reminder-last-fired clone) nil
+          (mevedel-reminder-recipe clone)
+          (copy-tree (mevedel-reminder-recipe reminder)))
+    clone))
 
 (defun mevedel-reminders-clone-list (reminders)
   "Return a fresh list of cloned REMINDERS.
