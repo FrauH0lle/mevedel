@@ -25,18 +25,12 @@
 ;; `cl-seq'
 (declare-function cl-delete-duplicates "cl-seq" (cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
-(declare-function cl-remove-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-some "cl-seq" (cl-pred cl-seq &rest cl-rest))
-
-;; `gptel'
-(defvar gptel-post-tool-call-functions)
 
 ;; `gptel-request'
 (declare-function gptel-get-tool "ext:gptel-request" (name))
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-p "ext:gptel-request" (cl-x))
 
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
@@ -49,10 +43,6 @@
                   "mevedel-hooks" (rules &optional scope))
 (autoload 'mevedel-hooks-annotate-rules-source "mevedel-hooks")
 (autoload 'mevedel-hooks-normalize-rules "mevedel-hooks")
-
-;; `mevedel-models'
-(declare-function mevedel-model-agent-tool-description "mevedel-models" ())
-(defvar mevedel-model-tiers)
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset--resolved-metadata
@@ -82,13 +72,6 @@
 (autoload 'mevedel-agent-path-p "mevedel-structs")
 (defvar mevedel--current-request)
 (defvar mevedel--session)
-
-;; `mevedel-system'
-(defvar mevedel-system-retained-components)
-(declare-function mevedel-system-build-prompt
-                  "mevedel-system" (profile &rest keys))
-(autoload 'mevedel-system-build-prompt "mevedel-system")
-
 
 ;;
 ;;; Agent struct and registry
@@ -519,7 +502,7 @@ Returns a cons (NAME . PLIST) suitable for the request-local role roster."
 (mevedel-define-agent worker
   :description "Implementation agent with broad repository tools and recursive
 delegation authority."
-  :tools (read edit (:tool "Bash") (:tool "ToolCall") (:tool "ToolSearch")
+  :tools (read edit (:tool "Bash")
           (:discoverable code)
           (:discoverable web)
           (:discoverable elisp)
@@ -556,7 +539,7 @@ delegation authority."
 needed, web research.  Caller specifies the thoroughness level
 (quick/moderate/thorough) in the prompt.  Returns a structured report -- never
 modifies files."
-  :tools (read (:tool "ToolCall") (:tool "ToolSearch")
+  :tools (read
           (:discoverable code)
           (:discoverable web)
           (:discoverable elisp)
@@ -585,7 +568,7 @@ modifies files."
   :description "Adversarial verification specialist.  Read-only -- \
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
-  :tools (read (:tool "Bash") (:tool "ToolCall") (:tool "ToolSearch")
+  :tools (read (:tool "Bash")
           (:discoverable code)
           (:discoverable elisp)
           (:discoverable (:tool "Eval"))
@@ -603,7 +586,7 @@ review.  Cannot edit, write, or create files."
 (mevedel-define-agent reviewer
   :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
-  :tools (read (:tool "Bash") (:tool "ToolCall") (:tool "ToolSearch")
+  :tools (read (:tool "Bash")
           (:discoverable code))
   :system-components
   '((role :file "agents/reviewer.md")
