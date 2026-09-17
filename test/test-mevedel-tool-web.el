@@ -27,68 +27,52 @@
 ;;; Registration
 
 (mevedel-deftest mevedel-tool-web--register
-  (:before-each (mevedel-tool-clear-registry)
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-web--register))
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)
   :doc "registers WebSearch natively without the inert count argument"
   ;; Upstream advertises `count' and its callback hardcodes five results,
   ;; so offering the argument teaches the model a lie.
-  (progn
-    (mevedel-tool-web--register)
-    (let ((tool (mevedel-tool-get "WebSearch" "mevedel-web")))
-      (should tool)
-      (should (eq t (mevedel-tool-read-only-p tool)))
-      (should (memq 'web (mevedel-tool-groups tool)))
-      (should (mevedel-tool-async-p tool))
-      (let ((arg-names (mapcar #'car (mevedel-tool-args tool))))
-        (should (memq 'query arg-names))
-        (should-not (memq 'count arg-names)))))
+  (let ((tool (mevedel-tool-get "WebSearch" "mevedel-web")))
+    (should tool)
+    (should (eq t (mevedel-tool-read-only-p tool)))
+    (should (memq 'web (mevedel-tool-groups tool)))
+    (should (mevedel-tool-async-p tool))
+    (let ((arg-names (mapcar #'car (mevedel-tool-args tool))))
+      (should (memq 'query arg-names))
+      (should-not (memq 'count arg-names))))
 
   :doc "registers WebFetch with max-result-size"
-  (progn
-    (mevedel-tool-web--register)
-    (let ((tool (mevedel-tool-get "WebFetch" "mevedel-web")))
-      (should tool)
-      (should (eq t (mevedel-tool-read-only-p tool)))
-      (should (= 50000 (mevedel-tool-max-result-size tool)))))
+  (let ((tool (mevedel-tool-get "WebFetch" "mevedel-web")))
+    (should tool)
+    (should (eq t (mevedel-tool-read-only-p tool)))
+    (should (= 50000 (mevedel-tool-max-result-size tool))))
 
-  :doc "WebFetch :get-domain extracts host from :url"
-  (progn
-    (mevedel-tool-web--register)
-    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-web"))
-           (fn (mevedel-tool-get-domain tool)))
-      (should fn)
-      (should (equal "example.com"
-                     (funcall fn '(:url "https://example.com/path"))))
-      (should-not (funcall fn '(:url "not-a-url")))))
-
-  :doc "WebFetch :get-domain reads a YouTube host from :url"
-  (progn
-    (mevedel-tool-web--register)
-    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-web"))
-           (fn (mevedel-tool-get-domain tool)))
-      (should fn)
-      (should (equal "www.youtube.com"
-                     (funcall fn '(:url "https://www.youtube.com/watch?v=xyz"))))))
+  :doc "WebFetch :get-domain extracts ordinary and YouTube hosts and rejects invalid URLs"
+  (let ((fn (mevedel-tool-get-domain
+             (mevedel-tool-get "WebFetch" "mevedel-web"))))
+    (should fn)
+    (should (equal "example.com"
+                   (funcall fn '(:url "https://example.com/path"))))
+    (should (equal "www.youtube.com"
+                   (funcall fn '(:url "https://www.youtube.com/watch?v=xyz"))))
+    (should-not (funcall fn '(:url "not-a-url"))))
 
   :doc "both tools share the web group"
-  (progn
-    (mevedel-tool-web--register)
-    (let ((web-tools (mevedel-tool-for-groups '(web))))
-      (should (<= 2 (length web-tools)))
-      (should (cl-every (lambda (tool) (mevedel-tool-read-only-p tool))
-                        web-tools))))
+  (let ((web-tools (mevedel-tool-for-groups '(web))))
+    (should (<= 2 (length web-tools)))
+    (should (cl-every (lambda (tool) (mevedel-tool-read-only-p tool))
+                      web-tools)))
 
   :doc "re-registering web tools replaces existing wrappers"
-  (progn
+  (let ((initial (mevedel-tool-get "WebSearch" "mevedel-web")))
     (mevedel-tool-web--register)
-    (let ((initial (mevedel-tool-get "WebSearch" "mevedel-web")))
-      (mevedel-tool-web--register)
-      (let ((refreshed (mevedel-tool-get "WebSearch" "mevedel-web")))
-        (should refreshed)
-        (should-not (eq initial refreshed))
-        (should (mevedel-tool-get "WebFetch" "mevedel-web"))))))
+    (let ((refreshed (mevedel-tool-get "WebSearch" "mevedel-web")))
+      (should refreshed)
+      (should-not (eq initial refreshed))
+      (should (mevedel-tool-get "WebFetch" "mevedel-web")))))
 
 
 ;;
@@ -110,19 +94,14 @@
     (should (null (plist-get plist :body-mode))))
 
   :doc "body-mode tracks the data buffer's major mode when one is attached"
-  (let ((data-buf (generate-new-buffer " *mev-test-fetch-data*"))
-        (view-buf (generate-new-buffer " *mev-test-fetch-view*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf (org-mode))
-          (with-current-buffer view-buf
-            (setq-local mevedel--data-buffer data-buf)
-            (let ((plist (mevedel-tool-web--render-fetch
-                          "WebFetch" '(:url "https://example.com/")
-                          "body\n" nil)))
-              (should (eq 'org-mode (plist-get plist :body-mode))))))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+  (with-temp-buffer
+    (org-mode)
+    (let ((data-buf (current-buffer)))
+      (with-temp-buffer
+        (setq-local mevedel--data-buffer data-buf)
+        (let ((plist (mevedel-tool-web--render-fetch
+                      "WebFetch" '(:url "https://example.com/") "body\n" nil)))
+          (should (eq 'org-mode (plist-get plist :body-mode)))))))
 
   :doc "falls back to the url when host cannot be parsed"
   (let* ((body "content\n")
@@ -146,18 +125,14 @@
     (should (null (plist-get plist :body-mode))))
 
   :doc "body-mode tracks the data buffer's major mode when one is attached"
-  (let ((data-buf (generate-new-buffer " *mev-test-search-data*"))
-        (view-buf (generate-new-buffer " *mev-test-search-view*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf (org-mode))
-          (with-current-buffer view-buf
-            (setq-local mevedel--data-buffer data-buf)
-            (let ((plist (mevedel-tool-web--render-search
-                          "WebSearch" '(:query "x") "- a\n- b\n" nil)))
-              (should (eq 'org-mode (plist-get plist :body-mode))))))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+  (with-temp-buffer
+    (org-mode)
+    (let ((data-buf (current-buffer)))
+      (with-temp-buffer
+        (setq-local mevedel--data-buffer data-buf)
+        (let ((plist (mevedel-tool-web--render-search
+                      "WebSearch" '(:query "x") "- a\n- b\n" nil)))
+          (should (eq 'org-mode (plist-get plist :body-mode))))))))
 
 
 ;;
