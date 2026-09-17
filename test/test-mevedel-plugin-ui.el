@@ -35,39 +35,6 @@
 (defvar mevedel--workspace)
 (defvar mevedel-plugins-test--owner-buffers nil)
 
-(defun mevedel-plugins-test--plugin-line (plugin &optional workspace)
-  "Return one compact state line for PLUGIN in WORKSPACE."
-  (let ((shadowed (mevedel-plugin-shadowed plugin)))
-    (format "%s%s enabled:%s hooks:%s events:%s skills:%d source:%s%s"
-            (mevedel-plugin-name plugin)
-            (if-let* ((version (mevedel-plugin-version plugin)))
-                (format " %s" version)
-              "")
-            (if (mevedel-plugins-enabled-p plugin workspace) "on" "off")
-            (mevedel-plugins-hooks-status plugin workspace)
-            (if-let* ((events (mevedel-plugins-hook-rule-events plugin)))
-                (string-join events ",")
-              "none")
-            (mevedel-plugins-skill-count plugin)
-            (mevedel-plugins--plugin-source-label plugin)
-            (if shadowed
-                (format " shadowed:%d" (length shadowed))
-              ""))))
-
-(defun mevedel-plugins-test--list-string (&optional workspace)
-  "Return rendered plugin rows for WORKSPACE."
-  (let ((plugins (mevedel-plugins-list workspace)))
-    (if plugins
-        (mapconcat
-         (lambda (plugin)
-           (string-join
-            (cons (mevedel-plugins-test--plugin-line plugin workspace)
-                  (mevedel-plugins--shadowed-lines plugin workspace))
-            "\n"))
-         plugins
-         "\n")
-      "No plugins installed.")))
-
 (defun mevedel-plugins-test--context
     (workspace view-buffer data-buffer &optional origin-buffer)
   "Return a plugin cockpit context for WORKSPACE."
@@ -221,7 +188,7 @@
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
       (with-current-buffer mevedel-plugins-list-buffer-name
         (let ((list-workspace
-               (mevedel-plugins-list--workspace
+               (mevedel-cockpit-context-workspace
                 (mevedel-cockpit-surface-context))))
           (mevedel-test--with-captured-messages nil
             (mevedel-plugins-list-toggle-enabled))
@@ -502,8 +469,10 @@
         (should (mevedel-plugins-staging-name-p (car (last args))))
         (should (file-directory-p dest))
         (should-not (mevedel-plugins-test--staging-leftovers dest)))
-      (should (string-match-p "demo enabled:off hooks:off"
-                              (mevedel-plugins-test--list-string workspace)))))
+      (let ((plugin (mevedel-plugins-find "demo" workspace)))
+        (should-not (mevedel-plugins-enabled-p plugin workspace))
+        (should (equal "off"
+                       (mevedel-plugins-hooks-status plugin workspace))))))
 
   :doc "blank and list forms route through the plugin cockpit"
   (let (areas)
@@ -682,8 +651,10 @@
                  (list 0 ""))))
       (should (equal "Updated plugin demo."
                      (mevedel-plugins-test--slash session "update demo")))
-      (should (string-match-p "demo enabled:on hooks:on"
-                              (mevedel-plugins-test--list-string workspace)))))
+      (let ((plugin (mevedel-plugins-find "demo" workspace)))
+        (should (mevedel-plugins-enabled-p plugin workspace))
+        (should (equal "on"
+                       (mevedel-plugins-hooks-status plugin workspace))))))
 
   :doc "manual updates invalidate changed hook consent"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo")))
@@ -730,8 +701,10 @@
         (should (member (concat "mevedel: plugin hook consent pending "
                                 "for demo; open /plugin to review")
                         messages)))
-      (should (string-match-p "demo enabled:on hooks:needs-consent"
-                              (mevedel-plugins-test--list-string workspace)))))
+      (let ((plugin (mevedel-plugins-find "demo" workspace)))
+        (should (mevedel-plugins-enabled-p plugin workspace))
+        (should (equal "needs-consent"
+                       (mevedel-plugins-hooks-status plugin workspace))))))
 
   :doc "manual updates preserve disabled plugin state"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
@@ -759,8 +732,10 @@
         (should-not (plist-get state :hooks-enabled))
         (should (mevedel-plugins-same-root-p
                  root (plist-get state :source-root) workspace)))
-      (should (string-match-p "demo enabled:off hooks:off"
-                              (mevedel-plugins-test--list-string workspace)))))
+      (let ((plugin (mevedel-plugins-find "demo" workspace)))
+        (should-not (mevedel-plugins-enabled-p plugin workspace))
+        (should (equal "off"
+                       (mevedel-plugins-hooks-status plugin workspace))))))
 
   :doc "manual updates preserve prior state when manifest name changes"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
@@ -783,8 +758,10 @@
         (should-not (plist-get state :hooks-enabled))
         (should (mevedel-plugins-same-root-p
                  root (plist-get state :source-root) workspace)))
-      (should (string-match-p "new-name enabled:off hooks:none"
-                              (mevedel-plugins-test--list-string workspace)))))
+      (let ((plugin (mevedel-plugins-find "new-name" workspace)))
+        (should-not (mevedel-plugins-enabled-p plugin workspace))
+        (should (equal "none"
+                       (mevedel-plugins-hooks-status plugin workspace))))))
 
   :doc "remove deletes managed plugin root and matching activation state"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
@@ -973,8 +950,10 @@
       (should (equal "Installed plugin demo."
                      (mevedel-plugins-test--slash
                       session "install owner/repo")))
-      (should (string-match-p "demo enabled:off hooks:none"
-                              (mevedel-plugins-test--list-string workspace)))))
+      (let ((plugin (mevedel-plugins-find "demo" workspace)))
+        (should-not (mevedel-plugins-enabled-p plugin workspace))
+        (should (equal "none"
+                       (mevedel-plugins-hooks-status plugin workspace))))))
 
   :doc "fresh installs fail when the clone lacks a manifest"
   (let ((mevedel-plugins-git-executor

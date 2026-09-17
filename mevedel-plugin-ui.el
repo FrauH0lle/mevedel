@@ -233,7 +233,7 @@ starts log it quietly to *Messages*."
   "Return a `tabulated-list-mode' row for plugin cockpit ITEM in CONTEXT."
   (if (mevedel-plugin-error-p item)
       (mevedel-plugins-list--error-entry item)
-    (let* ((workspace (mevedel-plugins-list--workspace context))
+    (let* ((workspace (mevedel-cockpit-context-workspace context))
            (plugin item)
            (name (mevedel-plugin-name plugin))
            (enabled (if (mevedel-plugins-enabled-p plugin workspace)
@@ -250,13 +250,9 @@ starts log it quietly to *Messages*."
              (number-to-string (mevedel-plugins-skill-count plugin))
              (mevedel-plugins--plugin-source-label plugin))))))
 
-(defun mevedel-plugins-list--workspace (context)
-  "Return CONTEXT's plugin cockpit workspace."
-  (mevedel-cockpit-context-workspace context))
-
 (defun mevedel-plugins-list--root-label (context)
   "Return CONTEXT's plugin cockpit workspace root label."
-  (if-let* ((workspace (mevedel-plugins-list--workspace context)))
+  (if-let* ((workspace (mevedel-cockpit-context-workspace context)))
       (abbreviate-file-name
        (mevedel-workspace-root workspace))
     "no workspace"))
@@ -285,7 +281,7 @@ starts log it quietly to *Messages*."
   (let ((total 0)
         (enabled 0)
         (hooks 0)
-        (workspace (mevedel-plugins-list--workspace context)))
+        (workspace (mevedel-cockpit-context-workspace context)))
     (dolist (item items)
       (when (mevedel-plugin-p item)
         (setq total (1+ total))
@@ -301,23 +297,19 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list--collect (context)
   "Return plugin cockpit items for CONTEXT."
   (mevedel-plugins-items
-   (mevedel-plugins-list--workspace context)))
+   (mevedel-cockpit-context-workspace context)))
 
 (defun mevedel-plugins-list-refresh ()
   "Refresh the current plugin management buffer."
   (interactive)
   (mevedel-cockpit-surface-refresh))
 
-(defun mevedel-plugins-list--refresh-preserving (name)
-  "Refresh the current plugin cockpit, preserving plugin NAME when possible."
-  (mevedel-cockpit-surface-refresh name))
-
 (defun mevedel-plugins-list-toggle-enabled ()
   "Toggle activation for the plugin at point."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (plugin (mevedel-plugins-list--plugin-at-point))
-         (workspace (mevedel-plugins-list--workspace
+         (workspace (mevedel-cockpit-context-workspace
                      context))
          (name (mevedel-plugin-name plugin)))
     (if (mevedel-plugins-enabled-p plugin workspace)
@@ -328,14 +320,14 @@ starts log it quietly to *Messages*."
           (message "mevedel: enabled plugin %s" name)
         (message "mevedel: enable cancelled for plugin %s" name)))
     (mevedel-plugins-refresh-session context)
-    (mevedel-plugins-list--refresh-preserving name)))
+    (mevedel-cockpit-surface-refresh name)))
 
 (defun mevedel-plugins-list-toggle-hooks ()
   "Toggle hooks for the plugin at point."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (selected (mevedel-plugins-list--plugin-at-point))
-         (workspace (mevedel-plugins-list--workspace
+         (workspace (mevedel-cockpit-context-workspace
                      context))
          (name (mevedel-plugin-name selected)))
     (cond
@@ -355,20 +347,20 @@ starts log it quietly to *Messages*."
      (t
       (message "mevedel: hook enable cancelled for plugin %s" name)))
     (mevedel-plugins-refresh-session context)
-    (mevedel-plugins-list--refresh-preserving name)))
+    (mevedel-cockpit-surface-refresh name)))
 
 (defun mevedel-plugins-list-update ()
   "Update the plugin at point."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (name (mevedel-plugins-list--selected-name))
-         (workspace (mevedel-plugins-list--workspace
+         (workspace (mevedel-cockpit-context-workspace
                      context))
          (message (mevedel-plugins-update
                    name
                    workspace)))
     (mevedel-plugins-refresh-session context)
-    (mevedel-plugins-list--refresh-preserving name)
+    (mevedel-cockpit-surface-refresh name)
     (message "%s" message)))
 
 (defun mevedel-plugins-list-remove ()
@@ -376,13 +368,13 @@ starts log it quietly to *Messages*."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (name (mevedel-plugins-list--selected-name))
-         (workspace (mevedel-plugins-list--workspace
+         (workspace (mevedel-cockpit-context-workspace
                      context))
          (message (mevedel-plugins-remove
                    name
                    workspace)))
     (mevedel-plugins-refresh-session context)
-    (mevedel-plugins-list--refresh-preserving name)
+    (mevedel-cockpit-surface-refresh name)
     (message "%s" message)))
 
 (defun mevedel-plugins-list--installed-name (message)
@@ -398,7 +390,7 @@ starts log it quietly to *Messages*."
          (message (mevedel-plugins-install target))
          (name (mevedel-plugins-list--installed-name message)))
     (mevedel-plugins-refresh-session context)
-    (mevedel-plugins-list--refresh-preserving (or name selected))
+    (mevedel-cockpit-surface-refresh (or name selected))
     (message "%s" message)))
 
 (defun mevedel-plugins-list-reload ()
@@ -407,7 +399,7 @@ starts log it quietly to *Messages*."
   (let* ((context (mevedel-cockpit-surface-context))
          (name (tabulated-list-get-id))
          (message (mevedel-plugins--reload context)))
-    (mevedel-plugins-list--refresh-preserving name)
+    (mevedel-cockpit-surface-refresh name)
     (message "%s" message)))
 
 (defun mevedel-plugins-list-open-source ()
@@ -426,7 +418,7 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list--detail-report (plugin context)
   "Return the complete information report for PLUGIN in CONTEXT."
   (let* ((name (mevedel-plugin-name plugin))
-         (workspace (mevedel-plugins-list--workspace context))
+         (workspace (mevedel-cockpit-context-workspace context))
          (hooks (mevedel-plugins-hooks-status plugin workspace))
          (events (mevedel-plugins-hook-rule-events plugin)))
     (list :title "Plugin" :subtitle name :identity (mevedel-plugin-root plugin)
