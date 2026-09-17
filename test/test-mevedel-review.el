@@ -127,32 +127,42 @@
            "/tmp/project/" "/tmp/project/review.md"))))
 
 
-(mevedel-deftest mevedel-review--target-prompt-and-hint ()
+(mevedel-deftest mevedel-review--prompt-and-hint ()
   ,test
   (test)
-  :doc "base branch prompt includes pre-resolved merge base"
+  :doc "both commands include the pre-resolved merge base and their own wording"
   (cl-letf (((symbol-function 'mevedel-review--git-string)
              (lambda (_cwd &rest args)
                (and (equal args '("merge-base" "HEAD" "main"))
                     "abc123"))))
+    (dolist (command '(review verify))
+      (let ((prompt+hint
+             (mevedel-review--prompt-and-hint
+              command '(:type base-branch :branch "main") "/tmp/project/")))
+        (should (string-search "merge base commit for this comparison is abc123"
+                               (car prompt+hint)))
+        (should (string-search "git diff abc123" (car prompt+hint)))
+        (should (eq (eq command 'verify)
+                    (not (null (string-search "VERDICT: PASS" (car prompt+hint))))))
+        (should (equal "changes against 'main'" (cdr prompt+hint))))))
+
+  :doc "custom targets trim instructions and keep the verifier verdict requirement"
+  (dolist (command '(review verify))
     (let ((prompt+hint
-           (mevedel-review--target-prompt-and-hint
-            '(:type base-branch :branch "main")
+           (mevedel-review--prompt-and-hint
+            command '(:type custom :instructions "  Check only tests.  ")
             "/tmp/project/")))
-      (should (string-search "merge base commit for this comparison is abc123"
-                             (car prompt+hint)))
-      (should (string-search "git diff abc123" (car prompt+hint)))
-      (should (equal "changes against 'main'" (cdr prompt+hint)))))
+      (if (eq command 'verify)
+          (progn
+            (should (string-search "Check only tests." (car prompt+hint)))
+            (should (string-search "VERDICT: PASS" (car prompt+hint))))
+        (should (equal "Check only tests." (car prompt+hint))))
+      (should (equal "Check only tests." (cdr prompt+hint))))))
 
-  :doc "custom target uses trimmed instructions"
-  (let ((prompt+hint
-         (mevedel-review--target-prompt-and-hint
-          '(:type custom :instructions "  Check only tests.  ")
-          "/tmp/project/")))
-    (should (equal "Check only tests." (car prompt+hint)))
-    (should (equal "Check only tests." (cdr prompt+hint))))
-
-  :doc "explicit slash target args parse but free-form text stays custom"
+(mevedel-deftest mevedel-review--parse-target-arg
+  (:doc "explicit slash target args parse but free-form text stays custom")
+  ,test
+  (test)
   (should (equal '(:type uncommitted)
                  (mevedel-review--parse-target-arg "current")))
   (should (equal '(:type commit :sha "HEAD" :title "")
@@ -161,22 +171,7 @@
                  (mevedel-review--parse-target-arg "branch:main")))
   (should (equal '(:type commit :sha "abc123" :title "")
                  (mevedel-review--parse-target-arg "commit:abc123")))
-  (should-not (mevedel-review--parse-target-arg "current changes"))
-
-  :doc "verify prompt mirrors review targets with verifier verdict wording"
-  (cl-letf (((symbol-function 'mevedel-review--git-string)
-             (lambda (_cwd &rest args)
-               (and (equal args '("merge-base" "HEAD" "main"))
-                    "abc123"))))
-    (let ((prompt+hint
-           (mevedel-review--verify-target-prompt-and-hint
-            '(:type base-branch :branch "main")
-            "/tmp/project/")))
-      (should (string-search "merge base commit for this comparison is abc123"
-                             (car prompt+hint)))
-      (should (string-search "git diff abc123" (car prompt+hint)))
-      (should (string-search "VERDICT: PASS" (car prompt+hint)))
-      (should (equal "changes against 'main'" (cdr prompt+hint))))))
+  (should-not (mevedel-review--parse-target-arg "current changes")))
 
 (mevedel-deftest mevedel-review--read-target ()
   ,test
