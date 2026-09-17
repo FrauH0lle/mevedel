@@ -494,7 +494,7 @@
                  (should-error (mevedel-journal-capture--read workspace id)))))
          (write-region original nil path nil 'silent)))))
 
-  :doc "rejects malformed source provenance and missing closed policy fields"
+  :doc "rejects malformed provenance and missing or unknown descriptor/policy fields"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
      (mevedel-test-journal-capture--turn session buffer "Check the result" "The result passed")
@@ -506,6 +506,10 @@
        (unwind-protect
            (dolist (mutation
                     (list
+                     (lambda (record) (remhash "head" record))
+                     (lambda (record)
+                       (remhash "head" record)
+                       (puthash "unexpected" nil record))
                      (lambda (record) (puthash "sources" [] record))
                      (lambda (record)
                        (puthash "logical" "../secret" (aref (gethash "sources" record) 0)))
