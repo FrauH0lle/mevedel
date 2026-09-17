@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import sys
 
@@ -35,9 +36,20 @@ def command(data: dict[str, object]) -> str:
     return value if isinstance(value, str) else ""
 
 
-def path_value(data: dict[str, object]) -> str:
-    value = tool_input(data).get("file_path")
-    return value if isinstance(value, str) else ""
+def patch_paths(data: dict[str, object]) -> list[str]:
+    """Read normalized file and rename paths from native ApplyPatch headers."""
+    patch = tool_input(data).get("patch")
+    if not isinstance(patch, str):
+        return []
+    paths = []
+    for line in patch.replace("\r", "\n").split("\n"):
+        match = re.fullmatch(
+            r"\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)",
+            line.strip(" \t\r\n"),
+        )
+        if match:
+            paths.append(posixpath.normpath(match[1].strip(" \t\r\n")))
+    return paths
 
 
 def skill_name(data: dict[str, object]) -> str:
@@ -56,28 +68,28 @@ def additional_context(text: str) -> None:
 def bash_safety() -> None:
     cmd = command(payload())
     dangerous = [
-        (r"(^|[;&|()[:space:]])rm[[:space:]].*(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)", "rm -rf is blocked"),
-        (r"git[[:space:]]+reset[[:space:]]+--hard\b", "git reset --hard is blocked"),
-        (r"git[[:space:]]+clean[[:space:]].*(-[A-Za-z]*f[A-Za-z]*d|-[A-Za-z]*d[A-Za-z]*f)", "git clean -fd is blocked"),
-        (r"git[[:space:]]+push\b.*(--force|-f|--force-with-lease)", "force-push is blocked"),
+        (r"(^|[;&|()\s])rm\s.*(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)", "rm -rf is blocked"),
+        (r"git\s+reset\s+--hard\b", "git reset --hard is blocked"),
+        (r"git\s+clean\s.*(-[A-Za-z]*f[A-Za-z]*d|-[A-Za-z]*d[A-Za-z]*f)", "git clean -fd is blocked"),
+        (r"git\s+push\b.*(--force|-f|--force-with-lease)", "force-push is blocked"),
         (r"\.git(/|$)", "commands touching .git internals are blocked"),
     ]
     for pattern, reason in dangerous:
-        if re.search(pattern.replace("[[:space:]]", r"\s"), cmd):
+        if re.search(pattern, cmd):
             deny(reason)
             return
 
 
 def generated_file_guard() -> None:
-    path = path_value(payload())
-    blocked = [
-        (path.endswith(".elc"), "generated .elc files must not be edited"),
-        ("/.mevedel/sessions/" in path or path.startswith(".mevedel/sessions/"), "session transcripts are generated runtime artifacts"),
-    ]
-    for matched, reason in blocked:
-        if matched:
-            deny(reason)
-            return
+    for path in patch_paths(payload()):
+        blocked = [
+            (path.endswith(".elc"), "generated .elc files must not be edited"),
+            ("/.mevedel/sessions/" in path or path.startswith(".mevedel/sessions/"), "session transcripts are generated runtime artifacts"),
+        ]
+        for matched, reason in blocked:
+            if matched:
+                deny(reason)
+                return
 
 
 def precompact_context() -> None:
