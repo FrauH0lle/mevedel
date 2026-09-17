@@ -695,30 +695,32 @@ section only."
                  'mevedel-view-collapsed t))))
         (set-marker end-marker nil)))))
 
-(defun mevedel-view-disclosure-section-bounds ()
+(defun mevedel-view-disclosure-section-bounds (&optional property)
   "Return (START . END) of the current section at point.
-A section is a contiguous region with the same `mevedel-view-source'.
+A section is a contiguous region with the same non-nil PROPERTY value.
+PROPERTY defaults to `mevedel-view-source'.  Respects narrowing.
 Compared with `eq' to match property-change scanning semantics -- two
 conses with equal values but distinct identity are treated as a
 boundary, which matters because the turn-level fallback source can
 share a value with a nested section without being the same object."
-  (let ((source (get-text-property (point) 'mevedel-view-source)))
-    (when source
+  (let* ((property (or property 'mevedel-view-source))
+         (value (get-text-property (point) property)))
+    (when value
       (let ((start (or (previous-single-property-change
-                        (point) 'mevedel-view-source)
+                        (point) property)
                        (point-min)))
             (end (or (next-single-property-change
-                      (point) 'mevedel-view-source)
+                      (point) property)
                      (point-max))))
         ;; `previous-single-property-change' returns the latest change
         ;; position before point -- which lands in the PREVIOUS run when
         ;; point is at the start of the current run.  Advance past any
-        ;; such leading region whose source is not `eq' to point's.
+        ;; such leading region whose value is not `eq' to point's.
         (when (and (< start (point))
-                   (not (eq (get-text-property start 'mevedel-view-source)
-                            source)))
+                   (not (eq (get-text-property start property)
+                            value)))
           (setq start (or (next-single-property-change
-                           start 'mevedel-view-source)
+                           start property)
                           (point))))
         (cons start end)))))
 

@@ -120,7 +120,7 @@
 (declare-function mevedel-view-disclosure-record-state
                   "mevedel-view-disclosure" (source vtype collapsed))
 (declare-function mevedel-view-disclosure-section-bounds
-                  "mevedel-view-disclosure" ())
+                  "mevedel-view-disclosure" (&optional property))
 (declare-function mevedel-view-disclosure-state-entry
                   "mevedel-view-disclosure" (source vtype))
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())

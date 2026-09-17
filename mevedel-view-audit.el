@@ -45,7 +45,7 @@
 (declare-function mevedel-view-disclosure-record-state
                   "mevedel-view-disclosure" (source vtype collapsed))
 (declare-function mevedel-view-disclosure-section-bounds
-                  "mevedel-view-disclosure" ())
+                  "mevedel-view-disclosure" (&optional property))
 (declare-function mevedel-view-disclosure-source-range
                   "mevedel-view-disclosure" (data-buffer start end))
 (declare-function mevedel-view-disclosure-state-key

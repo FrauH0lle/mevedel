@@ -691,6 +691,38 @@ state of its inner sections"
 (mevedel-deftest mevedel-view-disclosure-section-bounds ()
   ,test
   (test)
+  :doc "section boundaries preserve identity, narrowing, and point"
+  (dolist (property '(mevedel-view-source mevedel-view-hook-context-id
+                      mevedel-view-turn-id mevedel-view-type))
+    (with-temp-buffer
+      (insert "aaabbbccc...")
+      (let* ((user-p (eq property 'mevedel-view-type))
+             (outer (if user-p 'response (cons 1 20)))
+             (inner (if user-p 'user-input-summary (cons 1 20))))
+        (put-text-property 1 4 property outer)
+        (put-text-property 4 7 property inner)
+        (put-text-property 7 10 property outer)
+        (let ((before (buffer-string)))
+          (dolist (restriction '((1 . 13) (2 . 9)))
+            (save-restriction
+              (narrow-to-region (car restriction) (cdr restriction))
+              (cl-loop for pos from (point-min) below (point-max)
+                       do
+                       (goto-char pos)
+                       (let ((expected
+                              (cond
+                               ((and (>= pos 4) (< pos 7)) '(4 . 7))
+                               ((< pos 4)
+                                (cons (point-min) 4))
+                               ((< pos 10)
+                                (cons 7 (min 10 (point-max)))))))
+                         (should (equal expected
+                                        (mevedel-view-disclosure-section-bounds
+                                         property)))
+                         (should (= pos (point)))))))
+          (goto-char (point-max))
+          (should-not (mevedel-view-disclosure-section-bounds property))
+          (should (equal-including-properties before (buffer-string)))))))
   :doc "distinguishes equal-but-distinct source conses (regression)
 Thinking-cons and turn-fallback-cons can have equal values but be
 separate cons objects.  `section-bounds' must compare by `eq', not
