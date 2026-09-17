@@ -827,29 +827,15 @@ The HANDLER will receive one argument when the request terminates:
 The request is considered to have terminated when the FSM reaches a
 state with no possible transition, or an explicit ABRT handler."
   (let* ((terminal-states (mevedel--terminal-states handlers transitions))
-         ;; Alist whose keys are the terminal states, and values are their new
-         ;; lists of handlers
-         (terminal-state-handlers
-          (cl-loop
-           for state in terminal-states
-           for existing-entry = (assq state handlers)
-           collect (if existing-entry
-                       (if (member handler (cdr existing-entry))
-                           ;; Handler already present, return entry unchanged
-                           existing-entry
-                         ;; Handler not present, add it
-                         (cons state (append (cdr existing-entry) (list handler))))
-                     ;; (cons state (append (cdr existing-entry) (list handler)))
-                     (cons state (list handler)))))
-         ;; Create a new handlers list for this FSM
-         (augmented-handlers
-          (append
-           ;; Copy existing non-terminal handlers
-           (cl-remove-if (lambda (entry) (member (car entry) terminal-states)) handlers)
-           ;; Add our terminal state handlers
-           terminal-state-handlers)))
-    ;; Update the handlers list
-    augmented-handlers))
+         (terminal-handlers
+          (cl-loop for state in terminal-states
+                   for entry = (assq state handlers)
+                   collect (if (member handler (cdr entry))
+                               entry
+                             (cons state (append (cdr entry) (list handler)))))))
+    (append (cl-remove-if (lambda (entry) (member (car entry) terminal-states))
+                          handlers)
+            terminal-handlers)))
 
 (defun mevedel--terminal-states (handlers &optional transitions)
   "Return terminal states represented by HANDLERS and TRANSITIONS."
