@@ -383,7 +383,7 @@ the frame instead when the block is not on screen."
 (defun mevedel-tool-ask-ui--answered-count (state)
   "Return the number of answered questions in STATE."
   (cl-count-if #'identity
-               (append (mevedel-tool-ask-ui--state-answers state) nil)))
+               (mevedel-tool-ask-ui--state-answers state)))
 
 (defun mevedel-tool-ask-ui--next-unanswered (state)
   "Return the next unanswered question index in STATE, or nil."
@@ -445,14 +445,9 @@ the frame instead when the block is not on screen."
 
 (defun mevedel-tool-ask-ui--sync-sample (state)
   "Show STATE's focused sample, or close the sample frame."
-  (let* ((question (mevedel-tool-ask-ui--state-focus-question state))
-         (option (mevedel-tool-ask-ui--state-focus-option state))
-         (sample
-          (and
-           (not (mevedel-tool-ask-ui--custom-entry-p
-                 state question option))
-           (mevedel-tool-ask-ui--option-sample
-            (mevedel-tool-ask-ui--focused-option state)))))
+  (let ((question (mevedel-tool-ask-ui--state-focus-question state))
+        (sample (mevedel-tool-ask-ui--option-sample
+                 (mevedel-tool-ask-ui--focused-option state))))
     (if sample
         (mevedel-tool-ask-ui--sample-show
          sample (mevedel-tool-ask-ui--state-overlay state) question)
@@ -531,16 +526,16 @@ the frame instead when the block is not on screen."
 (defun mevedel-tool-ask-ui--keymap (state)
   "Return the interaction keymap controlling STATE."
   (let ((keymap (make-sparse-keymap)))
-    (dolist (key '("n" "C-n" "<down>"))
-      (define-key keymap (kbd key)
-                  (lambda ()
-                    (interactive)
-                    (mevedel-tool-ask-ui--dispatch state 'next))))
-    (dolist (key '("p" "C-p" "<up>"))
-      (define-key keymap (kbd key)
-                  (lambda ()
-                    (interactive)
-                    (mevedel-tool-ask-ui--dispatch state 'previous))))
+    (dolist (binding '(("n" . next) ("C-n" . next) ("<down>" . next)
+                       ("p" . previous) ("C-p" . previous) ("<up>" . previous)
+                       ("RET" . pick) ("<return>" . pick)
+                       ("c" . custom) ("C-c C-c" . submit)
+                       ("q" . cancel) ("C-g" . cancel) ("C-c C-k" . abort)))
+      (let ((action (cdr binding)))
+        (define-key keymap (kbd (car binding))
+                    (lambda ()
+                      (interactive)
+                      (mevedel-tool-ask-ui--dispatch state action)))))
     (dotimes (digit 9)
       (let ((entry digit))
         (define-key
@@ -548,15 +543,6 @@ the frame instead when the block is not on screen."
          (lambda ()
            (interactive)
            (mevedel-tool-ask-ui--dispatch state 'focus entry)))))
-    (dolist (key '("RET" "<return>"))
-      (define-key keymap (kbd key)
-                  (lambda ()
-                    (interactive)
-                    (mevedel-tool-ask-ui--dispatch state 'pick))))
-    (define-key keymap (kbd "c")
-                (lambda ()
-                  (interactive)
-                  (mevedel-tool-ask-ui--dispatch state 'custom)))
     (define-key
      keymap (kbd "C-v")
      (lambda ()
@@ -567,19 +553,6 @@ the frame instead when the block is not on screen."
      (lambda ()
        (interactive)
        (mevedel-tool-ask-ui--sample-scroll #'scroll-down-command)))
-    (define-key keymap (kbd "C-c C-c")
-                (lambda ()
-                  (interactive)
-                  (mevedel-tool-ask-ui--dispatch state 'submit)))
-    (dolist (key '("q" "C-g"))
-      (define-key keymap (kbd key)
-                  (lambda ()
-                    (interactive)
-                    (mevedel-tool-ask-ui--dispatch state 'cancel))))
-    (define-key keymap (kbd "C-c C-k")
-                (lambda ()
-                  (interactive)
-                  (mevedel-tool-ask-ui--dispatch state 'abort)))
     keymap))
 
 (defun mevedel-tool-ask-ui--divider ()

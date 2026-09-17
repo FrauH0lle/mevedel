@@ -25,6 +25,25 @@
           "helpers"))
 
 
+(defmacro test-mevedel-tool-ask-ui--with-form (&rest body)
+  "Run BODY with native Ask buffers and captured rendering.
+Bind data-buffer, view-buffer, rendered-body, rendered-keymap,
+registered-overlay and result for questionnaire assertions."
+  (declare (indent 0) (debug t))
+  `(mevedel-view-test--with-buffers
+     (let ((data-buffer data-buf)
+           (view-buffer view-buf)
+           (register (symbol-function 'mevedel-view--interaction-register))
+           rendered-body rendered-keymap registered-overlay result)
+       (cl-letf (((symbol-function 'mevedel-view--interaction-register)
+                  (lambda (descriptor)
+                    (setq rendered-body (plist-get descriptor :body)
+                          rendered-keymap (plist-get descriptor :keymap)
+                          registered-overlay (funcall register descriptor)))))
+         (with-current-buffer data-buffer
+           ,@body)))))
+
+
 ;;
 ;;; Ask User
 
@@ -66,314 +85,178 @@
   ,test
   (test)
   :doc "anchors each question to its own block and the last to the form end"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-anchor-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-anchor-view*"))
-        rendered-body
-        rendered-keymap)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-body (plist-get descriptor :body))
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           #'ignore
-           [(:question "One?" :options ["Yes" "No"])
-            (:question "Two?" :options ["Yes" "No"])
-            (:question "Three?" :options ["Yes" "No"])])
-          (ignore rendered-keymap)
-          (with-temp-buffer
-            (insert rendered-body)
-            (let* ((overlay (make-overlay (point-min) (point-max)))
-                   (start-0 (mevedel-tool-ask-ui--question-start overlay 0))
-                   (start-1 (mevedel-tool-ask-ui--question-start overlay 1))
-                   (anchor-0 (mevedel-tool-ask-ui--question-anchor overlay 0))
-                   (anchor-1 (mevedel-tool-ask-ui--question-anchor overlay 1))
-                   (anchor-2 (mevedel-tool-ask-ui--question-anchor overlay 2)))
-              ;; Every block is findable, in order.
-              (should start-0)
-              (should start-1)
-              (should (< start-0 start-1))
-              ;; A question's anchor sits inside its own block, below the
-              ;; options being compared and above the next question.
-              (should (< start-0 anchor-0))
-              (should (< anchor-0 start-1))
-              (should (< anchor-0 anchor-1))
-              ;; The last block has no successor, so it anchors to the
-              ;; end of the whole form.
-              (should (= anchor-2 (overlay-end overlay))))))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer)))))
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "One?" :options ["Yes" "No"])
+      (:question "Two?" :options ["Yes" "No"])
+      (:question "Three?" :options ["Yes" "No"])])
+    (with-temp-buffer
+      (insert rendered-body)
+      (let* ((overlay (make-overlay (point-min) (point-max)))
+             (start-0 (mevedel-tool-ask-ui--question-start overlay 0))
+             (start-1 (mevedel-tool-ask-ui--question-start overlay 1))
+             (anchor-0 (mevedel-tool-ask-ui--question-anchor overlay 0))
+             (anchor-1 (mevedel-tool-ask-ui--question-anchor overlay 1))
+             (anchor-2 (mevedel-tool-ask-ui--question-anchor overlay 2)))
+        ;; Every block is findable, in order.
+        (should start-0)
+        (should start-1)
+        (should (< start-0 start-1))
+        ;; A question's anchor sits inside its own block, below the
+        ;; options being compared and above the next question.
+        (should (< start-0 anchor-0))
+        (should (< anchor-0 start-1))
+        (should (< anchor-0 anchor-1))
+        ;; The last block has no successor, so it anchors to the
+        ;; end of the whole form.
+        (should (= anchor-2 (overlay-end overlay)))))))
+
 
 (mevedel-deftest mevedel-tool-ask-ui-show ()
   ,test
   (test)
   :doc "shows every question at once and submits the whole form"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-view*"))
-        rendered-body
-        rendered-keymap
-        registered-overlay
-        result)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-body (plist-get descriptor :body))
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     ;; One interaction id means one overlay across
-                     ;; renders; a fresh one per keystroke would pile up
-                     ;; in `mevedel--prompt-overlays'.
-                     (setq registered-overlay
-                           (or registered-overlay
-                               (make-overlay (point-min) (point-min)
-                                             (current-buffer) nil t)))))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           (lambda (value) (setq result value))
-           [(:question "Use cache?" :options ["Yes" "No"])
-            (:question "Run tests?" :options ["Yes" "No"])])
-          ;; Both questions are on screen from the very first render.
-          (should (string-match-p "Use cache\\?" rendered-body))
-          (should (string-match-p "Run tests\\?" rendered-body))
-          (should (string-match-p "0 of 2 answered" rendered-body))
-          ;; RET records the focused option and moves to the next
-          ;; unanswered question.
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (should (string-match-p "1 of 2 answered" rendered-body))
-          (call-interactively (lookup-key rendered-keymap (kbd "n")))
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (should (string-match-p "2 of 2 answered" rendered-body))
-          (with-current-buffer view-buffer
-            (should (= 1 (length mevedel--prompt-overlays))))
-          (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
-          (should (string-match-p "Q1: Use cache\\?" result))
-          (should (string-match-p "A1: Yes" result))
-          (should (string-match-p "Q2: Run tests\\?" result))
-          (should (string-match-p "A2: No" result))
-          ;; The generic approve/deny/feedback surface keys off
-          ;; `mevedel-user-request'; the questionnaire must not carry
-          ;; it, or point inside the Ask settles it with an outcome the
-          ;; questions never offered.
-          (should-not (overlay-get registered-overlay
-                                   'mevedel-user-request)))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Use cache?" :options ["Yes" "No"])
+      (:question "Run tests?" :options ["Yes" "No"])])
+    ;; Both questions are on screen from the very first render.
+    (should (string-match-p "Use cache\\?" rendered-body))
+    (should (string-match-p "Run tests\\?" rendered-body))
+    (should (string-match-p "0 of 2 answered" rendered-body))
+    ;; RET records the focused option and moves to the next
+    ;; unanswered question.
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (should (string-match-p "1 of 2 answered" rendered-body))
+    (call-interactively (lookup-key rendered-keymap (kbd "n")))
+    (call-interactively (lookup-key rendered-keymap (kbd "<return>")))
+    (should (string-match-p "2 of 2 answered" rendered-body))
+    (with-current-buffer view-buffer
+      (should (= 1 (length mevedel--prompt-overlays))))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "Q1: Use cache\\?" result))
+    (should (string-match-p "A1: Yes" result))
+    (should (string-match-p "Q2: Run tests\\?" result))
+    (should (string-match-p "A2: No" result))
+    ;; The generic approve/deny/feedback surface keys off
+    ;; `mevedel-user-request'; the questionnaire must not carry
+    ;; it, or point inside the Ask settles it with an outcome the
+    ;; questions never offered.
+    (should-not (overlay-get registered-overlay
+                             'mevedel-user-request)))
 
   :doc "moving back to an answered question reopens it on its answer"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-back-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-back-view*"))
-        rendered-body
-        rendered-keymap
-        result)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-body (plist-get descriptor :body))
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           (lambda (value) (setq result value))
-           [(:question "Use cache?" :options ["Yes" "No"])
-            (:question "Run tests?" :options ["Yes" "No"])])
-          ;; Answer the first question, then walk the cursor back into
-          ;; it: an answered question collapses to its answer until the
-          ;; cursor returns, which is the only "edit" gesture there is.
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (call-interactively (lookup-key rendered-keymap (kbd "p")))
-          ;; Digits move the cursor without answering, so the count is
-          ;; unchanged until RET.
-          (call-interactively (lookup-key rendered-keymap (kbd "2")))
-          (should (string-match-p "1 of 2 answered" rendered-body))
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
-          (should (string-match-p "A1: No" result)))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Use cache?" :options ["Yes" "No"])
+      (:question "Run tests?" :options ["Yes" "No"])])
+    ;; Answer the first question, then walk the cursor back into
+    ;; it: an answered question collapses to its answer until the
+    ;; cursor returns, which is the only "edit" gesture there is.
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (call-interactively (lookup-key rendered-keymap (kbd "p")))
+    ;; Digits move the cursor without answering, so the count is
+    ;; unchanged until RET.
+    (call-interactively (lookup-key rendered-keymap (kbd "2")))
+    (should (string-match-p "1 of 2 answered" rendered-body))
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: No" result)))
 
   :doc "an unanswered question submits as no preference, never nil"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-skip-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-skip-view*"))
-        rendered-body
-        rendered-keymap
-        result)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-body (plist-get descriptor :body))
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           (lambda (value) (setq result value))
-           [(:question "Use cache?" :options ["Yes" "No"])
-            (:question "Run tests?" :options ["Yes" "No"])])
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
-          (should (string-match-p "A1: Yes" result))
-          (should (string-match-p (regexp-quote
-                                   mevedel-tool-ask-ui--no-preference)
-                                  result))
-          (should-not (string-match-p "A2: nil" result)))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Use cache?" :options ["Yes" "No"])
+      (:question "Run tests?" :options ["Yes" "No"])])
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: Yes" result))
+    (should (string-match-p (regexp-quote
+                             mevedel-tool-ask-ui--no-preference)
+                            result))
+    (should-not (string-match-p "A2: nil" result)))
 
   :doc "recommended option remains part of the selected Ask answer"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-rec-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-rec-view*"))
-        rendered-body
-        rendered-keymap
-        result)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-body (plist-get descriptor :body))
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           (lambda (value) (setq result value))
-           [(:question "Choose risk profile"
-                       :options ["Conservative" "Balanced (Recommended)" "Aggressive"])])
-          (should (string-match-p "Balanced (Recommended)"
-                                  (substring-no-properties rendered-body)))
-          (let ((start (string-match-p (regexp-quote " (Recommended)")
-                                       rendered-body)))
-            (should (eq 'success
-                        (get-text-property start 'font-lock-face rendered-body))))
-          (call-interactively (lookup-key rendered-keymap (kbd "2")))
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
-          (should (string-match-p "Q1: Choose risk profile" result))
-          ;; The suffix travels with the answer: it is how the model
-          ;; learns whether the user took its recommendation.
-          (should (string-match-p "A1: Balanced (Recommended)" result)))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Choose risk profile"
+                 :options ["Conservative" "Balanced (Recommended)" "Aggressive"])])
+    (should (string-match-p "Balanced (Recommended)"
+                            (substring-no-properties rendered-body)))
+    (let ((start (string-match-p (regexp-quote " (Recommended)")
+                                 rendered-body)))
+      (should (eq 'success
+                  (get-text-property start 'font-lock-face rendered-body))))
+    (call-interactively (lookup-key rendered-keymap (kbd "2")))
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "Q1: Choose risk profile" result))
+    ;; The suffix travels with the answer: it is how the model
+    ;; learns whether the user took its recommendation.
+    (should (string-match-p "A1: Balanced (Recommended)" result)))
 
   :doc "object options show descriptions inline and echo the chosen sample"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-obj-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-obj-view*"))
-        rendered-body
-        rendered-keymap
-        result)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-body (plist-get descriptor :body))
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           (lambda (value) (setq result value))
-           [(:question "What should I write?"
-                       :options [(:label "Project AGENTS.md (Recommended)"
-                                  :description "Shared repo guidance"
-                                  :sample "# Repository Guidelines\n- Run tests")
-                                 (:label "Personal AGENTS.local.md"
-                                  :description "Private notes"
-                                  :sample "# Local notes")])])
-          (should (string-match-p "Shared repo guidance" rendered-body))
-          ;; The sample belongs to the frame beside the form, never to
-          ;; the form itself.
-          (should-not (string-match-p "# Repository Guidelines" rendered-body))
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
-          (should (string-match-p "A1: Project AGENTS.md (Recommended)"
-                                  result))
-          (should (string-match-p "Sample shown for A1:" result))
-          (should (string-match-p "# Repository Guidelines" result)))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+  (test-mevedel-tool-ask-ui--with-form
+    (let (shown-sample)
+      (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-show)
+                 (lambda (sample _overlay _question)
+                   (setq shown-sample sample)))
+                ((symbol-function 'mevedel-tool-ask-ui--sample-close)
+                 (lambda () (setq shown-sample nil))))
+        (mevedel-tool-ask-ui-show
+         (lambda (value) (setq result value))
+         [(:question "What should I write?"
+                     :options [(:label "Project AGENTS.md (Recommended)"
+                                :description "Shared repo guidance"
+                                :sample "# Repository Guidelines\n- Run tests")
+                               (:label "Personal AGENTS.local.md"
+                                :description "Private notes"
+                                :sample "# Local notes")])])
+        (should (string-match-p "Shared repo guidance" rendered-body))
+        ;; The sample belongs to the frame beside the form, never to
+        ;; the form itself.
+        (should-not (string-match-p "# Repository Guidelines" rendered-body))
+        (should (equal "# Repository Guidelines\n- Run tests" shown-sample))
+        (call-interactively (lookup-key rendered-keymap (kbd "n")))
+        (should (equal "# Local notes" shown-sample))
+        (call-interactively (lookup-key rendered-keymap (kbd "n")))
+        (should-not shown-sample)
+        (call-interactively (lookup-key rendered-keymap (kbd "1")))
+        (should (equal "# Repository Guidelines\n- Run tests" shown-sample))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+        (should (string-match-p "A1: Project AGENTS.md (Recommended)"
+                                result))
+        (should (string-match-p "Sample shown for A1:" result))
+        (should (string-match-p "# Repository Guidelines" result)))))
 
   :doc "cursor movement does not re-announce the form to remote guests"
-  (let ((data-buffer (generate-new-buffer " *mev-ask-announce-data*"))
-        (view-buffer (generate-new-buffer " *mev-ask-announce-view*"))
-        (mevedel-interaction-prompt-created-hook nil)
-        (announcements 0)
-        rendered-keymap
-        result)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
-                   (lambda () data-buffer))
-                  ((symbol-function 'mevedel-view--interaction-target-buffer)
-                   (lambda (&optional _data-buffer) view-buffer))
-                  ((symbol-function 'mevedel-view--interaction-register)
-                   (lambda (descriptor)
-                     (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
-                  ((symbol-function 'mevedel--prompt--register-canceller)
-                   #'ignore))
-          (add-hook 'mevedel-interaction-prompt-created-hook
-                    (lambda (_overlay) (cl-incf announcements)))
-          (with-current-buffer view-buffer
-            (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
-           (lambda (value) (setq result value))
-           [(:question "Use cache?" :options ["Yes" "No"])])
-          ;; The opening render announces once.
-          (should (= 1 announcements))
-          ;; A guest sees the whole form already, so host navigation is
-          ;; not state worth re-sending -- and every announce rebuilds
-          ;; the questionnaire payload, samples included.
-          (call-interactively (lookup-key rendered-keymap (kbd "n")))
-          (call-interactively (lookup-key rendered-keymap (kbd "p")))
-          (call-interactively (lookup-key rendered-keymap (kbd "1")))
-          (should (= 1 announcements))
-          ;; An answer is a real change.
-          (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-          (should (= 2 announcements)))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((mevedel-interaction-prompt-created-hook nil)
+          (announcements 0))
+      (add-hook 'mevedel-interaction-prompt-created-hook
+                (lambda (_overlay) (cl-incf announcements)))
+      (with-current-buffer view-buffer
+        (setq-local mevedel--prompt-overlays nil))
+      (mevedel-tool-ask-ui-show
+       (lambda (value) (setq result value))
+       [(:question "Use cache?" :options ["Yes" "No"])])
+      ;; The opening render announces once.
+      (should (= 1 announcements))
+      ;; A guest sees the whole form already, so host navigation is
+      ;; not state worth re-sending -- and every announce rebuilds
+      ;; the questionnaire payload, samples included.
+      (dolist (key '("n" "p" "1" "C-n" "<down>" "C-p" "<up>"))
+        (call-interactively (lookup-key rendered-keymap (kbd key))))
+      (should (= 1 announcements))
+      ;; An answer is a real change.
+      (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+      (should (= 2 announcements))))
 
   :doc "agent Ask prompt survives parent request cleanup but aborts with agent request"
   (let* ((session (mevedel-session--create :name "main"))
