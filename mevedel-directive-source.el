@@ -56,12 +56,8 @@
                   "mevedel-instruction-registry" (instruction))
 (declare-function mevedel--instruction-inlinks
                   "mevedel-instruction-registry" (instruction))
-(declare-function mevedel--instruction-operation-state-key
-                  "mevedel-instruction-registry" ())
 (declare-function mevedel--instruction-outlinks
                   "mevedel-instruction-registry" (instruction))
-(declare-function mevedel--instruction-state
-                  "mevedel-instruction-registry" (&optional key))
 (declare-function mevedel--instruction-with-uuid
                   "mevedel-instruction-registry"
                   (uuid &optional workspace))
@@ -747,26 +743,23 @@ BUFFER is required in order to perform cleanup on a dead instruction."
       (mevedel-directive-remove-subdirective
        (car subdirective-owner) (cdr subdirective-owner))))
     (overlay-put instruction 'mevedel-marked-for-deletion t)
-    (cl-labels ((cleanup (instr cleanup-buffer)
-                  (let ((id (mevedel--instruction-id instr)))
-                    (mevedel--retire-id id)
-                    (with-current-buffer cleanup-buffer
-                      (mevedel-unlink-instructions
-                       `(,id) (mevedel--instruction-outlinks instr))
-                      (mevedel-unlink-instructions
-                       (mevedel--instruction-inlinks instr) `(,id))))
-                  (setf (cdr (assoc cleanup-buffer
-                                    (mevedel--instruction-alist)))
-                        (delq instr
-                              (cdr (assoc cleanup-buffer
-                                          (mevedel--instruction-alist)))))))
-      (let ((ov-buffer (overlay-buffer instruction)))
-        (when (buffer-live-p ov-buffer)
-          (let ((children (mevedel--child-instructions instruction)))
-            (delete-overlay instruction)
-            (dolist (child children)
-              (mevedel--update-instruction-overlay child t))))
-        (cleanup instruction instruction-buffer))))
+    (let ((ov-buffer (overlay-buffer instruction)))
+      (when (buffer-live-p ov-buffer)
+        (let ((children (mevedel--child-instructions instruction)))
+          (delete-overlay instruction)
+          (dolist (child children)
+            (mevedel--update-instruction-overlay child t)))))
+    (let ((id (mevedel--instruction-id instruction)))
+      (mevedel--retire-id id)
+      (with-current-buffer instruction-buffer
+        (mevedel-unlink-instructions
+         `(,id) (mevedel--instruction-outlinks instruction))
+        (mevedel-unlink-instructions
+         (mevedel--instruction-inlinks instruction) `(,id))))
+    (setf (cdr (assoc instruction-buffer (mevedel--instruction-alist)))
+          (delq instruction
+                (cdr (assoc instruction-buffer
+                            (mevedel--instruction-alist))))))
   instruction)
 
 (defun mevedel--directive-text (directive)
