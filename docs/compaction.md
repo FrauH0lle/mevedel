@@ -475,12 +475,18 @@ session pending-reminder FIFO, which would deliver it to a later turn.
 
 Persisted sessions use split-on-compact:
 
-1. Save and finalize the current `segment-NNNN.chat.org`.
-2. Increment `mevedel-session-current-segment`.
-3. Build the new persisted contents in a temporary buffer.
-4. Publish them through a same-directory atomic rename.
-5. Repoint the data buffer's complete visited-file identity, restore any
-   unsaved pending prompt, and update the sidecar.
+1. Capture the current segment without the unsent pending prompt. File-workspace
+   sessions save that predecessor before replacing the live buffer.
+2. Advance `mevedel-session-current-segment` and build the successor in a temporary
+   buffer.
+3. Publish according to the session's authority profile. Portable project sessions
+   commit the finalized predecessor, successor, instruction artifacts, and sidecar
+   together through one immutable publication head. File-workspace sessions
+   publish the successor through a same-directory atomic rename,
+   then write the sidecar and instructions and finalize the predecessor.
+4. The publication helpers repoint the data buffer's complete visited-file
+   identity. Restore the pending prompt only in the live buffer, outside the
+   persisted contents.
 
 Rotation never saves through a dynamically rebound `buffer-file-name`.
 Automatic compaction therefore cannot enter Emacs's interactive

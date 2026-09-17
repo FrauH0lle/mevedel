@@ -2504,14 +2504,13 @@ last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
              truncated-tail-p)
   "Finalize SESSION's current segment and start a new one with SUMMARY.
 
-Performs the split-on-compact rotation:
-  1. Saves the current segment file before replacing the live buffer.
-  2. Advances `mevedel-session-current-segment' on SESSION.
-  3. Builds the new segment in a temporary buffer.
-  4. Atomically publishes it and repoints BUFFER's visited-file state.
-  5. Restores PENDING-TEXT in the live buffer without marking it saved.
-  6. Rewrites the sidecar.
-  7. Sets `MEVEDEL_SEGMENT_FINALIZED_AT' on the predecessor segment.
+Advance SESSION's segment number and build the successor in a temporary
+buffer.  Portable project sessions publish the finalized predecessor,
+successor, instructions, and sidecar in one immutable head.  File-workspace
+sessions save the predecessor, atomically publish the successor, write the
+sidecar and instructions, then finalize the predecessor.  Publication
+repoints BUFFER's visited-file state; PENDING-TEXT is restored only in the
+live buffer afterward.
 
 TAIL-TEXT is preserved recent transcript text, including text
 properties.  ARCHIVE-TEXT contains durable hidden records replacing
