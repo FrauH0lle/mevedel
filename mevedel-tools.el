@@ -6,12 +6,8 @@
 ;; `mevedel-tools-register' as the single initializer for the complete
 ;; built-in tool surface, including Skill and ListSkills.
 ;;
-;; Also hosts the specialist discovery (ToolSearch) infrastructure that does
-;; not yet belong to any single tool module: the polymorphic
-;; `mevedel-tools--ctx-*' accessors that dispatch on session vs.
-;; invocation state, the WAIT-state handler that drains queued
-;; `<agent-message>' blocks, and the `gptel-send' advice that
-;; dispatches slash commands before they reach the model.
+;; Also owns specialist discovery (ToolSearch), tool-call context and unknown
+;; tool recovery, and request-boundary delivery of steering, mail and rosters.
 
 ;;; Code:
 
@@ -63,38 +59,6 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel--ersatz-json-tool)
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-control-clear-context-mailbox
-                  "mevedel-agent-control" (context))
-(declare-function mevedel-agent-control-context-mailbox
-                  "mevedel-agent-control" (context))
-(declare-function mevedel-agent-control-context-path
-                  "mevedel-agent-control" (context))
-(declare-function mevedel-agent-control-direct-children
-                  "mevedel-agent-control" (session parent-path))
-
-;; `mevedel-agent-conversation'
-(declare-function mevedel-agent-conversation-insert-user-block
-                  "mevedel-agent-conversation"
-                  (invocation block &optional marker))
-(declare-function mevedel-agent-conversation-record-activity
-                  "mevedel-agent-conversation"
-                  (invocation item &optional suppress-rerender))
-(defvar mevedel--agent-invocation)
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-plan-read-only
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-plan-directive-p "mevedel-agents"
-                  (&optional session request))
-
 ;; `mevedel-compact'
 (declare-function mevedel--compact-defer-steering-p
                   "mevedel-compact" (fsm))
@@ -125,30 +89,11 @@
 (declare-function mevedel-skills-commit-invoked-records
                   "mevedel-skills-invoke" (session records))
 
-;; `mevedel-structs'
-(declare-function mevedel-request-plan-read-only
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session--set-active-dropped-file-grants
-                  "mevedel-structs" (session paths))
-(declare-function mevedel-session-activate-dropped-file-grants
-                  "mevedel-structs" (session paths))
-(declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x))
-(declare-function mevedel-session-pending-input-delivery-paused-p
-                  "mevedel-structs" (session))
-(defvar mevedel--current-request)
-(defvar mevedel--session)
-
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-blocking-p
                   "mevedel-view-interaction" (&optional view-buffer))
 (autoload 'mevedel-view-interaction-blocking-p
   "mevedel-view-interaction")
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
-(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 
 ;;
 ;;; Tool registration
@@ -296,37 +241,12 @@ Set by `mevedel-tools--handle-tool-use-advice' around
 which context (session vs agent invocation) owns the current tool
 call.  Nil outside tool dispatch.")
 
-(defun mevedel-tools--tool-call-result-p (tool-call)
-  "Return non-nil when TOOL-CALL already carries a result."
-  (plist-get tool-call :result))
-
-(defun mevedel-tools--active-tool-call-name-p (name tools)
-  "Return non-nil when NAME is present in active gptel TOOLS."
-  (cl-find-if (lambda (tool)
-                (equal name (gptel-tool-name tool)))
-              tools))
-
-(defun mevedel-tools--ersatz-json-tool-p (name)
-  "Return non-nil when NAME is gptel's structured-output pseudo tool."
-  (and (boundp 'gptel--ersatz-json-tool)
-       (equal name gptel--ersatz-json-tool)))
-
-(defun mevedel-tools--deferred-entry-name-p (name entries)
-  "Return non-nil when a deferred tool named NAME is in ENTRIES."
-  (cl-some (lambda (entry)
-             (equal name (cadr (car entry))))
-           entries))
-
-(defun mevedel-tools--deferred-tool-name-p (ctx name)
-  "Return non-nil when CTX knows NAME as a deferred capability."
-  (and ctx
-       (mevedel-tools--deferred-entry-name-p
-        name (mevedel-tools--ctx-tool-catalog ctx))))
-
 (defun mevedel-tools--unknown-tool-result (ctx name)
   "Return repair guidance for unknown native tool NAME in CTX."
   (format "Error: %s %s. Use ToolSearch(query=%S) for its contract, then ToolCall(expression) to invoke it."
-          (if (mevedel-tools--deferred-tool-name-p ctx name)
+          (if (and ctx
+                   (cl-some (lambda (entry) (equal name (cadr (car entry))))
+                            (mevedel-tools--ctx-tool-catalog ctx)))
               "Specialist is available through ToolCall:" "Unknown tool")
           name name))
 
@@ -343,9 +263,11 @@ call.  Nil outside tool dispatch.")
   "Return non-nil when TOOL-CALL names a missing tool in active TOOLS."
   (let ((name (plist-get tool-call :name)))
     (and name
-         (not (mevedel-tools--tool-call-result-p tool-call))
-         (not (mevedel-tools--active-tool-call-name-p name tools))
-         (not (mevedel-tools--ersatz-json-tool-p name)))))
+         (not (plist-get tool-call :result))
+         (not (cl-find-if (lambda (tool) (equal name (gptel-tool-name tool)))
+                          tools))
+         (not (and (boundp 'gptel--ersatz-json-tool)
+                   (equal name gptel--ersatz-json-tool))))))
 
 (defun mevedel-tools--settle-unknown-tool-calls (fsm)
   "Convert unresolved unknown tool-use entries in FSM into errors."
@@ -398,21 +320,13 @@ First checks FSM's info plist for an attached
 local `mevedel--agent-invocation' before its parent
 `mevedel--session', because agent transcript buffers intentionally
 carry both."
-  (or (and fsm
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (inv (plist-get info :mevedel-agent-invocation))
-                       ((mevedel-agent-invocation-p inv)))
-             inv))
-      (when-let* ((fsm fsm)
-                  (info (gptel-fsm-info fsm))
-                  (buffer (plist-get info :buffer))
-                  ((buffer-live-p buffer)))
-        (mevedel-tools--buffer-local-agent-invocation buffer))
-      (when-let* ((fsm fsm)
-                  (info (gptel-fsm-info fsm))
-                  (buffer (plist-get info :buffer))
-                  ((buffer-live-p buffer)))
-        (mevedel-tools--buffer-local-session buffer))))
+  (when fsm
+    (let* ((info (gptel-fsm-info fsm))
+           (inv (plist-get info :mevedel-agent-invocation))
+           (buffer (plist-get info :buffer)))
+      (or (and (mevedel-agent-invocation-p inv) inv)
+          (mevedel-tools--buffer-local-agent-invocation buffer)
+          (mevedel-tools--buffer-local-session buffer)))))
 
 (defun mevedel-tools--current-context ()
   "Return the tool context for the currently-executing tool call.
