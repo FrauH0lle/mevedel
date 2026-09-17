@@ -691,7 +691,7 @@ MODE is the optional markdown fence language."
       (json-parse-string text
                          :object-type 'plist
                          :array-type 'list
-                         :null-object nil
+                         :null-object :null
                          :false-object :false)
     (error nil)))
 
@@ -726,7 +726,8 @@ schema validation fails."
              (score-p (plist-get value :confidence_score))
              (or (not (plist-member value :priority))
                  (let ((priority (plist-get value :priority)))
-                   (and (fixnump priority) (<= 0 priority 3))))
+                   (or (eq priority :null)
+                       (and (fixnump priority) (<= 0 priority 3)))))
              (location-p (plist-get value :code_location))))
        (output-p
         (value)
