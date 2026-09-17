@@ -645,8 +645,7 @@ unavailable until it changes."
   (let* ((scope (transient-scope))
          (efforts (mevedel-menu--model-selection-efforts scope))
          (current (plist-get scope :reasoning-effort))
-         (position (seq-position efforts current))
-         (next (nth (mod (1+ (or position -1)) (length efforts)) efforts)))
+         (next (car (or (cdr (member current efforts)) efforts))))
     (format "%-13s %s → %s"
             "Cycle effort"
             (mevedel-menu--value (or current "default"))
@@ -1029,8 +1028,7 @@ place instead of prompting."
   (let* ((scope (transient-scope))
          (efforts (mevedel-menu--model-selection-efforts scope))
          (current (plist-get scope :reasoning-effort))
-         (position (seq-position efforts current))
-         (effort (nth (mod (1+ (or position -1)) (length efforts)) efforts)))
+         (effort (car (or (cdr (member current efforts)) efforts))))
     (plist-put scope :reasoning-effort effort)
     (plist-put scope :inherited nil)
     (funcall (plist-get scope :update)
@@ -1123,52 +1121,47 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--send ()
   "Send the current composer from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-view-send))
+  (mevedel-menu--call-in-view #'mevedel-view-send))
 
 (defun mevedel-menu--abort ()
   "Abort the active request from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-view-abort))
+  (mevedel-menu--call-in-view #'mevedel-view-abort))
 
 (defun mevedel-menu--take-control ()
   "Take control of this session from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-take-control))
+  (mevedel-menu--call-in-view #'mevedel-take-control))
 
 (defun mevedel-menu--release-control ()
   "Release this session's lease from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-release-control))
+  (mevedel-menu--call-in-view #'mevedel-release-control))
 
 (defun mevedel-menu--grant-control ()
   "Grant the pending control-transfer request from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-view-control-transfer-grant))
+  (mevedel-menu--call-in-view #'mevedel-view-control-transfer-grant))
 
 (defun mevedel-menu--keep-control ()
   "Decline the pending control-transfer request from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-view-control-transfer-keep))
+  (mevedel-menu--call-in-view #'mevedel-view-control-transfer-keep))
 
 (defun mevedel-menu--toggle-follow ()
   "Toggle published-state following from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-toggle-follow))
+  (mevedel-menu--call-in-view #'mevedel-toggle-follow))
 
 (defun mevedel-menu--refresh-session ()
   "Re-read the owner's newest published state from the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-refresh-session))
+  (mevedel-menu--call-in-view #'mevedel-refresh-session))
 
 (defun mevedel-menu--rewind-here ()
   "Rewind keeping the settled assistant turn at point in the view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-view-rewind-at-point))
+  (mevedel-menu--call-in-view #'mevedel-view-rewind-at-point))
 
 (defun mevedel-menu--redo ()
   "Restore the session to one of its published heads."
@@ -1188,21 +1181,17 @@ nothing to restore."
 (defun mevedel-menu--switch-variant-here ()
   "Switch conversation variants at point in the paired view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context)
-   #'mevedel-view-switch-conversation-variant-at-point))
+  (mevedel-menu--call-in-view #'mevedel-view-switch-conversation-variant-at-point))
 
 (defun mevedel-menu--fork-conversation-here ()
   "Arm a Conversation Fork at point in the paired view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-view-arm-conversation-fork))
+  (mevedel-menu--call-in-view #'mevedel-view-arm-conversation-fork))
 
 (defun mevedel-menu--fork-worktree-here ()
   "Arm a Worktree Fork at point in the paired view buffer."
   (interactive)
-  (mevedel-cockpit-call-in-view
-   (mevedel-menu--context) #'mevedel-view-arm-worktree-fork))
+  (mevedel-menu--call-in-view #'mevedel-view-arm-worktree-fork))
 
 (defun mevedel-menu--call-live-tip-data (function)
   "Call data-buffer FUNCTION after checking the paired view is live."

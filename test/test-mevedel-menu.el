@@ -180,74 +180,27 @@
 		      (when (get-buffer mevedel-menu-session-info-buffer-name)
 			(kill-buffer mevedel-menu-session-info-buffer-name)))))
 
-  :doc "opens requested tools, executions, skills, and plugins surfaces"
+  :doc "opens tables in the owning data buffer with the complete caller context"
   (mevedel-menu-test--with-buffers
-    (let (tools-context tools-buffer executions-context executions-buffer
-          artifacts-context artifacts-buffer
-          skills-context skills-buffer
-          plugins-context plugins-buffer)
-      (cl-letf (((symbol-function 'mevedel-tools-list-open)
-                 (lambda (context)
-                   (setq tools-context context
-                         tools-buffer (current-buffer))))
-                ((symbol-function 'mevedel-executions-list-open)
-                 (lambda (context)
-                   (setq executions-context context
-                         executions-buffer (current-buffer))))
-                ((symbol-function 'mevedel-artifacts-list-open)
-                 (lambda (context)
-                   (setq artifacts-context context
-                         artifacts-buffer (current-buffer))))
-                ((symbol-function 'mevedel-skills-list-open)
-                 (lambda (context)
-                   (setq skills-context context
-                         skills-buffer (current-buffer))))
-                ((symbol-function 'mevedel-plugins-list-open)
-                 (lambda (context)
-                   (setq plugins-context context
-                         plugins-buffer (current-buffer)))))
-        (with-current-buffer view-buf
-          (mevedel-menu-open 'tools)
-          (mevedel-menu-open 'executions)
-          (mevedel-menu-open 'artifacts)
-          (mevedel-menu-open 'skills)
-          (mevedel-menu-open 'plugins)))
-      (should (eq (mevedel-cockpit-context-session tools-context) session))
-      (should (eq (mevedel-cockpit-context-view-buffer tools-context)
-                  view-buf))
-      (should (eq (mevedel-cockpit-context-data-buffer tools-context)
-                  data-buf))
-      (should (eq (mevedel-cockpit-context-origin-buffer tools-context)
-                  view-buf))
-      (should (eq tools-buffer data-buf))
-      (should (eq (mevedel-cockpit-context-session executions-context)
-                  session))
-      (should (eq (mevedel-cockpit-context-view-buffer executions-context)
-                  view-buf))
-      (should (eq executions-buffer data-buf))
-      (should (eq (mevedel-cockpit-context-session artifacts-context)
-                  session))
-      (should (eq (mevedel-cockpit-context-view-buffer artifacts-context)
-                  view-buf))
-      (should (eq artifacts-buffer data-buf))
-      (should (eq (mevedel-cockpit-context-session skills-context)
-                  session))
-      (should (eq (mevedel-cockpit-context-view-buffer skills-context)
-                  view-buf))
-      (should (eq (mevedel-cockpit-context-data-buffer skills-context)
-                  data-buf))
-      (should (eq (mevedel-cockpit-context-origin-buffer skills-context)
-                  view-buf))
-      (should (eq skills-buffer data-buf))
-      (should (eq (mevedel-cockpit-context-workspace plugins-context)
-                  (mevedel-session-workspace session)))
-      (should (eq (mevedel-cockpit-context-view-buffer plugins-context)
-                  view-buf))
-      (should (eq (mevedel-cockpit-context-data-buffer plugins-context)
-                  data-buf))
-      (should (eq (mevedel-cockpit-context-origin-buffer plugins-context)
-                  view-buf))
-      (should (eq plugins-buffer data-buf))))
+    (dolist (entry '((tools . mevedel-tools-list-open)
+                     (executions . mevedel-executions-list-open)
+                     (artifacts . mevedel-artifacts-list-open)
+                     (skills . mevedel-skills-list-open)
+                     (plugins . mevedel-plugins-list-open)))
+      (let ((opener (cdr entry)) opened-context opened-buffer)
+        (cl-letf (((symbol-function opener)
+                   (lambda (context)
+                     (setq opened-context context
+                           opened-buffer (current-buffer)))))
+          (with-current-buffer view-buf
+            (mevedel-menu-open (car entry))))
+        (should (eq (mevedel-cockpit-context-session opened-context) session))
+        (should (eq (mevedel-cockpit-context-workspace opened-context)
+                    (mevedel-session-workspace session)))
+        (should (eq (mevedel-cockpit-context-view-buffer opened-context) view-buf))
+        (should (eq (mevedel-cockpit-context-data-buffer opened-context) data-buf))
+        (should (eq (mevedel-cockpit-context-origin-buffer opened-context) view-buf))
+        (should (eq opened-buffer data-buf)))))
 
   :doc "opens plugins management surface from the paired data buffer"
   (mevedel-menu-test--with-buffers
