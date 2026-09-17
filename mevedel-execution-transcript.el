@@ -38,6 +38,12 @@
 (autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
   "mevedel-session-artifacts")
 
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p
+                  "mevedel-session-codec" (session))
+(autoload 'mevedel-session-codec-portable-authority-p
+  "mevedel-session-codec")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-write-current-buffer-atomically
                   "mevedel-session-persistence" (path))
@@ -163,19 +169,19 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       :render-data render-data))
                (marker-table mevedel-execution-transcript--archived-rows))
           (when path
-            (let* ((remote (file-remote-p path))
-                   (session (and remote
-                                 (or mevedel--session
-                                     (error "Remote transcript has no session"))))
+            (let* ((session (or mevedel--session
+                                (error "Transcript has no session")))
+                   (portable
+                    (mevedel-session-codec-portable-authority-p session))
                    (root-buffer
-                    (and remote
+                    (and portable
                          (if (bound-and-true-p mevedel--agent-invocation)
                              (mevedel-agent-invocation-parent-data-buffer
                               mevedel--agent-invocation)
                            data-buffer)))
                    (coding (or buffer-file-coding-system 'utf-8-unix)))
               (with-temp-buffer
-                (if remote
+                (if portable
                     (progn
                       (setq buffer-file-coding-system coding)
                       (insert
@@ -197,7 +203,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       tool-use-id replacement))
                   (error "Persisted execution record missing: %s" tool-use-id))
                 (mevedel-session-artifacts-stabilize-gptel-bounds)
-                (if remote
+                (if portable
                     (mevedel-session-artifacts-publish-transcript-state
                      session root-buffer path
                      (buffer-substring-no-properties (point-min) (point-max))

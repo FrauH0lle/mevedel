@@ -525,6 +525,13 @@ the two copies cannot produce contradictory terminal states. A live archive
 record removed by a later compaction is carried into the next segment again;
 it remains durable across any number of rotations until terminal settlement.
 
+Archived terminal settlement follows the session's authority profile. Project
+sessions read the authoritative artifact and publish the completion with the
+sidecar in one immutable head, through both local and TRAMP access. Their fixed
+transcript paths are caches. File-workspace sessions use an atomic file write.
+The live transcript changes only after persistence succeeds, and pending prompt
+text in that buffer is not included in the persisted replacement.
+
 Persisted summary blocks include a short model-facing handoff prefix
 before the anchored Markdown summary. The prefix tells the resumed model
 to build on the prior work and avoid duplicating it. When a later

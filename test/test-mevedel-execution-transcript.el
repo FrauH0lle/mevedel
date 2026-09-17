@@ -199,7 +199,7 @@
   :doc "publishes completion transactionally and permits a later save"
   (let* ((path (make-temp-file "mevedel-execution-archive-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :name "archive")))
+         (session (mevedel-session--create :authority-mode 'pid-lock :name "archive")))
     (unwind-protect
         (progn
           (with-current-buffer buffer
@@ -272,7 +272,7 @@
   :doc "retries a disk-first partial commit from a narrowed live buffer"
   (let* ((path (make-temp-file "mevedel-execution-partial-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :name "partial"))
+         (session (mevedel-session--create :authority-mode 'pid-lock :name "partial"))
          (event
           (list :type 'terminal :session session :data-buffer buffer
                 :owner "main" :tool-use-id "partial-call"
@@ -281,6 +281,7 @@
     (unwind-protect
         (progn
           (with-current-buffer buffer
+            (setq-local mevedel--session session)
             (insert
              (mevedel-execution-transcript-test--persisted-audit-transcript
               (mevedel-execution-transcript-archive-text
@@ -335,7 +336,7 @@
   :doc "reroutes a terminal queued before its archive marker commits"
   (let* ((path (make-temp-file "mevedel-execution-reroute-"))
          (buffer (find-file-noselect path))
-         (session (mevedel-session--create :name "reroute"))
+         (session (mevedel-session--create :authority-mode 'pid-lock :name "reroute"))
          (event
           (list :type 'terminal :session session :data-buffer buffer
                 :owner "main" :tool-use-id "reroute-call"
@@ -344,6 +345,7 @@
     (unwind-protect
         (progn
           (with-current-buffer buffer
+            (setq-local mevedel--session session)
             (delay-mode-hooks (org-mode)))
           (mevedel-execution-transcript-handle-event event)
           (with-current-buffer buffer
@@ -375,153 +377,159 @@
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
       (when (file-exists-p path) (delete-file path))))
-  :doc "updates the committed remote transcript instead of its fixed cache"
-  (let* ((host "archived-terminal-publication")
-         (local-root
-          (file-name-as-directory
-           (make-temp-file "mevedel-archived-terminal-" t)))
-         (remote-root
-          (format "/mevedelmock:%s:%s/"
-                  host (directory-file-name local-root)))
-         (session-dir (concat remote-root "session/"))
-         (root-segment (concat session-dir "segment-0001.chat.org"))
-         (transcript (concat session-dir "agents/remote-call.chat.org"))
-         (sidecar (concat session-dir "session.meta.el"))
-         (archive
-          (mevedel-execution-transcript-test--persisted-audit-transcript
-           (mevedel-execution-transcript-archive-text
-            '(:live (("remote-call" :execution-id "exec-remote"
-                      :state running :live-execution-p t))))))
-         (render-data
-          '(:execution-id "exec-remote" :state completed
-                          :status success :live-execution-p nil))
-         (mevedel-session-durability--client-id (make-string 64 ?a))
-         (mevedel-session-durability--disclosed-targets
-          (make-hash-table :test #'equal))
-         buffer event root-buffer session)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp (list host)
-                                              (let ((workspace
-                                                     (mevedel-workspace--create
-                                                      :type 'project :id remote-root :root remote-root
-                                                      :name "remote")))
-                                                (setq session
-                                                      (mevedel-session-create "main" workspace remote-root)))
-                                              (setq event
-                                                    (list :type 'terminal :session session :owner "main"
-                                                          :tool-use-id "remote-call"))
-                                              (mevedel-workspace-identity-ensure remote-root)
-                                              (setf (mevedel-execution-target-incarnation
-                                                     (mevedel-session-execution-target session))
-                                                    "mock-incarnation")
-                                              (setf (mevedel-session-session-id session) "archived-terminal"
-                                                    (mevedel-session-save-path session) session-dir
-                                                    (mevedel-session-current-segment session) 1)
-                                              (make-directory session-dir t)
-                                              (puthash
-                                               (mevedel-execution-target-identity
-                                                (mevedel-session-execution-target session))
-                                               t mevedel-session-durability--disclosed-targets)
-                                              (should
-                                               (mevedel-session-durability-lease-acquire
-                                                session-dir "*archived terminal*" session))
-                                              (setq root-buffer (generate-new-buffer " *archived root*"))
-                                              (with-current-buffer root-buffer
-                                                (setq-local mevedel--session session)
-                                                (setq buffer-file-name root-segment)
-                                                (insert "* Root\n"))
-                                              (setq buffer (generate-new-buffer " *archived terminal*"))
-                                              (with-current-buffer buffer
-                                                (setq-local mevedel--session session)
-                                                (setq-local
-                                                 mevedel--agent-invocation
-                                                 (mevedel-agent-invocation--create
-                                                  :parent-data-buffer root-buffer))
-                                                (setq buffer-file-name transcript)
-                                                (insert archive)
-                                                (delay-mode-hooks (org-mode))
-                                                (mevedel-transcript-restore-properties))
-                                              (should
-                                               (mevedel-session-publication-publish
-                                                session
-                                                (list
-                                                 (list :path transcript :content archive)
-                                                 (list
-                                                  :path sidecar
-                                                  :content
-                                                  (mevedel-session-artifacts-printed-value
-                                                   (mevedel-session-artifacts-build-sidecar
-                                                    session root-buffer))
-                                                  :commit-marker t))))
-                                              (write-region "poisoned fixed cache" nil transcript nil 'silent)
-                                              (with-current-buffer buffer
-                                                (goto-char (point-max))
-                                                (insert "pending prompt\n")
-                                                (set-buffer-modified-p nil))
-                                              (mevedel-execution-transcript-commit-archive
-                                               buffer
-                                               '(:live (("remote-call" :execution-id "exec-remote"
-                                                         :state running :live-execution-p t))))
-                                              (let ((before
-                                                     (with-current-buffer buffer
-                                                       (buffer-string)))
-                                                    (committed
-                                                     (mevedel-session-artifacts-read-artifact
-                                                      session "agents/remote-call.chat.org" t)))
-                                                (cl-letf
-                                                    (((symbol-function
-                                                       'mevedel-session-artifacts-publish-transcript-state)
-                                                      (lambda (&rest _)
-                                                        (error "Publication failed"))))
-                                                  (should-error
-                                                   (mevedel-execution-transcript--record-archived-terminal
-                                                    buffer event render-data)))
+  :doc "updates committed project transcripts through local and remote access"
+  (dolist (remote '(nil t))
+    (let* ((host "archived-terminal-publication")
+           (local-root
+            (file-name-as-directory
+             (make-temp-file "mevedel-archived-terminal-" t)))
+           (remote-root
+            (if remote
+                (format "/mevedelmock:%s:%s/"
+                        host (directory-file-name local-root))
+              local-root))
+           (session-dir (concat remote-root "session/"))
+           (root-segment (concat session-dir "segment-0001.chat.org"))
+           (transcript (concat session-dir "agents/remote-call.chat.org"))
+           (sidecar (concat session-dir "session.meta.el"))
+           (archive
+            (mevedel-execution-transcript-test--persisted-audit-transcript
+             (mevedel-execution-transcript-archive-text
+              '(:live (("remote-call" :execution-id "exec-remote"
+                        :state running :live-execution-p t))))))
+           (render-data
+            '(:execution-id "exec-remote" :state completed
+                            :status success :live-execution-p nil))
+           (mevedel-session-durability--client-id (make-string 64 ?a))
+           (mevedel-session-durability--disclosed-targets
+            (make-hash-table :test #'equal))
+           buffer event root-buffer session)
+      (unwind-protect
+          (mevedel-test--with-local-shell-tramp (list host)
+                                                (let ((workspace
+                                                       (mevedel-workspace--create
+                                                        :type 'project :id remote-root :root remote-root
+                                                        :name "remote")))
+                                                  (setq session
+                                                        (mevedel-session-create "main" workspace remote-root)))
+                                                (setq event
+                                                      (list :type 'terminal :session session :owner "main"
+                                                            :tool-use-id "remote-call"))
+                                                (mevedel-workspace-identity-ensure remote-root)
+                                                (setf (mevedel-execution-target-incarnation
+                                                       (mevedel-session-execution-target session))
+                                                      "mock-incarnation")
+                                                (setf (mevedel-session-session-id session) "archived-terminal"
+                                                      (mevedel-session-save-path session) session-dir
+                                                      (mevedel-session-current-segment session) 1)
+                                                (make-directory session-dir t)
+                                                (puthash
+                                                 (mevedel-execution-target-identity
+                                                  (mevedel-session-execution-target session))
+                                                 t mevedel-session-durability--disclosed-targets)
+                                                (should
+                                                 (mevedel-session-durability-lease-acquire
+                                                  session-dir "*archived terminal*" session))
+                                                (setq root-buffer (generate-new-buffer " *archived root*"))
+                                                (with-current-buffer root-buffer
+                                                  (setq-local mevedel--session session)
+                                                  (setq buffer-file-name root-segment)
+                                                  (insert "* Root\n"))
+                                                (setq buffer (generate-new-buffer " *archived terminal*"))
                                                 (with-current-buffer buffer
-                                                  (should (equal-including-properties
-                                                           before (buffer-string)))
-                                                  (should-not (buffer-modified-p))
-                                                  (should (gethash
-                                                           "remote-call"
-                                                           mevedel-execution-transcript--archived-rows)))
-                                                (should (equal
-                                                         committed
-                                                         (mevedel-session-artifacts-read-artifact
-                                                          session "agents/remote-call.chat.org" t))))
-                                              (dotimes (_ 2)
-                                                (mevedel-execution-transcript--record-archived-terminal
-                                                 buffer event render-data))
-                                              (with-current-buffer buffer
-                                                (should-not (gethash
+                                                  (setq-local mevedel--session session)
+                                                  (setq-local
+                                                   mevedel--agent-invocation
+                                                   (mevedel-agent-invocation--create
+                                                    :parent-data-buffer root-buffer))
+                                                  (setq buffer-file-name transcript)
+                                                  (insert archive)
+                                                  (delay-mode-hooks (org-mode))
+                                                  (mevedel-transcript-restore-properties))
+                                                (should
+                                                 (mevedel-session-publication-publish
+                                                  session
+                                                  (list
+                                                   (list :path transcript :content archive)
+                                                   (list
+                                                    :path sidecar
+                                                    :content
+                                                    (mevedel-session-artifacts-printed-value
+                                                     (mevedel-session-artifacts-build-sidecar
+                                                      session root-buffer))
+                                                    :commit-marker t))))
+                                                (write-region "poisoned fixed cache" nil transcript nil 'silent)
+                                                (with-current-buffer buffer
+                                                  (goto-char (point-max))
+                                                  (insert "pending prompt\n")
+                                                  (set-buffer-modified-p nil))
+                                                (mevedel-execution-transcript-commit-archive
+                                                 buffer
+                                                 '(:live (("remote-call" :execution-id "exec-remote"
+                                                           :state running :live-execution-p t))))
+                                                (let ((before
+                                                       (with-current-buffer buffer
+                                                         (buffer-string)))
+                                                      (committed
+                                                       (mevedel-session-artifacts-read-artifact
+                                                        session "agents/remote-call.chat.org" t)))
+                                                  (cl-letf
+                                                   (((symbol-function
+                                                      'mevedel-session-artifacts-publish-transcript-state)
+                                                     (lambda (&rest _)
+                                                       (error "Publication failed"))))
+                                                   (should
+                                                    (equal
+                                                     '(error "Publication failed")
+                                                     (should-error
+                                                      (mevedel-execution-transcript--record-archived-terminal
+                                                       buffer event render-data)))))
+                                                  (with-current-buffer buffer
+                                                    (should (equal-including-properties
+                                                             before (buffer-string)))
+                                                    (should-not (buffer-modified-p))
+                                                    (should (gethash
                                                              "remote-call"
                                                              mevedel-execution-transcript--archived-rows)))
-                                              (let ((published
-                                                     (decode-coding-string
-                                                      (mevedel-session-artifacts-read-artifact
-                                                       session "agents/remote-call.chat.org" t)
-                                                      'utf-8-unix)))
-                                                (should-not (string-search "poisoned" published))
-                                                (should-not (string-search "pending prompt" published))
-                                                (should (= 1
-                                                           (length
-                                                            (mevedel-execution-transcript-test--restored-audit-records
-                                                             published 'execution-completion)))))
-                                              (with-current-buffer buffer
-                                                (should (string-search "pending prompt" (buffer-string)))
-                                                (should (= 1
-                                                           (length
-                                                            (mevedel-transcript-audit-records
-                                                             (buffer-string) 'execution-completion))))))
-      (when (and session (mevedel-session-lease session))
-        (ignore-errors
-          (mevedel-session-durability-lease-release session-dir session)))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (when (buffer-live-p root-buffer)
-        (with-current-buffer root-buffer (set-buffer-modified-p nil))
-        (kill-buffer root-buffer))
-      (when (file-directory-p local-root)
-        (delete-directory local-root t)))))
+                                                  (should (equal
+                                                           committed
+                                                           (mevedel-session-artifacts-read-artifact
+                                                            session "agents/remote-call.chat.org" t))))
+                                                (dotimes (_ 2)
+                                                  (mevedel-execution-transcript--record-archived-terminal
+                                                   buffer event render-data))
+                                                (with-current-buffer buffer
+                                                  (should-not (gethash
+                                                               "remote-call"
+                                                               mevedel-execution-transcript--archived-rows)))
+                                                (let ((published
+                                                       (decode-coding-string
+                                                        (mevedel-session-artifacts-read-artifact
+                                                         session "agents/remote-call.chat.org" t)
+                                                        'utf-8-unix)))
+                                                  (should-not (string-search "poisoned" published))
+                                                  (should-not (string-search "pending prompt" published))
+                                                  (should (= 1
+                                                             (length
+                                                              (mevedel-execution-transcript-test--restored-audit-records
+                                                               published 'execution-completion)))))
+                                                (with-current-buffer buffer
+                                                  (should (string-search "pending prompt" (buffer-string)))
+                                                  (should (= 1
+                                                             (length
+                                                              (mevedel-transcript-audit-records
+                                                               (buffer-string) 'execution-completion))))))
+        (when (and session (mevedel-session-lease session))
+          (ignore-errors
+            (mevedel-session-durability-lease-release session-dir session)))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))
+        (when (buffer-live-p root-buffer)
+          (with-current-buffer root-buffer (set-buffer-modified-p nil))
+          (kill-buffer root-buffer))
+        (when (file-directory-p local-root)
+          (delete-directory local-root t))))))
 
 (provide 'test-mevedel-execution-transcript)
 
