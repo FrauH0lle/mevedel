@@ -147,7 +147,7 @@ chunk when that stale transformer fails."
          (numberp mevedel-gptel-stream-bridge-insert-batch-delay)
          (> mevedel-gptel-stream-bridge-insert-batch-delay 0))
     (mevedel-gptel-stream-bridge--queue-gptel-stream-insert-batch
-     orig-fn response info raw))
+     orig-fn response info))
    (t
     (when (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
       (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info))
@@ -160,13 +160,9 @@ chunk when that stale transformer fails."
       (funcall orig-fn response info raw)))))
 
 (defun mevedel-gptel-stream-bridge--queue-gptel-stream-insert-batch
-    (orig-fn response info raw)
-  "Queue string RESPONSE for ORIG-FN as a batched gptel stream insert."
-  (when (and (plist-get info :mevedel-stream-insert-parts)
-             (not (equal raw (plist-get info :mevedel-stream-insert-raw))))
-    (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info))
+    (orig-fn response info)
+  "Queue non-raw string RESPONSE for ORIG-FN as a batched stream insert."
   (plist-put info :mevedel-stream-insert-orig orig-fn)
-  (plist-put info :mevedel-stream-insert-raw raw)
   (plist-put info :mevedel-stream-insert-parts
              (cons response
                    (plist-get info :mevedel-stream-insert-parts)))
@@ -191,14 +187,13 @@ chunk when that stale transformer fails."
               (orig-fn (plist-get info :mevedel-stream-insert-orig))
               ((functionp orig-fn)))
     (plist-put info :mevedel-stream-insert-parts nil)
-    (let ((raw (plist-get info :mevedel-stream-insert-raw))
-          (inhibit-modification-hooks t)
+    (let ((inhibit-modification-hooks t)
           (mevedel-gptel-stream-bridge--insert-batching-suspended t))
       (mevedel-gptel-stream-bridge--repair-gptel-stream-info info)
       (when (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
         (funcall orig-fn
                  (apply #'concat (nreverse parts))
-                 info raw)))))
+                 info nil)))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.

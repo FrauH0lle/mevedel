@@ -30,16 +30,6 @@
        (when (buffer-live-p data-buf)
          (kill-buffer data-buf)))))
 
-(defun mevedel-gptel-stream-bridge-test--count-substring (needle text)
-  "Return the number of non-overlapping NEEDLE occurrences in TEXT."
-  (let ((count 0)
-        (start 0)
-        position)
-    (while (setq position (string-search needle text start))
-      (cl-incf count)
-      (setq start (+ position (length needle))))
-    count))
-
 ;;
 ;;; Advice lifecycle
 
@@ -186,11 +176,13 @@
      (cl-labels ((orig (response _info &optional raw)
                    (push (list response raw) calls)))
        (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+        #'orig "before" info nil)
+       (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
         #'orig "raw" info t)
        (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
         #'orig "normal" info nil)
        (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
-       (should (equal '(("normal" nil) ("raw" t)) calls)))))
+       (should (equal '(("normal" nil) ("raw" t) ("before" nil)) calls)))))
 
   :doc "batching flushes before stream cleanup"
   (mevedel-gptel-stream-bridge-test--with-data-buffer
