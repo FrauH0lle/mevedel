@@ -976,42 +976,25 @@ PID-lock table.  File-workspace sessions use the following lock table:
         (mevedel-session-durability-lease-acquire
          session-dir buffer-name session))
     (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
-         (existing  (mevedel-session-persistence--read-lock lock-path)))
+           (existing (mevedel-session-persistence--read-lock lock-path))
+           (same-host (and existing
+                           (equal (plist-get existing :hostname)
+                                  (system-name)))))
       (cond
-     ((null existing)
-      ;; Race-free create via `add-name-to-file'.  If another process
-      ;; beat us to it between the read above and this write, fall
-      ;; through to the existing-lock branches.
-      (cond
-       ((mevedel-session-persistence--change-lock lock-path nil buffer-name)
-        t)
-       ((mevedel-session-persistence--read-lock lock-path)
-        (mevedel-session-persistence-lock-acquire
-         session-dir buffer-name session))
-       (t
-        (user-error "Session lock exists but could not be read: %s"
-                    lock-path))))
-     ((equal (plist-get existing :hostname) (system-name))
-      (cond
-       ((mevedel-session-persistence--same-host-lock-active-p existing)
-        (let ((response
-               (read-char-choice
-                (format
-                 (concat "Mevedel session locked by a live process on this host:\n"
-                         "  PID:    %s\n"
-                         "  Since:  %s\n"
-                         "  Buffer: %s\n"
-                         "[b]reak, [r]ead-only, [a]bort? ")
-                 (plist-get existing :pid)
-                 (plist-get existing :emacs-invocation-time)
-                 (plist-get existing :buffer))
-                '(?b ?r ?a))))
-          (pcase response
-            (?b (mevedel-session-persistence--write-lock lock-path buffer-name existing)
-                t)
-            (?r nil)
-            (?a (user-error "Session resume aborted")))))
-       (t
+       ((null existing)
+        ;; Checked creation uses the same native mutation lock as replacement.
+        ;; If another process wins, reread its holder before prompting.
+        (cond
+         ((mevedel-session-persistence--change-lock lock-path nil buffer-name)
+          t)
+         ((mevedel-session-persistence--read-lock lock-path)
+          (mevedel-session-persistence-lock-acquire
+           session-dir buffer-name session))
+         (t
+          (user-error "Session lock exists but could not be read: %s"
+                      lock-path))))
+       ((and same-host
+             (not (mevedel-session-persistence--same-host-lock-active-p existing)))
         (if (y-or-n-p
              (format "Stale mevedel lock (PID %d, buffer %s).  Break and proceed? "
                      (plist-get existing :pid)
@@ -1019,27 +1002,35 @@ PID-lock table.  File-workspace sessions use the following lock table:
             (progn
               (mevedel-session-persistence--write-lock lock-path buffer-name existing)
               t)
-          (user-error "Lock not broken")))))
-     (t
-      (let ((response
-             (read-char-choice
-              (format
-               (concat "Mevedel session locked by:\n"
-                       "  PID:    %s\n"
-                       "  Host:   %s\n"
-                       "  Since:  %s\n"
-                       "  Buffer: %s\n"
-                       "[b]reak, [r]ead-only, [a]bort? ")
-               (plist-get existing :pid)
-               (plist-get existing :hostname)
-               (plist-get existing :emacs-invocation-time)
-               (plist-get existing :buffer))
-              '(?b ?r ?a))))
-        (pcase response
-          (?b (mevedel-session-persistence--write-lock lock-path buffer-name existing)
-              t)
-          (?r nil)
-          (?a (user-error "Session resume aborted")))))))))
+          (user-error "Lock not broken")))
+       (t
+        (let ((prompt
+               (if same-host
+                   (format
+                    (concat "Mevedel session locked by a live process on this host:\n"
+                            "  PID:    %s\n"
+                            "  Since:  %s\n"
+                            "  Buffer: %s\n"
+                            "[b]reak, [r]ead-only, [a]bort? ")
+                    (plist-get existing :pid)
+                    (plist-get existing :emacs-invocation-time)
+                    (plist-get existing :buffer))
+                 (format
+                  (concat "Mevedel session locked by:\n"
+                          "  PID:    %s\n"
+                          "  Host:   %s\n"
+                          "  Since:  %s\n"
+                          "  Buffer: %s\n"
+                          "[b]reak, [r]ead-only, [a]bort? ")
+                  (plist-get existing :pid)
+                  (plist-get existing :hostname)
+                  (plist-get existing :emacs-invocation-time)
+                  (plist-get existing :buffer)))))
+          (pcase (read-char-choice prompt '(?b ?r ?a))
+            (?b (mevedel-session-persistence--write-lock lock-path buffer-name existing)
+                t)
+            (?r nil)
+            (?a (user-error "Session resume aborted")))))))))
 
 (defun mevedel-session-persistence-lock-release (session-dir &optional session)
   "Release this client's mutation authority for SESSION-DIR.
