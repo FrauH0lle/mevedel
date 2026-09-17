@@ -2887,16 +2887,14 @@ A no-op when the saved root is missing or matches current."
                                 (directory-files save-path))))))
 
 (defun mevedel-session-artifacts-self-heal-segment-counter
-    (session save-path &optional defer-finalization-p)
+    (session save-path)
   "Reconcile SESSION's `:current-segment' with the filesystem under SAVE-PATH.
 
 If the highest-numbered segment file on disk differs from the sidecar's
 recorded `:current-segment', trust the filesystem (the sidecar may be
 stale from a crash mid-rotation).  Logs a warning.  When healing upward
 after a crash that published a new segment before finalizing its
-predecessor, mark the predecessor finalized now.  When
-DEFER-FINALIZATION-P is non-nil, return that predecessor without writing it
-so the caller can include finalization in a larger publication batch."
+predecessor, mark the predecessor finalized now and return its path."
   (let* ((sidecar-n    (or (mevedel-session-current-segment session) 1))
          (filesystem-n (mevedel-session-artifacts-detect-highest-segment
                         save-path))
@@ -2912,8 +2910,7 @@ so the caller can include finalization in a larger publication batch."
         (setq predecessor
               (mevedel-session-artifacts-segment-path
                save-path (1- filesystem-n)))
-        (unless defer-finalization-p
-          (mevedel-session-artifacts--finalize-segment-file predecessor)))
+        (mevedel-session-artifacts--finalize-segment-file predecessor))
       (setf (mevedel-session-current-segment session) filesystem-n))
     predecessor))
 

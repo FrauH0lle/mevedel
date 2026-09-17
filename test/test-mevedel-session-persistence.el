@@ -762,6 +762,45 @@
 (mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
+  :doc "only PID-lock restore heals a disk counter ahead of the saved sidecar"
+  (dolist (make-workspace
+           '(test-mevedel-session-persistence--make-file-workspace
+             test-mevedel-session-persistence--make-workspace))
+    (let* ((root (make-temp-file "mevedel-restore-counter-" t))
+           (workspace (funcall make-workspace root))
+           (session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *restore-counter*"))
+           (portable-p (eq 'project (mevedel-workspace-type workspace)))
+           restored)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "Saved transcript\n")
+              (mevedel-session-artifacts-save session buffer))
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (let* ((directory (mevedel-session-save-path session))
+                   (predecessor (mevedel-session-artifacts-segment-path directory 1)))
+              (write-region "Newer disk transcript\n" nil
+                            (mevedel-session-artifacts-segment-path directory 2)
+                            nil 'silent)
+              (setq restored (mevedel-session-persistence-restore directory nil nil workspace))
+              (with-current-buffer restored
+                (should (= (if portable-p 1 2)
+                           (mevedel-session-current-segment mevedel--session)))
+                (should (string-match-p (if portable-p "Saved transcript" "Newer disk transcript")
+                                        (buffer-string))))
+              (with-temp-buffer
+                (insert-file-contents predecessor)
+                (should (eq (not portable-p)
+                            (not (null (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
+                                                       (buffer-string)))))))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (and (buffer-live-p restored)
+                       (buffer-local-value 'mevedel--session restored)))
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry))))
   :doc "settles a durable ToolCall checkpoint as interrupted, no resume"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

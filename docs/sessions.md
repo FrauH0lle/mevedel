@@ -1005,6 +1005,11 @@ archived/superseded. Structured execution rows in later segments provide the
 same successor evidence, including rows retained in a compacted tail; a row
 with no successor becomes `lost`.
 
+After acquiring a PID lock, resume reconciles the sidecar segment counter with
+the files on disk and finalizes the predecessor when recovering a newer segment.
+Portable sessions instead restore the committed publication head; unpublished
+segment files never advance their counter. Read-only inspection repairs neither.
+
 An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
