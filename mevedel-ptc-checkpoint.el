@@ -23,10 +23,6 @@
 (autoload 'mevedel-session-persistence-write-sidecar-now
   "mevedel-session-persistence")
 
-;; `mevedel-structs'
-(declare-function mevedel-session-ptc-checkpoints
-                  "mevedel-structs" (session))
-
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
@@ -139,15 +135,13 @@ The completed-turn save commits this change together with the final tool row."
          (calls
           (mapcar
            (lambda (call)
-             (let ((call (copy-sequence call)))
-               (when (memq (plist-get call :status) '(queued running))
-                 (setq call (plist-put call :status 'interrupted)))
-               call))
+             (when (memq (plist-get call :status) '(queued running))
+               (plist-put call :status 'interrupted))
+             call)
            (plist-get data :calls))))
     (setq data (plist-put data :outcome 'interrupted))
     (setq data (plist-put data :calls calls))
-    (setq data (plist-put data :nested-call-count (length calls)))
-    data))
+    (plist-put data :nested-call-count (length calls))))
 
 (defun mevedel-ptc-checkpoint--insert (checkpoint)
   "Append one recovered CHECKPOINT as a canonical Org tool block."

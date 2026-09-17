@@ -112,13 +112,18 @@
           '(:render-data
             (:kind ptc :outcome running
              :calls ((:id "p/1" :status running)
-                     (:id "p/2" :status success)))))
+                     (:id "p/2" :status success)
+                     (:id "p/3" :status queued)))))
+         (before (copy-tree checkpoint t))
          (data (mevedel-ptc-checkpoint--interrupted-render-data checkpoint)))
     (should (eq 'interrupted (plist-get data :outcome)))
-    (should (= 2 (plist-get data :nested-call-count)))
-    (should (equal '(interrupted success)
+    (should (equal checkpoint before))
+    (should (= 3 (plist-get data :nested-call-count)))
+    (should (equal '(interrupted success interrupted)
                    (mapcar (lambda (call) (plist-get call :status))
-                           (plist-get data :calls))))))
+                           (plist-get data :calls))))
+    (should (equal '(:outcome interrupted :calls nil :nested-call-count 0)
+                   (mevedel-ptc-checkpoint--interrupted-render-data nil)))))
 
 (mevedel-deftest mevedel-ptc-checkpoint--insert ()
   ,test
@@ -151,25 +156,19 @@
   ,test
   (test)
   :doc "inserts only missing rows and consumes every checkpoint"
-  (let ((session
-         (test-mevedel-ptc-checkpoint--session
+  (let* ((checkpoints
           '((:id "present" :args (:expression "1") :state settled
              :result "1" :render-data (:kind ptc :outcome completed :calls nil))
             (:id "missing" :args (:expression "2") :state running
-             :render-data (:kind ptc :outcome running :calls nil))))))
+             :render-data (:kind ptc :outcome running :calls nil))))
+         (session (test-mevedel-ptc-checkpoint--session checkpoints)))
     (with-temp-buffer
       (insert (propertize "existing" 'gptel '(tool . "present")))
       (should (equal '(1 . 2)
                      (mevedel-ptc-checkpoint-reconcile session)))
       (should (mevedel-tool-render-data-segment-bounds "missing"))
-      (should-not (mevedel-session-ptc-checkpoints session))))
-  :doc "consumes a checkpoint whose row is already present"
-  (let ((session
-         (test-mevedel-ptc-checkpoint--session
-          '((:id "present" :args (:expression "1") :state settled
-             :result "1" :render-data (:kind ptc :outcome completed))))))
-    (with-temp-buffer
-      (insert (propertize "existing" 'gptel '(tool . "present")))
+      (should-not (mevedel-session-ptc-checkpoints session))
+      (setf (mevedel-session-ptc-checkpoints session) (list (car checkpoints)))
       (should (equal '(0 . 1)
                      (mevedel-ptc-checkpoint-reconcile session)))
       (should-not (mevedel-session-ptc-checkpoints session)))))
