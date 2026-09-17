@@ -144,17 +144,9 @@ Return nil when WORKSPACE is nil."
        value))
 
 (defun mevedel-plugins--json-string (key alist)
-  "Return string field KEY from parsed JSON ALIST."
+  "Return string field named by symbol KEY from parsed JSON ALIST."
   (mevedel-plugins--string-or-nil
-   (or (alist-get key alist nil nil #'equal)
-       (alist-get (intern key) alist))))
-
-(defun mevedel-plugins--json-value (key alist missing)
-  "Return field KEY from parsed JSON ALIST, or MISSING."
-  (let ((value (alist-get key alist missing nil #'equal)))
-    (if (eq value missing)
-        (alist-get (intern key) alist missing)
-      value)))
+   (alist-get key alist)))
 
 (defun mevedel-plugins--safe-name-p (name)
   "Return non-nil when NAME is safe for plugin identifiers."
@@ -166,8 +158,7 @@ Return nil when WORKSPACE is nil."
   "Return non-nil when PATH stays inside ROOT."
   (let ((path (file-truename path))
         (root (file-name-as-directory (file-truename root))))
-    (or (equal (file-name-as-directory path) root)
-        (string-prefix-p root (file-name-as-directory path)))))
+    (string-prefix-p root (file-name-as-directory path))))
 
 (defun mevedel-plugins--resolve-manifest-path (root path)
   "Resolve manifest PATH relative to plugin ROOT."
@@ -193,10 +184,7 @@ Return a list of plists, each with a `:file' path."
 
 (defun mevedel-plugins--first-hook-file (hooks)
   "Return the first file path in normalized HOOKS."
-  (catch 'file
-    (dolist (entry hooks)
-      (when-let* ((file (plist-get entry :file)))
-        (throw 'file file)))))
+  (cl-some (lambda (entry) (plist-get entry :file)) hooks))
 
 (defun mevedel-plugins--read-manifest-result (root &optional workspace)
   "Read plugin manifest under ROOT.
@@ -215,21 +203,20 @@ does not contain a readable Codex plugin manifest."
                             :array-type 'list
                             :null-object nil
                             :false-object nil)))
-                   (name (or (mevedel-plugins--json-string "name" json)
+                   (name (or (mevedel-plugins--json-string 'name json)
                              fallback-name))
                    (missing (make-symbol "missing"))
-                   (skills (mevedel-plugins--json-string "skills" json))
+                   (skills (mevedel-plugins--json-string 'skills json))
                    (hooks (mevedel-plugins--normalize-manifest-hooks
                            root
-                           (mevedel-plugins--json-value
-                            "hooks" json missing)
+                           (alist-get 'hooks json missing)
                            missing)))
               (if (mevedel-plugins--safe-name-p name)
                   (mevedel-plugin--create
                    :name name
-                   :version (mevedel-plugins--json-string "version" json)
+                   :version (mevedel-plugins--json-string 'version json)
                    :description (mevedel-plugins--json-string
-                                 "description" json)
+                                 'description json)
                    :root root
                    :skills-dir (mevedel-plugins--resolve-manifest-path
                                 root skills)
@@ -380,15 +367,8 @@ Items include usable plugin manifests and visible metadata errors."
 
 (defun mevedel-plugins-find (name &optional workspace)
   "Return installed plugin named NAME, or nil."
-  (catch 'found
-    (dolist (plugin (mevedel-plugins-list workspace) nil)
-      (when (equal name (mevedel-plugin-name plugin))
-        (throw 'found plugin)))))
-
-(defun mevedel-plugins-plugin-root (plugin-name)
-  "Return root directory for installed PLUGIN-NAME, or nil."
-  (when-let* ((plugin (mevedel-plugins-find plugin-name)))
-    (mevedel-plugin-root plugin)))
+  (cl-find name (mevedel-plugins-list workspace)
+           :key #'mevedel-plugin-name :test #'equal))
 
 
 ;;
@@ -617,11 +597,9 @@ Relative identities are requalified through the live WORKSPACE root."
 
 (defun mevedel-plugins-enabled (&optional workspace)
   "Return installed plugins enabled in WORKSPACE."
-  (let (enabled)
-    (dolist (plugin (plist-get (mevedel-plugins--collect workspace) :winners)
-                    (nreverse enabled))
-      (when (mevedel-plugins-enabled-p plugin workspace)
-        (push plugin enabled)))))
+  (cl-remove-if-not
+   (lambda (plugin) (mevedel-plugins-enabled-p plugin workspace))
+   (plist-get (mevedel-plugins--collect workspace) :winners)))
 
 (defun mevedel-plugins-count-label (&optional workspace)
   "Return enabled/total plugin count label for WORKSPACE."
@@ -855,10 +833,9 @@ Relative identities are requalified through the live WORKSPACE root."
 
 (defun mevedel-plugins-pending-consent (&optional workspace)
   "Return enabled plugins whose executable hooks need consent in WORKSPACE."
-  (let (pending)
-    (dolist (plugin (mevedel-plugins-enabled workspace) (nreverse pending))
-      (when (mevedel-plugins-hooks-stale-p plugin workspace)
-        (push plugin pending)))))
+  (cl-remove-if-not
+   (lambda (plugin) (mevedel-plugins-hooks-stale-p plugin workspace))
+   (mevedel-plugins-enabled workspace)))
 
 
 

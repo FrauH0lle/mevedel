@@ -629,27 +629,19 @@
     (should-not (mevedel-plugins--read-state workspace))
     (should-not mevedel-plugins-test--read-eval-ran)))
 
-(mevedel-deftest mevedel-plugins-plugin-root
-  (:vars* ((user-dir (file-name-as-directory
-                      (make-temp-file "mevedel-plugins-root-" t)))
-           (workspace-root (file-name-as-directory
+(mevedel-deftest mevedel-plugins-plugin-data-dir
+  (:vars* ((workspace-root (file-name-as-directory
                             (make-temp-file "mevedel-plugins-root-ws-" t)))
-           (workspace (mevedel-plugins-test--workspace workspace-root))
-           (mevedel-user-dir user-dir)
-           (mevedel-plugin-install-directory
-            (file-name-concat user-dir ".agents" "plugins")))
-   :after-each (progn
-                 (delete-directory user-dir t)
-                 (delete-directory workspace-root t)))
+           (workspace (mevedel-plugins-test--workspace workspace-root)))
+   :after-each (delete-directory workspace-root t))
   ,test
   (test)
-  (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
-    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
-    (should (equal (file-name-as-directory (expand-file-name root))
-                   (mevedel-plugins-plugin-root "demo")))
-    (should (equal (file-name-concat workspace-root ".mevedel"
-                                     "state" "plugin-data" "demo")
-                   (mevedel-plugins-plugin-data-dir "demo" workspace))))
+  :doc "locates runtime data by workspace and plugin name"
+  (should (equal (file-name-concat workspace-root ".mevedel"
+                                  "state" "plugin-data" "demo")
+                 (mevedel-plugins-plugin-data-dir "demo" workspace)))
+
+  :doc "expands the workspace root before locating runtime data"
   (let* ((root "~/mevedel-plugins-ws/")
          (workspace (mevedel-plugins-test--workspace root)))
     (should (equal (file-name-concat (expand-file-name root) ".mevedel"
