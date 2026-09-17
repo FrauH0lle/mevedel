@@ -480,67 +480,38 @@ prompt label and defaults to `review'."
               "Review prompt cannot be empty")))
          (list :type 'custom :instructions instructions))))))
 
-(defun mevedel-review--target-prompt-and-hint (target &optional cwd)
-  "Return (PROMPT . HINT) for review TARGET.
-CWD is used for git merge-base resolution."
-  (let ((cwd (or cwd (mevedel-review--cwd))))
+(defun mevedel-review--prompt-and-hint (command target &optional cwd)
+  "Return (PROMPT . HINT) for validation COMMAND and TARGET.
+CWD is used for git merge-base resolution.  COMMAND defaults to review."
+  (let ((cwd (or cwd (mevedel-review--cwd)))
+        (verify-p (eq command 'verify)))
     (pcase (plist-get target :type)
       ('uncommitted
-       (cons mevedel-review--uncommitted-prompt "current changes"))
+       (cons (if verify-p mevedel-review--verify-uncommitted-prompt
+               mevedel-review--uncommitted-prompt)
+             "current changes"))
       ('base-branch
        (let* ((branch (plist-get target :branch))
               (merge-base (and branch
                                (mevedel-review--git-string
                                 cwd "merge-base" "HEAD" branch))))
          (cons (if merge-base
-                   (format mevedel-review--base-branch-prompt
+                   (format (if verify-p mevedel-review--verify-base-branch-prompt
+                             mevedel-review--base-branch-prompt)
                            branch merge-base merge-base branch)
-                 (format mevedel-review--base-branch-backup-prompt
+                 (format (if verify-p mevedel-review--verify-base-branch-backup-prompt
+                           mevedel-review--base-branch-backup-prompt)
                          branch branch branch branch))
                (format "changes against '%s'" branch))))
       ('commit
        (let ((sha (plist-get target :sha))
              (title (string-trim (or (plist-get target :title) ""))))
          (cons (if (string-empty-p title)
-                   (format mevedel-review--commit-prompt sha)
-                 (format mevedel-review--commit-with-title-prompt sha title))
-               (if (string-empty-p title)
-                   (format "commit %s" (substring sha 0 (min 7 (length sha))))
-                 (format "commit %s: %s"
-                         (substring sha 0 (min 7 (length sha)))
-                         title)))))
-      ('custom
-       (let ((instructions (string-trim
-                            (or (plist-get target :instructions) ""))))
-         (when (string-empty-p instructions)
-           (user-error "Review prompt cannot be empty"))
-         (cons instructions instructions)))
-      (_ (user-error "Unknown review target: %S" target)))))
-
-(defun mevedel-review--verify-target-prompt-and-hint (target &optional cwd)
-  "Return (PROMPT . HINT) for verify TARGET.
-CWD is used for git merge-base resolution."
-  (let ((cwd (or cwd (mevedel-review--cwd))))
-    (pcase (plist-get target :type)
-      ('uncommitted
-       (cons mevedel-review--verify-uncommitted-prompt "current changes"))
-      ('base-branch
-       (let* ((branch (plist-get target :branch))
-              (merge-base (and branch
-                               (mevedel-review--git-string
-                                cwd "merge-base" "HEAD" branch))))
-         (cons (if merge-base
-                   (format mevedel-review--verify-base-branch-prompt
-                           branch merge-base merge-base branch)
-                 (format mevedel-review--verify-base-branch-backup-prompt
-                         branch branch branch branch))
-               (format "changes against '%s'" branch))))
-      ('commit
-       (let ((sha (plist-get target :sha))
-             (title (string-trim (or (plist-get target :title) ""))))
-         (cons (if (string-empty-p title)
-                   (format mevedel-review--verify-commit-prompt sha)
-                 (format mevedel-review--verify-commit-with-title-prompt
+                   (format (if verify-p mevedel-review--verify-commit-prompt
+                             mevedel-review--commit-prompt)
+                           sha)
+                 (format (if verify-p mevedel-review--verify-commit-with-title-prompt
+                           mevedel-review--commit-with-title-prompt)
                          sha title))
                (if (string-empty-p title)
                    (format "commit %s" (substring sha 0 (min 7 (length sha))))
@@ -551,16 +522,15 @@ CWD is used for git merge-base resolution."
        (let ((instructions (string-trim
                             (or (plist-get target :instructions) ""))))
          (when (string-empty-p instructions)
-           (user-error "Verify prompt cannot be empty"))
-         (cons (format mevedel-review--verify-custom-prompt instructions)
+           (user-error (if verify-p "Verify prompt cannot be empty"
+                         "Review prompt cannot be empty")))
+         (cons (if verify-p
+                   (format mevedel-review--verify-custom-prompt instructions)
+                 instructions)
                instructions)))
-      (_ (user-error "Unknown verify target: %S" target)))))
-
-(defun mevedel-review--prompt-and-hint (command target &optional cwd)
-  "Return (PROMPT . HINT) for COMMAND, TARGET, and CWD."
-  (if (eq command 'verify)
-      (mevedel-review--verify-target-prompt-and-hint target cwd)
-    (mevedel-review--target-prompt-and-hint target cwd)))
+      (_ (user-error (if verify-p "Unknown verify target: %S"
+                       "Unknown review target: %S")
+                     target)))))
 
 
 ;;
