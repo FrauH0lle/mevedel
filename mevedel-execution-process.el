@@ -616,14 +616,8 @@ deferred work, so that case deletes immediately rather than leak."
                   (mevedel-execution-process--child-workdir child)))
            (terminal
             (mevedel-execution-process--child-terminal-function child)))
-      (mevedel-execution-process--release-runtime child)
+      (mevedel-execution-process-release child t)
       (when terminal (funcall terminal child result)))))
-
-(defun mevedel-execution-process--release-runtime (child)
-  "Release CHILD's process and timers without deleting its spool."
-  (let ((path (mevedel-execution-process--child-spool-path child)))
-    (mevedel-execution-process-release child t)
-    (setf (mevedel-execution-process--child-spool-path child) path)))
 
 (defun mevedel-execution-process--settle-after-kill (child)
   "Settle CHILD after its final process-group signal."
