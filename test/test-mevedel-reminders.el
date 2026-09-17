@@ -266,7 +266,11 @@ this collapses both shapes to the delivered text."
     (should (equal 7 (mevedel-reminder-interval clone)))
     (should (null (mevedel-reminder-last-fired clone)))
     (should (equal '(pending-events)
-                   (mevedel-reminder-recipe clone))))
+                   (mevedel-reminder-recipe clone)))
+    (should-not (eq r clone))
+    (setcar (mevedel-reminder-recipe clone) 'date-change)
+    (should (equal '(pending-events) (mevedel-reminder-recipe r)))
+    (should (= 42 (mevedel-reminder-last-fired r))))
 
   :doc "`mevedel-reminder-clone' produces independent last-fired state"
   (let* ((r (mevedel-reminder-create
