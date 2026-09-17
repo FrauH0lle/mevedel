@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Private session resolution and interaction metadata shared by permission
-;; prompts and Plan approval.  Each feature owns its own lifecycle.
+;; Private session resolution shared by execution, permission prompts and
+;; Plan approval, plus interaction metadata for queued prompts.  Each feature
+;; owns its own lifecycle.
 
 ;;; Code:
 

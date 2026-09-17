@@ -80,6 +80,10 @@
 (declare-function mevedel-pipeline-tool-results-dir
                   "mevedel-pipeline" (session buffer &optional request))
 
+;; `mevedel-queue'
+(declare-function mevedel-queue--current-session "mevedel-queue" ())
+(autoload 'mevedel-queue--current-session "mevedel-queue")
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 
@@ -114,8 +118,6 @@
                   "mevedel-tool-exec-permission" (args))
 (declare-function mevedel-tool-exec-permission-eval-preserve-ui-p
                   "mevedel-tool-exec-permission" (args))
-(declare-function mevedel-tool-exec-permission-session
-                  "mevedel-tool-exec-permission" ())
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -400,7 +402,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (let* ((analysis (mevedel-bash-analysis-analyze command))
            (_ (when (plist-get analysis :background-p)
                 (error "Shell-native background execution is not supported; use yield_time_ms")))
-           (session (mevedel-tool-exec-permission-session))
+           (session (mevedel-queue--current-session))
            (sandbox-request
             (mevedel-tool-exec-permission-effective-sandbox-request
              args "Bash" command nil
@@ -449,7 +451,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
   (let* ((execution-id (plist-get args :execution_id))
          (chars (or (plist-get args :chars) ""))
          (requested-yield-time-ms (plist-get args :yield_time_ms))
-         (session (mevedel-tool-exec-permission-session))
+         (session (mevedel-queue--current-session))
          (owner (mevedel-current-origin))
          (wait-ms (mevedel-tool-exec--write-wait-time-ms args chars)))
     (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
@@ -486,7 +488,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--list-executions (_args)
   "Return yielded executions visible to the current model owner."
-  (let ((session (mevedel-tool-exec-permission-session))
+  (let ((session (mevedel-queue--current-session))
         (owner (mevedel-current-origin)))
     (unless session
       (error "ListExecutions requires an active session"))
@@ -500,7 +502,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 (defun mevedel-tool-exec--stop-execution (callback args)
   "Stop one owner-scoped yielded execution named by ARGS."
   (let ((execution-id (plist-get args :execution_id))
-        (session (mevedel-tool-exec-permission-session))
+        (session (mevedel-queue--current-session))
         (owner (mevedel-current-origin)))
     (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
       (error "Parameter execution_id is required"))
@@ -642,7 +644,7 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (let* ((workdir (mevedel-tool-exec-permission-default-directory))
-         (session (mevedel-tool-exec-permission-session))
+         (session (mevedel-queue--current-session))
          (owner (mevedel-current-origin))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
@@ -725,7 +727,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
         (mode (mevedel-tool-exec-permission-eval-mode args)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
-    (let* ((session (mevedel-tool-exec-permission-session))
+    (let* ((session (mevedel-queue--current-session))
            (request
             (mevedel-tool-exec-permission-effective-sandbox-request
              args "Eval" expression mode

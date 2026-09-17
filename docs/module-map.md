@@ -71,7 +71,7 @@ Data model
   mevedel-tool-repair.el      structured validation and atomic input repair
   mevedel-tool-repair-gptel.el  lossless gptel argument decoding bridge
   mevedel-tool-repair-diagnostics.el  repair audit and telemetry
-  mevedel-queue.el            shared interaction entry metadata
+  mevedel-queue.el            session lookup and interaction entry metadata
   mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
   mevedel-reminders.el        system-reminder staging, delivery and firing policy
   mevedel-history.el          retained reminders and provider response reconstruction

@@ -43,6 +43,47 @@
           (end-of-file nil))))
     (nreverse entries)))
 
+(mevedel-deftest mevedel-tool-exec-permission--capture-permission-origin ()
+  ,test
+  (test)
+  :doc "captures local or data-buffer session without changing the input"
+  (let ((data (generate-new-buffer " *permission-capture-data*"))
+        (dead (generate-new-buffer " *permission-capture-dead*"))
+        (local-session (mevedel-session--create :name "local"))
+        (data-session (mevedel-session--create :name "data")))
+    (unwind-protect
+        (progn
+          (kill-buffer dead)
+          (with-current-buffer data
+            (setq-local mevedel--session data-session))
+          (dolist (link (list data dead nil))
+            (dolist (local (list local-session nil))
+              (with-temp-buffer
+                (setq-local mevedel--session local
+                            mevedel--data-buffer link)
+                (let* ((input (list :command "pwd"))
+                       (captured
+                        (mevedel-tool-exec-permission--capture-permission-origin
+                         input)))
+                  (should (equal '(:command "pwd") input))
+                  (should (eq (or local (and (eq link data) data-session))
+                              (plist-get (plist-get captured :permission-context)
+                                         :session))))))))
+      (when (buffer-live-p data) (kill-buffer data))
+      (when (buffer-live-p dead) (kill-buffer dead))))
+  :doc "explicit session and explicit absence survive ambient session fallback"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "ambient"))
+    (dolist (session (list nil (mevedel-session--create :name "explicit")))
+      (let* ((context (list :session session :origin "/root/worker"
+                            :execution-directory "/captured/"))
+             (input (list :command "pwd" :permission-context context))
+             (captured
+              (mevedel-tool-exec-permission--capture-permission-origin input)))
+        (should (equal context (plist-get captured :permission-context)))
+        (should (eq context (plist-get input :permission-context)))
+        (should-not (eq context (plist-get captured :permission-context)))))))
+
 (mevedel-deftest mevedel-tool-exec-permission--decide ()
   ,test
   (test)
