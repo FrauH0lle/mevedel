@@ -26,18 +26,10 @@
 (defvar gptel-display-buffer-action)
 
 ;; `gptel-request'
-(declare-function gptel--model-name "ext:gptel-request" (model))
-(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
 ;; `mevedel-chat'
-(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
-(declare-function mevedel--chat-buffer
-                  "mevedel-chat"
-                  (session-name &optional create workspace working-directory))
-(declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
-(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (autoload 'mevedel--active-chat-buffer "mevedel-chat")
 (autoload 'mevedel--chat-buffer "mevedel-chat")
 (autoload 'mevedel--patch-buffer "mevedel-chat")
@@ -45,9 +37,6 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-directive-frame'
-(declare-function mevedel-directive-frame-display
-                  "mevedel-directive-frame"
-                  (directive view-buffer &optional focus))
 (autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
 
 ;; `mevedel-directive-plan'
@@ -57,12 +46,8 @@
 (autoload 'mevedel-directive-plan--planning-prompt "mevedel-directive-plan")
 
 ;; `mevedel-directive-request'
-(declare-function mevedel--directive-bound-session-buffer
-                  "mevedel-directive-request" (record workspace))
 (declare-function mevedel--directive-implementation-prompt
                   "mevedel-directive-request" (content directive &optional feedback))
-(declare-function mevedel--directive-session-buffer
-                  "mevedel-directive-request" (directive workspace))
 (declare-function mevedel--discuss-directive-prompt
                   "mevedel-directive-request"
                   (content &optional directive message attempt-index))
@@ -134,10 +119,6 @@
                   "mevedel-instruction-registry" (&optional workspace))
 (defvar mevedel--instruction-state-key-override)
 
-;; `mevedel-models'
-(declare-function mevedel-model-current-provider-label
-                  "mevedel-models" (&optional buffer))
-
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
@@ -147,7 +128,6 @@
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence" (file &optional message workspace))
-(declare-function mevedel--setup-buffer-hooks "mevedel-persistence" (buffer))
 
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-append-implementation-input
@@ -155,23 +135,12 @@
 (autoload 'mevedel-plan-handoff-append-implementation-input
   "mevedel-plan-handoff")
 
-;; `mevedel-skills-core'
-(declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
-
-;; `mevedel-skills-ui'
-(declare-function mevedel-skills-user-visible-skills
-                  "mevedel-skills-ui" (session &optional inline-only))
-
 ;; `mevedel-structs'
-(declare-function mevedel-directive--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-patch
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-p "mevedel-structs" (cl-x))
-(declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-planning-enabled
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
@@ -179,33 +148,14 @@
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective--create
-                  "mevedel-structs" (&rest slots))
-(declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--input-marker-position
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view-enter-directive-scope
-                  "mevedel-view-composer"
-                  (directive action &optional attempt-index workspace))
 (defvar mevedel-view--input-marker)
-
-;; `mevedel-view-disclosure'
-(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--markdown-fontify-mode "mevedel-view-fontify" ())
-
-;; `mevedel-view-render'
-(declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))

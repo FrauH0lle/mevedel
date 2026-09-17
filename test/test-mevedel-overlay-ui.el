@@ -521,8 +521,6 @@
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))
               (should (member '(?v "view-changes") choices))
-              (catch 'captured
-                (mevedel--ov-actions-dispatch directive))
               (should (member '(?A "archive") choices))
               (should-not (member '(?k "clear") choices))
               (setf

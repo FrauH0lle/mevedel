@@ -440,11 +440,13 @@ interactive calls."
                       (if has-activity-p
                           '(?A "archive")
                         '(?k "clear")))
+                     (cycle-choice
+                      (if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
+                          '(?e "expand") '(?e "collapse")))
                      (choices
                      (pcase instruction-type
                        (`reference `((?t "add-tags") (?r "remove-tags") (?l "link") (?u "unlink") (?c "commentary") (?k "clear")
-                                     ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                          '(?e "expand") '(?e "collapse"))))
+                                     ,cycle-choice))
                        (`directive
                         (cond
                           ;; In flight: always reachable activity, and no
@@ -453,8 +455,7 @@ interactive calls."
                           ((memq 'abort actions)
                            `((?a "abort")
                              (?o "activity")
-                             ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                  '(?e "expand") '(?e "collapse"))))
+                             ,cycle-choice))
                           ((memq 'implement-this actions)
                            `(,@(and activity-choice (list activity-choice))
                              ,@(and continue-plan-choice
@@ -462,8 +463,7 @@ interactive calls."
                              (?d "continue-discussion")
                              (?i "implement-this") (?m "modify") ,remove-choice
                              ,@(and settings-choice (list settings-choice))
-                             ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                  '(?e "expand") '(?e "collapse"))))
+                             ,cycle-choice))
                           ((memq 'request-changes actions)
                            `(,@(and activity-choice (list activity-choice))
                              ,@(and continue-plan-choice
@@ -474,8 +474,7 @@ interactive calls."
                              (?w "show-answer") (?c "request-changes") (?p "preview") (?m "modify") ,remove-choice
                                         ,@(and settings-choice
                                                (list settings-choice))
-                                        ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                             '(?e "expand") '(?e "collapse"))))
+                                        ,cycle-choice))
                           ((memq 'retry actions)
                            `(,@(and activity-choice (list activity-choice))
                              ,@(and continue-plan-choice
@@ -484,16 +483,14 @@ interactive calls."
                              (?r "retry") (?m "modify") (?p "preview") ,remove-choice
                                      ,@(and settings-choice
                                             (list settings-choice))
-                                     ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                          '(?e "expand") '(?e "collapse"))))
+                                     ,cycle-choice))
                           (t `(,@(and activity-choice (list activity-choice))
                                ,@(and continue-plan-choice
                                       (list continue-plan-choice))
                                (?d "discuss") (?i "implement") (?t "tags") (?m "modify")
                                (?p "preview") ,remove-choice
                                ,@(and settings-choice (list settings-choice))
-                               ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                    '(?e "expand") '(?e "collapse"))))))))
+                               ,cycle-choice))))))
                     (model-values
                      (and request-owner
                           (mevedel--directive-model-values request-owner)))
@@ -1136,8 +1133,7 @@ directly.  Return nil if no overlays exist at point."
   (let* ((ovs (mevedel--instructions-at (point)))
          (ov-strings (cl-loop for ov in ovs
                               collect (string-trim (overlay-get ov 'before-string))))
-         (ov-map (cl-loop for i below (length ovs)
-                          collect (cons (nth i ov-strings) (nth i ovs))))
+         (ov-map (cl-mapcar #'cons ov-strings ovs))
          selection)
     (if (length> ovs 1)
         (setq selection (completing-read "Choose instruction overlay: " ov-strings))
