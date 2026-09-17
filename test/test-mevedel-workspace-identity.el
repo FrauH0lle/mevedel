@@ -18,7 +18,8 @@
 ;;; Workspace identity
 
 (mevedel-deftest mevedel-workspace-identity-read
-  (:vars* ((root (file-name-as-directory
+  (:vars* ((mevedel-workspace-identity--cache (make-hash-table :test #'equal))
+           (root (file-name-as-directory
                   (make-temp-file "mevedel-workspace-identity-" t))))
    :after-each (delete-directory root t))
   ,test
@@ -55,7 +56,8 @@
     (should-not (mevedel-workspace-identity-read root))))
 
 (mevedel-deftest mevedel-workspace-identity-ensure
-  (:vars* ((root (file-name-as-directory
+  (:vars* ((mevedel-workspace-identity--cache (make-hash-table :test #'equal))
+           (root (file-name-as-directory
                   (make-temp-file "mevedel-workspace-identity-" t))))
    :after-each (delete-directory root t))
   ,test
