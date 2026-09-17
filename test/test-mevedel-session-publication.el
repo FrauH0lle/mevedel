@@ -433,5 +433,91 @@ and its segment path."
       (should ran)
       (should (= 0 reservations)))))
 
+(mevedel-deftest mevedel-session-publication-abandon (:quiet t)
+  ,test
+  (test)
+  :doc "retries interrupted specialized abandonment without accepting lost recovery"
+  (dolist (scenario '(marker-delete payload-delete intent-write missing-without-approval))
+    (let* ((root (make-temp-file "mevedel-abandon-retry-" t))
+           (repair (make-temp-file "mevedel-abandon-source-" t))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id root :root root :name "abandon"))
+           (session (mevedel-session-create "main" workspace))
+           (delete-marker (symbol-function 'mevedel-session-control-fs-delete-file))
+           (delete-payload (symbol-function 'mevedel-session-control-fs-delete-directory))
+           (write-marker (symbol-function 'mevedel-session-durability--write-plist))
+           (confirmations 0)
+           marker payload)
+      (setf (mevedel-session-save-path session) root
+            (mevedel-session-session-id session) "abandon-retry")
+      (unwind-protect
+          (progn
+            (should (mevedel-session-durability-lease-acquire root "abandon" session))
+            (write-region "repair bytes" nil (file-name-concat repair "before.el")
+                          nil 'silent)
+            (mevedel-session-recovery-record-failure session "incomplete rollback" repair)
+            (setq marker (plist-get (mevedel-session-pending-publication session)
+                                    :manual-recovery-marker)
+                  payload (plist-get (mevedel-session-pending-publication session)
+                                     :manual-recovery))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _) (cl-incf confirmations) t)))
+              (ert-info ((format "Abandonment failure %s" scenario))
+                (if (eq scenario 'missing-without-approval)
+                    (progn
+                      (delete-directory payload t)
+                      (should (string-match-p
+                               "Invalid specialized recovery marker"
+                               (error-message-string
+                                (should-error (mevedel-session-publication-abandon session)))))
+                      (should (= confirmations 0)))
+                  (cl-letf (((symbol-function 'mevedel-session-control-fs-delete-file)
+                             (lambda (path)
+                               (if (and (eq scenario 'marker-delete) (equal path marker))
+                                   (error "Injected abandonment failure")
+                                 (funcall delete-marker path))))
+                            ((symbol-function 'mevedel-session-control-fs-delete-directory)
+                             (lambda (path)
+                               (if (and (eq scenario 'payload-delete) (equal path payload))
+                                   (error "Injected abandonment failure")
+                                 (funcall delete-payload path))))
+                            ((symbol-function 'mevedel-session-durability--write-plist)
+                             (lambda (path data)
+                               (if (and (eq scenario 'intent-write) (equal path marker))
+                                   (error "Injected abandonment failure")
+                                 (funcall write-marker path data)))))
+                    (should (equal "Injected abandonment failure"
+                                   (error-message-string
+                                    (should-error
+                                     (mevedel-session-publication-abandon session))))))
+                  (should (file-exists-p marker))
+                  (if (eq scenario 'marker-delete)
+                      (should-not (file-exists-p payload))
+                    (should (equal "repair bytes"
+                                   (mevedel-session-artifacts-read-file-raw
+                                    (file-name-concat payload "before.el")))))
+                  ;; Reconstruct the pending state from disk, as after client loss.
+                  (setf (mevedel-session-pending-publication session) nil)
+                  (mevedel-session-recovery-refresh session)
+                  (should (mevedel-session-pending-publication session))
+                  (with-temp-buffer
+                    (setq-local mevedel--session session)
+                    (should-error
+                     (mevedel-session-artifacts-assert-mutation-authority
+                      session (current-buffer))
+                     :type 'user-error))
+                  (should (= confirmations 1))
+                  (should (mevedel-session-publication-abandon session))
+                  (should (= confirmations 2))
+                  (should-not (file-exists-p marker))
+                  (should-not (file-exists-p payload))
+                  (should-not (mevedel-session-recovery-read root))
+                  (should-not (mevedel-session-pending-publication session))))))
+        (mevedel-session-durability--cancel-renewal session)
+        (when (file-directory-p repair) (delete-directory repair t))
+        (delete-directory root t)
+        (mevedel-session-durability-forget-removed-session session)
+        (mevedel-workspace-clear-registry)))))
+
 (provide 'test-mevedel-session-publication)
 ;;; test-mevedel-session-publication.el ends here

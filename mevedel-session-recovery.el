@@ -125,7 +125,8 @@ recovery does not discover session buffers by scanning Emacs global state."
 
 (defun mevedel-session-recovery--read-marker
     (session-dir marker-path)
-  "Read and validate target recovery MARKER-PATH for SESSION-DIR."
+  "Read and validate target recovery MARKER-PATH for SESSION-DIR.
+An abandonment marker may outlive its explicitly discarded directory."
   (setq marker-path
         (mevedel-session-control-fs-physical-path marker-path))
   ;; The name is validated before anything is read: a junk entry must
@@ -135,22 +136,30 @@ recovery does not discover session buffers by scanning Emacs global state."
     (error "Invalid specialized recovery marker: %s" marker-path))
   (let* ((root (mevedel-session-recovery--root session-dir))
          (marker (mevedel-session-durability--read-plist marker-path))
+         (abandoning (plist-get marker :abandoning))
          (relative (and marker (plist-get marker :directory)))
          (directory (and relative
                          (expand-file-name relative session-dir))))
     (unless (and (proper-list-p marker)
                  (equal (plist-get marker :version) 1)
                  (eq (plist-get marker :kind) 'rewind)
+                 (memq abandoning '(nil t))
                  (stringp (plist-get marker :reason))
                  (mevedel-session-recovery--valid-directory-p
                   relative)
-                 (mevedel-session-control-fs-directory-p directory)
+                 (or (mevedel-session-control-fs-directory-p directory)
+                     (and abandoning
+                          (not (mevedel-session-control-fs-path-exists-p directory))))
                  (file-in-directory-p directory root))
       (error "Invalid specialized recovery marker: %s" marker-path))
     (list :marker marker-path
           :directory directory
           :relative-directory relative
-          :reason (plist-get marker :reason)
+          :abandoning abandoning
+          :reason (if abandoning
+                      (format "Recovery abandonment is incomplete: %s"
+                              (plist-get marker :reason))
+                    (plist-get marker :reason))
           :kind (plist-get marker :kind)
           :created-at (plist-get marker :created-at))))
 
@@ -342,6 +351,16 @@ so a later explicit abandonment can remove both sources safely."
      (let ((session-dir (mevedel-session-save-path session)))
        (dolist (recovery
                 (mevedel-session-recovery--markers session-dir))
+         ;; Persist the approved deletion before touching bytes.  A surviving
+         ;; marker remains actionable even if its directory is already gone.
+         (unless (plist-get recovery :abandoning)
+           (mevedel-session-durability--write-plist
+            (plist-get recovery :marker)
+            (list :version 1 :kind (plist-get recovery :kind)
+                  :directory (plist-get recovery :relative-directory)
+                  :reason (plist-get recovery :reason)
+                  :created-at (plist-get recovery :created-at)
+                  :abandoning t)))
          (mevedel-session-control-fs-delete-directory
           (plist-get recovery :directory))
          (when (mevedel-session-control-fs-directory-p

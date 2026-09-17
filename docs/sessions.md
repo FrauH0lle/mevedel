@@ -747,7 +747,11 @@ path. Target recovery is not a publication artifact: `.recovery/` is excluded
 from immutable publications, Rewind materialization, forks, and Save As
 clones. Explicit abandonment is destructive and removes the target marker and
 bytes (or the retained local fallback) while holding the session lease. A
-successful rollback leaves no recovery tree.
+successful rollback leaves no recovery tree. Abandonment records the approved
+deletion in the marker before removing bytes. If cleanup stops partway through,
+the marker still blocks mutation and explicit abandonment can retry, even after
+the payload directory is gone. Missing bytes without that recorded intent remain
+an invalid recovery marker.
 
 Critical publication changes the owned generation to `publishing` and reserves
 a one-hour ownership window before each artifact.  Timer callbacks perform no
