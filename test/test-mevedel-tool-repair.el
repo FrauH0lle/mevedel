@@ -166,6 +166,41 @@
                "value must be at most 3600000"
                (mevedel-tool-repair-format-issues tool issues)))))
 
+  :doc "preserves presence and null rules at root and nested properties"
+  (dolist (nested '(nil t))
+    (dolist (required '(nil t))
+      (dolist (raw '(nil t))
+        (let* ((mevedel-tool-repair--raw-input-p raw)
+               (tool
+                (mevedel-tool--create
+                 :name "Presence"
+                 :args (if nested
+                           `((config object :required "Config"
+                                     :properties (:value (:type string))
+                                     :required ,(if required ["value"] [])))
+                         `((value string ,(if required :required :optional)
+                                  "Value")))))
+               (path (if nested '(config value) '(value))))
+          ;; Columns: input, required issue, optional issue, raw optional issue.
+          (dolist (entry '((nil missing-required nil nil)
+                           ((:value nil) missing-required nil optional-null)
+                           ((:value :null) missing-required wrong-type optional-null)
+                           ((:value "ok") nil nil nil)
+                           ((:value 42) wrong-type wrong-type wrong-type)
+                           ((:value []) wrong-type wrong-type wrong-type)))
+            (let* ((args (car entry))
+                   (expected (nth (cond (required 1) (raw 3) (t 2)) entry))
+                   (issues
+                    (mevedel-tool-repair-validate
+                     tool (if nested
+                              (list :config (append args '(:ignored t)))
+                            args))))
+              (should (equal (and expected (list expected))
+                             (mapcar (lambda (issue) (plist-get issue :kind))
+                                     issues)))
+              (when expected
+                (should (equal path (plist-get (car issues) :path))))))))))
+
   :doc "fails closed for unsupported schema types"
   (let ((tool
          (mevedel-tool--create

@@ -64,29 +64,23 @@
       (plist-put tool-call :args
                  (mevedel-tool-repair--preserve-empty-objects args)))))
 
+(defconst mevedel-tool-repair--shape-advice
+  '((gptel--parse-response :around mevedel-tool-repair--with-lossless-json)
+    (gptel-curl--parse-stream :around mevedel-tool-repair--with-lossless-json)
+    (json-parse-string :around mevedel-tool-repair--json-parse-string)
+    (gptel--handle-pre-tool :before mevedel-tool-repair--restore-argument-shapes))
+  "Native functions, advice positions and lossless argument adapters.")
+
 (defun mevedel-tool-repair-install-shape-adapter ()
   "Install the temporary lossless gptel tool-input adapter."
-  (dolist (spec '((gptel--parse-response :around
-                                          mevedel-tool-repair--with-lossless-json)
-                  (gptel-curl--parse-stream :around
-                                            mevedel-tool-repair--with-lossless-json)
-                  (json-parse-string :around
-                                     mevedel-tool-repair--json-parse-string)
-                  (gptel--handle-pre-tool :before
-                                          mevedel-tool-repair--restore-argument-shapes)))
+  (dolist (spec mevedel-tool-repair--shape-advice)
     (unless (advice-member-p (nth 2 spec) (car spec))
       (advice-add (car spec) (cadr spec) (nth 2 spec)))))
 
 (defun mevedel-tool-repair-uninstall-shape-adapter ()
   "Remove the temporary lossless gptel tool-input adapter."
-  (dolist (spec '((gptel--parse-response
-                   mevedel-tool-repair--with-lossless-json)
-                  (gptel-curl--parse-stream
-                   mevedel-tool-repair--with-lossless-json)
-                  (json-parse-string mevedel-tool-repair--json-parse-string)
-                  (gptel--handle-pre-tool
-                   mevedel-tool-repair--restore-argument-shapes)))
-    (advice-remove (car spec) (cadr spec))))
+  (dolist (spec mevedel-tool-repair--shape-advice)
+    (advice-remove (car spec) (nth 2 spec))))
 
 (provide 'mevedel-tool-repair-gptel)
 

@@ -172,11 +172,6 @@
                       (= 0 (hash-table-count value)))))
     (_ (error "Unsupported tool schema type: %S" type))))
 
-(defun mevedel-tool-repair--resource-address-like-p (value)
-  "Return non-nil when VALUE begins with a resource-like scheme prefix."
-  (when (stringp value)
-    (mevedel-resource-address-like-p value)))
-
 (defun mevedel-tool-repair--issue (path kind expected actual &optional schema)
   "Return a structured validation issue."
   (list :path path :kind kind :expected expected :actual actual
@@ -202,6 +197,21 @@
            (mevedel-tool-repair--assert-schema-supported
             (pop properties))))))))
 
+(defun mevedel-tool-repair--validate-property
+    (schema value path required present)
+  "Validate property VALUE at PATH using SCHEMA, REQUIRED and PRESENT.
+Raw model input distinguishes explicit null from an omitted optional value."
+  (cond
+   ((and required (mevedel-tool-repair--null-p value))
+    (list (mevedel-tool-repair--issue
+           path 'missing-required (plist-get schema :type) 'missing schema)))
+   ((and mevedel-tool-repair--raw-input-p present
+         (mevedel-tool-repair--null-p value))
+    (list (mevedel-tool-repair--issue
+           path 'optional-null (plist-get schema :type) 'null schema)))
+   ((and present value)
+    (mevedel-tool-repair--validate-schema schema value path))))
+
 (defun mevedel-tool-repair--validate-properties (schema value path)
   "Validate declared object properties in VALUE at PATH against SCHEMA."
   (let ((properties (plist-get schema :properties))
@@ -217,30 +227,11 @@
              (present (and (listp value) (plist-member value key)))
              (property-value (and present (plist-get value key)))
              (property-path (append path (list name))))
-        (cond
-         ((and (memq name required)
-               (mevedel-tool-repair--null-p property-value))
-          (setq issues
-                (append issues
-                        (list
-                         (mevedel-tool-repair--issue
-                          property-path 'missing-required
-                          (plist-get property-schema :type) 'missing
-                          property-schema)))))
-         ((and mevedel-tool-repair--raw-input-p present
-               (mevedel-tool-repair--null-p property-value))
-          (setq issues
-                (append issues
-                        (list
-                         (mevedel-tool-repair--issue
-                          property-path 'optional-null
-                          (plist-get property-schema :type) 'null
-                          property-schema)))))
-         ((and present property-value)
-          (setq issues
-                (append issues
-                        (mevedel-tool-repair--validate-schema
-                         property-schema property-value property-path)))))))
+        (setq issues
+              (append issues
+                      (mevedel-tool-repair--validate-property
+                       property-schema property-value property-path
+                       (memq name required) present)))))
     issues))
 
 (defun mevedel-tool-repair--validate-array (schema value path)
@@ -284,7 +275,7 @@
                (mevedel-tool-repair--actual-type value) schema)
               issues))
       (when (and (eq type 'path)
-                 (mevedel-tool-repair--resource-address-like-p value))
+                 (mevedel-resource-address-like-p value))
         (push (mevedel-tool-repair--issue
                path 'resource-address 'path 'string schema)
               issues))
@@ -364,26 +355,10 @@ positional dispatch, which represents omitted optional arguments as nil."
                                     (list :mevedel-optional t))
                                (nthcdr 4 spec))))
           (push name known-names)
-          (cond
-           ((and required (mevedel-tool-repair--null-p value))
-            (setq issues
-                  (append issues
-                          (list
-                           (mevedel-tool-repair--issue
-                            (list name) 'missing-required type 'missing
-                            schema)))))
-           ((and mevedel-tool-repair--raw-input-p present
-                 (mevedel-tool-repair--null-p value))
-            (setq issues
-                  (append issues
-                          (list
-                           (mevedel-tool-repair--issue
-                            (list name) 'optional-null type 'null schema)))))
-           ((and present value)
-            (setq issues
-                  (append issues
-                          (mevedel-tool-repair--validate-schema
-                           schema value (list name))))))))
+          (setq issues
+                (append issues
+                        (mevedel-tool-repair--validate-property
+                         schema value (list name) required present)))))
       (append issues
               (mevedel-tool-repair--unexpected-issues
                args (nreverse known-names))))))
@@ -608,18 +583,12 @@ positional dispatch, which represents omitted optional arguments as nil."
       (let* ((issues (mevedel-tool-repair--validate-raw tool candidate))
              (change
               (and issues
-                   (or (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'omit-optional-null)
-                       (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'parse-json-value)
-                       (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'wrap-array-singleton)
-                       (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'empty-array-placeholder)
-                       (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'unwrap-path-autolink)
-                       (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'clamp-range)))))
+                   (cl-loop for rule in '(omit-optional-null parse-json-value
+                                          wrap-array-singleton
+                                          empty-array-placeholder
+                                          unwrap-path-autolink clamp-range)
+                            thereis (mevedel-tool-repair--apply-rule
+                                     tool candidate issues rule)))))
         (if (null change)
             (setq done t)
           (let ((updated (plist-get change :args)))
