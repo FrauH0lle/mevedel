@@ -32,11 +32,16 @@ The model returns compact JSON with three fields:
 | --- | --- |
 | `risk` | `low`, `medium`, `high`, or `critical`: the command's potential effect |
 | `recommendation` | `proceed`, `ask`, or `deny`: whether uncertainty or severity warrants intervention |
-| `reason` | A nonempty explanation of the decisive effect, normalized to at most 240 characters |
+| `reason` | A nonempty explanation of the decisive effect, trimmed and truncated after 240 characters with `...` appended when longer |
 
 A custom classifier receives `(COMMAND CONTEXT CALLBACK)` and calls CALLBACK
 with nil or the equivalent keyword plist. Receiving guidance never means the
 operation has run or been authorized.
+
+The classifier entry point owns the timeout and delivers one normalized result
+for both custom and model classifiers. Failure or timeout settles with unavailable
+guidance; late or repeated responses cannot replace that result. The model
+adapter only constructs the isolated request and decodes its response events.
 
 Risk and recommendation are separate. Confinement may affect the practical
 recommendation but does not lower the stated risk. A network capability request

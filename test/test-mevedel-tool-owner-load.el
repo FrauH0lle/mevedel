@@ -46,6 +46,38 @@
                                      'defun)
                         ""))
                  (error "Bash policy behavior has the wrong owner"))))
+            (guardian
+             (progn
+               (require 'mevedel-bash-policy)
+               (let* ((directory (make-temp-file "mevedel-cold-guardian-" t))
+                      (workspace (mevedel-workspace--create
+                                  :type 'test :id directory :root directory
+                                  :name "cold-guardian"))
+                      (mevedel-permission-guardian t)
+                      results)
+                 (unwind-protect
+                     (progn
+                       (cl-letf (((symbol-function 'gptel-request)
+                                  (lambda (_prompt &rest args)
+                                    (let ((callback (plist-get args :callback)))
+                                      (funcall callback
+                                               "{\"risk\":\"high\",\"recommendation\":\"ask\",\"reason\":\"Inspect scope.\"}"
+                                               nil)
+                                      (funcall callback 'abort nil)))))
+                         (mevedel-bash-policy-guardian-classify-async
+                          "make test"
+                          (list :workspace workspace :working-directory directory)
+                          (lambda (value) (push value results))))
+                       (unless (equal '((:risk high :recommendation ask
+                                         :reason "Inspect scope.")) results)
+                         (error "Cold guardian did not settle once: %S" results))
+                       (unless (string-suffix-p
+                                "mevedel-bash-policy.elc"
+                                (or (symbol-file
+                                     'mevedel-bash-policy-guardian-classify-async
+                                     'defun) ""))
+                         (error "Guardian did not load its compiled owner")))
+                   (delete-directory directory t)))))
             (exec-permission
              (progn
                (require 'mevedel-structs)

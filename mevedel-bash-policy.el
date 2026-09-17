@@ -798,18 +798,15 @@ authorize dangerous or complex syntax."
       (and end (substring text start (1+ end))))))
 
 (defun mevedel-bash-policy--bash-guardian-parse (response)
-  "Parse guardian RESPONSE into normalized guidance, or nil."
+  "Decode guardian RESPONSE as a JSON plist, or return nil."
   (when (stringp response)
     (when-let* ((json (mevedel-bash-policy--bash-guardian-json-range response)))
       (condition-case nil
-          (mevedel-bash-policy--bash-guardian-normalize
-           (progn
-             (require 'json)
-             (json-parse-string json
-                                :object-type 'plist
-                                :array-type 'list
-                                :null-object nil
-                                :false-object nil)))
+          (json-parse-string json
+                             :object-type 'plist
+                             :array-type 'list
+                             :null-object nil
+                             :false-object nil)
         (error nil)))))
 
 (defun mevedel-bash-policy-guardian-context-string (context)
@@ -856,91 +853,58 @@ authorize dangerous or complex syntax."
 
 (defun mevedel-bash-policy--bash-guardian-model-async (command context callback)
   "Ask gptel for advisory-only Bash risk guidance about COMMAND.
-CONTEXT describes the classifier inputs.  CALLBACK receives normalized
-guidance or nil."
-  (if (not (require 'gptel nil t))
-      (funcall callback nil)
-    (let ((done nil)
-          chunks
-          timer)
-      (cl-labels
-          ((finish (guidance)
-             (unless done
-               (setq done t)
-               (when timer
-                 (cancel-timer timer))
-               (funcall callback guidance))))
-        (setq timer
-              (run-at-time
-               mevedel-permission-guardian-timeout nil
-               (lambda ()
-                 (finish nil))))
-        (condition-case nil
-            (let* ((policy
-                    (progn
-                      (require 'mevedel-models)
-                      (mevedel-model-resolve-workload 'guardian)))
-                   (gptel-use-tools nil)
-                   (gptel-tools nil)
-                   (gptel-use-context nil)
-                   (system-prompt
-                    (progn
-                      (require 'mevedel-system)
-                      (mevedel-system-build-prompt
-                       'bash-guardian
-                       :workspace (plist-get context :workspace)
-                       :working-directory
-                       (plist-get context :working-directory)
-                       :session (plist-get context :session))))
-                   (prompt
-                    (format
-                     "Bash source:\n```bash\n%s\n```\n\nDeterministic analysis and confinement evidence:\n```text\n%s\n```"
-                     command
-                     (mevedel-bash-policy-guardian-context-string
-                      context)))
-                   (request-fn
-                    (lambda ()
-                      (gptel-request
-                       prompt
-                       :buffer (current-buffer)
-                       :stream gptel-stream
-                       :system system-prompt
-                       :transforms nil
-                       :callback
-                       (lambda (response info)
-                         (cond
-                          ((and (consp response)
-                                (eq (car response) 'reasoning)))
-                          ((and (plist-get info :stream)
-                                (stringp response))
-                           (push response chunks))
-                          ((eq response t)
-                           (finish
-                            (mevedel-bash-policy--bash-guardian-parse
-                             (apply #'concat (nreverse chunks)))))
-                          ((stringp response)
-                           (finish
-                            (mevedel-bash-policy--bash-guardian-parse response)))
-                          ((or (null response) (eq response 'abort))
-                           (finish nil))))))))
-              (let ((gptel-backend (plist-get policy :backend))
-                    (gptel-model (plist-get policy :model))
-                    (gptel-reasoning-effort (plist-get policy :effort)))
-                (funcall request-fn)))
-          (error
-           (finish nil)))))))
+CONTEXT describes the classifier inputs.  CALLBACK receives parsed guidance
+or nil; the classifier entry point owns timeout and settlement."
+  (let* ((policy (mevedel-model-resolve-workload 'guardian))
+         (gptel-use-tools nil)
+         (gptel-tools nil)
+         (gptel-use-context nil)
+         (system-prompt
+          (mevedel-system-build-prompt
+           'bash-guardian
+           :workspace (plist-get context :workspace)
+           :working-directory (plist-get context :working-directory)
+           :session (plist-get context :session)))
+         (prompt
+          (format
+           "Bash source:\n```bash\n%s\n```\n\nDeterministic analysis and confinement evidence:\n```text\n%s\n```"
+           command (mevedel-bash-policy-guardian-context-string context)))
+         (gptel-backend (plist-get policy :backend))
+         (gptel-model (plist-get policy :model))
+         (gptel-reasoning-effort (plist-get policy :effort))
+         chunks)
+    (gptel-request
+     prompt
+     :buffer (current-buffer)
+     :stream gptel-stream
+     :system system-prompt
+     :transforms nil
+     :callback
+     (lambda (response info)
+       (cond
+        ((and (consp response) (eq (car response) 'reasoning)))
+        ((and (plist-get info :stream) (stringp response))
+         (push response chunks))
+        ((eq response t)
+         (funcall callback
+                  (mevedel-bash-policy--bash-guardian-parse
+                   (apply #'concat (nreverse chunks)))))
+        ((stringp response)
+         (funcall callback
+                  (mevedel-bash-policy--bash-guardian-parse response)))
+        ((or (null response) (eq response 'abort))
+         (funcall callback nil)))))))
 
 (defun mevedel-bash-policy-guardian-classify-async
     (command context callback)
   "Return optional guardian guidance for COMMAND and CONTEXT.
-CALLBACK receives nil or a normalized guidance plist."
+CALLBACK receives nil or a normalized guidance plist exactly once, whether
+classification uses gptel or a custom function."
   (require 'gptel)
   (require 'mevedel-models)
   (require 'mevedel-system)
-  (cond
-   ((null mevedel-permission-guardian)
-    (funcall callback nil))
-   ((functionp mevedel-permission-guardian)
+  (if (null mevedel-permission-guardian)
+      (funcall callback nil)
     (let ((done nil)
           timer)
       (cl-labels
@@ -958,12 +922,12 @@ CALLBACK receives nil or a normalized guidance plist."
                (lambda ()
                  (finish nil))))
         (condition-case nil
-            (funcall mevedel-permission-guardian command context #'finish)
+            (funcall (if (functionp mevedel-permission-guardian)
+                         mevedel-permission-guardian
+                       #'mevedel-bash-policy--bash-guardian-model-async)
+                     command context #'finish)
           (error
-           (finish nil))))))
-   (t
-    (mevedel-bash-policy--bash-guardian-model-async
-     command context callback))))
+           (finish nil)))))))
 
 (defun mevedel-bash-policy-full-auto-guardian-needed-p
     (command &optional permission-context)
