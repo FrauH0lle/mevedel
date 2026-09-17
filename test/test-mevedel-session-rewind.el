@@ -16,50 +16,32 @@
 (mevedel-deftest mevedel-session-rewind--refresh-restored-buffers ()
   ,test
   (test)
-  :doc "reverts unmodified visiting buffers after file restore"
-  (let* ((tempdir (make-temp-file "mevedel-refresh-" t))
-         (file (file-name-concat tempdir "source.el"))
-         (buf nil))
-    (unwind-protect
-        (progn
-          (write-region "old\n" nil file nil 'silent)
-          (setq buf (find-file-noselect file))
-          (write-region "new\n" nil file nil 'silent)
-          (mevedel-session-rewind--refresh-restored-buffers
-           (list (list :action 'restore :path file))
-           (list :succeeded 1))
-          (with-current-buffer buf
-            (should (equal "new\n"
-                           (buffer-substring-no-properties
-                            (point-min) (point-max))))))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf (set-buffer-modified-p nil))
-        (kill-buffer buf))
-      (delete-directory tempdir t)))
-  :doc "reverts modified visiting buffers after confirmed file restore"
-  (let* ((tempdir (make-temp-file "mevedel-refresh-" t))
-         (file (file-name-concat tempdir "source.el"))
-         (buf nil))
-    (unwind-protect
-        (progn
-          (write-region "old\n" nil file nil 'silent)
-          (setq buf (find-file-noselect file))
-          (with-current-buffer buf
-            (goto-char (point-max))
-            (insert "local\n"))
-          (write-region "new\n" nil file nil 'silent)
-          (mevedel-session-rewind--refresh-restored-buffers
-           (list (list :action 'restore :path file))
-           (list :succeeded 1))
-          (with-current-buffer buf
-            (should-not (buffer-modified-p))
-            (should (equal "new\n"
-                           (buffer-substring-no-properties
-                            (point-min) (point-max))))))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf (set-buffer-modified-p nil))
-        (kill-buffer buf))
-      (delete-directory tempdir t)))
+  :doc "reverts visiting buffers after file restore, including confirmed local edits"
+  (dolist (modified '(nil t))
+    (let* ((tempdir (make-temp-file "mevedel-refresh-" t))
+           (file (file-name-concat tempdir "source.el"))
+           (buf nil))
+      (unwind-protect
+          (progn
+            (write-region "old\n" nil file nil 'silent)
+            (setq buf (find-file-noselect file))
+            (when modified
+              (with-current-buffer buf
+                (goto-char (point-max))
+                (insert "local\n")))
+            (write-region "new\n" nil file nil 'silent)
+            (mevedel-session-rewind--refresh-restored-buffers
+             (list (list :action 'restore :path file))
+             (list :succeeded 1))
+            (with-current-buffer buf
+              (should-not (buffer-modified-p))
+              (should (equal "new\n"
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))))))
+        (when (buffer-live-p buf)
+          (with-current-buffer buf (set-buffer-modified-p nil))
+          (kill-buffer buf))
+        (delete-directory tempdir t))))
   :doc "kills visiting buffers for deleted restored files"
   (let* ((tempdir (make-temp-file "mevedel-refresh-" t))
          (file (file-name-concat tempdir "source.el"))
