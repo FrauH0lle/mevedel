@@ -4939,6 +4939,19 @@
   ,test
   (test)
 
+  :doc "handles empty, singleton, adjacent, and interrupted batches"
+  (dolist (case '((nil nil)
+                 ((nil) nil)
+                 ((1) ("  \u2500 "))
+                 ((nil 1 nil) ("    " "  \u2500 " "    "))
+                 ((1 2 2 1) ("  \u2500 " "  \u250c " "  \u2514 " "  \u2500 "))
+                 ((1 nil 1) ("  \u2500 " "    " "  \u2500 "))
+                 (("join" "join") ("  \u250c " "  \u2514 "))))
+    (let* ((children (mapcar (lambda (batch) (list :batch batch)) (car case)))
+           (before (copy-tree children)))
+      (should (equal (cadr case) (mevedel-view--child-call-prefixes children)))
+      (should (equal before children))))
+
   :doc "gives a sequence-only block no glyph gutter"
   (should-not (mevedel-view--child-call-prefixes
                '((:id "a" :batch nil) (:id "b" :batch nil))))
