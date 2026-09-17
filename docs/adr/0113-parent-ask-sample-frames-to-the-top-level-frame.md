@@ -20,9 +20,12 @@ visible above it, and `mevedel-directive-frame--anchor' already flips a frame
 above its anchor when there is no room below. Clipping has no such escape hatch.
 
 Anchor coordinates computed inside the directive frame must be translated into
-top-level native-frame coordinates. Both sample and directive placement subtract
-the parent's native origin, obtained through `frame-edges`, from display
-coordinates returned by `window-absolute-pixel-position`.
+top-level native-frame coordinates. Sample placement first subtracts the source
+frame's native origin from `window-absolute-pixel-position`, then walks its
+parents using each child's parent-relative `left` and `top` plus the difference
+between its native and outer edges. This avoids depending on the child's global
+display origin. The top-level case, including directive placement, needs only
+the source native-origin subtraction.
 
 ## Decision history
 
@@ -32,3 +35,9 @@ the parent did not sit at the display origin. It described correcting that
 before implementing sample frames. Both paths now perform the translation;
 the implemented reference is native frame edges rather than the original
 record's proposed `frame-position` subtraction.
+
+A native PGTK acceptance run later reproduced sample parenting to the directive
+frame, despite the decision above. It also observed a child at `(80, 100)` whose
+reported native origin was `(-1, -1)` before its geometry settled. Sample creation
+now walks to the top-level parent, and placement composes parent-relative offsets
+instead of assuming that different frames report consistent display origins.

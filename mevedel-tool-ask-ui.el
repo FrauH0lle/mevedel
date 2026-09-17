@@ -268,33 +268,42 @@ reopens -- cheaper than tracking which overlay owns it."
 (defun mevedel-tool-ask-ui--sample-place (frame parent window position)
   "Size and place FRAME in PARENT under buffer POSITION in WINDOW."
   (when-let* ((pixels (window-absolute-pixel-position position window)))
-    ;; `window-absolute-pixel-position' answers in display coordinates
-    ;; while a child frame's position is relative to its parent's native
-    ;; frame.  See docs/adr/0113.
-    (let* ((native (frame-edges parent 'native-edges))
+    (let* ((source (window-frame window))
+           (native (frame-edges source 'native-edges))
            (char-height (frame-char-height parent))
            (parent-width (frame-pixel-width parent))
            (parent-height (frame-pixel-height parent))
            (width (round (* mevedel-ask-sample-frame-width parent-width)))
            (height (* mevedel-ask-sample-frame-height char-height))
            (anchor-x (- (car pixels) (nth 0 native)))
-           (anchor-y (- (cdr pixels) (nth 1 native)))
-           (below (+ anchor-y char-height))
-           (x (max 0 (min anchor-x (- parent-width width))))
-           ;; Flip above the form when there is no room below it.
-           (y (if (<= (+ below height) parent-height)
-                  below
-                (max 0 (- anchor-y height)))))
-      (set-frame-size frame width height t)
-      (set-frame-position frame x y)
-      ;; `vertically' only: fitting both dimensions widens the frame to
-      ;; the sample's longest unwrapped line, which a code block readily
-      ;; pushes past the parent.
-      (fit-frame-to-buffer frame
-                           mevedel-ask-sample-frame-height
-                           mevedel-ask-sample-frame-min-height
-                           nil nil 'vertically)
-      t)))
+           (anchor-y (- (cdr pixels) (nth 1 native))))
+      ;; Translate from each child's native origin through its parent-relative
+      ;; outer position.  Display origins for child frames can be unavailable
+      ;; on Wayland; only differences within the same frame are reliable.
+      (while (not (eq source parent))
+        (let ((outer (frame-edges source 'outer-edges)))
+          (cl-incf anchor-x (+ (frame-parameter source 'left)
+                              (- (car native) (car outer))))
+          (cl-incf anchor-y (+ (frame-parameter source 'top)
+                              (- (cadr native) (cadr outer)))))
+        (setq source (frame-parent source)
+              native (frame-edges source 'native-edges)))
+      (let* ((below (+ anchor-y char-height))
+             (x (max 0 (min anchor-x (- parent-width width))))
+             ;; Flip above the form when there is no room below it.
+             (y (if (<= (+ below height) parent-height)
+                    below
+                  (max 0 (- anchor-y height)))))
+        (set-frame-size frame width height t)
+        (set-frame-position frame x y)
+        ;; `vertically' only: fitting both dimensions widens the frame to
+        ;; the sample's longest unwrapped line, which a code block readily
+        ;; pushes past the parent.
+        (fit-frame-to-buffer frame
+                             mevedel-ask-sample-frame-height
+                             mevedel-ask-sample-frame-min-height
+                             nil nil 'vertically)
+        t))))
 
 (defun mevedel-tool-ask-ui--sample-show (sample overlay index)
   "Show SAMPLE in a child frame under question INDEX's block in OVERLAY.
@@ -311,6 +320,8 @@ the frame instead when the block is not on screen."
         (mevedel-tool-ask-ui--sample-close)
       (let ((parent (window-frame window))
             (work (mevedel-tool-ask-ui--sample-work-buffer)))
+        (while (frame-parent parent)
+          (setq parent (frame-parent parent)))
         (with-current-buffer work
           (let ((inhibit-read-only t))
             (erase-buffer)
