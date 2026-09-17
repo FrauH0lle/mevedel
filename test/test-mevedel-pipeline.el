@@ -3751,28 +3751,6 @@ cover, so the permission step's warning about it is captured here."
 
 
 ;;
-;;; Args conversion
-
-(mevedel-deftest mevedel-pipeline--positional-to-plist ()
-		 ,test
-		 (test)
-		 :doc "converts positional args to plist"
-		 (let ((specs '((name string :required "Name")
-				(count integer :optional "Count")))
-		       (values '("hello" 42)))
-		   (should (equal (mevedel-pipeline--positional-to-plist values specs)
-				  '(:name "hello" :count 42))))
-		 :doc "handles empty args"
-		 (should (null (mevedel-pipeline--positional-to-plist nil nil)))
-		 :doc "handles fewer values than specs"
-		 (let ((specs '((a string :required "A")
-				(b string :required "B")))
-		       (values '("only-one")))
-		   (should (equal (mevedel-pipeline--positional-to-plist values specs)
-				  '(:a "only-one")))))
-
-
-;;
 ;;; Pipeline wrapper via mevedel-define-tool
 
 (mevedel-deftest mevedel-pipeline--define-tool-wrapper

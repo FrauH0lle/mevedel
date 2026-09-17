@@ -38,12 +38,12 @@
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--positional-to-plist
-                  "mevedel-pipeline" (raw-args specs))
 (declare-function mevedel-pipeline-run-tool
                   "mevedel-pipeline" (tool callback args))
 
 ;; `mevedel-tool-registry'
+(declare-function mevedel-tool--positional-to-plist
+                  "mevedel-tool-registry" (raw-args specs))
 (declare-function mevedel-tool--resolve-prompt
                   "mevedel-tool-registry" (prompt))
 (declare-function mevedel-tool-register "mevedel-tool-registry" (tool))

@@ -404,6 +404,24 @@
          (properties (plist-get (car mevedel-args) :properties)))
     (should (eq 'string (plist-get (plist-get properties :type) :type)))))
 
+(mevedel-deftest mevedel-tool--positional-to-plist ()
+  ,test
+  (test)
+  :doc "converts positional args to plist"
+  (let ((specs '((name string :required "Name")
+                 (count integer :optional "Count")))
+        (values '("hello" 42)))
+    (should (equal (mevedel-tool--positional-to-plist values specs)
+                   '(:name "hello" :count 42))))
+  :doc "handles empty args"
+  (should (null (mevedel-tool--positional-to-plist nil nil)))
+  :doc "handles fewer values than specs"
+  (let ((specs '((a string :required "A")
+                 (b string :required "B")))
+        (values '("only-one")))
+    (should (equal (mevedel-tool--positional-to-plist values specs)
+                   '(:a "only-one")))))
+
 
 ;;
 ;;; JSON boolean truthiness
@@ -865,6 +883,90 @@
       (let ((tool (mevedel-tool--create :name (car spec) :category (cadr spec))))
         (mevedel-tool-register tool)
         (should (eq (not (null (mevedel-tool-callable-p tool))) (nth 2 spec)))))))
+
+(mevedel-deftest mevedel-define-tool/cold-dispatch ()
+  ,test
+  (test)
+  :doc "native and wrapped tools dispatch from fresh source and compiled registries"
+  (let* ((root (file-name-directory (locate-library "mevedel")))
+         (compiled-root (make-temp-file "mevedel-cold-registry-" t))
+         (emacs (expand-file-name invocation-name invocation-directory))
+         (source (file-name-concat compiled-root "mevedel-tool-registry.el")))
+    (unwind-protect
+        (progn
+          (copy-file (file-name-concat root "mevedel-tool-registry.el") source)
+          (let ((byte-compile-verbose nil))
+            (should (byte-compile-file source)))
+          (dolist (library (list (file-name-concat root "mevedel-tool-registry.el")
+                                (concat source "c")))
+            (dolist (wrapped '(nil t))
+              (with-temp-buffer
+                (ert-info ((format "registry: %s, wrapped: %s" library wrapped))
+                  (let ((status
+                         (call-process
+                          emacs nil t nil "--batch" "-Q" "-L" root "--eval"
+                          (prin1-to-string
+                           `(progn
+                              (load ,library nil t)
+                              (require 'mevedel-structs)
+                              (setq-local mevedel--session
+                                          (mevedel-session--create
+                                           :name "cold-registry"
+                                           :permission-mode 'ask))
+                              (defvar cold-registry-calls 0)
+                              ,(if wrapped
+                                   '(mevedel-define-tool
+                                     :wrap
+                                     (gptel-make-tool
+                                      :name "ColdProbe" :category "source"
+                                      :description "Cold wrapped probe"
+                                      :args '((:name "text" :type string
+                                               :description "Text"))
+                                      :async t
+                                      :function
+                                      (lambda (callback text)
+                                        (cl-incf cold-registry-calls)
+                                        (funcall callback text)))
+                                     :read-only-p t)
+                                 '(mevedel-define-tool
+                                   :name "ColdProbe" :description "Cold native probe"
+                                   :args ((text string :required "Text"))
+                                   :read-only-p t
+                                   :handler
+                                   (lambda (args)
+                                     (cl-incf cold-registry-calls)
+                                     (list :result (plist-get args :text)))))
+                              (when (featurep 'mevedel-pipeline)
+                                (error "Registration loaded execution pipeline"))
+                              (let* ((tool (mevedel-tool-get "ColdProbe"))
+                                     (dispatch (gptel-tool-function
+                                                (mevedel-tool-gptel-tool tool)))
+                                     (deliveries 0)
+                                     result)
+                                (funcall dispatch
+                                         (lambda (value)
+                                           (cl-incf deliveries)
+                                           (setq result value))
+                                         "cold result")
+                                (unless (and (equal "cold result" result)
+                                             (= 1 deliveries)
+                                             (= 1 cold-registry-calls))
+                                  (error "Cold dispatch failed: %S" result))
+                                (funcall dispatch
+                                         (lambda (value)
+                                           (cl-incf deliveries)
+                                           (setq result value))
+                                         '(invalid argument))
+                                (unless (and (string-prefix-p "Error:" result)
+                                             (= 2 deliveries)
+                                             (= 1 cold-registry-calls))
+                                  (error "Invalid input reached handler: %S" result)))
+                              (when (featurep 'mevedel)
+                                (error "Registry dispatch loaded umbrella")))))))
+                    (ert-info ((buffer-string))
+                      (should (= 0 status))
+                      (should (string-empty-p (string-trim (buffer-string)))))))))))
+      (delete-directory compiled-root t))))
 
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

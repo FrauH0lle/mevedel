@@ -33,6 +33,10 @@ ToolSearch delivers current contracts; the dialect manual lists pure operations.
 
 ## Tool pipeline
 
+`mevedel-tool-registry.el` owns registration, schemas, and conversion of gptel's
+positional arguments to handler plists. Registration loads gptel's tool API;
+the registered callbacks load the execution pipeline on their first call.
+
 All tools share one execution pipeline. Provider calls enter through
 `mevedel-pipeline-run-tool`; nested programmatic calls use
 `mevedel-pipeline-run-tool-outcome`:

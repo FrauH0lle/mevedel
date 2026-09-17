@@ -11,20 +11,10 @@
 
 (require 'cl-lib)
 
-(require 'mevedel-pipeline)
+(require 'gptel-request)
 
-;; `gptel-request'
-(declare-function gptel-get-tool "ext:gptel-request" (path))
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
-(declare-function gptel-tool-args "ext:gptel-request" (tool))
-(declare-function gptel-tool-async "ext:gptel-request" (tool))
-(declare-function gptel-tool-category "ext:gptel-request" (tool))
-(declare-function gptel-tool-description "ext:gptel-request" (tool))
-(declare-function gptel-tool-function "ext:gptel-request" (tool))
-(declare-function gptel-tool-include "ext:gptel-request" (tool))
-(declare-function gptel-tool-name "ext:gptel-request" (tool))
-(declare-function gptel-tool-p "ext:gptel-request" (object))
-(defvar gptel--known-tools)
+;; `mevedel-pipeline'
+(autoload 'mevedel-pipeline-run-tool "mevedel-pipeline")
 
 ;; `mevedel-ptc-interpreter'
 (autoload 'mevedel-ptc-tool-name-p "mevedel-ptc-interpreter")
@@ -174,7 +164,6 @@ CATEGORY is nil, search all entries for the first matching NAME."
                                      mevedel-tool--builtin-registrars))
                   (feature (nth (- (length entry) 2) entry))
                   (registrar (car (last entry))))
-        (require 'gptel-request)
         (require feature)
         (funcall registrar)
         (mevedel-tool-get name))))
@@ -403,6 +392,19 @@ Convenience wrapper around `mevedel-tool-resolve' that extracts the
 
 ;;
 ;;; Args conversion
+
+(defun mevedel-tool--positional-to-plist (arg-values arg-specs)
+  "Convert positional ARG-VALUES to a keyword plist using ARG-SPECS.
+
+ARG-SPECS is the mevedel args format: ((name type ...) ...).
+ARG-VALUES is a list of values in the same order.
+Returns a plist like (:name1 val1 :name2 val2 ...)."
+  (let ((plist nil))
+    (cl-loop for spec in arg-specs
+             for val in arg-values
+             do (push (intern (format ":%s" (car spec))) plist)
+             (push val plist))
+    (nreverse plist)))
 
 (defconst mevedel-tool--path-description-suffix
   "Pass a raw filesystem path, not Markdown or a web URL."
@@ -634,6 +636,7 @@ handler."
   (let ((v (plist-get args key)))
     (if (integerp v) v default)))
 
+
 ;;
 ;;; Prompt resolution
 
@@ -835,7 +838,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :function (lambda (callback &rest raw-args)
                           (mevedel-pipeline-run-tool
                            mtool callback
-                           (mevedel-pipeline--positional-to-plist
+                           (mevedel-tool--positional-to-plist
                             raw-args ',(or args nil))))
               :description resolved-prompt
               :args ',(when args (mevedel-tool--args-to-gptel args))
@@ -981,7 +984,7 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
              :function (lambda (callback &rest raw-args)
                          (mevedel-pipeline-run-tool
                           mtool callback
-                          (mevedel-pipeline--positional-to-plist
+                          (mevedel-tool--positional-to-plist
                            raw-args mevedel-args)))
              :description resolved-prompt
              :args (mevedel-tool--args-to-gptel mevedel-args)
