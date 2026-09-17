@@ -282,20 +282,29 @@ mis-attributed.")
     (when follow-up-changed
       (mevedel-pending-inputs-follow-up-changed session))))
 
+(defun mevedel-view--next-follow-up (session)
+  "Return SESSION's first follow-up eligible for its owning workflow.
+Directive planning admits only Plan input for its directive; otherwise
+follow-ups retain their queue order.  Delivery holds are checked separately."
+  (let ((queue (mevedel-session-pending-follow-ups session))
+        (workflow (mevedel-session-directive-planning session)))
+    (if workflow
+        (cl-find-if
+         (lambda (entry)
+           (let ((scope (plist-get entry :scope)))
+             (and (eq (plist-get scope :action) 'plan)
+                  (equal (plist-get scope :directive-id)
+                         (plist-get workflow :directive-id)))))
+         queue)
+      (car queue))))
+
 (defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION follow-ups should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-session-pending-input-delivery-paused-p sess)
         (mevedel-session-pending-plan-approval sess)
-        (when-let* ((workflow (mevedel-session-directive-planning sess)))
-          (not
-           (cl-find-if
-            (lambda (entry)
-              (let ((scope (plist-get entry :scope)))
-                (and (eq (plist-get scope :action) 'plan)
-                     (equal (plist-get scope :directive-id)
-                            (plist-get workflow :directive-id)))))
-            (mevedel-session-pending-follow-ups sess))))
+        (and (mevedel-session-directive-planning sess)
+             (not (mevedel-view--next-follow-up sess)))
         (plist-get (mevedel-session-plan-metadata sess)
                    :implementation-retry)
         (mevedel-view--reserved-goal-handoff-id sess)
@@ -743,20 +752,8 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (string-empty-p (mevedel-view--input-text)))
              (mevedel-session-artifacts-assert-new-mutation-authority
               session)
-             (when-let* ((queue (mevedel-view--drop-disallowed-guest-skills
-                                 session)))
-               (let* ((workflow (mevedel-session-directive-planning session))
-                      (entry
-                       (if workflow
-                           (cl-find-if
-                            (lambda (candidate)
-                              (let ((scope (plist-get candidate :scope)))
-                                (and (eq (plist-get scope :action) 'plan)
-                                     (equal (plist-get scope :directive-id)
-                                            (plist-get workflow
-                                                       :directive-id)))))
-                            queue)
-                         (car queue)))
+             (when (mevedel-view--drop-disallowed-guest-skills session)
+               (let* ((entry (mevedel-view--next-follow-up session))
                       (kind (mevedel-view--pending-follow-up-kind entry))
                       (input (mevedel-view--pending-input-text entry))
                       (dropped-file-grants
