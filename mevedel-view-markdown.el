@@ -64,6 +64,7 @@
 (declare-function mevedel-view-table-rerender "mevedel-view-table"
                   (&optional window))
 
+(require 'mevedel-mention-bindings)
 (require 'mevedel-view-path)
 (require 'mevedel-view-table)
 (require 'text-property-search)
@@ -554,33 +555,9 @@ discipline."
             (mevedel-view--put-image-display mb me path)))))))
 
 (defconst mevedel-view--file-mention-regexp
-  (concat "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)"
+  (concat "@file:" mevedel-mention-bindings-file-token-regexp
           "\\(" mevedel-view--direct-line-ref-list-regexp "\\)?")
   "Regexp matching rendered `@file' mentions.")
-
-(defun mevedel-view--unescape-braced-file-path (token)
-  "Return TOKEN decoded as a braced file path."
-  (with-temp-buffer
-    (let ((i 0))
-      (while (< i (length token))
-        (let ((ch (aref token i)))
-          (if (and (= ch ?\\)
-                   (< (1+ i) (length token)))
-              (progn
-                (cl-incf i)
-                (insert-char (aref token i)))
-            (insert-char ch)))
-        (cl-incf i)))
-    (buffer-string)))
-
-(defun mevedel-view--file-mention-token-path (token)
-  "Return the file path encoded by @file TOKEN."
-  (if (and (>= (length token) 2)
-           (= (aref token 0) ?{)
-           (= (aref token (1- (length token))) ?}))
-      (mevedel-view--unescape-braced-file-path
-       (substring token 1 -1))
-    token))
 
 (defun mevedel-view--linkify-file-mentions-in-range (start end)
   "Turn rendered `@file' mentions into file buttons between START and END."
@@ -590,7 +567,7 @@ discipline."
       (while (re-search-forward mevedel-view--file-mention-regexp end t)
         (let* ((mb (match-beginning 0))
                (me (match-end 0))
-               (raw (mevedel-view--file-mention-token-path
+               (raw (mevedel-mention-bindings-file-token-path
                      (match-string-no-properties 1)))
                (line (and (match-beginning 2)
                           (mevedel-view--line-ref-list-start-line

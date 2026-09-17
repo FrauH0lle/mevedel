@@ -28,6 +28,29 @@
 ;;
 ;;; Validation
 
+(mevedel-deftest mevedel-mention-bindings-file-token-path ()
+  ,test
+  (test)
+  :doc "decodes file tokens without disturbing match data or input properties"
+  (dolist (case '(("" . "") ("plain\\file.el" . "plain\\file.el")
+                  ("{" . "{") ("}" . "}") ("{}" . "")
+                  ("{space #file.el}" . "space #file.el")
+                  ("{a\\}b\\\\c}" . "a}b\\c")
+                  ("{a\\qb\\}" . "aqb\\")
+                  ("{a\nb}" . "a\nb")
+                  ("{\u03bb.el}" . "\u03bb.el")))
+    (string-match "\\(sentinel\\)" "sentinel")
+    (let ((before (match-data)))
+      (should (equal (cdr case)
+                     (mevedel-mention-bindings-file-token-path (car case))))
+      (should (equal before (match-data)))))
+  (let ((bare (propertize "file.el" 'face 'bold))
+        (braced (propertize "{file.el}" 'face 'bold)))
+    (should (eq bare (mevedel-mention-bindings-file-token-path bare)))
+    (should (equal-including-properties
+             "file.el" (mevedel-mention-bindings-file-token-path braced)))
+    (should (get-text-property 0 'face braced))))
+
 (mevedel-deftest mevedel-mention-bindings-set ()
   ,test
   (test)

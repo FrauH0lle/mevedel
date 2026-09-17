@@ -15,8 +15,14 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(defconst mevedel-mention-bindings-file-token-regexp
+  "\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)"
+  "Regexp capturing a bare or braced file path token in group 1.
+Consumers add the @file prefix and their own line-range syntax.")
+
 (defconst mevedel-mention-bindings-file-regexp
-  "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
+  (concat "@file:" mevedel-mention-bindings-file-token-regexp
+          "\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?")
   "Regexp matching an @file mention.
 Capture group 1 is the bare path or the braced path token.  Capture
 groups 2 and 3 are optional line-range bounds.
@@ -73,6 +79,27 @@ Each result is a plist with :start, :end, and :binding."
 
 ;;
 ;;; Lexical tokens
+
+(defun mevedel-mention-bindings-file-token-path (token)
+  "Return TOKEN decoded as a braced @file path.
+TOKEN may be either a bare path or a `{...}' path.  Inside braces, a
+backslash quotes the following character."
+  (if (not (and (string-prefix-p "{" token)
+                (string-suffix-p "}" token)))
+      token
+    (let* ((body (substring token 1 -1))
+           (index 0)
+           (limit (length body))
+           chars)
+      (while (< index limit)
+        (let ((ch (aref body index)))
+          (if (and (= ch ?\\) (< (1+ index) limit))
+              (progn
+                (cl-incf index)
+                (push (aref body index) chars))
+            (push ch chars)))
+        (cl-incf index))
+      (apply #'string (nreverse chars)))))
 
 (defun mevedel-mention-bindings--skill-candidate-names (raw-name)
   "Return lexical skill-name candidates for RAW-NAME in priority order."

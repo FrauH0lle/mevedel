@@ -55,7 +55,10 @@ session-only proposals, or `Eval`.
 `mevedel-mention-bindings.el` owns the shared atomic binding lifecycle for
 skills, direct references, files, and MCP resources. Kind-specific discovery,
 resolution, content loading, permission checks, and request annotations remain
-in the skill and mention modules.
+in the skill and mention modules. File token recognition and braced-path
+decoding also live in the binding module and are shared with Markdown view
+links; request ranges and rendered line-reference lists keep their respective
+syntax. Decoding a token neither resolves nor authorizes its pathname.
 
 ## Atomic binding lifecycle
 
