@@ -128,14 +128,6 @@
   (or (plist-get operation :physical-move-path)
       (plist-get operation :move-path)))
 
-(defun mevedel-tool-patch--resource-source-p (operation)
-  "Return non-nil when OPERATION's source is a resource."
-  (plist-get operation :resource-path-p))
-
-(defun mevedel-tool-patch--resource-destination-p (operation)
-  "Return non-nil when OPERATION's destination is a resource."
-  (plist-get operation :resource-move-path-p))
-
 (defun mevedel-tool-patch-sanitize-error (message proposal)
   "Replace private resource paths in MESSAGE with authored operands.
 PROPOSAL is the prepared proposal whose physical fields are private."
@@ -377,24 +369,24 @@ tolerated, and content lines are kept raw."
               (mevedel-pipeline-canonical-path
                (mevedel-execution-target-expand-path target path root)))))
          (normalized (replace-regexp-in-string "\r\n?" "\n" patch))
-         (lines (split-string (string-trim normalized) "\n" nil))
+         (lines (vconcat (split-string (string-trim normalized) "\n" nil)))
          (count (length lines))
          (index 1)
          operations)
     (unless (and (>= count 3)
-                 (string= (string-trim (car lines))
+                 (string= (string-trim (aref lines 0))
                           mevedel-tool-patch--begin))
       (error "Invalid patch: The first line must be '%s'"
              mevedel-tool-patch--begin))
-    (unless (string= (string-trim (car (last lines)))
+    (unless (string= (string-trim (aref lines (1- count)))
                      mevedel-tool-patch--end)
       (error "Invalid patch: The last line must be '%s'"
              mevedel-tool-patch--end))
     (when (string-prefix-p "*** Environment ID: "
-                           (string-trim (nth 1 lines)))
+                           (string-trim (aref lines 1)))
       (setq index 2))
     (while (< index (1- count))
-      (let* ((line (string-trim (nth index lines)))
+      (let* ((line (string-trim (aref lines index)))
              (line-number (1+ index)))
         (cond
          ((string-prefix-p mevedel-tool-patch--add line)
@@ -404,8 +396,8 @@ tolerated, and content lines are kept raw."
             (setq index (1+ index))
             (while (and (< index (1- count))
                         (not (mevedel-tool-patch--operation-marker-p
-                              (string-trim (nth index lines)))))
-              (let ((added-line (nth index lines)))
+                              (string-trim (aref lines index)))))
+              (let ((added-line (aref lines index)))
                 (unless (string-prefix-p "+" added-line)
                   (error "Invalid patch at line %d: Add lines must start with '+'"
                          (1+ index)))
@@ -435,10 +427,10 @@ tolerated, and content lines are kept raw."
             (when (and (< index (1- count))
                        (string-prefix-p mevedel-tool-patch--move
                                         (string-trim-right
-                                         (nth index lines))))
+                                         (aref lines index))))
               (setq move-rel
                     (mevedel-tool-patch--marker-path
-                     (string-trim-right (nth index lines))
+                     (string-trim-right (aref lines index))
                      mevedel-tool-patch--move (1+ index)))
               (setq index (1+ index)))
             (let ((payload-first-line (1+ index)))
@@ -447,8 +439,8 @@ tolerated, and content lines are kept raw."
               ;; update body stays an ordinary context line.
               (while (and (< index (1- count))
                           (not (mevedel-tool-patch--operation-marker-p
-                                (string-trim-right (nth index lines)))))
-                (push (nth index lines) payload)
+                                (string-trim-right (aref lines index)))))
+                (push (aref lines index) payload)
                 (setq index (1+ index)))
               (setq payload (nreverse payload))
               (when (and (null move-rel) (null payload))
@@ -880,8 +872,7 @@ Returns nil when the two contents hold the same lines."
              (when (file-exists-p path)
                (error "Cannot add existing file: %s" path))
              (push (append (list :action 'write :path path)
-                           (and (mevedel-tool-patch--resource-source-p
-                                 operation)
+                           (and (plist-get operation :resource-path-p)
                                 '(:resource-p t))
                            (list :content (plist-get operation :content)))
                    changes))))
@@ -890,8 +881,7 @@ Returns nil when the two contents hold the same lines."
            (when (plist-get operation :selected)
              (mevedel-tool-patch--read-file path)
              (push (append (list :action 'delete :path path)
-                           (and (mevedel-tool-patch--resource-source-p
-                                 operation)
+                           (and (plist-get operation :resource-path-p)
                                 '(:resource-p t)))
                    changes))))
         ('update
@@ -913,8 +903,7 @@ Returns nil when the two contents hold the same lines."
                            (mevedel-tool-patch-apply-hunks
                             content hunks path)))
                (push (append (list :action 'write :path path)
-                             (and (mevedel-tool-patch--resource-source-p
-                                   operation)
+                             (and (plist-get operation :resource-path-p)
                                   '(:resource-p t))
                              (list :content updated
                                    :bytes
@@ -930,13 +919,11 @@ Returns nil when the two contents hold the same lines."
                (when (file-exists-p destination)
                  (error "Cannot move to existing file: %s" destination))
                (push (append (list :action 'delete :path path)
-                             (and (mevedel-tool-patch--resource-source-p
-                                   operation)
+                             (and (plist-get operation :resource-path-p)
                                   '(:resource-p t)))
                      changes)
                (push (append (list :action 'write :path destination)
-                             (and (mevedel-tool-patch--resource-destination-p
-                                   operation)
+                             (and (plist-get operation :resource-move-path-p)
                                   '(:resource-p t))
                              (let ((updated
                                     (if-let* ((hunks
@@ -1290,19 +1277,6 @@ Refresh file tracking immediately and diagnostics before continuation."
              (funcall continuation)))))
     (finish changes)))
 
-(defun mevedel-tool-patch--selected-count (proposal)
-  "Return the number of selected user-visible changes in PROPOSAL.
-Locator hunks position other hunks without changing anything, so they
-are not changes."
-  (cl-loop for operation in (plist-get proposal :operations)
-           sum (if (eq (plist-get operation :kind) 'update)
-                   (cl-count-if (lambda (hunk)
-                                  (and (plist-get hunk :selected)
-                                       (mevedel-tool-patch-hunk-changes-p
-                                        hunk)))
-                                (plist-get operation :hunks))
-                 (if (plist-get operation :selected) 1 0))))
-
 (defun mevedel-tool-patch--selected-file-data (operation)
   "Return persisted per-file data for selected OPERATION changes."
   (let* ((kind (plist-get operation :kind))
@@ -1477,8 +1451,7 @@ the review just applied."
                                (let ((revised (mevedel-tool-patch-revised-count
                                                proposal)))
                                  (format "Applied patch: %d changes%s"
-                                         (mevedel-tool-patch--selected-count
-                                          proposal)
+                                         (plist-get stats :selected)
                                          (if (> revised 0)
                                              (format " (%d revised by the user during review)"
                                                      revised)
