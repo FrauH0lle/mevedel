@@ -735,6 +735,40 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-durability--target-time ()
+  ,test
+  (test)
+  :doc "transaction readings stay directory-specific, expire, and never escape their scope"
+  (let ((outer "/mevedelmock:outer:/session/.lease/")
+        (inner "/mevedelmock:inner:/session/.lease/")
+        (mevedel-session-durability--transaction-clock nil)
+        (mevedel-session-durability--observed-time nil)
+        (elapsed 0.0)
+        reads)
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) elapsed))
+              ((symbol-function 'mevedel-session-control-fs-target-time)
+               (lambda (directory)
+                 (push directory reads)
+                 (if (equal directory outer) 1000 100000))))
+      (mevedel-session-durability-with-transaction
+        (should (= 1000 (mevedel-session-durability--target-time outer)))
+        (should-not (mevedel-session-durability--target-time-cached-p inner))
+        (mevedel-session-durability-with-transaction
+          (should (= 100000 (mevedel-session-durability--target-time inner))))
+        (setq elapsed 0.5)
+        (should (= 1000 (mevedel-session-durability--target-time outer)))
+        (should (= 100000 (mevedel-session-durability--target-time inner)))
+        (should (equal reads (list inner outer)))
+        (setq elapsed 1.0)
+        (should-not (mevedel-session-durability--target-time-cached-p outer))
+        (should (= 1000 (mevedel-session-durability--target-time outer)))
+        (should (equal reads (list outer inner outer))))
+      (should-not mevedel-session-durability--transaction-clock)
+      (dotimes (_ 2)
+        (should (= 1000 (mevedel-session-durability--target-time outer)))))
+    (should (= 5 (length reads)))))
+
+
 (mevedel-deftest mevedel-session-durability-target-clock-skew
   (:doc "uses target time when clients have radically skewed wall clocks")
   (let* ((root (make-temp-file "mevedel-target-clock-skew-" t))

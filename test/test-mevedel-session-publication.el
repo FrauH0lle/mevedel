@@ -322,6 +322,87 @@ and its segment path."
   ,test
   (test)
 
+  :doc "nested target batches keep lease deadlines on their own target clocks"
+  (let* ((root (make-temp-file "mevedel-nested-clocks-" t))
+         (hosts '("clock-outer" "clock-inner"))
+         (clocks '(("clock-outer" . 1000) ("clock-inner" . 100000)))
+         (program (symbol-function 'mevedel-session-control-fs-run-program))
+         (mevedel-session-durability--client-id (make-string 64 ?c))
+         (mevedel-session-durability--disclosed-targets (make-hash-table :test #'equal))
+         sessions records appends)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp hosts
+          ;; All filesystem operations and lease comparisons remain native.
+          ;; Only the returned filesystem clocks differ between these targets.
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations &optional lock-directory)
+                       (let ((results (funcall program operations lock-directory)))
+                         (cl-mapc
+                          (lambda (operation result)
+                            (let* ((path (plist-get operation :path))
+                                   (host (file-remote-p path 'host))
+                                   (now (cdr (assoc host clocks))))
+                              (when (and now (eq 'ok (plist-get result :status)))
+                                (pcase (plist-get operation :op)
+                                  ('target-time (plist-put result :value now))
+                                  ((or 'write 'create)
+                                   (when (string-match-p "/\\.lease/[0-9]+\\.el\\'" path)
+                                     (push (cons now (car (read-from-string
+                                                          (plist-get operation :content))))
+                                           records)))))))
+                          operations results)
+                         results))))
+            (dolist (host hosts)
+              (make-directory (file-name-concat root host))
+              (cl-destructuring-bind (_workspace session directory _segment)
+                  (test-mevedel-session-persistence--make-remote-restore-fixture
+                   host (file-name-concat root host) "Transcript\n")
+                (push session sessions)
+                (puthash (mevedel-execution-target-identity
+                          (mevedel-session-execution-target session))
+                         t mevedel-session-durability--disclosed-targets)
+                (should (mevedel-session-durability-lease-acquire
+                         directory "*nested-clock*" session))
+                ;; Exercise the normal steady state after a heartbeat has
+                ;; retained the bytes its next renewal may compare and swap.
+                (should (mevedel-session-durability-lease-renew session))))
+            (setq sessions (nreverse sessions)
+                  records nil)
+            (unwind-protect
+                (cl-labels ((append-log (session text)
+                              (push (mevedel-session-publication-append-diagnostic
+                                     session
+                                     (file-name-concat (mevedel-session-save-path session) "clock.log")
+                                     text)
+                                    appends)))
+                  (mevedel-session-publication-call-with-diagnostic-batch
+                   (car sessions)
+                   (lambda ()
+                     (append-log (car sessions) "outer before\n")
+                     (mevedel-session-publication-call-with-diagnostic-batch
+                      (cadr sessions)
+                      (lambda () (append-log (cadr sessions) "inner\n")))
+                     (append-log (car sessions) "outer after\n")))
+                  (should records)
+                  (dolist (entry records)
+                    (let ((now (car entry)) (record (cdr entry)))
+                      (should (> (plist-get record :expires-at) now))
+                      (should (<= (plist-get record :expires-at)
+                                  (+ now mevedel-session-publication-lease-seconds)))))
+                  (should (cl-every #'identity appends))
+                  (cl-mapc
+                   (lambda (session expected)
+                     (should (mevedel-session-durability-lease-owned-p session))
+                     (should (equal expected
+                                    (mevedel-session-control-fs-read-file
+                                     (file-name-concat (mevedel-session-save-path session) "clock.log")))))
+                   sessions '("outer before\nouter after\n" "inner\n")))
+              (dolist (session sessions)
+                (mevedel-session-durability-lease-release
+                 (mevedel-session-save-path session) session)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
   :doc "appends inside a batch share one reservation"
   ;; Each append otherwise opened its own transaction: recovery refresh,
   ;; lease renewal, ownership reading, then a reservation renewing on

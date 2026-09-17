@@ -218,17 +218,19 @@ elapsed time only decides when to read the target again; it never becomes a
 time value.")
 
 (defvar mevedel-session-durability--transaction-clock nil
-  "Cons cell caching one transaction's target clock reading, or nil.
+  "Cons cell caching one transaction's target clock readings, or nil.
 
-Its car is (TARGET-SECONDS . LOCAL-FLOAT-TIME).  A caller that spans one
-durable transaction binds this to a fresh `(list nil)'; outside such a binding
-every reading reaches the target.")
+Its car maps control directories to (TARGET-SECONDS . LOCAL-FLOAT-TIME).
+Nested transactions on different targets must not share a clock.  A caller
+that spans one durable transaction binds this to a fresh `(list nil)';
+outside such a binding every reading reaches the target.")
 
-(defun mevedel-session-durability--note-target-time (seconds)
-  "Record SECONDS as this transaction's target clock reading."
+(defun mevedel-session-durability--note-target-time (directory seconds)
+  "Record SECONDS as this transaction's clock reading for DIRECTORY."
   (when (and mevedel-session-durability--transaction-clock (numberp seconds))
-    (setcar mevedel-session-durability--transaction-clock
-            (cons seconds (float-time))))
+    (setf (alist-get directory (car mevedel-session-durability--transaction-clock)
+                     nil nil #'equal)
+          (cons seconds (float-time))))
   seconds)
 
 (defun mevedel-session-durability--target-time (directory)
@@ -239,13 +241,15 @@ target filesystem, including through TRAMP.  It is therefore shared by
 clients whose local wall clocks disagree.  Failure to obtain that timestamp
 fails closed instead of falling back to a client clock."
   (or mevedel-session-durability--observed-time
-      (let ((cached (car mevedel-session-durability--transaction-clock)))
+      (let ((cached (alist-get directory
+                               (car mevedel-session-durability--transaction-clock)
+                               nil nil #'equal)))
         (and cached
              (< (- (float-time) (cdr cached))
                 mevedel-session-durability--clock-reuse-seconds)
              (car cached)))
       (mevedel-session-durability--note-target-time
-       (mevedel-session-control-fs-target-time directory))))
+       directory (mevedel-session-control-fs-target-time directory))))
 
 (defvar mevedel-session-durability--asserted-directories nil
   "Cons cell listing directories already proved free of a PID lock, or nil.
@@ -509,10 +513,12 @@ the lease directory cannot present itself as a newer generation."
           (when (> generation best)
             (setq best generation)))))))
 
-(defun mevedel-session-durability--target-time-cached-p ()
-  "Return non-nil when a fresh target clock reading can answer without I/O."
+(defun mevedel-session-durability--target-time-cached-p (directory)
+  "Return non-nil when DIRECTORY has a fresh clock reading without I/O."
   (or (numberp mevedel-session-durability--observed-time)
-      (let ((cached (car mevedel-session-durability--transaction-clock)))
+      (let ((cached (alist-get directory
+                               (car mevedel-session-durability--transaction-clock)
+                               nil nil #'equal)))
         (and cached
              (< (- (float-time) (cdr cached))
                 mevedel-session-durability--clock-reuse-seconds)))))
@@ -548,7 +554,7 @@ last so an absent record still leaves the clock and the listing answered."
     ;; closed there.
     (list :now (and (eq 'ok (plist-get clock :status))
                     (mevedel-session-durability--note-target-time
-                     (plist-get clock :value)))
+                     directory (plist-get clock :value)))
           :listed (eq 'ok (plist-get listing :status))
           :names (and (eq 'ok (plist-get listing :status))
                       (plist-get listing :value))
@@ -590,7 +596,7 @@ failed."
          (clock (nth 3 results)))
     (when (eq 'ok (plist-get clock :status))
       (mevedel-session-durability--note-target-time
-       (plist-get clock :value)))
+       directory (plist-get clock :value)))
     (cond
      ((memq (plist-get proof :status) '(mismatch absent)) nil)
      ((not (eq 'ok (plist-get proof :status)))
@@ -1011,7 +1017,7 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
             (and (natnump generation)
                  (eq 'owned (plist-get bound :state))
                  (plist-get bound :bytes)
-                 (mevedel-session-durability--target-time-cached-p)
+                 (mevedel-session-durability--target-time-cached-p directory)
                  bound))
            (observed (unless assumed
                        (condition-case nil
