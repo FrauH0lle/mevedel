@@ -2437,16 +2437,13 @@ user\\='s view, by contrast, sees a foldable block."
   (when (and file (file-exists-p file))
     (with-temp-buffer
       (insert-file-contents file)
-      (let ((org-agenda-file-menu-enabled nil))
-        (org-mode))
-      (mevedel-transcript-restore-properties t)
-      (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
-                     (format-time-string "%FT%H-%M-%S"))
-      (mevedel-session-artifacts-stabilize-gptel-bounds)
-      (write-region (point-min) (point-max) file nil 'silent))))
+      (write-region
+       (mevedel-session-artifacts-finalized-segment-text
+        (buffer-string) buffer-file-coding-system)
+       nil file nil 'silent))))
 
 (defun mevedel-session-artifacts-finalized-segment-text (text coding)
-  "Return segment TEXT with finalized metadata, encoded using CODING."
+  "Return segment TEXT with finalized metadata, using buffer coding CODING."
   (with-temp-buffer
     (setq buffer-file-coding-system coding)
     (insert text)
