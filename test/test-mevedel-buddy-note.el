@@ -689,41 +689,23 @@
 ;;; Tool schemas
 
 (mevedel-deftest mevedel-buddy-note-tools
-  (:doc "`mevedel-buddy-note-tools' follows gptel's argument convention")
+  (:after-each (mevedel-test--note-cleanup)
+   :doc "`mevedel-buddy-note-tools' follows gptel's argument convention")
   ,test
   (test)
 
-  :doc "every tool is built and named"
-  (let ((names (mapcar #'gptel-tool-name
-                       (mevedel-buddy-note-tools (lambda () t)))))
+  :doc "builds named tools with typed, described, required arguments"
+  (let ((tools (mevedel-buddy-note-tools (lambda () t))))
     (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
-                   names)))
-
-  :doc "no argument carries `:required'"
-  ;; gptel marks optional arguments and derives the schema's required
-  ;; array itself.  A stray `:required' is passed through into the
-  ;; per-property schema, where JSON Schema expects an array, and strict
-  ;; providers reject the whole request.
-  (dolist (tool (mevedel-buddy-note-tools (lambda () t)))
-    (dolist (arg (gptel-tool-args tool))
-      (should-not (plist-member arg :required))))
-
-  :doc "only genuinely optional arguments are marked optional"
-  (let* ((tools (mevedel-buddy-note-tools (lambda () t)))
-         (optional
-          (mapcan
-           (lambda (tool)
-             (mapcar (lambda (arg) (plist-get arg :name))
-                     (seq-filter (lambda (arg) (plist-get arg :optional))
-                                 (gptel-tool-args tool))))
-           tools)))
-    (should-not optional))
-
-  :doc "every argument declares a type and a description"
-  (dolist (tool (mevedel-buddy-note-tools (lambda () t)))
-    (dolist (arg (gptel-tool-args tool))
-      (should (plist-get arg :type))
-      (should (plist-get arg :description))))
+                   (mapcar #'gptel-tool-name tools)))
+    (dolist (tool tools)
+      (dolist (arg (gptel-tool-args tool))
+        ;; gptel derives the schema's required array from :optional; a
+        ;; :required property here would make strict providers reject it.
+        (should-not (plist-member arg :required))
+        (should-not (plist-get arg :optional))
+        (should (plist-get arg :type))
+        (should (plist-get arg :description)))))
 
   :doc "a tool refuses once its own review is over"
   ;; A request outlives the review that started it, and the next review
