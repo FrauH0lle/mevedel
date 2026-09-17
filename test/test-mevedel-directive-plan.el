@@ -105,7 +105,7 @@
          (directive (make-overlay (point-min) (point-min)))
          settled)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-directive-plan--persist)
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                    #'ignore)
                   ((symbol-function 'mevedel-directive-plan--refresh)
                    #'ignore)
@@ -133,7 +133,7 @@
          (directive (make-overlay (point-min) (point-min)))
          (settled 0))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-directive-plan--persist)
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                    #'ignore)
                   ((symbol-function 'mevedel-directive-plan--refresh)
                    #'ignore)
@@ -166,7 +166,7 @@
         (cl-letf (((symbol-function 'mevedel-directive-plan--implement)
                    (lambda (&rest _)
                      (ert-fail "Invalidated plan reached implementation")))
-                  ((symbol-function 'mevedel-directive-plan--persist) #'ignore)
+                  ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                   ((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
                   ((symbol-function
                     'mevedel-directive-plan--restore-chat-scope)
@@ -473,7 +473,7 @@
                ((symbol-function
                  'mevedel-plan-handoff-validate-skill-bindings)
                 #'ignore)
-               ((symbol-function 'mevedel-directive-plan--persist)
+               ((symbol-function 'mevedel-session-artifacts-save)
                 #'ignore)
                ((symbol-function 'mevedel-view-enter-directive-scope)
                 #'ignore)
