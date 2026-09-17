@@ -879,7 +879,7 @@ lifetime, including when the catalog is empty. Catalog changes no longer rewrite
 the system prefix or require a separate persisted skills-delta acknowledgement.
 See [retained instruction context](architecture.md#retained-instruction-context).
 
-The bundled `/clean-work [focus]` workflow reviews `work://shared` for confirmed
+The bundled `$clean-work [focus]` workflow reviews `work://shared` for confirmed
 duplicates, superseded drafts and completed handoffs. It preserves unresolved
 work and uncertain material, checks surviving sources, and uses normal ApplyPatch
 permissions and review. It does not expire files by age or reorganize folders.

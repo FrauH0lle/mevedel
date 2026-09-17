@@ -344,8 +344,9 @@ the next send.
 | `mevedel-view-rewind-at-point`       | Rewind in place to the assistant turn at point.          |
 | `mevedel-view-switch-conversation-variant-at-point` | Switch variants at the fork point under point. |
 | `mevedel-view-cycle-permission-mode` | Cycle the current session's permission mode.             |
-| `mevedel-view-edit-last-queued-message` | Move queued follow-ups back into the composer.          |
-| `mevedel-view-clear-queued-messages` | Clear queued follow-up prompts for the current session.  |
+| `mevedel-pending-inputs-open`       | Open Pending Inputs (`C-c C-e`), then select an entry to manage. |
+| `mevedel-pending-inputs-edit`       | Edit the selected Pending Inputs entry in the composer; save updates it, cancel restores the prior draft. |
+| `mevedel-pending-inputs-clear`      | Confirm and clear all pending steering and follow-ups (`C-c C-q`). |
 | `mevedel-view-toggle-transcript`     | Switch from the view to the raw data buffer.             |
 | `mevedel-view-rerender`              | Debounced full refresh of the rendered view.             |
 
