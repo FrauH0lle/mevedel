@@ -48,7 +48,7 @@
           (with-current-buffer buffer
             (insert (file-name-nondirectory (nth 3 paths)))
             (narrow-to-region (point-max) (point-max))
-            (setq-local gptel-context--alist (list (list (nth 4 paths)))))
+            (setq-local gptel-context (list (list (nth 4 paths)))))
           (write-region (file-name-nondirectory (nth 8 paths)) nil
                         (file-name-concat data "sessions/test/transcript") nil 'silent)
           (should (= 2 (mevedel-state-cleanup workspace)))
