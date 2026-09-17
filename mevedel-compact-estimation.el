@@ -181,8 +181,7 @@ count never becomes the baseline for the chat buffer."
                     :provider-context-status provider-status
                     :fresh-visible-prompt-estimate fresh-estimate
                     :model-context-window context-window
-                    :input-tokens
-                    (mevedel-compact-estimation--token-usage-input provider-usage)
+                    :input-tokens provider-input
                     :output-tokens
                     (and (numberp (plist-get provider-usage :output))
                          (plist-get provider-usage :output))
@@ -203,8 +202,7 @@ count never becomes the baseline for the chat buffer."
            :chosen-source source
            :model-context-window context-window
            :baseline-marker-position (point-max)
-           :input-tokens
-           (mevedel-compact-estimation--token-usage-input provider-usage)
+           :input-tokens provider-input
            :output-tokens
            (and (numberp (plist-get provider-usage :output))
                 (plist-get provider-usage :output))))))))
@@ -325,23 +323,15 @@ is gptel's temporary prompt buffer after mevedel prompt transforms have
 run."
   (when (and (buffer-live-p source-buffer)
              (buffer-live-p prompt-buffer))
-    (let* ((source-state
-            (with-current-buffer source-buffer
-              (list :baseline mevedel-compact-estimation--known-token-baseline
-                    :estimate (mevedel-compact-estimation-estimate-tokens))))
-           (source-estimate (plist-get source-state :estimate))
-           (source-fresh (mevedel-compact-estimation-estimate-buffer-tokens
-                          source-buffer))
-           (prompt-fresh (mevedel-compact-estimation-estimate-buffer-tokens
-                          prompt-buffer)))
-      (cond
-       ((not (plist-get source-state :baseline))
-        prompt-fresh)
-       ((and source-estimate source-fresh prompt-fresh)
-        (+ source-estimate
-           (max 0 (- prompt-fresh source-fresh))))
-       (source-estimate)
-       (prompt-fresh)))))
+    (with-current-buffer source-buffer
+      (let ((source-estimate (mevedel-compact-estimation-estimate-tokens))
+            (source-fresh (mevedel-compact-estimation-estimate-buffer-tokens
+                           source-buffer))
+            (prompt-fresh (mevedel-compact-estimation-estimate-buffer-tokens
+                           prompt-buffer)))
+        (if mevedel-compact-estimation--known-token-baseline
+            (+ source-estimate (max 0 (- prompt-fresh source-fresh)))
+          prompt-fresh)))))
 
 (defun mevedel-compact-estimation--string-lengths (&rest values)
   "Return the total length of string VALUES."

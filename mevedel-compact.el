@@ -58,55 +58,6 @@
 (declare-function mevedel--active-chat-buffer
                   "mevedel-chat" (&optional workspace))
 
-;; `mevedel-compact-estimation'
-(declare-function mevedel-compact-estimation-admission
-                  "mevedel-compact-estimation" (estimate target-policy))
-(declare-function mevedel-compact-estimation-baseline-source
-                  "mevedel-compact-estimation" ())
-(declare-function mevedel-compact-estimation-estimate-data-tokens
-                  "mevedel-compact-estimation" (data))
-(declare-function mevedel-compact-estimation-estimate-tokens
-                  "mevedel-compact-estimation" ())
-(declare-function mevedel-compact-estimation-estimate-transformed-request-tokens
-                  "mevedel-compact-estimation" (source-buffer prompt-buffer))
-(declare-function mevedel-compact-estimation-policy-threshold-tokens
-                  "mevedel-compact-estimation" (policy))
-(declare-function mevedel-compact-estimation-summary-request-p
-                  "mevedel-compact-estimation" (info))
-(declare-function mevedel-compact-estimation-target-policy
-                  "mevedel-compact-estimation" ())
-(declare-function mevedel-compact-estimation-telemetry-inputs
-                  "mevedel-compact-estimation" (estimate target-policy))
-
-;; `mevedel-compact-evidence'
-(declare-function mevedel-compact-evidence-current-tool-batch-start
-                  "mevedel-compact-evidence" (info body-start))
-(declare-function mevedel-compact-evidence-find-boundary
-                  "mevedel-compact-evidence" ())
-(declare-function mevedel-compact-evidence-rebuild-prompt-buffer
-                  "mevedel-compact-evidence"
-                  (prompt-buffer source-buffer source-pending-text
-                                 prompt-history-start prompt-pending-start))
-
-;; `mevedel-compact-run'
-(declare-function mevedel-compact-run-start
-                  "mevedel-compact-run" (&rest keys))
-(defvar mevedel-compact-run-cancel)
-(defvar mevedel-compact-run-failure-count)
-(defvar mevedel-compact-run-in-flight)
-
-;; `mevedel-compact-target'
-(declare-function mevedel-compact-target-agent-target
-                  "mevedel-compact-target" (invocation))
-(declare-function mevedel-compact-target-call
-                  "mevedel-compact-target" (target operation &rest args))
-(declare-function mevedel-compact-target-current-persisted-p
-                  "mevedel-compact-target" ())
-(declare-function mevedel-compact-target-main-target
-                  "mevedel-compact-target" ())
-(defvar mevedel-compact-target-current-request-hook-context)
-(defvar mevedel-compact-target-current-request-reminder)
-
 ;; `mevedel-goal'
 (declare-function mevedel-goal-pause-runtime-failure
                   "mevedel-goal" (buffer reason))
