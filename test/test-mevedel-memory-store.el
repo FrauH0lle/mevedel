@@ -42,12 +42,7 @@
           (make-directory (file-name-concat root "memory"))
           (let ((coding-system-for-write 'utf-8-unix))
             (write-region "Gr\u00fc\u00dfe\r\n" nil (file-name-concat root "memory" "topic.md") nil 'silent))
-          (let* ((entry (mevedel-journal-store-publish-digest
-                         root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
-                                    :workspace identity :trigger 'session-end :segment 1
-                                    :source-revision (make-string 64 ?b) :turns '(1) :turn-ids (list (make-string 64 ?c))
-                                    :created "2020-01-01T00:00:00Z" :model "test:model")
-                         "## Done\n- Observed: Tests passed.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none"))
+          (let* ((entry (mevedel-test-memory-store--digest root identity 1))
                  (scope (mevedel-memory-scope-capture workspace)))
             (setq claim (mevedel-journal-claim-acquire (file-name-concat (mevedel-journal-store-state-directory journal) "consolidation") 180))
             (let* ((prepared (mevedel-memory-store-prepare workspace claim scope (list entry) ""))
@@ -112,12 +107,7 @@
          (reply "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes.")
          claim)
     (unwind-protect
-        (let* ((entry (mevedel-journal-store-publish-digest
-                       root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
-                                  :workspace identity :trigger 'session-end :segment 1
-                                  :source-revision (make-string 64 ?b) :turns '(1) :turn-ids (list (make-string 64 ?c))
-                                  :created "2020-01-01T00:00:00Z" :model "test:model")
-                       "## Done\n- Observed: Tests passed.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none"))
+        (let* ((entry (mevedel-test-memory-store--digest root identity 1))
                (scope (mevedel-memory-scope-capture workspace)))
           (setq claim (mevedel-journal-claim-acquire
                        (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "consolidation") 180))
