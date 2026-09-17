@@ -475,9 +475,9 @@ their backend-specific meaning. Discovery no longer invokes this writer.
 
 `mevedel-tool-ui.el` assembles the user-interaction tool surface and owns the
 Agent, FollowupAgent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
-WaitAgent adapters. Ask's questionnaire, handler, renderer, and schema live in
-`mevedel-tool-ask.el`. Exact external-path authority is part of the normal
-permission pipeline, not a model-visible tool.
+WaitAgent adapters. Ask's questionnaire lives in `mevedel-tool-ask-ui.el`; its
+handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
+authority is part of the normal permission pipeline, not a model-visible tool.
 
 Agent's required inputs are `task_name` and `message`. Its optional `role`,
 `context`, `model`, and `effort` inputs are validated before reservation:

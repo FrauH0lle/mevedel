@@ -51,43 +51,31 @@
   :doc "rejects a missing questions argument"
   (should-error (mevedel-tool-ask--ask #'ignore nil) :type 'error))
 
-(mevedel-deftest mevedel-tool-ask--question-count ()
-  ,test
-  (test)
-  :doc "counts each supported Ask question container shape"
-  (progn
-    (should (= 1 (mevedel-tool-ask--question-count
-                  [(:question "A?")])))
-    (should (= 2 (mevedel-tool-ask--question-count
-                  '((:question "A?") (:question "B?")))))
-    (should (= 1 (mevedel-tool-ask--question-count 'malformed)))
-    (should (= 0 (mevedel-tool-ask--question-count nil)))))
-
-(mevedel-deftest mevedel-tool-ask--result-status ()
-  ,test
-  (test)
-  :doc "marks only string results with an error prefix"
-  (progn
-    (should (eq 'error
-                (mevedel-tool-ask--result-status "Error: unavailable")))
-    (should-not (mevedel-tool-ask--result-status "done"))
-    (should-not (mevedel-tool-ask--result-status '(:result "done")))))
-
 (mevedel-deftest mevedel-tool-ask--render ()
   ,test
   (test)
-  :doc "renders an Ask result with its question count"
-  (should
-   (equal '(:header "Ask: 2 questions"
-            :body "answers"
-            :body-mode nil
-            :status nil
-            :initially-collapsed-p t)
-          (mevedel-tool-ask--render
-           "Ask"
-           '(:questions [(:question "A?") (:question "B?")])
-           "answers"
-           nil))))
+  :doc "renders each question container with its count and result status"
+  (dolist (case '(([(:question "A?")] "1 question")
+                  (((:question "A?") (:question "B?")) "2 questions")
+                  (malformed "1 question")
+                  (nil "0 questions")))
+    (dolist (result '("answers" "Error: unavailable"))
+      (should
+       (equal (list :header (concat "Ask: " (cadr case))
+                    :body result :body-mode nil
+                    :status (if (equal result "answers") nil 'error)
+                    :initially-collapsed-p t)
+              (mevedel-tool-ask--render
+               nil (list :questions (car case)) result nil)))))
+
+  :doc "uses the supplied tool name and ignores non-string results"
+  (progn
+    (should (equal "Questionnaire: 2 questions"
+                   (plist-get (mevedel-tool-ask--render
+                               "Questionnaire" '(:questions [a b]) "answers" nil)
+                              :header)))
+    (should-not (mevedel-tool-ask--render
+                 "Ask" nil '(:result "done") nil))))
 
 (mevedel-deftest mevedel-tool-ask-register ()
   ,test

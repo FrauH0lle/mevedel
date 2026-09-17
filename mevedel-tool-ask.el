@@ -54,32 +54,20 @@ CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
 ;;
 ;;; Renderer
 
-(defun mevedel-tool-ask--question-count (questions)
-  "Return the number of QUESTIONS in an Ask call."
-  (cond
-   ((vectorp questions) (length questions))
-   ((listp questions) (length questions))
-   (questions 1)
-   (t 0)))
-
-(defun mevedel-tool-ask--result-status (result)
-  "Return a renderer status for RESULT."
-  (and (stringp result)
-       (string-prefix-p "Error:" result)
-       'error))
-
 (defun mevedel-tool-ask--render (name args result _render-data)
   "Return rendering plist for Ask NAME, ARGS, and RESULT."
   (when (stringp result)
-    (let ((count (mevedel-tool-ask--question-count
-                  (plist-get args :questions))))
+    (let* ((questions (plist-get args :questions))
+           (count (if (or (vectorp questions) (listp questions))
+                      (length questions)
+                    1)))
       (list :header (format "%s: %d %s"
                             (or name "Ask")
                             count
                             (if (= count 1) "question" "questions"))
             :body result
             :body-mode nil
-            :status (mevedel-tool-ask--result-status result)
+            :status (and (string-prefix-p "Error:" result) 'error)
             :initially-collapsed-p t))))
 
 
