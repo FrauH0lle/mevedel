@@ -3372,6 +3372,21 @@ rotation never saves through a rebound temporary visited filename or prompts"
                     (setq-local mevedel--session session)
                     (setq buffer-file-name segment)
                     (insert "old transcript"))
+                  (dolist (operation '(sidecar transcript))
+                    (setf (mevedel-session-publication-active-p session) t)
+                    (unwind-protect
+                        (progn
+                          (should-error
+                           (if (eq operation 'sidecar)
+                               (mevedel-session-artifacts-publish-sidecar-state
+                                session buffer)
+                             (mevedel-session-artifacts-publish-transcript-state
+                              session buffer segment "queued terminal"))
+                           :type 'user-error)
+                          (should-not (mevedel-session-publication-queue session))
+                          (should-not (mevedel-session-pending-publication session)))
+                      (setf (mevedel-session-publication-active-p session) nil)
+                      (mevedel-session-publication-clear-transient session)))
                   (let ((head-before
                          (plist-get (mevedel-session-publication session)
                                     :head)))
@@ -3527,9 +3542,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 :content "sidecar"
                 :commit-marker t)))
            ((symbol-function 'mevedel-session-publication-publish)
-            (lambda (_session artifacts)
+            (lambda (_session artifacts &optional require-commit)
               (should (plist-get (car artifacts) :commit-marker))
-              'queued)))
+              (should require-commit)
+              (user-error "Required session publication cannot be queued"))))
         (should-error
          (mevedel-session-artifacts-publish-sidecar-state
           session (current-buffer))

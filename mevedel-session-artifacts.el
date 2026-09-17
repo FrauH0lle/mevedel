@@ -1723,30 +1723,21 @@ the sidecar.  Mutation authority is checked before the artifact is built."
     (error "Portable session sidecar is not published"))
   (mevedel-session-artifacts-assert-mutation-authority
    session root-buffer)
-  (list
-   :path
-   (mevedel-session-artifacts-sidecar-path
-    (mevedel-session-save-path session))
-   :content
-   (mevedel-session-artifacts-printed-value
-    (mevedel-session-artifacts-build-sidecar session root-buffer))
-   :commit-marker t))
+  (mevedel-session-artifacts--sidecar-artifact session root-buffer))
 
 (defun mevedel-session-artifacts-publish-sidecar-state
     (session root-buffer)
   "Publish SESSION's freshly built sidecar as one strict commit.
 
-ROOT-BUFFER must be SESSION's live root data buffer.  Publication and
-authority failures are propagated to the caller."
-  (let ((result
-         (mevedel-session-publication-publish
-          session
-          (list
-           (mevedel-session-artifacts--sidecar-publication-artifact
-            session root-buffer)))))
-    (when (eq result 'queued)
-      (user-error "Session state publication was queued before its commit"))
-    result))
+ROOT-BUFFER must be SESSION's live root data buffer.  Reentrant calls are
+rejected before staging.  Pre-commit failures propagate; post-commit cleanup
+failures remain diagnostic under the publisher's strict commit contract."
+  (mevedel-session-publication-publish
+   session
+   (list
+    (mevedel-session-artifacts--sidecar-publication-artifact
+     session root-buffer))
+   t))
 
 (defun mevedel-session-artifacts-publish-transcript-state
     (session root-buffer transcript-path content &optional coding)
@@ -1755,7 +1746,7 @@ authority failures are propagated to the caller."
 ROOT-BUFFER must be SESSION's live root data buffer.  TRANSCRIPT-PATH must be
 a logical artifact below SESSION's save path.  The current authoritative
 sidecar is rebuilt from SESSION and ROOT-BUFFER and commits the two-artifact
-batch."
+batch.  Reentrant publication is rejected before any bytes are queued."
   (unless (stringp content)
     (error "Transcript publication requires string content"))
   (let* ((sidecar-artifact
@@ -1772,7 +1763,8 @@ batch."
      session
      (list
       (list :path path :content content :coding coding)
-      sidecar-artifact))))
+      sidecar-artifact)
+     t)))
 
 (defun mevedel-session-artifacts-publish-agent-terminal-state (invocation)
   "Publish INVOCATION's portable transcript and final session sidecar together.
@@ -1789,10 +1781,8 @@ continues to wait for the root turn's completed-turn publication boundary."
           (mevedel-agent-invocation-transcript-relative-path invocation))
          (target (and session (mevedel-session-execution-target session)))
          (transcript (and save-path relative
-                          (expand-file-name relative save-path)))
-         (sidecar (and save-path
-                       (mevedel-session-artifacts-sidecar-path save-path))))
-    (unless (and session target save-path relative transcript sidecar
+                          (expand-file-name relative save-path))))
+    (unless (and session target save-path relative transcript
                  (mevedel-session-codec-portable-authority-p session)
                  (buffer-live-p parent)
                  (buffer-live-p buffer)
@@ -1825,12 +1815,7 @@ continues to wait for the root turn's completed-turn publication boundary."
                           (point-min) (point-max))
                 :coding (or buffer-file-coding-system 'utf-8-unix))
           ;; The sidecar commits transcript metadata and final registry state.
-          (list :path sidecar
-                :content
-                (mevedel-session-artifacts-printed-value
-                 (mevedel-session-artifacts-build-sidecar
-                  session parent))
-                :commit-marker t))
+          (mevedel-session-artifacts--sidecar-artifact session parent))
          t)
         (when modified-p
           (condition-case err
@@ -2500,15 +2485,7 @@ last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
                :coding coding)
          (list :path new-segment :content new-text :coding coding))
         (mevedel-session-artifacts--instruction-artifacts session buffer)
-        (list
-         (list
-          :path
-          (mevedel-session-artifacts-sidecar-path
-           (mevedel-session-save-path session))
-          :content
-          (mevedel-session-artifacts-printed-value
-           (mevedel-session-artifacts-build-sidecar session buffer))
-           :commit-marker t)))
+        (list (mevedel-session-artifacts--sidecar-artifact session buffer)))
        require-commit)
       (mevedel-session-artifacts--set-visited-segment-file new-segment))))
 

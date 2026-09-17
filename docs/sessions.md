@@ -797,6 +797,12 @@ caller returns only after that batch changes the immutable head.  Once the head
 has changed, later lease normalization or buffer save-hook failures are
 diagnostic cleanup failures rather than grounds to roll live agent state back.
 
+Strict metadata and archived-transcript updates use the publisher's same
+required-commit contract. Reentrant calls fail before staging or queueing any
+bytes, leaving the caller free to retry after the active publication. A
+post-commit cleanup failure remains diagnostic because the new head is already
+authoritative.
+
 Observational agent persists are not acknowledged mutations.  Activity
 transitions (blocked/waiting flavors and their release) and mailbox
 consumption debounce into one sidecar-only registry save
