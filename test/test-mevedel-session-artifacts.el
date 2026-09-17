@@ -41,7 +41,32 @@
             (should (org-entry-get (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"))
             (should (equal before (mevedel-agent-conversation-project-history
                                    (current-buffer))))))
-      (delete-file file))))
+      (delete-file file)))
+  :doc "matches portable finalization while preserving file encoding and newlines"
+  (dolist (coding '(utf-8-unix utf-8-dos iso-latin-1-unix
+                   utf-16le-with-signature-dos))
+    (let ((file (make-temp-file "mevedel-finalize-coding-" nil ".org")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'format-time-string)
+                     (lambda (&rest _) "2026-01-01T00-00-00")))
+            (with-temp-buffer
+              (insert ":PROPERTIES:\n:END:\n\nUser caf\u00e9.\n")
+              (let ((coding-system-for-write coding))
+                (write-region (point-min) (point-max) file nil 'silent)))
+            (let ((expected
+                   (with-temp-buffer
+                     (insert-file-contents file)
+                     (should (eq coding buffer-file-coding-system))
+                     (encode-coding-string
+                      (mevedel-session-artifacts-finalized-segment-text
+                       (buffer-string) buffer-file-coding-system)
+                      buffer-file-coding-system))))
+              (mevedel-session-artifacts--finalize-segment-file file)
+              (with-temp-buffer
+                (set-buffer-multibyte nil)
+                (insert-file-contents-literally file)
+                (should (equal expected (buffer-string))))))
+        (delete-file file)))))
 
 (mevedel-deftest mevedel-session-artifacts-finalized-segment-text ()
   ,test
