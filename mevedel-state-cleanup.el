@@ -17,7 +17,7 @@
 (require 'mevedel-structs)
 
 ;; `gptel'
-(defvar gptel-context--alist)
+(defvar gptel-context)
 
 ;; `mevedel-view-history'
 (defvar mevedel-view-history--ring)
@@ -92,11 +92,11 @@ binary and linked files, including old publication generations."
            (and (boundp 'mevedel-view-history--stored-incomplete)
                 (stringp mevedel-view-history--stored-incomplete)
                 (string-search name mevedel-view-history--stored-incomplete))
-           (and (boundp 'gptel-context--alist)
+           (and (boundp 'gptel-context)
                 (cl-some (lambda (entry)
                            (and (stringp (car entry))
                                 (string-search name (car entry))))
-                         gptel-context--alist))
+                         gptel-context))
            (save-restriction
              (widen)
              (save-excursion
