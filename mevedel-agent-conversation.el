@@ -267,10 +267,10 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
                 #'mevedel-view-agent-live-transcript-post-tool nil t)
       (add-hook 'gptel-post-response-functions
                 #'mevedel-execution-transcript-retry-terminals nil t)
-      (let ((inv invocation))
-        (add-hook
-         'gptel-pre-tool-call-functions
-         (lambda (&rest args)
+      (add-hook
+       'gptel-pre-tool-call-functions
+       (lambda (&rest args)
+         (let ((inv mevedel--agent-invocation))
            (prog1 nil
              (when (mevedel-agent-invocation-p inv)
                (cl-incf (mevedel-agent-invocation-call-count inv))
@@ -282,11 +282,12 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
                             :tool-name tool-name
                             :summary (format "%s(...)" tool-name))
                   t))
-               (mevedel-agent-conversation-refresh inv))))
-         nil t)
-        (add-hook
-         'gptel-post-tool-call-functions
-         (lambda (&rest args)
+               (mevedel-agent-conversation-refresh inv)))))
+       nil t)
+      (add-hook
+       'gptel-post-tool-call-functions
+       (lambda (&rest args)
+         (let ((inv mevedel--agent-invocation))
            (prog1 nil
              (when (mevedel-agent-invocation-p inv)
                (let ((tool-name
@@ -300,15 +301,16 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
                     (list :type 'tool-finish :tool-name tool-name
                           :summary (format "%s done" tool-name)))
                   t))
-               (mevedel-agent-conversation-refresh inv))))
-         nil t)
-        (add-hook
-         'gptel-post-response-functions
-         (lambda (&rest _)
+               (mevedel-agent-conversation-refresh inv)))))
+       nil t)
+      (add-hook
+       'gptel-post-response-functions
+       (lambda (&rest _)
+         (let ((inv mevedel--agent-invocation))
            (prog1 nil
              (when (mevedel-agent-invocation-p inv)
-               (mevedel-agent-conversation-refresh inv))))
-         nil t))
+               (mevedel-agent-conversation-refresh inv)))))
+       nil t)
       (add-hook 'kill-buffer-hook
                 #'mevedel-agent-conversation--on-buffer-kill nil t))
     buffer))

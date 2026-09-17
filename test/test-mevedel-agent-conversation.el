@@ -366,6 +366,55 @@
 		 ,test
 		 (test)
 
+  :doc "attributes retained follow-up hooks to the current invocation"
+  (let* ((parent (generate-new-buffer " *agent-followup-parent*"))
+         (old (mevedel-agent-invocation--create
+               :agent-id "default--first" :path "/root/task"
+               :parent-data-buffer parent))
+         (next (mevedel-agent-invocation--create
+                :agent-id "default--second" :path "/root/task"
+                :parent-data-buffer parent))
+         (native-refresh (symbol-function 'mevedel-agent-conversation-refresh))
+         refreshed buffer)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent
+            (setq-local mevedel--session nil mevedel--workspace nil
+                        mevedel--view-buffer nil))
+          (setq buffer (mevedel-agent-conversation-open old parent))
+          (setf (mevedel-agent-invocation-buffer old) buffer
+                (mevedel-agent-invocation-buffer next) buffer
+                (mevedel-agent-invocation-runtime-settled-p old) t)
+          (with-current-buffer buffer
+            ;; Runtime dispatch reuses the conversation and replaces this local.
+            (setq-local mevedel--agent-invocation next)
+            (cl-letf (((symbol-function 'mevedel-agent-conversation-refresh)
+                       (lambda (invocation)
+                         (push invocation refreshed)
+                         (funcall native-refresh invocation))))
+              (should-not
+               (run-hook-with-args-until-success
+                'gptel-pre-tool-call-functions '(:name "FixtureNoop" :args nil)))
+              (run-hook-with-args 'gptel-post-tool-call-functions
+                                  '(:name "FixtureNoop" :args nil :result "done"))
+              (run-hook-with-args 'gptel-post-response-functions
+                                  (point-min) (point-max)))
+            (should (= 0 (mevedel-agent-invocation-call-count old)))
+            (should-not (mevedel-agent-invocation-activity old))
+            (should (= 1 (mevedel-agent-invocation-call-count next)))
+            (should (equal '(tool-start tool-finish)
+                           (mapcar (lambda (item) (plist-get item :type))
+                                   (mevedel-agent-invocation-activity next))))
+            (should (equal (list next next next) refreshed))
+            (setf (mevedel-agent-invocation-runtime-settled-p next) t)
+            (should (plist-get
+                     (run-hook-with-args-until-success
+                      'gptel-pre-tool-call-functions '(:name "FixtureNoop" :args nil))
+                     :stop))
+            (should (= 1 (mevedel-agent-invocation-call-count next)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (kill-buffer parent)))
+
 		 :doc "installs linear gptel Org context and path-scoped skill activation"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-agent-parent-" t)))

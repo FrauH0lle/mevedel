@@ -179,7 +179,9 @@ sequenceDiagram
 
 The diagram covers initial spawning and settlement. Follow-ups reuse the
 retained identity and configuration, run UserPromptSubmit for an idle agent's
-new task, and do not rerun SubagentStart. A caller that needs the result explicitly
+new task, and do not rerun SubagentStart. Tool counts, activity and response
+refresh belong to the current invocation in that retained conversation. A caller
+that needs the result explicitly
 invokes `WaitAgent`; a caller that does not may finish while descendants keep
 running. `/review`, `/verify`, and fork-skill workflows may keep their owning
 interaction open until a leaf result arrives, but that awaiting behavior does
