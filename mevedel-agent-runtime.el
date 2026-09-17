@@ -83,67 +83,6 @@
 (autoload 'mevedel-agent-persistence-transcript-path-p
   "mevedel-agent-persistence")
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-configuration-agent
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-configuration-p
-                  "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-activity
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-create "mevedel-agents" (agent))
-(declare-function mevedel-agent-invocation-description
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-frozen-configuration
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-hook-audits
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-turn
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-plan-read-only
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-require-path
-                  "mevedel-agents" (invocation))
-(declare-function mevedel-agent-invocation-runtime-execution-results
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-budget-timer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-fsm
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-pending-response
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-settle-callback
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-settled-p
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-sidecar-dirty
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-skill-permission-rules
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-terminal-reason
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-started-at
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-relative-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-status
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
-(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
-(defvar mevedel-agent-task-path-property)
-
 ;; `mevedel-execution'
 (declare-function mevedel-execution-owner-live-p
                   "mevedel-execution" (session owner))
@@ -308,9 +247,8 @@
                      'mevedel-session--read-only-mode parent-buffer)))
       (condition-case err
           (when-let* ((save-path
-                       (progn
-                         (mevedel-session-persistence-shallow-ensure-files
-                          session parent-buffer))))
+                       (mevedel-session-persistence-shallow-ensure-files
+                        session parent-buffer)))
             (let* ((agent
                     (mevedel-agent-invocation-agent invocation))
                    (agent-type (or (and agent (mevedel-agent-name agent))
@@ -386,13 +324,10 @@
               (session (mevedel-agent-invocation-parent-session invocation))
               (save-path (mevedel-session-save-path session)))
     (condition-case err
-        (progn
-          (when (and
-                 (mevedel-agent-persistence-transcript-path-p
-                  relative save-path)
-                 (mevedel-session-artifacts-artifact-present-p
-                  session relative))
-            (expand-file-name relative save-path)))
+        (when (and
+               (mevedel-agent-persistence-transcript-path-p relative save-path)
+               (mevedel-session-artifacts-artifact-present-p session relative))
+          (expand-file-name relative save-path))
       (error
        (message "mevedel: transcript path validation failed: %S" err)
        nil))))
@@ -549,12 +484,9 @@
                  (eq 'committed (plist-get pending :phase))))
            status visible transaction terminal-publication-p)
       (if committed-p
-          (setq response (plist-get pending :response)
-                event (plist-get pending :event)
-                status (plist-get pending :status)
+          (setq status (plist-get pending :status)
                 visible (plist-get pending :visible)
-                transaction (plist-get pending :transaction)
-                terminal-publication-p (plist-get pending :published))
+                transaction (plist-get pending :transaction))
         (when (and (listp pending) (plist-member pending :response))
           (setq response (plist-get pending :response)
                 event (plist-get pending :event)))
@@ -588,9 +520,8 @@
                 terminal-publication-p
                 (and session
                      save-path
-                     (progn
-                       (mevedel-session-artifacts-artifact-present-p
-                        session "session.meta.el"))
+                     (mevedel-session-artifacts-artifact-present-p
+                      session "session.meta.el")
                      (mevedel-agent-invocation-transcript-relative-path
                       invocation)
                      (buffer-live-p
@@ -611,9 +542,8 @@
                     (funcall callback invocation visible event))))
           (condition-case err
               (if terminal-publication-p
-                  (progn
-                    (mevedel-session-artifacts-publish-agent-terminal-state
-                     invocation))
+                  (mevedel-session-artifacts-publish-agent-terminal-state
+                   invocation)
                 (when (consp transaction)
                   (mevedel-agent-control-commit-session session)))
             (error
@@ -621,10 +551,8 @@
                (funcall (car transaction)))
              (signal (car err) (cdr err))))
           (setq pending
-                (list :response response :event event :phase 'committed
-                      :status status :visible visible
-                      :transaction transaction
-                      :published terminal-publication-p))
+                (list :phase 'committed :status status :visible visible
+                      :transaction transaction))
           (setf (mevedel-agent-invocation-runtime-pending-response invocation)
                 pending)))
       (when (functionp (cdr-safe transaction))
@@ -752,14 +680,18 @@ Settle a held provider response once its last owned execution has finished."
 ;;
 ;;; Turn hooks
 
-(defun mevedel-agent-runtime--run-hook-sync (event payload invocation)
-  "Run EVENT with PAYLOAD for INVOCATION and return its decision."
+(defun mevedel-agent-runtime--run-prompt-hook (prompt invocation)
+  "Run `UserPromptSubmit' for agent PROMPT and wait for its decision."
   (let* ((session (mevedel-agent-invocation-parent-session invocation))
          (workspace (and session (mevedel-session-workspace session)))
-         done
-         decision)
+         done decision)
     (mevedel-hooks-run-event
-     event payload
+     'UserPromptSubmit
+     (mevedel-hooks-event-plist
+      'UserPromptSubmit session workspace
+      :agent-path (mevedel-agent-invocation-path invocation)
+      :prompt prompt
+      :display-text prompt)
      (lambda (result)
        (setq decision result
              done t))
@@ -767,19 +699,6 @@ Settle a held provider response once its last owned execution has finished."
     (while (not done)
       (accept-process-output nil 0.05))
     decision))
-
-(defun mevedel-agent-runtime--run-prompt-hook (prompt invocation)
-  "Run `UserPromptSubmit' for agent PROMPT and return its decision."
-  (let* ((session (mevedel-agent-invocation-parent-session invocation))
-         (workspace (and session (mevedel-session-workspace session))))
-    (mevedel-agent-runtime--run-hook-sync
-     'UserPromptSubmit
-     (mevedel-hooks-event-plist
-      'UserPromptSubmit session workspace
-      :agent-path (mevedel-agent-invocation-path invocation)
-      :prompt prompt
-      :display-text prompt)
-     invocation)))
 
 (defun mevedel-agent-runtime--run-stop-hook (invocation status)
   "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."
@@ -859,10 +778,9 @@ blocked transition."
          (effective-prompt
           (if context (concat submitted "\n\n" context) submitted))
          (rewrite-audit
-          (progn
-            (mevedel--hook-prompt-rewrite-audit-record
-             'UserPromptSubmit prompt submitted
-             (mevedel-hooks-decision-reason prompt-decision)))))
+          (mevedel--hook-prompt-rewrite-audit-record
+           'UserPromptSubmit prompt submitted
+           (mevedel-hooks-decision-reason prompt-decision))))
     (list :prompt effective-prompt
           :audits (and rewrite-audit (list rewrite-audit)))))
 

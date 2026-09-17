@@ -54,22 +54,6 @@
           (mevedel-agent-invocation-transcript-status invocation) 'running)
     invocation))
 
-(mevedel-deftest mevedel-agent-runtime--run-hook-sync ()
-  ,test
-  (test)
-  :doc "waits for and returns an agent hook decision"
-  (let* ((session (mevedel-session--create :name "main"))
-         (invocation (mevedel-agent-runtime-test--invocation))
-         (mevedel-user-prompt-submit-functions
-          (list (lambda (_event) '(:updated-input "rewritten")))))
-    (setf (mevedel-agent-invocation-parent-session invocation) session)
-    (should
-     (equal '(:updated-input "rewritten")
-            (mevedel-agent-runtime--run-hook-sync
-             'UserPromptSubmit
-             (list :hook-event 'UserPromptSubmit)
-             invocation)))))
-
 (mevedel-deftest mevedel-agent-runtime--run-stop-hook ()
   ,test
   (test)
@@ -870,7 +854,11 @@ ARTIFACT-P selects whether its sidecar counts as committed."
            (plist-get
             (mevedel-agent-invocation-runtime-pending-response invocation)
             :phase)))
-      (mevedel-agent-runtime--settle invocation "ignored duplicate")
+      (should
+       (equal "finished"
+              (mevedel-agent-runtime--settle
+               invocation "ignored duplicate"
+               '(:mevedel-agent-terminal-status error))))
       (should
        (mevedel-agent-invocation-runtime-settled-p invocation))
       (should (= 1 callbacks))
