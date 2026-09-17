@@ -253,7 +253,8 @@
           (should queued)
           (mevedel-permission-persistence-write-store
            file `(:rules nil :resource-grants ((:path ,path :access read))))
-          (mevedel-permission-persistence-save-rule workspace "Read" 'deny)
+          (mevedel-permission-persistence-save-rule
+           workspace '("Read" :action deny))
           (mevedel-tool-permission-step
            context (lambda (_) (setq allowed t))
            (lambda (&rest _) (setq denied t)))
@@ -1480,7 +1481,7 @@
   (let* ((parent-session (mevedel-session--create :name "parent"))
          (sub-agent-alias parent-session))
     (mevedel-permission--add-session-rule
-     sub-agent-alias "Edit" 'allow "/foo/*")
+     sub-agent-alias '("Edit" :path "/foo/*" :action allow))
     (should (equal (mevedel-session-permission-rules parent-session)
                    '(("Edit" :path "/foo/*" :action allow)))))
 

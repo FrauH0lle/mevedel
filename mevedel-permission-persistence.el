@@ -29,15 +29,11 @@
 (autoload 'mevedel-permission-mode-data-buffer "mevedel-permission-mode")
 
 ;; `mevedel-permission-rules'
-(declare-function mevedel-permission-rules-build-rule
-                  "mevedel-permission-rules"
-                  (tool-name action spec-key spec-value &rest keys))
 (declare-function mevedel-permission-rules-merge-resource-grant
                   "mevedel-permission-rules"
                   (grants path access &optional recursive))
 (declare-function mevedel-permission-rules-resource-grant
                   "mevedel-permission-rules" (path access &optional recursive))
-(autoload 'mevedel-permission-rules-build-rule "mevedel-permission-rules")
 (autoload 'mevedel-permission-rules-merge-resource-grant
   "mevedel-permission-rules")
 (autoload 'mevedel-permission-rules-resource-grant
@@ -522,29 +518,13 @@ Returns a merged list in `mevedel-permission-rules' format."
        (mevedel-permission--workspace-target workspace))
       '(:rules nil :resource-grants nil)))
 
-(cl-defun mevedel-permission-persistence-save-rule
-    (workspace tool-name action &optional path
-               &key spec-key spec-value network file-system
-               sandbox-permissions)
-  "Append a permission rule to WORKSPACE's persistent rules file.
-
-TOOL-NAME and ACTION define the rule.  Positional PATH is equivalent
-to SPEC-KEY `:path'.  SPEC-KEY/SPEC-VALUE let callers store rules
-qualified by any specifier (`:path', `:pattern', `:domain', `:name').
-NETWORK and FILE-SYSTEM record matching additive execution authority.
-SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
-is created if it does not exist."
+(defun mevedel-permission-persistence-save-rule (workspace rule)
+  "Append RULE to WORKSPACE's persistent rules unless already present.
+RULE uses the `mevedel-permission-rules' format."
   (let* ((file (mevedel-permission-persistence-file workspace 'workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
          (existing (plist-get store :rules))
-         (key (or spec-key (and path :path)))
-         (value (or spec-value path))
-         (rule (mevedel-permission-rules-build-rule
-                tool-name action key value
-                :network network
-                :file-system file-system
-                :sandbox-permissions sandbox-permissions))
          (updated (if (member rule existing)
                       existing
                     (append existing (list rule)))))

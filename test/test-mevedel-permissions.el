@@ -761,43 +761,49 @@
   (test)
   :doc "adds rule to session"
   (let ((session (mevedel-session--create :name "test")))
-    (mevedel-permission--add-session-rule session "Edit" 'allow)
+    (mevedel-permission--add-session-rule
+     session '("Edit" :action allow))
     (should (equal (mevedel-session-permission-rules session)
                    '(("Edit" :action allow)))))
   :doc "adds path-scoped rule"
   (let ((session (mevedel-session--create :name "test")))
-    (mevedel-permission--add-session-rule session "Edit" 'allow "/foo/*")
+    (mevedel-permission--add-session-rule
+     session '("Edit" :path "/foo/*" :action allow))
     (should (equal (mevedel-session-permission-rules session)
                    '(("Edit" :path "/foo/*" :action allow)))))
   :doc "appends multiple rules"
   (let ((session (mevedel-session--create :name "test")))
-    (mevedel-permission--add-session-rule session "Read" 'allow)
-    (mevedel-permission--add-session-rule session "Edit" 'deny)
+    (mevedel-permission--add-session-rule
+     session '("Read" :action allow))
+    (mevedel-permission--add-session-rule
+     session '("Edit" :action deny))
     (should (= (length (mevedel-session-permission-rules session)) 2)))
   :doc "deduplicates exact session rules"
   (let ((session (mevedel-session--create :name "test")))
-    (mevedel-permission--add-session-rule session "Read" 'allow)
-    (mevedel-permission--add-session-rule session "Read" 'allow)
-    (mevedel-permission--add-session-rule session "Edit" 'allow "/foo/*")
-    (mevedel-permission--add-session-rule session "Edit" 'allow "/foo/*")
     (mevedel-permission--add-session-rule
-     session "Bash" 'allow nil
-     :spec-key :pattern :spec-value "git diff:*")
+     session '("Read" :action allow))
     (mevedel-permission--add-session-rule
-     session "Bash" 'allow nil
-     :spec-key :pattern :spec-value "git diff:*")
+     session '("Read" :action allow))
+    (mevedel-permission--add-session-rule
+     session '("Edit" :path "/foo/*" :action allow))
+    (mevedel-permission--add-session-rule
+     session '("Edit" :path "/foo/*" :action allow))
+    (mevedel-permission--add-session-rule
+     session '("Bash" :pattern "git diff:*" :action allow))
+    (mevedel-permission--add-session-rule
+     session '("Bash" :pattern "git diff:*" :action allow))
     (should (equal (mevedel-session-permission-rules session)
                    '(("Read" :action allow)
                      ("Edit" :path "/foo/*" :action allow)
                      ("Bash" :pattern "git diff:*" :action allow)))))
   :doc "preserves distinct session rules"
   (let ((session (mevedel-session--create :name "test")))
-    (mevedel-permission--add-session-rule session "Bash" 'allow nil
-     :spec-key :pattern :spec-value "git diff:*")
-    (mevedel-permission--add-session-rule session "Bash" 'deny nil
-     :spec-key :pattern :spec-value "git diff:*")
-    (mevedel-permission--add-session-rule session "Bash" 'allow nil
-     :spec-key :pattern :spec-value "git status:*")
+    (mevedel-permission--add-session-rule
+     session '("Bash" :pattern "git diff:*" :action allow))
+    (mevedel-permission--add-session-rule
+     session '("Bash" :pattern "git diff:*" :action deny))
+    (mevedel-permission--add-session-rule
+     session '("Bash" :pattern "git status:*" :action allow))
     (should (equal (mevedel-session-permission-rules session)
                    '(("Bash" :pattern "git diff:*" :action allow)
                      ("Bash" :pattern "git diff:*" :action deny)
@@ -811,8 +817,7 @@
   (let* ((parent-session (mevedel-session--create :name "parent"))
          (sub-agent-session-alias parent-session))
     (mevedel-permission--add-session-rule
-     sub-agent-session-alias "Bash" 'allow nil
-     :spec-key :pattern :spec-value "ls")
+     sub-agent-session-alias '("Bash" :pattern "ls" :action allow))
     (should (equal (mevedel-session-permission-rules parent-session)
                    '(("Bash" :pattern "ls" :action allow))))
     (should (eq (mevedel-session-permission-rules parent-session)
@@ -919,7 +924,7 @@
                 (mevedel-session-active-dropped-file-grants session)
                 (list path))
           (mevedel-permission-persistence-save-rule
-           workspace "Read" 'allow)
+           workspace '("Read" :action allow))
           (mevedel-permission-persistence-save-resource-grant
            workspace path 'read)
           (should (mevedel-permission-invalidate-target-grants session))
@@ -1051,7 +1056,67 @@
                               :action)
                    'deny)))
   :doc "unknown result defaults to deny"
-  (should (eq (mevedel-permission--apply-prompt-result 'bogus "Edit") 'deny)))
+  (should (eq (mevedel-permission--apply-prompt-result 'bogus "Edit") 'deny))
+
+  :doc "remembers the same complete operation profile in session and workspace"
+  (dolist (specifier '((nil nil) (:path "/outside/*")
+                       (:pattern "build *") (:domain "*.example.com")
+                       (:name "worker")))
+    (let* ((root (make-temp-file "mevedel-rule-profile-" t))
+           (mevedel-user-dir (file-name-concat root "global"))
+           (workspace (mevedel-workspace--create :type 'project :root root))
+           (session (mevedel-session--create :name "test"))
+           (grants (list (list :path (file-name-concat root "cache")
+                               :access 'write :recursive t)))
+           (expected (append (list "Custom")
+                             (and (car specifier) specifier)
+                             (list :network t :file-system grants :action 'allow))))
+      (unwind-protect
+          (progn
+            (should
+             (eq 'allow
+                 (mevedel-permission--apply-prompt-result
+                  'always-allow "Custom" session workspace nil
+                  :spec-key (car specifier) :spec-value (cadr specifier)
+                  :network t :file-system grants)))
+            (should (equal (list expected)
+                           (mevedel-session-permission-rules session)))
+            (should (equal (list expected)
+                           (mevedel-permission-persistence-load-rules workspace)))
+            (should-not (mevedel-session-resource-grants session))
+            (should-not (mevedel-permission-persistence-load-resource-grants workspace)))
+        (delete-directory root t))))
+
+  :doc "selected resource scope and original deny rule remain independent"
+  (let ((session (mevedel-session--create :name "test")))
+    (mevedel-permission--apply-prompt-result
+     'allow-session "Read" session nil "/selected/tree"
+     :spec-key :path :spec-value "/original/file"
+     :resource-access 'read :resource-recursive t)
+    (should (equal '((:path "/selected/tree" :access read :recursive t))
+                   (mevedel-session-resource-grants session)))
+    (should-not (mevedel-session-permission-rules session))
+    (mevedel-permission--apply-prompt-result
+     'deny-session "Read" session nil "/selected/tree"
+     :spec-key :path :spec-value "/original/file"
+     :resource-access 'read :resource-recursive t)
+    (should (equal '(("Read" :path "/original/file" :action deny))
+                   (mevedel-session-permission-rules session))))
+
+  :doc "failed persistent approval does not install a session rule"
+  (let* ((root (make-temp-file "mevedel-rule-failure-" t))
+         (workspace (mevedel-workspace--create :type 'project :root root))
+         (session (mevedel-session--create :name "test"))
+         (file (mevedel-permission-persistence-file workspace 'workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (write-region "invalid" nil file nil 'silent)
+          (should-error (mevedel-permission--apply-prompt-result
+                         'always-allow "Read" session workspace)
+                        :type 'user-error)
+          (should-not (mevedel-session-permission-rules session)))
+      (delete-directory root t))))
 
 
 (mevedel-deftest mevedel-permission--invocation-context ()

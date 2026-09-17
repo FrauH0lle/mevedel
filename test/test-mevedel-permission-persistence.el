@@ -211,8 +211,10 @@
               :file-cache (make-hash-table :test #'equal))))
     (unwind-protect
         (progn
-          (mevedel-permission-persistence-save-rule ws "Read" 'allow)
-          (mevedel-permission-persistence-save-rule ws "Edit" 'deny "/secret/*")
+          (mevedel-permission-persistence-save-rule
+           ws '("Read" :action allow))
+          (mevedel-permission-persistence-save-rule
+           ws '("Edit" :path "/secret/*" :action deny))
           (let ((rules (mevedel-permission-persistence-load-rules ws)))
             (should (= (length rules) 2))
             (should (equal (car rules) '("Read" :action allow)))
@@ -238,9 +240,8 @@
     (unwind-protect
         (progn
           (mevedel-permission-persistence-save-rule
-           ws "Eval" 'allow nil
-           :spec-key :pattern :spec-value "(message *)"
-           :sandbox-permissions 'require-escalated)
+           ws '("Eval" :pattern "(message *)"
+                       :sandbox-permissions require-escalated :action allow))
           (should
            (equal
             '(("Eval" :pattern "(message *)"
@@ -267,7 +268,8 @@
                   :resource-grants nil)
                 (current-buffer)))
           ;; Write project rules
-          (mevedel-permission-persistence-save-rule ws "Edit" 'allow "~/proj/*")
+          (mevedel-permission-persistence-save-rule
+           ws '("Edit" :path "~/proj/*" :action allow))
           (let ((rules (mevedel-permission-persistence-load-rules ws)))
             ;; Global rules first, then project
             (should (= (length rules) 3))
@@ -335,11 +337,9 @@
     (unwind-protect
         (progn
           (mevedel-permission-persistence-save-rule
-           ws "Bash" 'allow nil
-           :spec-key :pattern :spec-value "git diff:*")
+           ws '("Bash" :pattern "git diff:*" :action allow))
           (mevedel-permission-persistence-save-rule
-           ws "Bash" 'allow nil
-           :spec-key :pattern :spec-value "git diff:*")
+           ws '("Bash" :pattern "git diff:*" :action allow))
           (let ((rules (mevedel-permission-persistence-load-rules ws)))
             (should (equal rules
                            '(("Bash" :pattern "git diff:*"
@@ -355,14 +355,11 @@
     (unwind-protect
         (progn
           (mevedel-permission-persistence-save-rule
-           ws "Bash" 'allow nil
-           :spec-key :pattern :spec-value "git diff:*")
+           ws '("Bash" :pattern "git diff:*" :action allow))
           (mevedel-permission-persistence-save-rule
-           ws "Bash" 'deny nil
-           :spec-key :pattern :spec-value "git diff:*")
+           ws '("Bash" :pattern "git diff:*" :action deny))
           (mevedel-permission-persistence-save-rule
-           ws "Bash" 'allow nil
-           :spec-key :pattern :spec-value "git status:*")
+           ws '("Bash" :pattern "git status:*" :action allow))
           (let ((rules (mevedel-permission-persistence-load-rules ws)))
             (should (equal rules
                            '(("Bash" :pattern "git diff:*"
@@ -385,7 +382,8 @@
           (with-temp-file file
             (insert "(:rules malformed :resource-grants nil)"))
           (should-error
-           (mevedel-permission-persistence-save-rule ws "Read" 'allow)
+           (mevedel-permission-persistence-save-rule
+            ws '("Read" :action allow))
            :type 'user-error)
           (should (equal "(:rules malformed :resource-grants nil)"
                          (with-temp-buffer
@@ -407,7 +405,8 @@
                         nil outside nil 'silent)
           (make-symbolic-link outside file)
           (should-error
-           (mevedel-permission-persistence-save-rule ws "Read" 'allow))
+           (mevedel-permission-persistence-save-rule
+            ws '("Read" :action allow)))
           (should (file-symlink-p file))
           (should (equal "(:rules nil :resource-grants nil)\n"
                          (with-temp-buffer
@@ -427,7 +426,8 @@
         (progn
           (make-symbolic-link outside-dir state-dir)
           (should-error
-           (mevedel-permission-persistence-save-rule ws "Read" 'allow))
+           (mevedel-permission-persistence-save-rule
+            ws '("Read" :action allow)))
           (should-not (file-exists-p outside-file)))
       (when (file-symlink-p state-dir)
         (delete-file state-dir))
@@ -446,7 +446,8 @@
               :name "test" :file-cache nil)))
     (unwind-protect
         (progn
-          (mevedel-permission-persistence-save-rule ws "Read" 'allow)
+          (mevedel-permission-persistence-save-rule
+           ws '("Read" :action allow))
           (mevedel-permission-persistence-save-resource-grant ws path 'read)
           (should (eq 'allow
                       (mevedel-check-permission
@@ -904,7 +905,7 @@
           (mevedel-permission-persistence-write-store
            file (list :rules (list rule) :resource-grants nil))
           (mevedel-permission-persistence-save-rule
-           ws "Bash" 'allow nil :spec-key :pattern :spec-value "echo *")
+           ws '("Bash" :pattern "echo *" :action allow))
           (mevedel-permission-validate-persistent-stores ws)
           ;; A separate editor adds a rule after the cockpit's snapshot.
           (with-temp-file file

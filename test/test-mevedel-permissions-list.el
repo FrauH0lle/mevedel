@@ -221,8 +221,7 @@ Return the row's tabulated id."
   (mevedel-permissions-list-test--with-buffers
     (let ((network '("Bash" :pattern "npx test*" :network t :action allow)))
       (mevedel-permission-persistence-save-rule
-       workspace "Bash" 'allow nil
-       :spec-key :pattern :spec-value "npx test*" :network t)
+       workspace network)
       (mevedel-permission-persistence-save-resource-grant
        workspace "/tmp/workspace-external" 'read)
       (with-current-buffer (mevedel-permissions-list-test--open context)
