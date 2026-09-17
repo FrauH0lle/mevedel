@@ -98,16 +98,11 @@
 `mevedel-sandbox--additional-filesystem-mounts' assigns ordered exact mounts"
   (should
    (equal
-    '(:arguments
-      ("--ro-bind-fd" "20" "/target/a"
-       "--bind-fd" "21" "/target/b")
-      :grants
-      ((:path "/target/a" :source-path "/source/a" :access read)
-       (:path "/target/b" :source-path "/source/b" :access write)))
+    '("--ro-bind-fd" "20" "/target/a"
+      "--bind-fd" "21" "/target/b")
     (mevedel-sandbox--additional-filesystem-mounts
-     '(:file-system
-       ((:path "/target/a" :source-path "/source/a" :access read)
-        (:path "/target/b" :source-path "/source/b" :access write)))
+     '((:path "/target/a" :source-path "/source/a" :access read)
+       (:path "/target/b" :source-path "/source/b" :access write))
      20))))
 
 (mevedel-deftest mevedel-sandbox--fd-backed-command ()
