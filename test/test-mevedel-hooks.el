@@ -96,6 +96,131 @@
         (list :event event :default-directory default-directory))
   nil)
 
+(mevedel-deftest mevedel-hooks--annotate-handlers
+  (:doc "annotates every ordered handler without mutating rules or metadata")
+  (let* ((rules '((PreToolUse
+                  (:matcher "Read" :hooks ((:command "first" :source old)
+                                           (:command "second"))))
+                 (Stop (:hooks ((:command "last"))))))
+         (before (copy-tree rules))
+         (properties '(:source nil :source-file "hooks.el"))
+         (annotated (mevedel-hooks--annotate-handlers rules properties)))
+    (should (equal '((PreToolUse
+                      (:matcher "Read"
+                       :hooks ((:command "first" :source nil :source-file "hooks.el")
+                               (:command "second" :source nil :source-file "hooks.el"))))
+                     (Stop (:hooks ((:command "last" :source nil
+                                     :source-file "hooks.el")))))
+                   annotated))
+    (should (equal rules before))
+    (should (equal '(:source nil :source-file "hooks.el") properties))
+    (should-not (mevedel-hooks--annotate-handlers nil properties))))
+
+(mevedel-deftest mevedel-hooks-annotate-rules-source
+  (:doc "copies rule containers without replacing omitted provenance or callbacks")
+  (let* ((callback (lambda (_event) nil))
+         (rules `((PreToolUse
+                   (:matcher "Read" :label "keep"
+                    :hooks ((:type elisp :function ,callback :source old
+                             :source-file "original.el" :source-root "/original/")))
+                   (:matcher "empty" :hooks nil)
+                   (:matcher "absent"))
+                  (Stop)))
+         (before (copy-tree rules))
+         (annotated (mevedel-hooks-annotate-rules-source rules 'user))
+         (group (cadar annotated))
+         (handler (car (plist-get group :hooks))))
+    (should (equal rules before))
+    (should (equal '(PreToolUse Stop) (mapcar #'car annotated)))
+    (should (equal (cddar rules) (cddar annotated)))
+    (should (eq callback (plist-get handler :function)))
+    (should (eq 'user (plist-get handler :source)))
+    (should (equal "original.el" (plist-get handler :source-file)))
+    (should (equal "/original/" (plist-get handler :source-root)))
+    (setf (plist-get group :label) "changed"
+          (plist-get handler :source-root) "/changed/")
+    (should (equal rules before))
+    (let* ((replaced (mevedel-hooks-annotate-rules-source
+                      rules 'project-file "project.el" "/project/"))
+           (handler (car (plist-get (cadar replaced) :hooks))))
+      (should (equal "project.el" (plist-get handler :source-file)))
+      (should (equal "/project/" (plist-get handler :source-root)))
+      (should (equal rules before)))))
+
+(mevedel-deftest mevedel-hooks--annotate-plugin-rules
+  (:doc "replaces plugin authority while retaining manifest provenance")
+  (let* ((root (make-temp-file "mevedel-hooks-annotation" t))
+         (workspace (mevedel-hooks-test--workspace root))
+         (plugin (mevedel-plugin--create :name "demo" :root nil))
+         (rules '((SessionStart
+                   (:matcher "startup"
+                    :hooks ((:type command :command "true"
+                             :source user-file :source-file "hooks.json"
+                             :source-root "/manifest/" :plugin-root "/old/"
+                             :plugin-name "old" :plugin-data "/old/data/"))))))
+         (before (copy-tree rules)))
+    (unwind-protect
+        (let* ((annotated (mevedel-hooks--annotate-plugin-rules
+                          rules plugin workspace))
+               (handler (car (plist-get (cadar annotated) :hooks))))
+          (should (equal rules before))
+          (should (eq 'plugin (plist-get handler :source)))
+          (should (equal "demo" (plist-get handler :plugin-name)))
+          (should (plist-member handler :plugin-root))
+          (should-not (plist-get handler :plugin-root))
+          (should (equal (file-name-concat root ".mevedel/state/plugin-data/demo")
+                         (plist-get handler :plugin-data)))
+          (should (equal "hooks.json" (plist-get handler :source-file)))
+          (should (equal "/manifest/" (plist-get handler :source-root)))
+          (setf (plist-get handler :command) "changed")
+          (should (equal rules before)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks--matcher-target
+  (:doc "dispatch and inspection select the documented field for every event")
+  (let* ((payload '(:tool-name "Read" :role "worker" :trigger "manual"
+                   :source "resume" :reason "close" nil "not-a-target"))
+         (root (make-temp-file "mevedel-hooks-targets" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-context-frozen-p t))
+    (unwind-protect
+        (dolist (case '((PreToolUse :tool-name "Read")
+                        (PermissionRequest :tool-name "Read")
+                        (PermissionDenied :tool-name "Read")
+                        (PostToolUse :tool-name "Read")
+                        (PostToolUseFailure :tool-name "Read")
+                        (SubagentStart :role "worker")
+                        (SubagentStop :role "worker")
+                        (PreCompact :trigger "manual")
+                        (PostCompact :trigger "manual")
+                        (SessionStart :source "resume")
+                        (SessionEnd :reason "close")
+                        (UserPromptSubmit nil nil)
+                        (UserPromptExpansion nil nil)
+                        (Stop nil nil) (StopFailure nil nil)))
+          (pcase-let ((`(,event ,key ,target) case))
+            (let (mevedel-hooks-test--elisp-origin finished)
+              (setf (mevedel-session-hook-rules session)
+                    `((,event
+                       (:matcher ,(or target "*")
+                        :hooks ((:type elisp
+                                 :function
+                                 mevedel-hooks-test--capture-elisp-origin))))))
+              (should (eq key (mevedel-hooks--target-key-for-event event)))
+              (should (equal target (mevedel-hooks--matcher-target event payload)))
+              (let ((dry (mevedel-hooks-run-dry event payload session)))
+                (should (= 1 (plist-get dry :handler-count)))
+                (should (equal target (plist-get dry :matcher-target))))
+              (should-not mevedel-hooks-test--elisp-origin)
+              (mevedel-hooks-run-event
+               event payload (lambda (_decision) (setq finished t)) session)
+              (should (eq event (plist-get
+                                 (plist-get mevedel-hooks-test--elisp-origin :event)
+                                 :hook-event-name)))
+              (should finished))))
+      (delete-directory root t))
+    (should-not (mevedel-hooks--matcher-target 'Unknown payload))))
+
 (mevedel-deftest mevedel-hooks-tool-event-plist
   (:doc "carries nested tool identity and source into hook payloads")
   (let* ((tool (mevedel-tool--create :name "Child"))

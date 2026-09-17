@@ -680,9 +680,9 @@ The returned plist includes `:path', `:hash', `:content', and
   "Append normalized hook rule LAYER to RULES."
   (append rules (mevedel-hooks-normalize-rules layer)))
 
-(defun mevedel-hooks-annotate-rules-source
-    (rules source &optional source-file source-root)
-  "Annotate RULES with SOURCE, SOURCE-FILE, and SOURCE-ROOT provenance."
+(defun mevedel-hooks--annotate-handlers (rules properties)
+  "Return a copy of RULES with PROPERTIES applied to every handler.
+Copy rule containers and handler plists; retain their nested values."
   (mapcar
    (lambda (entry)
      (cons
@@ -696,48 +696,35 @@ The returned plist includes `:path', `:hash', `:content', and
                     copy :hooks
                     (mapcar
                      (lambda (handler)
-                       (let ((handler (copy-sequence handler)))
-                         (setq handler (plist-put handler :source source))
-                         (when source-file
-                           (setq handler
-                                 (plist-put handler :source-file source-file)))
-                         (when source-root
-                           (setq handler
-                                 (plist-put handler :source-root source-root)))
+                       (let ((handler (copy-sequence handler))
+                             (properties properties))
+                         (while properties
+                           (setq handler (plist-put handler
+                                                    (pop properties)
+                                                    (pop properties))))
                          handler))
                      hooks))))
            copy))
        (cdr entry))))
    rules))
 
+(defun mevedel-hooks-annotate-rules-source
+    (rules source &optional source-file source-root)
+  "Annotate RULES with SOURCE, SOURCE-FILE, and SOURCE-ROOT provenance."
+  (mevedel-hooks--annotate-handlers
+   rules (append (list :source source)
+                 (when source-file (list :source-file source-file))
+                 (when source-root (list :source-root source-root)))))
+
 (defun mevedel-hooks--annotate-plugin-rules (rules plugin &optional workspace)
   "Return RULES with every handler annotated for PLUGIN execution.
 Plugin runtime data is scoped to WORKSPACE when provided."
-  (let* ((name (mevedel-plugin-name plugin))
-         (root (mevedel-plugin-root plugin))
-         (data (mevedel-plugins-plugin-data-dir name workspace)))
-    (mapcar
-     (lambda (entry)
-       (cons
-        (car entry)
-        (mapcar
-         (lambda (group)
-           (let ((copy (copy-sequence group)))
-             (when-let* ((hooks (plist-get copy :hooks)))
-               (setq copy
-                     (plist-put
-                      copy :hooks
-                      (mapcar
-                       (lambda (handler)
-                         (let ((handler (copy-sequence handler)))
-                           (setq handler (plist-put handler :source 'plugin))
-                           (setq handler (plist-put handler :plugin-name name))
-                           (setq handler (plist-put handler :plugin-root root))
-                           (plist-put handler :plugin-data data)))
-                       hooks))))
-             copy))
-         (cdr entry))))
-     rules)))
+  (mevedel-hooks--annotate-handlers
+   rules (list :source 'plugin
+               :plugin-name (mevedel-plugin-name plugin)
+               :plugin-root (mevedel-plugin-root plugin)
+               :plugin-data (mevedel-plugins-plugin-data-dir
+                             (mevedel-plugin-name plugin) workspace))))
 
 (defun mevedel-hooks--plugin-manifest-rules (plugin)
   "Return normalized manifest hook rules for PLUGIN."
@@ -907,20 +894,23 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 ;;
 ;;; Matching
 
-(defun mevedel-hooks--matcher-target (event event-plist)
-  "Return matcher target for EVENT from EVENT-PLIST."
+(defun mevedel-hooks--target-key-for-event (event)
+  "Return the primary matcher payload key for EVENT, or nil."
   (pcase event
     ((guard (memq event mevedel-hooks-tool-events))
-     (plist-get event-plist :tool-name))
+     :tool-name)
     ((or 'SubagentStart 'SubagentStop)
-     (plist-get event-plist :role))
+     :role)
     ((or 'PreCompact 'PostCompact)
-     (plist-get event-plist :trigger))
-    ('SessionStart
-     (plist-get event-plist :source))
-    ('SessionEnd
-     (plist-get event-plist :reason))
+     :trigger)
+    ('SessionStart :source)
+    ('SessionEnd :reason)
     (_ nil)))
+
+(defun mevedel-hooks--matcher-target (event event-plist)
+  "Return matcher target for EVENT from EVENT-PLIST."
+  (when-let* ((key (mevedel-hooks--target-key-for-event event)))
+    (plist-get event-plist key)))
 
 (defun mevedel-hooks-matcher-matches-p (matcher target)
   "Return non-nil when MATCHER matches TARGET."
@@ -2306,19 +2296,6 @@ decision plist."
            (unless (memq event '(Stop StopFailure)) request)
            nil #'finish
            dispatch-buffer))))))
-
-(defun mevedel-hooks--target-key-for-event (event)
-  "Return the primary matcher payload key for EVENT, or nil."
-  (pcase event
-    ((guard (memq event mevedel-hooks-tool-events))
-     :tool-name)
-    ((or 'SubagentStart 'SubagentStop)
-     :role)
-    ((or 'PreCompact 'PostCompact)
-     :trigger)
-    ('SessionStart :source)
-    ('SessionEnd :reason)
-    (_ nil)))
 
 ;;;###autoload
 (defun mevedel-hooks-run-dry
