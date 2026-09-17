@@ -65,26 +65,6 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel--session)
 
-;; `mevedel-transcript'
-(declare-function mevedel-transcript--user-prompt-start
-                  "mevedel-transcript" (pos next prop &optional state))
-(declare-function mevedel-transcript-prompt-scan-state
-                  "mevedel-transcript" ())
-(declare-function mevedel-transcript-project-evidence
-                  "mevedel-transcript" (ranges &rest keys))
-(declare-function mevedel-transcript-segments
-                  "mevedel-transcript" (start end))
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel--strip-hook-audit-blocks
-                  "mevedel-transcript-audit" (text))
-(declare-function mevedel-transcript-audit-records
-                  "mevedel-transcript-audit" (text &optional type))
-(declare-function mevedel-transcript-buffer-directive-ranges
-                  "mevedel-transcript-audit" (&optional allow-open))
-(declare-function mevedel-transcript-exclude-directive-turns
-                  "mevedel-transcript-audit" (&optional fsm))
-
 ;; `org'
 (declare-function org-find-property "org" (property &optional value))
 
@@ -445,7 +425,7 @@ reconstructed into a child conversation."
      (let* ((agent-p (bound-and-true-p mevedel--agent-invocation))
             (summary (if agent-p
                          (mevedel-compact-evidence-agent-summary-bounds)
-                       (mevedel-compact-evidence--summary-bounds)))
+                       (mevedel-session-artifacts-segment-summary-bounds)))
             (body-start (or (plist-get summary :end) (point-min)))
             (starts (mevedel-compact-evidence-turn-starts-before
                      (point-max) body-start))
@@ -597,14 +577,9 @@ compaction was in flight remain in place."
           (insert-buffer-substring source-buffer))
         (mevedel-transcript-exclude-directive-turns)))))
 
-(defun mevedel-compact-evidence--summary-bounds ()
-  "Return plist bounds for the leading summary block, or nil.
-The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
-  (mevedel-session-artifacts-segment-summary-bounds))
-
 (defun mevedel-compact-evidence-previous-summary ()
   "Return the leading compaction summary body, or nil."
-  (when-let* ((bounds (mevedel-compact-evidence--summary-bounds)))
+  (when-let* ((bounds (mevedel-session-artifacts-segment-summary-bounds)))
     (mevedel-session-artifacts-strip-summary-handoff-prefix
      (string-trim
       (mevedel--strip-hook-audit-blocks
@@ -614,7 +589,7 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
 
 (defun mevedel-compact-evidence-body-start ()
   "Return the position after the leading summary block, if present."
-  (if-let* ((bounds (mevedel-compact-evidence--summary-bounds)))
+  (if-let* ((bounds (mevedel-session-artifacts-segment-summary-bounds)))
       (plist-get bounds :end)
     (point-min)))
 
