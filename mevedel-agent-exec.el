@@ -85,65 +85,13 @@
 (defvar gptel-use-curl)
 (defvar gptel-use-tools)
 
-;; `mevedel-agent-conversation'
-(declare-function mevedel-agent-conversation-configure
-                  "mevedel-agent-conversation" (invocation &optional buffer))
-(declare-function mevedel-agent-conversation-final-response
-                  "mevedel-agent-conversation" (invocation))
-(declare-function mevedel-agent-conversation-record-activity
-                  "mevedel-agent-conversation"
-                  (invocation item &optional suppress-rerender))
-(declare-function mevedel-agent-conversation-save
-                  "mevedel-agent-conversation" (invocation &optional deferred))
-
-;; `mevedel-agents'
-(declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-configuration--create
-                  "mevedel-agents" (&rest args))
-(declare-function mevedel-agent-configuration-p
-                  "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-configuration-request-locals
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-freeze "mevedel-agents" (agent))
-(declare-function mevedel-agent-invocation-activity
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-frozen-configuration
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-runtime-fsm
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-skill-model-override
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-terminal-reason
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-relative-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-system-prompt "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
-(defvar mevedel-agent-request-local-symbols)
-
 ;; `mevedel-compact'
 (declare-function mevedel--compact-handle-agent-wait
                   "mevedel-compact" (fsm))
 
-;; `mevedel-compact-estimation'
-(declare-function mevedel-compact-estimation-record-token-baseline
-                  "mevedel-compact-estimation" (fsm))
-
-;; `mevedel-models'
-(declare-function mevedel-model-resolve-workload
-                  "mevedel-models"
-                  (workload &optional explicit-selector explicit-effort))
-(defvar mevedel-model-tiers)
-(defvar mevedel-model-workloads)
-
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--agent-transform
                   "mevedel-reminders" (fsm))
-
-;; `mevedel-tool-ptc'
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
@@ -157,11 +105,6 @@
 
 (defvar mevedel-agent-exec-debug nil
   "Non-nil enables request-driver lifecycle diagnostics.")
-
-;; `mevedel-view-agent'
-(declare-function mevedel-view-agent-live-transcript-finalize
-                  "mevedel-view-agent" (invocation))
-
 
 (defun mevedel-agent-exec--error-reason-from-info (info)
   "Extract a short human reason string from gptel-fsm INFO, or nil.
@@ -201,14 +144,10 @@ Reads `gptel-fsm-info' and delegates to
 ;;
 ;;; FSM handler table
 
-(defun mevedel-agent-exec--invocation-from-info (info)
-  "Return the `mevedel-agent-invocation' recorded on INFO, or nil."
-  (plist-get info :mevedel-agent-invocation))
-
 (defun mevedel-agent-exec--invocation-from-fsm (fsm)
   "Return the `mevedel-agent-invocation' for FSM, or nil."
   (when fsm
-    (mevedel-agent-exec--invocation-from-info (gptel-fsm-info fsm))))
+    (plist-get (gptel-fsm-info fsm) :mevedel-agent-invocation)))
 
 (defun mevedel-agent-exec--handle-tret-save (fsm)
   "Schedule an agent-buffer save for FSM after tool-result handling.
@@ -229,12 +168,7 @@ running Org save machinery synchronously on every tool boundary."
        inv '(:type waiting :summary "waiting")))))
 
 (defun mevedel-agent-exec--handle-done-save (fsm)
-  "Run gptel's post-insert path so `gptel-post-response-functions' fires.
-
-The current sub-agent FSM table had no DONE entry; this hook delegates
-to `gptel--handle-post-insert' and then triggers an explicit transcript
-save (for completeness; the post-response hook also calls the save
-helper buffer-locally)."
+  "Run gptel's post-response hooks for FSM, then save the transcript."
   (when (fboundp 'gptel--handle-post-insert)
     (condition-case _ (gptel--handle-post-insert fsm) (error nil)))
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
@@ -611,8 +545,7 @@ provider callback."
                         text))
                     (deliver-error ()
                       (let* ((fallback-partial (partial-string))
-                             (inv (mevedel-agent-exec--invocation-from-info
-                                   info)))
+                             (inv (plist-get info :mevedel-agent-invocation)))
                         (when-let* ((reason
                                      (mevedel-agent-exec--error-reason-from-info
                                       info)))
@@ -656,8 +589,7 @@ partial-len=%d :tool-use=%S :stream=%S"
                                              (funcall transformer text)
                                            text))
                                         (inv
-                                         (mevedel-agent-exec--invocation-from-info
-                                          info))
+                                         (plist-get info :mevedel-agent-invocation))
                                         (final-response
                                          (mevedel-agent-conversation-final-response
                                           inv)))
@@ -691,13 +623,11 @@ partial-len=%d :tool-use=%S :stream=%S"
                ;; Non-streaming terminal: gptel removes `:stream' from INFO
                ;; and never fires `t'.  Treat the string as terminal when no
                ;; tool use is pending.
-               (when (and (not fired)
-                          (not (plist-get info :stream))
+               (when (and (not (plist-get info :stream))
                           (not (plist-get info :tool-use)))
                  (finalize)))
               ('t
-               (when (and (not fired)
-                          (not (plist-get info :tool-use)))
+               (unless (plist-get info :tool-use)
                  (finalize)))
               ('abort
                (when (overlayp ov) (delete-overlay ov))

@@ -197,16 +197,6 @@ fire-count and payload."
 							 (should (equal "reasoning about tool call continuation after tools"
 									(car (car fired)))))
 
-		 :doc "streaming: single chunk on non-streaming path does not double-fire on later `t'"
-		 ;; Defensive: if gptel ever delivers both a non-streaming string and
-		 ;; a `t' (shouldn't happen in current gptel), the fired latch keeps
-		 ;; MAIN-CB at one invocation.
-		 (mevedel-agent-exec-test--with-callback cb
-							 (funcall cb "one-shot" nil)
-							 (funcall cb t nil)
-							 (should (= 1 (length fired)))
-							 (should (equal "one-shot" (car (car fired)))))
-
 		 :doc "streaming chunk with `:stream' t: string branch defers to `t'"
 		 ;; With `:stream' set, per-chunk firing is disabled; the 't signal
 		 ;; remains the terminal.  Mirrors real streaming backends.
@@ -790,18 +780,15 @@ fire-count and payload."
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
 
 
-(mevedel-deftest mevedel-agent-exec--invocation-from-info ()
-		 ,test
-		 (test)
-
-		 :doc "prefers the invocation stored directly on the FSM info plist"
-		 (let* ((agent (mevedel-agent--create :name "explorer"))
-			(inv (mevedel-agent-invocation--create :agent agent)))
-		   (should (eq inv (mevedel-agent-exec--invocation-from-info
-				    (list :mevedel-agent-invocation inv)))))
-
-		 )
-
+(mevedel-deftest mevedel-agent-exec--invocation-from-fsm ()
+  ,test
+  (test)
+  :doc "reads the invocation from FSM info and tolerates absent state"
+  (let* ((inv (mevedel-agent-invocation--create))
+         (fsm (gptel-make-fsm :info (list :mevedel-agent-invocation inv))))
+    (should (eq inv (mevedel-agent-exec--invocation-from-fsm fsm)))
+    (should-not (mevedel-agent-exec--invocation-from-fsm nil))
+    (should-not (mevedel-agent-exec--invocation-from-fsm (gptel-make-fsm)))))
 
 
 (mevedel-deftest mevedel-agent-exec--handle-tret-save ()
