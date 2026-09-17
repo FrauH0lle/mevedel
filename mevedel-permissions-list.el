@@ -103,7 +103,9 @@ An execution profile's remembered child grants follow the pattern."
           :access (or (plist-get plist :action) 'allow)
           :subject (car rule)
           :spec (concat
-                 (or (plist-get plist :pattern)
+                 (or (when-let* ((expression (plist-get plist :expression)))
+                       (concat expression " (literal)"))
+                     (plist-get plist :pattern)
                      (plist-get plist :path)
                      (plist-get plist :domain)
                      (plist-get plist :name)

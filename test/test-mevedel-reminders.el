@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'mevedel-hooks)
+
 (require 'gptel)
 (require 'gptel-gemini)
 (require 'gptel-request)
@@ -1200,6 +1202,8 @@ this collapses both shapes to the delivered text."
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-full-auto-mode)))
+    (should (string-search "Live Eval runs inside Emacs without confinement."
+                           (funcall (mevedel-reminder-content r) session)))
     (setf (mevedel-session-permission-mode session) 'full-auto)
     (should (mevedel-reminders--should-fire-p r 0 session))
     (setf (mevedel-reminder-last-fired r) 0)

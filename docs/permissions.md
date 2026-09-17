@@ -148,7 +148,8 @@ One specifier per rule:
 | Key        | Matches                | Used by                           |
 |------------|------------------------|-----------------------------------|
 | `:path`    | path (glob, `~` exp.)  | Read, ApplyPatch, Glob, Grep, ... |
-| `:pattern` | command/expression glob | Bash; full-escalation Eval rules |
+| `:pattern` | command/expression glob | Bash; deliberately authored Eval rules |
+| `:expression` | whole expression, literal | Remembered Eval approvals and execution profiles |
 | `:domain`  | host name (glob)       | WebFetch, WebSearch               |
 | `:name`    | free-form name (glob)  | Agent (`role`)                    |
 
@@ -719,6 +720,13 @@ ambiguous Bash remains invocation-only; experts may still author an exact,
 scoped, or deliberately broad qualified rule directly. Reusable deny remains
 available because it can only reduce authority.
 
+Remembered Eval rules use `:expression`, including ordinary permission,
+additive profiles, and full escalation. They match the complete expression text
+with no wildcard expansion or whitespace normalization. Approving
+`(message "*")` therefore does not authorize `(message "different")`.
+Deliberately authored `:pattern` rules retain glob semantics; the remembered
+authority cockpit labels literal expression rules explicitly.
+
 `best-effort` executes directly when the initial probe is unavailable. Once
 confined preparation begins, a failure is returned without an unrestricted
 replacement. A private marker emitted immediately before `exec` distinguishes
@@ -785,6 +793,9 @@ specialized card. The expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.  The prompt also shows the
 requested execution mode and, for live Eval, whether UI preservation is
 enabled.
+
+The full-auto reminder explicitly states that live Eval runs inside Emacs
+without confinement, alongside the tool and permission-card disclosures.
 
 Eval supports two execution modes.  `live` is the default and evaluates
 inside the current Emacs process so the expression can inspect live

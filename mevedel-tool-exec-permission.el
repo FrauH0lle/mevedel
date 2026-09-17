@@ -347,7 +347,7 @@ Fall back to direct queue admission for callers outside the tool pipeline."
         (let ((safe (list :tool-name tool-name :origin origin :mode mode
                           :outcome outcome :via via)))
           (when-let* ((key (plist-get props :specifier-key))
-                      ((memq key '(:path :pattern :domain :name))))
+                      ((memq key '(:path :pattern :expression :domain :name))))
             (setq safe (plist-put safe :specifier-key key)))
           (when (plist-member props :protected-path)
             (setq safe
@@ -736,6 +736,7 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
   (when (memq outcome '(allow-session always-allow))
     (let* ((selection
             (car (plist-get request :remember-cell)))
+           (spec-key (if (equal tool-name "Eval") :expression :pattern))
            (patterns (plist-get request :remember-patterns))
            (profile
             (mevedel-tool-exec-permission--additional-profile
@@ -756,11 +757,11 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
                    (not (member pattern profile-patterns)))
           (mevedel-permission--apply-prompt-result
            outcome tool-name session workspace nil
-           :spec-key :pattern :spec-value pattern)))
+           :spec-key spec-key :spec-value pattern)))
       (dolist (pattern profile-patterns)
         (mevedel-permission--apply-prompt-result
          outcome tool-name session workspace nil
-         :spec-key :pattern :spec-value pattern
+         :spec-key spec-key :spec-value pattern
          :network (plist-get profile :network)
          :file-system (plist-get profile :file-system)))
       (dolist (grant (plist-get selection :resource-grants))
@@ -935,7 +936,8 @@ BUCKETS supplies ordinary and execution-level rules for LEVEL."
     ((or 'allow-session 'always-allow)
      (mevedel-permission--apply-prompt-result
       outcome tool-name session workspace nil
-      :spec-key :pattern :spec-value detail
+      :spec-key (if (equal tool-name "Eval") :expression :pattern)
+      :spec-value detail
       :sandbox-permissions level)
      (mevedel-tool-exec-permission--permission-decision-result
       metadata-p 'allow 'sandbox-full-escalation
@@ -943,7 +945,8 @@ BUCKETS supplies ordinary and execution-level rules for LEVEL."
     ('deny-session
      (mevedel-permission--apply-prompt-result
       outcome tool-name session workspace nil
-      :spec-key :pattern :spec-value detail
+      :spec-key (if (equal tool-name "Eval") :expression :pattern)
+      :spec-value detail
       :sandbox-permissions level)
      (mevedel-tool-exec-permission--full-escalation-denial metadata-p))
     (`(feedback . ,text)
@@ -974,7 +977,8 @@ once with the applied prompt result."
       (mevedel-tool-exec-permission--log-permission-decision
        tool-name 'ask via permission-context
        :sandbox-permissions level
-       :specifier-key :pattern :specifier-value detail))
+       :specifier-key (if (equal tool-name "Eval") :expression :pattern)
+       :specifier-value detail))
     (mevedel-tool-exec-permission--request-permission
      (list
       :kind 'sandbox
@@ -984,7 +988,7 @@ once with the applied prompt result."
       :mutation-p (mevedel-tool-exec-permission--mutation-p tool-name detail)
       :sandbox-permissions level
       :justification (plist-get request :justification)
-      :specifier-key :pattern
+      :specifier-key (if (equal tool-name "Eval") :expression :pattern)
       :specifier-value detail
       :include-always
       (mevedel-tool-exec-permission--full-escalation-reusable-rule-p
@@ -1057,7 +1061,7 @@ identifies rule or mode authority."
           (lambda (stored-outcome)
             (mevedel-permission--apply-prompt-result
              stored-outcome "Eval" session workspace nil
-             :spec-key :pattern
+             :spec-key :expression
              :spec-value expression))
           "Eval cancelled by user. Feedback: ")))
     (mevedel-tool-exec-permission--permission-decision-result
@@ -1089,7 +1093,7 @@ Feedback: TEXT\"."
            :remember-authority-cell (list '(:operation t))
            :include-always (not (null workspace))
            :workspace workspace
-           :specifier-key :pattern
+           :specifier-key :expression
            :specifier-value expression
            :origin
            (mevedel-tool-exec-permission--permission-origin permission-context)
@@ -1407,7 +1411,8 @@ then decides again until the invocation is allowed or denied."
                      (mevedel-bash-policy-decision-specifier-value detail))))
          (escalation-props
           (list :sandbox-permissions level
-                :specifier-key :pattern :specifier-value detail))
+                :specifier-key (if bash-p :pattern :expression)
+                :specifier-value detail))
          settled operation-logged operation-result)
     (cl-labels
         ((record (outcome via &rest props)

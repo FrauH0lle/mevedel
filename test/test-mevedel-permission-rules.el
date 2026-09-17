@@ -114,6 +114,17 @@
 (mevedel-deftest mevedel-permission-rules-find ()
   ,test
   (test)
+  :doc "literal Eval expressions stay distinct from deliberately authored pattern rules"
+  (let* ((literal '("Eval" :expression "(message \"*\")" :action allow))
+         (pattern '("Eval" :pattern "(message \"*\")" :action ask))
+         (rules (list literal pattern)))
+    (should (equal rules (mevedel-permission-rules-find
+                          rules "Eval" :pattern "(message \"*\")")))
+    (should (equal (list pattern) (mevedel-permission-rules-find
+                                  rules "Eval" :pattern "(message \"different\")")))
+    (should-not (mevedel-permission-rules-find
+                 '(("*" :expression "(message \"*\")" :action allow))
+                 "Bash" :pattern "(message \"*\")")))
   :doc "exact tool name match"
   (let ((rules '(("Read" :action allow))))
     (should (equal (length (mevedel-permission-rules-find rules "Read")) 1))
@@ -443,6 +454,22 @@
 (mevedel-deftest mevedel-permission-rules-execution-level-decision ()
   ,test
   (test)
+  :doc "literal Eval grants preserve execution-level and direct-authority boundaries"
+  (let* ((expression "(message \"*\")")
+         (allow (list "Eval" :expression expression
+                      :sandbox-permissions 'require-escalated :action 'allow))
+         (deny (list "Eval" :expression expression
+                     :sandbox-permissions 'require-escalated :action 'deny)))
+    (dolist (bucket '(:session :persistent :defcustom))
+      (should (eq 'allow (mevedel-permission-rules-execution-level-decision
+                          (list (cons bucket (list allow)))
+                          "Eval" 'require-escalated expression))))
+    (should-not (mevedel-permission-rules-execution-level-decision
+                 (list (cons :skill (list allow))) "Eval" 'require-escalated expression))
+    (should (eq 'deny (mevedel-permission-rules-execution-level-decision
+                       (list (cons :session (list allow)) (cons :skill (list deny)))
+                       "Eval" 'require-escalated expression)))
+    (should-not (mevedel-permission-rules-action (list allow) "Eval" :pattern expression)))
   :doc "direct scoped rule authorizes only its requested execution level"
   (let ((mevedel-permission-rules nil)
         (buckets

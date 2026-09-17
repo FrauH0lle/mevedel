@@ -147,7 +147,7 @@ normalizes rule path patterns."
            (specifier-keys
             (cl-remove-if-not
              (lambda (key) (plist-member plist key))
-             '(:path :pattern :domain :name)))
+             '(:path :pattern :expression :domain :name)))
            (file-system-present (plist-member plist :file-system))
            (file-system (plist-get plist :file-system))
            (normalized-file-system
@@ -161,7 +161,7 @@ normalizes rule path patterns."
       (when (and
              (mevedel-permission--valid-plist-p
               plist
-              '(:path :pattern :domain :name :network :file-system
+              '(:path :pattern :expression :domain :name :network :file-system
                 :sandbox-permissions :action)
               '(:action))
              (<= (length specifier-keys) 1)

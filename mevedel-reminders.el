@@ -859,7 +859,7 @@ sparsely while that mode remains active."
    :trigger (lambda (session)
               (eq (mevedel-reminders--session-mode session) 'full-auto))
    :content (lambda (_session)
-              "Full-auto mode is active. Heuristic Bash and Eval prompts are skipped, but explicit denies and protected-resource authority still apply. Keep destructive tool calls deliberate.")
+              "Full-auto mode is active. Heuristic Bash and Eval prompts are skipped, but explicit denies and protected-resource authority still apply. Live Eval runs inside Emacs without confinement. Keep destructive tool calls deliberate.")
    :interval (or interval 5)))
 
 (defun mevedel-reminders-make-full-auto-mode-exit ()

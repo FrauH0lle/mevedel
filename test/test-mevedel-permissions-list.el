@@ -79,6 +79,12 @@ Return the row's tabulated id."
 (mevedel-deftest mevedel-permissions-list--collect ()
   ,test
   (test)
+  :doc "shows a remembered Eval expression with its literal matching extent"
+  (mevedel-permissions-list-test--with-buffers
+    (setf (mevedel-session-permission-rules session)
+          '(("Eval" :expression "(message \"*\")" :action allow)))
+    (should (equal "(message \"*\") (literal)"
+                   (plist-get (car (mevedel-permissions-list--collect context)) :spec))))
   :doc "distinguishes session operation, network, and resource authority"
   (mevedel-permissions-list-test--with-buffers
     (setf (mevedel-session-permission-rules session)
