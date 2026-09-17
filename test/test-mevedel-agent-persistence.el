@@ -139,13 +139,14 @@
                   (plist-get encoded :request-locals))))
   :doc "rejects a missing frozen configuration"
   (should-error (mevedel-agent-persistence--encode-configuration nil))
-  :doc "rejects an incomplete durable request-local configuration"
-  (let ((configuration
-         (mevedel-agent-persistence-test--configuration)))
-    (setf (mevedel-agent-configuration-request-locals configuration)
-          (cdr (mevedel-agent-configuration-request-locals configuration)))
-    (should-error
-     (mevedel-agent-persistence--encode-configuration configuration))))
+  :doc "rejects incomplete and malformed durable request-local configurations"
+  (let* ((configuration (mevedel-agent-persistence-test--configuration))
+         (locals (mevedel-agent-configuration-request-locals configuration)))
+    (dolist (invalid (list (cdr locals) (cons 'bad locals)
+                          (cons '("gptel-model" . bad) locals)))
+      (setf (mevedel-agent-configuration-request-locals configuration) invalid)
+      (should-error
+       (mevedel-agent-persistence--encode-configuration configuration)))))
 
 (mevedel-deftest mevedel-agent-persistence--serialize-record ()
   ,test
@@ -233,6 +234,9 @@
      :type 'mevedel-agent-persistence-invalid-data)
     (dolist (locals
              (list
+              (cons 'bad (copy-tree (plist-get encoded :request-locals)))
+              (cons '("gptel-model" . bad)
+                    (copy-tree (plist-get encoded :request-locals)))
               (cons '(kill-buffer-hook . (ignore))
                     (copy-tree (plist-get encoded :request-locals)))
               (append (copy-tree (plist-get encoded :request-locals))
@@ -286,41 +290,17 @@
 (mevedel-deftest mevedel-agent-persistence-transcript-path-p ()
   ,test
   (test)
-  :doc "accepts well-formed relative paths under agents/"
+  :doc "accepts relative agent transcripts and rejects other path shapes"
   (let ((tmp (file-name-as-directory (make-temp-file "agent-path-" t))))
     (unwind-protect
-        (should (mevedel-agent-persistence-transcript-path-p
-                 "agents/task.chat.org" tmp))
+        (progn
+          (should (mevedel-agent-persistence-transcript-path-p
+                   "agents/task.chat.org" tmp))
+          (dolist (path '("/etc/passwd.chat.org" "agents/../escape.chat.org"
+                          "agents/transcript.txt" "outside/file.chat.org"))
+            (should-not (mevedel-agent-persistence-transcript-path-p path tmp))))
       (delete-directory tmp t)))
-  :doc "rejects absolute paths"
-  (let ((tmp (file-name-as-directory (make-temp-file "agent-path-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-agent-persistence-transcript-path-p
-          "/etc/passwd.chat.org" tmp))
-      (delete-directory tmp t)))
-  :doc "rejects paths with parent segments"
-  (let ((tmp (file-name-as-directory (make-temp-file "agent-path-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-agent-persistence-transcript-path-p
-          "agents/../escape.chat.org" tmp))
-      (delete-directory tmp t)))
-  :doc "rejects non-transcript suffixes"
-  (let ((tmp (file-name-as-directory (make-temp-file "agent-path-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-agent-persistence-transcript-path-p
-          "agents/transcript.txt" tmp))
-      (delete-directory tmp t)))
-  :doc "rejects paths outside the agents directory"
-  (let ((tmp (file-name-as-directory (make-temp-file "agent-path-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-agent-persistence-transcript-path-p
-          "outside/file.chat.org" tmp))
-      (delete-directory tmp t)))
-  :doc "rejects an existing transcript symlink that escapes agents/"
+  :doc "checks local symlinks but leaves remote cache validation to publication"
   (let* ((tmp (file-name-as-directory (make-temp-file "agent-path-" t)))
          (agents (file-name-concat tmp "agents"))
          (outside (make-temp-file "agent-path-outside-" nil ".chat.org"))
@@ -331,19 +311,7 @@
           (make-symbolic-link outside link)
           (should-not
            (mevedel-agent-persistence-transcript-path-p
-            "agents/linked.chat.org" tmp)))
-      (when (file-exists-p link) (delete-file link))
-      (when (file-exists-p outside) (delete-file outside))
-      (delete-directory tmp t)))
-  :doc "ignores a poisoned fixed cache when the session path is remote"
-  (let* ((tmp (file-name-as-directory (make-temp-file "agent-path-" t)))
-         (agents (file-name-concat tmp "agents"))
-         (outside (make-temp-file "agent-path-outside-" nil ".chat.org"))
-         (link (file-name-concat agents "linked.chat.org")))
-    (unwind-protect
-        (progn
-          (make-directory agents t)
-          (make-symbolic-link outside link)
+            "agents/linked.chat.org" tmp))
           (cl-letf (((symbol-function 'file-remote-p)
                      (lambda (path &optional _identification _connected)
                        (and (equal path tmp) "/mock:"))))
