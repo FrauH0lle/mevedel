@@ -67,7 +67,7 @@
                                   :focus "" :digests nil :proposals nil :references references)))
                    (stored (mevedel-journal-store-read directory (plist-get review :file))))
               (should (equal references (plist-get stored :references))))
-          (should (equal body (with-temp-buffer (insert-file-contents topic) (buffer-string))))))
+          (should (equal body (mevedel-test--read-file topic)))))
       (delete-directory directory t)))
   :doc "longer inline delimiters do not lose the following reference and private paths remain unknown"
   (let* ((directory (make-temp-file "mevedel-memory-reference-inline-" t))
