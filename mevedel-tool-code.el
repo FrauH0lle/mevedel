@@ -559,19 +559,13 @@ than silently answered for somewhere else."
       (file-name-nondirectory path)
     "?"))
 
-(defun mevedel-tool-code--result-lines (result)
-  "Return non-empty line count for RESULT."
-  (if (stringp result)
-      (length (split-string result "\n" t))
-    0))
-
 (defun mevedel-tool-code--location-count (result)
   "Return number of file:line style entries in RESULT."
   (if (or (not (stringp result))
           (string-prefix-p "Error" result)
           (string-prefix-p "No " result))
       0
-    (mevedel-tool-code--result-lines result)))
+    (length (split-string result "\n" t))))
 
 (defun mevedel-tool-code--render-xref (name args result _render-data)
   "Return rendering plist for xref tool NAME with ARGS and RESULT."
