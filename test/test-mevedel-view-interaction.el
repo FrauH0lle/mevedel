@@ -286,6 +286,33 @@
 (mevedel-deftest mevedel-view--interaction-register ()
   ,test
   (test)
+  :doc "replacement clears optional metadata while retaining the callback handle"
+  (dolist (cleared '(nil (:keymap nil :help-echo nil :entry nil :activate nil)))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (let* ((base '(:kind preview :id preview :body "Preview"))
+               (overlay
+                (mevedel-view--interaction-register
+                 (append base (list :keymap (make-sparse-keymap)
+                                    :help-echo "Details" :entry 'entry
+                                    :activate #'ignore :read-only nil)))))
+          (overlay-put overlay 'test-private-state 'retained)
+          (dolist (property '(keymap help-echo mevedel-view-interaction-entry
+                             mevedel-view-interaction-activate))
+            (should (overlay-get overlay property)))
+          (should-not (overlay-get overlay 'read-only))
+          (should (eq overlay
+                      (mevedel-view--interaction-register
+                       (append base cleared))))
+          (dolist (property '(keymap help-echo mevedel-view-interaction-entry
+                             mevedel-view-interaction-activate))
+            (should-not (overlay-get overlay property)))
+          (should (overlay-get overlay 'read-only))
+          (should (eq 'retained (overlay-get overlay 'test-private-state)))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+
   :doc "acquires one blocker per non-permission interaction identity"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "interaction-state"))

@@ -468,19 +468,12 @@ snapshot taken at registration."
                  (if (plist-member descriptor :read-only)
                      (plist-get descriptor :read-only)
                    t))
-    (if-let* ((map (plist-get descriptor :keymap)))
-        (overlay-put overlay 'keymap map)
-      (overlay-put overlay 'keymap nil))
-    (if-let* ((help (plist-get descriptor :help-echo)))
-        (overlay-put overlay 'help-echo help)
-      (overlay-put overlay 'help-echo nil))
-    (if (plist-member descriptor :entry)
-        (overlay-put overlay 'mevedel-view-interaction-entry
-                     (plist-get descriptor :entry))
-      (overlay-put overlay 'mevedel-view-interaction-entry nil))
-    (if-let* ((activate (plist-get descriptor :activate)))
-        (overlay-put overlay 'mevedel-view-interaction-activate activate)
-      (overlay-put overlay 'mevedel-view-interaction-activate nil))
+    (overlay-put overlay 'keymap (plist-get descriptor :keymap))
+    (overlay-put overlay 'help-echo (plist-get descriptor :help-echo))
+    (overlay-put overlay 'mevedel-view-interaction-entry
+                 (plist-get descriptor :entry))
+    (overlay-put overlay 'mevedel-view-interaction-activate
+                 (plist-get descriptor :activate))
     overlay))
 
 (defun mevedel-view--interaction-overlay-for (id descriptor)
