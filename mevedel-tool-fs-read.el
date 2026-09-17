@@ -201,26 +201,16 @@ fontifies as the file's natural mode when detectable from extension."
 (defconst mevedel-tool-fs-read--large-attachment-reminder-bytes (* 1024 1024)
   "Minimum PDF attachment size that gets bounded-page guidance.")
 
-(defun mevedel-tool-fs-read--agent-context-p ()
-  "Return non-nil when the current tool call is inside a sub-agent.
+(defun mevedel-tool-fs-read--dedup-p ()
+  "Return non-nil when this Read may consult and record duplicate-read state.
 
-Sub-agents share the parent session for permissions, but their LLM
-context is separate.  A parent-session Read dedup entry therefore
-must not suppress content inside a fresh agent transcript, and an
-agent Read must not poison the parent's later Read calls."
-  (and (boundp 'mevedel--agent-invocation)
-       mevedel--agent-invocation))
-
-(defun mevedel-tool-fs-read--dedup-exempt-p ()
-  "Return non-nil when this Read must not touch duplicate-read state.
-
-Covers sub-agent calls and ToolCall nested calls.  A script sees only
-its own tool results and the model sees only the script's final value,
-so \"reuse the previous contents\" is unusable there, and recording the
-access would poison the parent conversation's later Read calls with
-content that never entered provider history."
-  (or (mevedel-tool-fs-read--agent-context-p)
-      (eq (bound-and-true-p mevedel-pipeline--active-call-source) 'ptc)))
+Resource reads always return their contents.  Sub-agents have separate
+transcripts, and ToolCall exposes only its final value to the model, so
+neither may reuse or poison the parent conversation's Read history."
+  (and (bound-and-true-p mevedel--session)
+       (not mevedel-tool-fs-read--resource-address)
+       (not (bound-and-true-p mevedel--agent-invocation))
+       (not (eq (bound-and-true-p mevedel-pipeline--active-call-source) 'ptc))))
 
 (defconst mevedel-tool-fs-read--blocked-device-paths
   '("/dev/zero" "/dev/random" "/dev/urandom" "/dev/full"
@@ -261,13 +251,6 @@ content that never entered provider history."
              (not (gptel--model-mime-capable-p mime)))
     (error "Current model does not support media type %s" mime)))
 
-(defun mevedel-tool-fs-read--file-bytes-prefix-p (path prefix)
-  "Return non-nil when PATH begins with byte string PREFIX."
-  (with-temp-buffer
-    (set-buffer-multibyte nil)
-    (insert-file-contents-literally path nil 0 (length prefix))
-    (string-equal (buffer-string) prefix)))
-
 (defun mevedel-tool-fs-read--file-bytes-at-p (path offset expected)
   "Return non-nil when PATH has EXPECTED byte string at OFFSET."
   (with-temp-buffer
@@ -280,18 +263,18 @@ content that never entered provider history."
   (and (> (file-attribute-size (file-attributes path)) 0)
        (pcase mime
          ("application/pdf"
-          (mevedel-tool-fs-read--file-bytes-prefix-p path "%PDF-"))
+          (mevedel-tool-fs-read--file-bytes-at-p path 0 "%PDF-"))
          ("image/png"
-          (mevedel-tool-fs-read--file-bytes-prefix-p
-           path (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n)))
+          (mevedel-tool-fs-read--file-bytes-at-p
+           path 0 (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n)))
          ("image/jpeg"
-          (mevedel-tool-fs-read--file-bytes-prefix-p
-           path (unibyte-string #xff #xd8 #xff)))
+          (mevedel-tool-fs-read--file-bytes-at-p
+           path 0 (unibyte-string #xff #xd8 #xff)))
          ("image/gif"
-          (or (mevedel-tool-fs-read--file-bytes-prefix-p path "GIF87a")
-              (mevedel-tool-fs-read--file-bytes-prefix-p path "GIF89a")))
+          (or (mevedel-tool-fs-read--file-bytes-at-p path 0 "GIF87a")
+              (mevedel-tool-fs-read--file-bytes-at-p path 0 "GIF89a")))
          ("image/webp"
-          (and (mevedel-tool-fs-read--file-bytes-prefix-p path "RIFF")
+          (and (mevedel-tool-fs-read--file-bytes-at-p path 0 "RIFF")
                (mevedel-tool-fs-read--file-bytes-at-p path 8 "WEBP")))
          (_ nil))))
 
@@ -1140,9 +1123,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
            (mevedel-tool-fs-read--media-result-mime filename args))
           (let ((dedup-key (mevedel-tool-fs-read--media-dedup-key args)))
             (cond
-             ((and (bound-and-true-p mevedel--session)
-                   (not mevedel-tool-fs-read--resource-address)
-                   (not (mevedel-tool-fs-read--dedup-exempt-p))
+             ((and (mevedel-tool-fs-read--dedup-p)
                    (mevedel-session-read-is-duplicate-p
                     mevedel--session filename dedup-key nil))
              (format "File %s unchanged since last read.  Reuse the previous contents."
@@ -1162,9 +1143,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
                                    result
                                    (mevedel-tool-fs-read-format-large-pdf-reminder
                                     filename))))
-                          (when (and (bound-and-true-p mevedel--session)
-                                     (not mevedel-tool-fs-read--resource-address)
-                                     (not (mevedel-tool-fs-read--dedup-exempt-p)))
+                          (when (mevedel-tool-fs-read--dedup-p)
                             (mevedel-session-record-file-access
                              mevedel--session filename 'read dedup-key nil))
                           result)
@@ -1195,17 +1174,13 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
           (error "Cannot read binary file (type: .%s): %s" ext
                  (mevedel-tool-fs-read--visible-path filename))))
       (cond
-       ((and (bound-and-true-p mevedel--session)
-             (not mevedel-tool-fs-read--resource-address)
-             (not (mevedel-tool-fs-read--dedup-exempt-p))
+       ((and (mevedel-tool-fs-read--dedup-p)
              (mevedel-session-read-is-duplicate-p
               mevedel--session filename offset limit))
         (format "File %s unchanged since last read.  Reuse the previous contents."
                 (mevedel-tool-fs-read--visible-path filename)))
        ((zerop (file-attribute-size (file-attributes filename)))
-        (when (and (bound-and-true-p mevedel--session)
-                   (not mevedel-tool-fs-read--resource-address)
-                   (not (mevedel-tool-fs-read--dedup-exempt-p)))
+        (when (mevedel-tool-fs-read--dedup-p)
           (mevedel-session-record-file-access
            mevedel--session filename 'read offset limit))
         (format "<system-reminder>\n\
@@ -1215,9 +1190,7 @@ content, not a read failure.\n</system-reminder>"
        (t
         (let ((content (mevedel-tool-fs-read-slurp-file-contents
                         filename offset limit)))
-          (when (and (bound-and-true-p mevedel--session)
-                     (not mevedel-tool-fs-read--resource-address)
-                     (not (mevedel-tool-fs-read--dedup-exempt-p)))
+          (when (mevedel-tool-fs-read--dedup-p)
             (mevedel-session-record-file-access
              mevedel--session filename 'read offset limit))
           content)))))))

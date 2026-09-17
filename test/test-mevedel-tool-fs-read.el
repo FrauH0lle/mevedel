@@ -27,6 +27,13 @@
                byte-compile-current-file))
           "helpers"))
 
+(defmacro test-mevedel-tool-fs-read--with-file (suffix content &rest body)
+  "Run BODY with tmp bound to a temporary file with SUFFIX and CONTENT."
+  (declare (indent 2) (debug t))
+  `(let ((tmp (make-temp-file "mevedel-test-" nil ,suffix ,content)))
+     (unwind-protect (progn ,@body)
+       (delete-file tmp))))
+
 (mevedel-deftest mevedel-tool-fs-read--with-local-media-source ()
   ,test
   (test)
@@ -109,6 +116,24 @@
     (insert bytes)
     (let ((coding-system-for-write 'binary))
       (write-region nil nil path nil 'silent))))
+
+(mevedel-deftest mevedel-tool-fs-read--validate-media-file ()
+  ,test
+  (test)
+  :doc "validates every supported signature and rejects empty or mismatched bytes"
+  (dolist (entry `(("application/pdf" . "%PDF-")
+                   ("image/png" . ,test-mevedel-tool-fs-read--png-bytes)
+                   ("image/jpeg" . ,(unibyte-string #xff #xd8 #xff))
+                   ("image/gif" . "GIF87a")
+                   ("image/gif" . "GIF89a")
+                   ("image/webp" . "RIFFxxxxWEBP")))
+    (test-mevedel-tool-fs-read--with-file nil nil
+      (test-mevedel-tool-fs-read--write-bytes tmp (cdr entry))
+      (should-not (mevedel-tool-fs-read--validate-media-file tmp (car entry)))
+      (dolist (bytes '("" "x" "RIFFxxxxNOPE" "NOPExxxxWEBP"))
+        (test-mevedel-tool-fs-read--write-bytes tmp bytes)
+        (should-error
+         (mevedel-tool-fs-read--validate-media-file tmp (car entry)))))))
 
 (mevedel-deftest mevedel-tool-fs-read-media-mime-type ()
   ,test
@@ -406,8 +431,10 @@
                    (should-not (string-match-p
                                 (regexp-quote save-path) result))
                    result)))
-            (read-resource local-address 'read "local note")
-            (read-resource artifact-address 'read "artifact result")
+            (dotimes (_ 2)
+              (read-resource local-address 'read "local note")
+              (read-resource artifact-address 'read "artifact result"))
+            (should-not (mevedel-session-touched-files session))
             (let* ((record (mevedel-agent-record--create
                             :path "/root/reviewer" :role "reviewer"
                             :activity 'idle
@@ -527,6 +554,7 @@
            (session (mevedel-session-create "main" workspace root))
            (request (mevedel-request--create))
            (draft "> quoted\nsecond line")
+           (gptel--known-backends nil)
            (backend (gptel-make-openai
                      "read-instructions" :key "test" :host "example.test"
                      :models '(test)))
@@ -616,77 +644,62 @@
   ,test
   (test)
   :doc "reads full file with line numbers"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp (insert "line one\nline two\nline three\n"))
-          (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-            (should (string-match-p "1\tline one" result))
-            (should (string-match-p "2\tline two" result))
-            (should (string-match-p "3\tline three" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp (insert "line one\nline two\nline three\n"))
+    (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (should (string-match-p "1\tline one" result))
+      (should (string-match-p "2\tline two" result))
+      (should (string-match-p "3\tline three" result))))
   :doc "reads with offset"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp (insert "a\nb\nc\nd\ne\n"))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 3 :limit 2))))
-            (should (string-match-p "3\tc" result))
-            (should (string-match-p "4\td" result))
-            (should-not (string-match-p "\\b1\ta" result))
-            (should-not (string-match-p "5\te" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp (insert "a\nb\nc\nd\ne\n"))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 3 :limit 2))))
+      (should (string-match-p "3\tc" result))
+      (should (string-match-p "4\td" result))
+      (should-not (string-match-p "\\b1\ta" result))
+      (should-not (string-match-p "5\te" result))))
   :doc "reads with limit only"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp (insert "a\nb\nc\nd\ne\n"))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 1 :limit 2))))
-            (should (string-match-p "1\ta" result))
-            (should (string-match-p "2\tb" result))
-            (should-not (string-match-p "3\tc" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp (insert "a\nb\nc\nd\ne\n"))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 1 :limit 2))))
+      (should (string-match-p "1\ta" result))
+      (should (string-match-p "2\tb" result))
+      (should-not (string-match-p "3\tc" result))))
   :doc "rejects a negative text range"
   ;; A negative limit read as an empty success, and a negative offset
   ;; was clamped to line 1 -- content the label does not describe.
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp (insert "a\nb\nc\n"))
-          (should-error
-           (mevedel-tool-fs-read--file (list :file_path tmp :limit -5))
-           :type 'error)
-          (should-error
-           (mevedel-tool-fs-read--file (list :file_path tmp :offset -3))
-           :type 'error)
-          ;; A negative float must not slip past an integer-only check.
-          (should-error
-           (mevedel-tool-fs-read--file (list :file_path tmp :offset -3.0))
-           :type 'error))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp (insert "a\nb\nc\n"))
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp :limit -5))
+     :type 'error)
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp :offset -3))
+     :type 'error)
+    ;; A negative float must not slip past an integer-only check.
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp :offset -3.0))
+     :type 'error))
   :doc "reports a range that starts after the last line"
   ;; An empty success is indistinguishable from an empty file, and this
   ;; tool explicitly annotates the genuinely-empty case.  Line four of a
   ;; three-line file is the exact offset a stale continuation hint hands
   ;; the model.
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp (insert "a\nb\nc\n"))
-          (should-error
-           (mevedel-tool-fs-read--file (list :file_path tmp :offset 99))
-           :type 'error)
-          (should-error
-           (mevedel-tool-fs-read--file (list :file_path tmp :offset 4))
-           :type 'error)
-          ;; The last real line still reads.
-          (should (string-match-p
-                   "3\tc"
-                   (mevedel-tool-fs-read--file
-                    (list :file_path tmp :offset 3)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp (insert "a\nb\nc\n"))
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp :offset 99))
+     :type 'error)
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp :offset 4))
+     :type 'error)
+    ;; The last real line still reads.
+    (should (string-match-p
+             "3\tc"
+             (mevedel-tool-fs-read--file
+              (list :file_path tmp :offset 3)))))
   :doc "errors on non-existent file"
   (should-error
    (mevedel-tool-fs-read--file (list :file_path "/nonexistent/file.txt"))
@@ -696,119 +709,102 @@
    (mevedel-tool-fs-read--file (list :file_path "/tmp"))
    :type 'error)
   :doc "errors on binary extension"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".zip")))
-    (unwind-protect
-        (should-error
-         (mevedel-tool-fs-read--file (list :file_path tmp))
-         :type 'error)
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".zip" nil
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp))
+     :type 'error))
   :doc "reads supported image media with base64 envelope when media-capable"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".png")))
-    (unwind-protect
-        (progn
-          (test-mevedel-tool-fs-read--write-bytes
-           tmp test-mevedel-tool-fs-read--png-bytes)
-          (cl-letf (((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (mime &optional _model)
-                       (equal mime "image/png")))
-                    )
-            (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-              (should (listp result))
-              (should (string-match-p "<media-file>"
-                                      (plist-get result :result)))
-              (should (string-match-p "mime_type: image/png"
-                                      (plist-get result :result)))
-              (should (string-match-p "encoding: base64"
-                                      (plist-get result :result)))
-              (should (equal (plist-get (car (plist-get result :media)) :mime)
-                             "image/png"))
-              (should (plist-get (car (plist-get result :media)) :data)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".png" nil
+    (test-mevedel-tool-fs-read--write-bytes
+     tmp test-mevedel-tool-fs-read--png-bytes)
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (mime &optional _model)
+                 (equal mime "image/png")))
+              )
+      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+        (should (listp result))
+        (should (string-match-p "<media-file>"
+                                (plist-get result :result)))
+        (should (string-match-p "mime_type: image/png"
+                                (plist-get result :result)))
+        (should (string-match-p "encoding: base64"
+                                (plist-get result :result)))
+        (should (equal (plist-get (car (plist-get result :media)) :mime)
+                       "image/png"))
+        (should (plist-get (car (plist-get result :media)) :data)))))
   :doc "treats default offset and limit values as absent for media reads"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".png")))
-    (unwind-protect
-        (progn
-          (test-mevedel-tool-fs-read--write-bytes
-           tmp test-mevedel-tool-fs-read--png-bytes)
-          (cl-letf (((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (mime &optional _model)
-                       (equal mime "image/png")))
-                    )
-            (let ((result (mevedel-tool-fs-read--file
-                           (list :file_path tmp :offset 0 :limit 2000
-                                 :pages ""))))
-              (should (listp result))
-              (should (equal (plist-get (car (plist-get result :media)) :mime)
-                             "image/png")))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".png" nil
+    (test-mevedel-tool-fs-read--write-bytes
+     tmp test-mevedel-tool-fs-read--png-bytes)
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (mime &optional _model)
+                 (equal mime "image/png")))
+              )
+      (let ((result (mevedel-tool-fs-read--file
+                     (list :file_path tmp :offset 0 :limit 2000
+                           :pages ""))))
+        (should (listp result))
+        (should (equal (plist-get (car (plist-get result :media)) :mime)
+                       "image/png")))))
   :doc "rejects nonzero text ranges for media reads"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".png")))
-    (unwind-protect
-        (progn
-          (test-mevedel-tool-fs-read--write-bytes
-           tmp test-mevedel-tool-fs-read--png-bytes)
-          (cl-letf (((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (mime &optional _model)
-                       (equal mime "image/png"))))
-            (let ((err (should-error
-                        (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 1))
-                        :type 'error)))
-              (should (string-match-p "offset and limit"
-                                      (cadr err))))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".png" nil
+    (test-mevedel-tool-fs-read--write-bytes
+     tmp test-mevedel-tool-fs-read--png-bytes)
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (mime &optional _model)
+                 (equal mime "image/png"))))
+      (let ((err (should-error
+                  (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 1))
+                  :type 'error)))
+        (should (string-match-p "offset and limit"
+                                (cadr err))))))
   :doc "rejects media reads when current model cannot accept media"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".jpg" "jpg-bytes")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'gptel--model-capable-p)
-                   (lambda (&rest _) nil)))
-          (let ((err (should-error
-                      (mevedel-tool-fs-read--file (list :file_path tmp))
-                      :type 'error)))
-            (should (string-match-p "does not support media"
-                                    (cadr err)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".jpg" "jpg-bytes"
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (&rest _) nil)))
+      (let ((err (should-error
+                  (mevedel-tool-fs-read--file (list :file_path tmp))
+                  :type 'error)))
+        (should (string-match-p "does not support media"
+                                (cadr err))))))
   :doc "rejects media reads when current model cannot accept MIME type"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'gptel--model-capable-p)
-                   (lambda (cap &optional _model) (eq cap 'media)))
-                  ((symbol-function 'gptel--model-mime-capable-p)
-                   (lambda (_mime &optional _model) nil)))
-          (let ((err (should-error
-                      (mevedel-tool-fs-read--file (list :file_path tmp))
-                      :type 'error)))
-            (should (string-match-p "does not support media type application/pdf"
-                                    (cadr err)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) nil)))
+      (let ((err (should-error
+                  (mevedel-tool-fs-read--file (list :file_path tmp))
+                  :type 'error)))
+        (should (string-match-p "does not support media type application/pdf"
+                                (cadr err))))))
   :doc "adds bounded-page reminder when reading a large PDF without pages"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'gptel--model-capable-p)
-                   (lambda (cap &optional _model) (eq cap 'media)))
-                  ((symbol-function 'gptel--model-mime-capable-p)
-                   (lambda (_mime &optional _model) t))
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) t))
 
-                  ((symbol-function 'mevedel-tool-fs-read-large-pdf-p)
-                   (lambda (_path) t))
-                  ((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-                   (lambda (_path) 42))
-                  ((symbol-function 'mevedel-tool-fs-read--base64-file)
-                   (lambda (&rest _) "JVBERg==")))
-          (let* ((result (mevedel-tool-fs-read--file (list :file_path tmp)))
-                 (body (plist-get result :result)))
-            (should (listp result))
-            (should (plist-get result :media))
-            (should (string-match-p "<system-reminder>" body))
-            (should (string-match-p "pages=\"START-END\"" body))
-            (should (string-match-p "42 pages" body))))
-      (delete-file tmp)))
+              ((symbol-function 'mevedel-tool-fs-read-large-pdf-p)
+               (lambda (_path) t))
+              ((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
+               (lambda (_path) 42))
+              ((symbol-function 'mevedel-tool-fs-read--base64-file)
+               (lambda (&rest _) "JVBERg==")))
+      (let* ((result (mevedel-tool-fs-read--file (list :file_path tmp)))
+             (body (plist-get result :result)))
+        (should (listp result))
+        (should (plist-get result :media))
+        (should (string-match-p "<system-reminder>" body))
+        (should (string-match-p "pages=\"START-END\"" body))
+        (should (string-match-p "42 pages" body)))))
   :doc "downloads a remote PDF only once across attachment and guidance"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-read-remote-pdf-" t)))
@@ -845,48 +841,43 @@
                 (should (= 1 copies))))))
       (delete-directory root t)))
   :doc "adds bounded-page reminder when direct PDF attachment is too large"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
-    (unwind-protect
-        (let ((mevedel-tool-fs-read-media-max-bytes 1))
-          (cl-letf (((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (_mime &optional _model) t))
-                    ((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-                     (lambda (_path) 42)))
-            (let ((err (should-error
-                        (mevedel-tool-fs-read--file
-                         (list :file_path tmp))
-                        :type 'error)))
-              (should (string-match-p "Media file is too large"
-                                      (cadr err)))
-              (should (string-match-p "<system-reminder>"
-                                      (cadr err)))
-              (should (string-match-p "pages=\"START-END\""
-                                      (cadr err))))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (let ((mevedel-tool-fs-read-media-max-bytes 1))
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t))
+                ((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
+                 (lambda (_path) 42)))
+        (let ((err (should-error
+                    (mevedel-tool-fs-read--file
+                     (list :file_path tmp))
+                    :type 'error)))
+          (should (string-match-p "Media file is too large"
+                                  (cadr err)))
+          (should (string-match-p "<system-reminder>"
+                                  (cadr err)))
+          (should (string-match-p "pages=\"START-END\""
+                                  (cadr err)))))))
   :doc "falls back to textual media envelope when backend cannot serialize media"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".png")))
-    (unwind-protect
-        (progn
-          (test-mevedel-tool-fs-read--write-bytes
-           tmp test-mevedel-tool-fs-read--png-bytes)
-          (cl-letf (((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (_mime &optional _model) t))
-                    )
-            (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-              (should (listp result))
-              (should (string-match-p "<media-file>"
-                                      (plist-get result :result)))
-              (should (string-match-p "mime_type: image/png"
-                                      (plist-get result :result)))
-              (should (string-match-p "encoding: base64"
-                                      (plist-get result :result)))
-              (should (equal (plist-get (car (plist-get result :media)) :mime)
-                             "image/png")))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".png" nil
+    (test-mevedel-tool-fs-read--write-bytes
+     tmp test-mevedel-tool-fs-read--png-bytes)
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) t))
+              )
+      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+        (should (listp result))
+        (should (string-match-p "<media-file>"
+                                (plist-get result :result)))
+        (should (string-match-p "mime_type: image/png"
+                                (plist-get result :result)))
+        (should (string-match-p "encoding: base64"
+                                (plist-get result :result)))
+        (should (equal (plist-get (car (plist-get result :media)) :mime)
+                       "image/png")))))
   :doc "checks transformed image MIME instead of source MIME"
   (let ((tmp (make-temp-file "mevedel-test-" nil ".webp"))
         (prepared (make-temp-file "mevedel-test-prepared-" nil ".jpg")))
@@ -915,82 +906,74 @@
       (delete-file tmp)
       (delete-file prepared)))
   :doc "rejects media reads when contents do not match extension"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".png" "not-a-png")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'gptel--model-capable-p)
-                   (lambda (cap &optional _model) (eq cap 'media)))
-                  ((symbol-function 'gptel--model-mime-capable-p)
-                   (lambda (_mime &optional _model) t))
-                  )
-          (let ((err (should-error
-                      (mevedel-tool-fs-read--file (list :file_path tmp))
-                      :type 'error)))
-            (should (string-match-p "contents do not match media type"
-                                    (cadr err)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".png" "not-a-png"
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) t))
+              )
+      (let ((err (should-error
+                  (mevedel-tool-fs-read--file (list :file_path tmp))
+                  :type 'error)))
+        (should (string-match-p "contents do not match media type"
+                                (cadr err))))))
   :doc "rejects image transform arguments on full PDF reads"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'gptel--model-capable-p)
-                   (lambda (cap &optional _model) (eq cap 'media)))
-                  ((symbol-function 'gptel--model-mime-capable-p)
-                   (lambda (_mime &optional _model) t)))
-          (let ((err (should-error
-                      (mevedel-tool-fs-read--file
-                       (list :file_path tmp :max_width 1000))
-                      :type 'error)))
-            (should (string-match-p "PDF page images" (cadr err)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) t)))
+      (let ((err (should-error
+                  (mevedel-tool-fs-read--file
+                   (list :file_path tmp :max_width 1000))
+                  :type 'error)))
+        (should (string-match-p "PDF page images" (cadr err))))))
   :doc "errors when PDF page extraction needs missing pdftoppm"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
-    (unwind-protect
-        (let ((orig-executable-find (symbol-function 'executable-find))
-              (mevedel-sandbox--probe-cache nil))
-          (cl-letf (((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (_mime &optional _model) t))
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (let ((orig-executable-find (symbol-function 'executable-find))
+          (mevedel-sandbox--probe-cache nil))
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t))
 
-                    ((symbol-function 'executable-find)
-                     (lambda (cmd &optional remote)
-                       (and (not (equal cmd "pdftoppm"))
-                            (funcall orig-executable-find cmd remote)))))
-            (let ((err (should-error
-                        (mevedel-tool-fs-read--file
-                         (list :file_path tmp :pages "1"))
-                        :type 'error)))
-              (should (string-match-p "poppler-utils" (cadr err))))))
-      (delete-file tmp)))
+                ((symbol-function 'executable-find)
+                 (lambda (cmd &optional remote)
+                   (and (not (equal cmd "pdftoppm"))
+                        (funcall orig-executable-find cmd remote)))))
+        (let ((err (should-error
+                    (mevedel-tool-fs-read--file
+                     (list :file_path tmp :pages "1"))
+                    :type 'error)))
+          (should (string-match-p "poppler-utils" (cadr err)))))))
   :doc "caps aggregate base64 payload for rendered PDF pages"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
-    (unwind-protect
-        (let ((mevedel-tool-fs-read--pdf-pages-max-base64-chars 8))
-          (cl-letf (((symbol-function 'executable-find)
-                     (lambda (cmd) (and (equal cmd "pdftoppm") t)))
-                    ((symbol-function 'mevedel-execution-run-helper)
-                     (lambda (_name command _read-paths _writable-roots
-                                    &rest _)
-                       (if (equal (car command) "pdftoppm")
-                           (progn
-                             (test-mevedel-tool-fs-read--write-bytes
-                              (concat (car (last command)) ".png")
-                              test-mevedel-tool-fs-read--png-bytes)
-                             '(:exit-code 0 :output ""))
-                         '(:exit-code 1 :output ""))))
-                    ((symbol-function 'gptel--model-capable-p)
-                     (lambda (cap &optional _model) (eq cap 'media)))
-                    ((symbol-function 'gptel--model-mime-capable-p)
-                     (lambda (_mime &optional _model) t))
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (let ((mevedel-tool-fs-read--pdf-pages-max-base64-chars 8))
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (cmd) (and (equal cmd "pdftoppm") t)))
+                ((symbol-function 'mevedel-execution-run-helper)
+                 (lambda (_name command _read-paths _writable-roots
+                                &rest _)
+                   (if (equal (car command) "pdftoppm")
+                       (progn
+                         (test-mevedel-tool-fs-read--write-bytes
+                          (concat (car (last command)) ".png")
+                          test-mevedel-tool-fs-read--png-bytes)
+                         '(:exit-code 0 :output ""))
+                     '(:exit-code 1 :output ""))))
+                ((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (_mime &optional _model) t))
 
-                    ((symbol-function 'mevedel-tool-fs-read--base64-file)
-                     (lambda (&rest _) "aaaaaaaaa")))
-            (let ((err (should-error
-                        (mevedel-tool-fs-read--file
-                         (list :file_path tmp :pages "1"))
-                        :type 'error)))
-              (should (string-match-p "aggregate media size limit"
-                                      (cadr err))))))
-      (delete-file tmp)))
+                ((symbol-function 'mevedel-tool-fs-read--base64-file)
+                 (lambda (&rest _) "aaaaaaaaa")))
+        (let ((err (should-error
+                    (mevedel-tool-fs-read--file
+                     (list :file_path tmp :pages "1"))
+                    :type 'error)))
+          (should (string-match-p "aggregate media size limit"
+                                  (cadr err)))))))
   :doc "file-not-found suggests same basename with different extension"
   (let* ((tmp-dir (make-temp-file "mevedel-missing-" t))
          (default-directory (file-name-as-directory tmp-dir))
@@ -1028,37 +1011,30 @@
    (mevedel-tool-fs-read--file (list :file_path "/dev/zero"))
    :type 'error)
   :doc "returns system-reminder for empty file"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-          (should (string-match-p "system-reminder" result))
-          (should (string-match-p "empty" result)))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (should (string-match-p "system-reminder" result))
+      (should (string-match-p "empty" result))))
   :doc "truncates long lines"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert (make-string 3000 ?x) "\nshort\n"))
-          (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-            (should (string-match-p "\\[\\.\\.\\.]" result))
-            (should (string-match-p "2\tshort" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp
+      (insert (make-string 3000 ?x) "\nshort\n"))
+    (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (should (string-match-p "\\[\\.\\.\\.]" result))
+      (should (string-match-p "2\tshort" result))))
   :doc "caps default text reads with continuation guidance"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (let ((mevedel-tool-fs-read--default-limit 3)
-              (mevedel-tool-fs-read--max-output-chars 10000))
-          (with-temp-file tmp
-            (dotimes (i 5)
-              (insert (format "line %d\n" (1+ i)))))
-          (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-            (should (string-match-p "1\tline 1" result))
-            (should (string-match-p "3\tline 3" result))
-            (should-not (string-match-p "4\tline 4" result))
-            (should (string-match-p "Read output truncated" result))
-            (should (string-match-p "offset=4" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((mevedel-tool-fs-read--default-limit 3)
+          (mevedel-tool-fs-read--max-output-chars 10000))
+      (with-temp-file tmp
+        (dotimes (i 5)
+          (insert (format "line %d\n" (1+ i)))))
+      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+        (should (string-match-p "1\tline 1" result))
+        (should (string-match-p "3\tline 3" result))
+        (should-not (string-match-p "4\tline 4" result))
+        (should (string-match-p "Read output truncated" result))
+        (should (string-match-p "offset=4" result)))))
   :doc "remote continuation guidance uses the target-native path"
   (let ((root (file-name-as-directory
                (make-temp-file "mevedel-remote-read-root-" t))))
@@ -1084,91 +1060,71 @@
               (should-not (string-match-p "/mevedelmock:" result)))))
       (delete-directory root t)))
   :doc "caps aggregate text read output with continuation guidance"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (let ((mevedel-tool-fs-read--default-limit 10)
-              (mevedel-tool-fs-read--max-output-chars 25))
-          (with-temp-file tmp
-            (insert "one\ntwo\nthree\nfour\nfive\n"))
-          (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
-            (should (string-match-p "1\tone" result))
-            (should-not (string-match-p "5\tfive" result))
-            (should (string-match-p "Read output truncated" result))
-            (should (string-match-p "offset=4" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((mevedel-tool-fs-read--default-limit 10)
+          (mevedel-tool-fs-read--max-output-chars 25))
+      (with-temp-file tmp
+        (insert "one\ntwo\nthree\nfour\nfive\n"))
+      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+        (should (string-match-p "1\tone" result))
+        (should-not (string-match-p "5\tfive" result))
+        (should (string-match-p "Read output truncated" result))
+        (should (string-match-p "offset=4" result)))))
   :doc "errors on oversized file without range"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (insert (make-string (* 600 1024) ?x)))
-          (should-error
-           (mevedel-tool-fs-read--file (list :file_path tmp))
-           :type 'error))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp
+      (insert (make-string (* 600 1024) ?x)))
+    (should-error
+     (mevedel-tool-fs-read--file (list :file_path tmp))
+     :type 'error))
   :doc "reads oversized file with offset/limit"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (dotimes (i 100)
-              (insert (format "line %d: %s\n" (1+ i) (make-string 6000 ?x)))))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 50 :limit 5))))
-            (should (string-match-p "50\tline 50" result))
-            (should (string-match-p "54\tline 54" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (with-temp-file tmp
+      (dotimes (i 100)
+        (insert (format "line %d: %s\n" (1+ i) (make-string 6000 ?x)))))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 50 :limit 5))))
+      (should (string-match-p "50\tline 50" result))
+      (should (string-match-p "54\tline 54" result))))
   :doc "preserves a UTF-8 character split across input chunks"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (let ((coding-system-for-write 'utf-8-unix))
-            (with-temp-file tmp
-              (insert (make-string (- (* 512 1024) 4) ?x)
-                      "\nab\u00e9\n")))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 2 :limit 1))))
-            (should (string-match-p
-                     (regexp-quote "2\tab\u00e9") result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((coding-system-for-write 'utf-8-unix))
+      (with-temp-file tmp
+        (insert (make-string (- (* 512 1024) 4) ?x)
+                "\nab\u00e9\n")))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 2 :limit 1))))
+      (should (string-match-p
+               (regexp-quote "2\tab\u00e9") result))))
   :doc "preserves a UTF-16 surrogate pair split across input chunks"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (let ((coding-system-for-write 'utf-16le-with-signature))
-            (write-region
-             (concat (make-string (/ (- (* 512 1024) 8) 2) ?x)
-                     "\na\U0001f600\n")
-             nil tmp nil 'silent))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 2 :limit 1))))
-            (should (string-match-p
-                     (regexp-quote "2\ta\U0001f600") result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((coding-system-for-write 'utf-16le-with-signature))
+      (write-region
+       (concat (make-string (/ (- (* 512 1024) 8) 2) ?x)
+               "\na\U0001f600\n")
+       nil tmp nil 'silent))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 2 :limit 1))))
+      (should (string-match-p
+               (regexp-quote "2\ta\U0001f600") result))))
   :doc "ignores newline bytes spanning UTF-16 code units"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (let ((coding-system-for-write 'utf-16le-with-signature))
-            (write-region "\u0a41\u0100\nsecond\n"
-                          nil tmp nil 'silent))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 2 :limit 1))))
-            (should (string-match-p "2\tsecond" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((coding-system-for-write 'utf-16le-with-signature))
+      (write-region "\u0a41\u0100\nsecond\n"
+                    nil tmp nil 'silent))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 2 :limit 1))))
+      (should (string-match-p "2\tsecond" result))))
   :doc "counts a bare LF after a DOS-coded input chunk"
-  (let ((tmp (make-temp-file "mevedel-test-")))
-    (unwind-protect
-        (progn
-          (let ((coding-system-for-write 'no-conversion))
-            (write-region
-             (concat "one\r\n" (make-string (* 512 1024) ?x)
-                     "\nthree\r\n")
-             nil tmp nil 'silent))
-          (let ((result (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 3 :limit 1))))
-            (should (string-match-p "3\tthree" result))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file nil nil
+    (let ((coding-system-for-write 'no-conversion))
+      (write-region
+       (concat "one\r\n" (make-string (* 512 1024) ?x)
+               "\nthree\r\n")
+       nil tmp nil 'silent))
+    (let ((result (mevedel-tool-fs-read--file
+                   (list :file_path tmp :offset 3 :limit 1))))
+      (should (string-match-p "3\tthree" result))))
   :doc "follows symlinks"
   (let ((tmp (make-temp-file "mevedel-test-"))
         (link (make-temp-file "mevedel-link-")))
@@ -1182,15 +1138,13 @@
       (delete-file tmp)
       (when (file-exists-p link) (delete-file link))))
   :doc "does not re-resolve a path already canonicalized by the pipeline"
-  (let ((tmp (make-temp-file "mevedel-test-" nil ".txt" "content\n")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'file-truename)
-                   (lambda (&rest _)
-                     (error "Read handler re-resolved its authorized path"))))
-          (should (string-match-p
-                   "content"
-                   (mevedel-tool-fs-read--file (list :file_path tmp)))))
-      (delete-file tmp)))
+  (test-mevedel-tool-fs-read--with-file ".txt" "content\n"
+    (cl-letf (((symbol-function 'file-truename)
+               (lambda (&rest _)
+                 (error "Read handler re-resolved its authorized path"))))
+      (should (string-match-p
+               "content"
+               (mevedel-tool-fs-read--file (list :file_path tmp))))))
   :doc "records session interaction and workspace cache entry"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
          (ws (mevedel-workspace--create
