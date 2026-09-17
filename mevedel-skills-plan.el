@@ -146,8 +146,7 @@ the leading command forks."
       (let* ((root (car tokens))
              (root-skill (plist-get root :value))
              (cursor (plist-get root :end))
-             (remaining (cdr tokens))
-             done)
+             (remaining (cdr tokens)))
         (puthash (plist-get root :start) t command-starts)
         (puthash (mevedel-skills-source-key
                   (mevedel-skill-source-file root-skill))
@@ -155,12 +154,11 @@ the leading command forks."
         (setq fork-p (eq (mevedel-skill-context root-skill) 'fork))
         (if fork-p
             (setq arguments-start cursor)
-          (while (not done)
+          (while (not arguments-start)
             (let ((next-start (string-match-p "\\S-" text cursor)))
               (cond
                ((null next-start)
-                (setq arguments-start (length text)
-                      done t))
+                (setq arguments-start (length text)))
                ((and (<= (+ next-start 2) (length text))
                      (string= "--" (substring text next-start
                                                (+ next-start 2)))
@@ -168,12 +166,10 @@ the leading command forks."
                          (string-match-p
                           "[[:space:]]"
                           (char-to-string (aref text (+ next-start 2))))))
-                (setq arguments-start (+ next-start 2)
-                      done t))
+                (setq arguments-start (+ next-start 2)))
                ((or (null remaining)
                     (/= next-start (plist-get (car remaining) :start)))
-                (setq arguments-start next-start
-                      done t))
+                (setq arguments-start next-start))
                (t
                 (let* ((token (car remaining))
                        (skill (plist-get token :value))
@@ -183,8 +179,7 @@ the leading command forks."
                   (if (or (eq (mevedel-skill-context skill) 'fork)
                           (and (not (gethash source command-sources))
                                (>= (hash-table-count command-sources) 6)))
-                      (setq arguments-start next-start
-                            done t)
+                      (setq arguments-start next-start)
                     (puthash (plist-get token :start) t command-starts)
                     (puthash source t command-sources)
                     (setq cursor (plist-get token :end)
