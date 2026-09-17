@@ -2202,66 +2202,57 @@
             (test-mevedel-session-persistence--pid-lock-context))
            :type 'user-error))
       (delete-directory tempdir t)))
-  :doc "same-host live PID: [b]reak overwrites the lock"
-  (let ((tempdir (file-name-as-directory
-                  (make-temp-file "mevedel-lock-test-" t))))
-    (unwind-protect
-        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
-          ;; Plant a lock with a live PID on this host.
-          (with-temp-file lock-path
-            (prin1 (list :pid (emacs-pid)
-                         :hostname (system-name)
-                         :emacs-invocation-time "old"
-                         :buffer "*other-buf*")
-                   (current-buffer)))
-          (cl-letf (((symbol-function 'read-char-choice)
-                     (lambda (&rest _) ?b)))
-            (should (mevedel-session-persistence-lock-acquire
-                     tempdir "*test-buf*"
-                     (test-mevedel-session-persistence--pid-lock-context))))
-          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
-            (should (= (emacs-pid) (plist-get plist :pid)))
-            (should (equal "*test-buf*" (plist-get plist :buffer)))))
-      (delete-directory tempdir t)))
-  :doc "same-host live PID: [r]ead-only returns nil and preserves lock"
-  (let ((tempdir (file-name-as-directory
-                  (make-temp-file "mevedel-lock-test-" t))))
-    (unwind-protect
-        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
-          (with-temp-file lock-path
-            (prin1 (list :pid (emacs-pid)
-                         :hostname (system-name)
-                         :emacs-invocation-time "old"
-                         :buffer "*other-buf*")
-                   (current-buffer)))
-          (cl-letf (((symbol-function 'read-char-choice)
-                     (lambda (&rest _) ?r)))
-            (should (null (mevedel-session-persistence-lock-acquire
-                           tempdir "*test-buf*"
-                           (test-mevedel-session-persistence--pid-lock-context)))))
-          ;; Original lock untouched.
-          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
-            (should (equal "*other-buf*" (plist-get plist :buffer)))))
-      (delete-directory tempdir t)))
-  :doc "same-host live PID: [a]bort signals user-error"
-  (let ((tempdir (file-name-as-directory
-                  (make-temp-file "mevedel-lock-test-" t))))
-    (unwind-protect
-        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
-          (with-temp-file lock-path
-            (prin1 (list :pid (emacs-pid)
-                         :hostname (system-name)
-                         :emacs-invocation-time "old"
-                         :buffer "*other-buf*")
-                   (current-buffer)))
-          (cl-letf (((symbol-function 'read-char-choice)
-                     (lambda (&rest _) ?a)))
-            (should-error
-             (mevedel-session-persistence-lock-acquire
-              tempdir "*test-buf*"
-              (test-mevedel-session-persistence--pid-lock-context))
-             :type 'user-error)))
-      (delete-directory tempdir t)))
+  :doc "live local and foreign holders share break, read-only, and abort decisions"
+  (dolist (host (list (system-name) "other-host"))
+    (dolist (response '(?b ?r ?a))
+      (ert-info ((format "holder %s, response %c" host response))
+        (let* ((directory (make-temp-file "mevedel-lock-choice-" t))
+               (path (mevedel-session-persistence--lock-path directory))
+               (holder (list :pid (emacs-pid) :hostname host
+                             :emacs-invocation-time "old"
+                             :buffer "*other-buf*"))
+               (text (prin1-to-string holder))
+               prompted)
+          (unwind-protect
+              (progn
+                (write-region text nil path nil 'silent)
+                (cl-letf (((symbol-function 'read-char-choice)
+                           (lambda (prompt choices &rest _)
+                             (should-not prompted)
+                             (setq prompted t)
+                             (should (equal '(?b ?r ?a) choices))
+                             (should (string-match-p "Since:  old" prompt))
+                             (should (string-search "Buffer: *other-buf*" prompt))
+                             (should (string-search
+                                      (if (equal host (system-name))
+                                          "live process on this host:"
+                                        "Host:   other-host")
+                                      prompt))
+                             response))
+                          ((symbol-function 'y-or-n-p)
+                           (lambda (&rest _)
+                             (ert-fail "An active holder used stale-lock confirmation"))))
+                  (if (eq response ?a)
+                      (should-error
+                       (mevedel-session-persistence-lock-acquire
+                        directory "*test-buf*"
+                        (test-mevedel-session-persistence--pid-lock-context))
+                       :type 'user-error)
+                    (should
+                     (eq (eq response ?b)
+                         (mevedel-session-persistence-lock-acquire
+                          directory "*test-buf*"
+                          (test-mevedel-session-persistence--pid-lock-context))))))
+                (should prompted)
+                (if (eq response ?b)
+                    (let ((updated (mevedel-session-persistence--read-lock path)))
+                      (should (= (emacs-pid) (plist-get updated :pid)))
+                      (should (equal (system-name) (plist-get updated :hostname)))
+                      (should (equal "*test-buf*" (plist-get updated :buffer))))
+                  (with-temp-buffer
+                    (insert-file-contents path)
+                    (should (equal text (buffer-string))))))
+            (delete-directory directory t))))))
   :doc "same-host reused PID follows the stale-lock confirmation path"
   (let ((tempdir (file-name-as-directory
                   (make-temp-file "mevedel-lock-test-" t))))
@@ -2340,26 +2331,6 @@
           ;; Original lock remains untouched.
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (= 999999 (plist-get plist :pid)))))
-      (delete-directory tempdir t)))
-  :doc "cross-host: read-only response returns nil"
-  (let ((tempdir (file-name-as-directory
-                  (make-temp-file "mevedel-lock-test-" t))))
-    (unwind-protect
-        (let* ((lock-path (mevedel-session-persistence--lock-path tempdir)))
-          (with-temp-file lock-path
-            (prin1 (list :pid 12345
-                         :hostname "other-host"
-                         :emacs-invocation-time "..."
-                         :buffer "*remote-buf*")
-                   (current-buffer)))
-          (cl-letf (((symbol-function 'read-char-choice)
-                     (lambda (&rest _) ?r)))
-            (should (null (mevedel-session-persistence-lock-acquire
-                           tempdir "*test-buf*"
-                           (test-mevedel-session-persistence--pid-lock-context)))))
-          ;; The remote lock is still in place.
-          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
-            (should (equal "other-host" (plist-get plist :hostname)))))
       (delete-directory tempdir t))))
 
 
