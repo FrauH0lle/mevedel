@@ -40,7 +40,6 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
-(defvar mevedel-user-dir)
 
 ;; `mevedel-system'
 (defvar mevedel-memory-dirs)
@@ -170,41 +169,6 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
     (cons 'file filename)))
 
 
-(defun mevedel-workspace-file-buffers (workspace)
-  "Return live buffers visiting files under WORKSPACE's root.
-
-Membership is decided on the buffer's file name, never on the target.
-`file-in-directory-p' resolves both arguments with `file-truename',
-which on a remote root is a round trip per buffer.  Repeated queries,
-issued on the same
-connection the tool call is already using, stall the turn outright and
-give a nested command somebody else's reply to parse.
-
-Symlinks are still resolved when the root is local, where the check
-costs no I/O.  A remote root compares by name only: a client that
-reaches the same target through a different symlinked spelling is not
-worth a per-buffer round trip on the hot path."
-  (when-let* ((workspace workspace)
-              (root (file-name-as-directory
-                     (expand-file-name (mevedel-workspace-root workspace)))))
-    ;; Hoisted: the truename of the root does not vary per buffer.
-    (let ((true-root (unless (file-remote-p root)
-                       (ignore-errors
-                         (file-name-as-directory (file-truename root))))))
-      (cl-remove-if-not
-       (lambda (buffer)
-         (when-let* ((file (buffer-file-name buffer)))
-           (or (string-prefix-p root file)
-               ;; A local root cannot contain a remote file, so the
-               ;; fallback never reaches for a remote truename either.
-               (and true-root
-                    (not (file-remote-p file))
-                    (when-let* ((true-file
-                                 (ignore-errors (file-truename file))))
-                      (string-prefix-p true-root true-file))))))
-       (buffer-list)))))
-
-
 ;;
 ;;; Workspace type functions
 
@@ -286,18 +250,6 @@ cached one level lower.  Intended for testing and cleanup."
   (file-name-concat
    (mevedel-workspace--normalize-root (mevedel-workspace-root workspace))
    ".mevedel/"))
-
-(defun mevedel-workspace-find-state-file (workspace filename)
-  "Find FILENAME in WORKSPACE's state dir, falling back to global.
-
-Returns the first existing path, or the project path if neither exists."
-  (let ((project-path (file-name-concat
-                       (mevedel-workspace-state-dir workspace) filename))
-        (global-path (file-name-concat mevedel-user-dir filename)))
-    (cond
-     ((file-exists-p project-path) project-path)
-     ((file-exists-p global-path) global-path)
-     (t project-path))))
 
 
 ;;
