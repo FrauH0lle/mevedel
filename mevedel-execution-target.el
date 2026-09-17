@@ -485,15 +485,6 @@ Bash capability that probe established."
     (mevedel-execution-target-refresh-incarnation target))
   target)
 
-(defun mevedel-execution-target-seed-incarnation (target incarnation)
-  "Seed TARGET with persisted INCARNATION without detecting replacement."
-  (unless (and (stringp incarnation) (not (string-blank-p incarnation)))
-    (error "Invalid target incarnation: %S" incarnation))
-  (setf (mevedel-execution-target-incarnation target) incarnation
-        (mevedel-execution-target-observed-incarnation target) nil
-        (mevedel-execution-target-incarnation-changed-p target) nil)
-  target)
-
 (defun mevedel-execution-target-restore-incarnation (target incarnation)
   "Restore persisted INCARNATION while retaining TARGET's live observation.
 

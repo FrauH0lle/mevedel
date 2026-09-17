@@ -411,8 +411,9 @@
                                                     (list :type 'terminal :session session :owner "main"
                                                           :tool-use-id "remote-call"))
                                               (mevedel-workspace-identity-ensure remote-root)
-                                              (mevedel-execution-target-seed-incarnation
-                                               (mevedel-session-execution-target session) "mock-incarnation")
+                                              (setf (mevedel-execution-target-incarnation
+                                                     (mevedel-session-execution-target session))
+                                                    "mock-incarnation")
                                               (setf (mevedel-session-session-id session) "archived-terminal"
                                                     (mevedel-session-save-path session) session-dir
                                                     (mevedel-session-current-segment session) 1)

@@ -67,8 +67,7 @@
           (let ((target-a (mevedel-session-execution-target session-a))
                 (mevedel-session-durability--client-id client-a))
             (setf (mevedel-session-sandbox-mode session-a) 'off)
-            (mevedel-execution-target-seed-incarnation
-             target-a incarnation-a)
+            (setf (mevedel-execution-target-incarnation target-a) incarnation-a)
             (puthash
              (mevedel-execution-target-identity target-a) t
              mevedel-session-durability--disclosed-targets)

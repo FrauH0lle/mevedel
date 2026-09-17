@@ -32,9 +32,9 @@
           (mevedel-workspace--create
            :type 'project :id root :root root :name "remote")))
     (let ((session (mevedel-session-create "main" workspace)))
-      (mevedel-execution-target-seed-incarnation
-       (mevedel-session-execution-target session)
-       (format "mock-incarnation-%s" host))
+      (setf (mevedel-execution-target-incarnation
+             (mevedel-session-execution-target session))
+            (format "mock-incarnation-%s" host))
       session)))
 
 (defun test-mevedel-session-durability--local-session (root)
@@ -3682,7 +3682,7 @@
                  :conversation-location transcript-relative))
           (test-mevedel-session-durability--accept-storage session)
           (mevedel-workspace-identity-ensure root)
-          (mevedel-execution-target-seed-incarnation target "remote-host-a")
+          (setf (mevedel-execution-target-incarnation target) "remote-host-a")
           (setf (mevedel-session-save-path session) session-dir
                 (mevedel-session-session-id session) "agent-session"
                 (mevedel-session-created-at session) "created"

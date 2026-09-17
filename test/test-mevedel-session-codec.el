@@ -381,8 +381,9 @@
            :root "/ssh:first:/srv/project/"
            :name "project"))
          (session (mevedel-session-create "main" workspace)))
-    (mevedel-execution-target-seed-incarnation
-     (mevedel-session-execution-target session) "remote-host-a")
+    (setf (mevedel-execution-target-incarnation
+           (mevedel-session-execution-target session))
+          "remote-host-a")
     (cl-letf (((symbol-function 'mevedel-workspace-identity-read)
                (lambda (_root) identity)))
       (let* ((sidecar (mevedel-session-codec-serialize session))
@@ -406,8 +407,9 @@
            :root "/ssh:first:/srv/project/"
            :name "project"))
          (session (mevedel-session-create "main" workspace)))
-    (mevedel-execution-target-seed-incarnation
-     (mevedel-session-execution-target session) "remote-host-a")
+    (setf (mevedel-execution-target-incarnation
+           (mevedel-session-execution-target session))
+          "remote-host-a")
     (setf (mevedel-session-permission-rules session)
           '(("Read" :path "/ssh:first:/srv/project/src/**" :action allow)
             ("Bash" :pattern "git status"

@@ -901,7 +901,7 @@
                (lambda (&rest _) (cl-incf probes) ""))
               ((symbol-function 'mevedel-execution-target--local-incarnation)
                (lambda () "local-replacement")))
-      (mevedel-execution-target-seed-incarnation target "local-baseline")
+      (setf (mevedel-execution-target-incarnation target) "local-baseline")
       (mevedel-execution-target-observe-incarnation target)
       (should (= 0 probes))
       (should (mevedel-execution-target-incarnation-changed-p target))
@@ -909,17 +909,17 @@
                      (mevedel-execution-target-observed-incarnation
                       target))))))
 
-(mevedel-deftest mevedel-execution-target-seed-incarnation ()
+(mevedel-deftest mevedel-execution-target-restore-incarnation ()
   ,test
   (test)
-  :doc "installs a persisted baseline without reporting replacement"
+  :doc "installs a remote persisted baseline before observing replacement"
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/")))
     (setf (mevedel-execution-target-incarnation-changed-p target) t
           (mevedel-execution-target-observed-incarnation target)
           "unacknowledged-incarnation")
     (should (eq target
-                (mevedel-execution-target-seed-incarnation
+                (mevedel-execution-target-restore-incarnation
                  target "persisted-incarnation")))
     (should (equal "persisted-incarnation"
                    (mevedel-execution-target-incarnation target)))
@@ -932,7 +932,20 @@
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/")))
     (should-error
-     (mevedel-execution-target-seed-incarnation target nil))))
+     (mevedel-execution-target-restore-incarnation target nil)))
+
+  :doc "retains a changed local observation when restoring a persisted baseline"
+  (cl-letf (((symbol-function
+              'mevedel-execution-target--local-incarnation)
+             (lambda () "live-incarnation")))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (mevedel-execution-target-restore-incarnation
+       target "persisted-incarnation")
+      (should (equal "persisted-incarnation"
+                     (mevedel-execution-target-incarnation target)))
+      (should (equal "live-incarnation"
+                     (mevedel-execution-target-observed-incarnation target)))
+      (should (mevedel-execution-target-incarnation-changed-p target)))))
 
 (mevedel-deftest
     mevedel-execution-target-prepare-incarnation-acknowledgement ()
@@ -941,7 +954,7 @@
   :doc "promotes only a staged replacement while keeping it unacknowledged"
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/")))
-    (mevedel-execution-target-seed-incarnation target "old-incarnation")
+    (setf (mevedel-execution-target-incarnation target) "old-incarnation")
     (setf (mevedel-execution-target-observed-incarnation target)
           "new-incarnation"
           (mevedel-execution-target-incarnation-changed-p target) t)
@@ -957,7 +970,7 @@
   :doc "rejects acknowledgement preparation without a staged observation"
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/")))
-    (mevedel-execution-target-seed-incarnation target "old-incarnation")
+    (setf (mevedel-execution-target-incarnation target) "old-incarnation")
     (should-error
      (mevedel-execution-target-prepare-incarnation-acknowledgement target))))
 
@@ -1104,22 +1117,6 @@
       (should-not (mevedel-execution-target--local-incarnation))
       (should-error
        (mevedel-execution-target-refresh-incarnation target)))))
-
-(mevedel-deftest mevedel-execution-target-restore-incarnation ()
-  ,test
-  (test)
-  :doc "retains a changed local observation when restoring a persisted baseline"
-  (cl-letf (((symbol-function
-              'mevedel-execution-target--local-incarnation)
-             (lambda () "live-incarnation")))
-    (let ((target (mevedel-execution-target-create "/srv/project/")))
-      (mevedel-execution-target-restore-incarnation
-       target "persisted-incarnation")
-      (should (equal "persisted-incarnation"
-                     (mevedel-execution-target-incarnation target)))
-      (should (equal "live-incarnation"
-                     (mevedel-execution-target-observed-incarnation target)))
-      (should (mevedel-execution-target-incarnation-changed-p target)))))
 
 (mevedel-deftest mevedel-execution-target--install-hint ()
   ,test

@@ -328,8 +328,8 @@
                     'sha256
                     (mevedel-execution-target--incarnation-payload
                      "fixture" "fixture" "1" "fixture"))))
-              (mevedel-execution-target-seed-incarnation
-               target "old-incarnation")
+              (setf (mevedel-execution-target-incarnation target)
+                    "old-incarnation")
               (setf (mevedel-execution-target-support-tier target) 'supported
                     (mevedel-session-sandbox-mode session) 'off
                     (mevedel-session-resource-grants session)
