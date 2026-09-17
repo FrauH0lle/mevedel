@@ -18,28 +18,6 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-turn)
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-control-cancel-wait
-                  "mevedel-agent-control" (session path))
-(declare-function mevedel-agent-control-followup
-                  "mevedel-agent-control" t t)
-(declare-function mevedel-agent-control-interrupt
-                  "mevedel-agent-control" (session target))
-(declare-function mevedel-agent-control-list-agents
-                  "mevedel-agent-control" (session &optional path-prefix))
-(declare-function mevedel-agent-control-send-message
-                  "mevedel-agent-control" (session target message))
-(declare-function mevedel-agent-control-spawn
-                  "mevedel-agent-control" t t)
-(declare-function mevedel-agent-control-wait
-                  "mevedel-agent-control" (session callback &optional timeout-ms))
-(declare-function mevedel-agent-record-conversation-location
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-id
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-path
-                  "mevedel-agent-control" (cl-x) t)
-
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
@@ -51,18 +29,10 @@
 ;; `mevedel-tool-ask'
 (declare-function mevedel-tool-ask-register "mevedel-tool-ask" ())
 
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-truthy-p
-                  "mevedel-tool-registry" (value))
-
 ;; `mevedel-tools'
 (declare-function mevedel-tools--tool-search
                   "mevedel-tools" (callback query))
 
-
-;; `mevedel-turn'
-(declare-function mevedel-request-push-canceller
-                  "mevedel-turn" (request canceller))
 
 ;;
 ;;; Agent tool
@@ -268,18 +238,6 @@
             :agent-path path
             :initially-collapsed-p t))))
 
-(defun mevedel-tool-ui--result-status (result)
-  "Return a renderer status for RESULT."
-  (and (stringp result)
-       (string-prefix-p "Error:" result)
-       'error))
-
-(defun mevedel-tool-ui--line-count (result)
-  "Return non-empty line count for RESULT."
-  (if (stringp result)
-      (length (split-string result "\n" t))
-    0))
-
 (defun mevedel-tool-ui--render-list-agents
     (name _args result _render-data)
   "Render the ListAgents RESULT as a compact table."
@@ -334,15 +292,13 @@
   "Return rendering plist for ToolSearch NAME, ARGS, and RESULT."
   (when (stringp result)
     (let* ((query (or (plist-get args :query) ""))
-           (load (mevedel-tool-truthy-p (plist-get args :load)))
-           (count (mevedel-tool-ui--line-count result)))
-      (list :header (format "%s: %s (%s, %d %s)"
+           (count (length (split-string result "\n" t))))
+      (list :header (format "%s: %s (search, %d %s)"
                             (or name "ToolSearch") query
-                            (if load "load" "search")
                             count (if (= count 1) "line" "lines"))
             :body result
             :body-mode nil
-            :status (mevedel-tool-ui--result-status result)
+            :status (and (string-prefix-p "Error:" result) 'error)
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-wait-agent

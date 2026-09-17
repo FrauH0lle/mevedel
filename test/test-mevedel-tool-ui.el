@@ -29,30 +29,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-record-activity
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-configuration
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-conversation-location
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-id
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-parent-path
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-path
-                  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-role
-                  "mevedel-agent-control" (cl-x) t)
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-buffer
-                  "mevedel-agents" (cl-x) t)
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-lock-release
-                  "mevedel-session-persistence" (path))
-
 (defun mevedel-tool-ui-test--session ()
   "Return a fresh in-memory session for tool UI tests."
   (mevedel-session-create
@@ -62,6 +38,15 @@
     :id "tool-ui"
     :root temporary-file-directory
     :name "tool-ui")))
+
+(defun mevedel-tool-ui-test--insert-rendering (rendering)
+  "Insert RENDERING before the current view's composer."
+  (let ((inhibit-read-only t))
+    (goto-char mevedel-view--input-marker)
+    (set-marker-insertion-type mevedel-view--input-marker t)
+    (unwind-protect
+        (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+      (set-marker-insertion-type mevedel-view--input-marker nil))))
 
 (mevedel-deftest mevedel-tool-ui--deliver-result ()
   ,test
@@ -923,12 +908,7 @@
                   :path "/root/spec_review"
                   :agent-id "default--internal"
                   :status running))))
-          (let ((inhibit-read-only t))
-            (goto-char mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t)
-            (unwind-protect
-                (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-              (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (mevedel-tool-ui-test--insert-rendering rendering)
           (should (string= draft (mevedel-view--input-text)))))))
 
   :doc "Started paths activate their retained transcript"
@@ -997,12 +977,7 @@
         "Error: Unknown agent target" nil))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-              (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (mevedel-tool-ui-test--insert-rendering rendering)
         (should (string= draft (mevedel-view--input-text))))))
 
   :doc "interaction paths activate transcripts; follow-ups and sent messages expand"
@@ -1082,18 +1057,33 @@
               (plist-get rendering :body)))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (mevedel-tool-ui-test--insert-rendering rendering)
         (should (string= draft (mevedel-view--input-text))))))
 
   :doc "falls back to generic rendering for malformed results"
   (should-not
    (mevedel-tool-ui--render-list-agents
     "ListAgents" nil "not json" nil)))
+
+(mevedel-deftest mevedel-tool-ui--render-tool-search ()
+  ,test
+  (test)
+  :doc "shows non-empty line counts, original text, and error status"
+  (dolist (case '(("" 0 nil) ("one\n\ntwo\n" 2 nil)
+                  ("Error: Unknown tool" 1 error)))
+    (let* ((result (car case))
+           (count (cadr case))
+           (rendering
+            (mevedel-tool-ui--render-tool-search
+             "ToolSearch" '(:query "Read") result nil)))
+      (should (equal (format "ToolSearch: Read (search, %d %s)"
+                             count (if (= count 1) "line" "lines"))
+                     (plist-get rendering :header)))
+      (should (eq result (plist-get rendering :body)))
+      (should (eq (nth 2 case) (plist-get rendering :status)))
+      (should (plist-get rendering :initially-collapsed-p))))
+  :doc "leaves non-string results to generic rendering"
+  (should-not (mevedel-tool-ui--render-tool-search nil nil nil nil)))
 
 (mevedel-deftest mevedel-tool-ui--interrupt-agent
   (:doc "Interrupts retained turns through canonical path events")
@@ -1135,12 +1125,7 @@
                      (plist-get rendering :header)))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (mevedel-tool-ui-test--insert-rendering rendering)
         (should (string= draft (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-tool-ui--send-message ()
@@ -1219,12 +1204,7 @@
       (should-not (plist-get rendering :hidden-p))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (mevedel-tool-ui-test--insert-rendering rendering)
         (should (string-match-p
                  "WaitAgent: agents"
                  (buffer-substring-no-properties
