@@ -79,9 +79,14 @@
   (with-temp-buffer
     (insert "plain response tail")
     (put-text-property 7 (point-max) 'gptel 'response)
-    (should (mevedel-transcript-restore-properties-present-p
-             (point-min) (point-max)))
-    (should-not (mevedel-transcript-restore-properties-present-p 1 7))))
+    (should (eq t (mevedel-transcript-restore-properties-present-p
+                   (point-min) (point-max))))
+    (should-not (mevedel-transcript-restore-properties-present-p 1 7))
+    (should-not (mevedel-transcript-restore-properties-present-p 7 7))
+    (should-not (mevedel-transcript-restore-properties-present-p 8 7))
+    (should (eq t (mevedel-transcript-restore-properties-present-p 7 8)))
+    (put-text-property 7 (point-max) 'gptel nil)
+    (should-not (mevedel-transcript-restore-properties-present-p 1 (point-max)))))
 
 (mevedel-deftest mevedel-transcript-restore-properties ()
   ,test

@@ -104,14 +104,8 @@ the buffer modified."
 
 (defun mevedel-transcript-restore-properties-present-p (start end)
   "Return non-nil when START..END contain a `gptel' text property."
-  (let ((pos start)
-        found)
-    (while (and (< pos end) (not found))
-      (when (get-text-property pos 'gptel)
-        (setq found t))
-      (setq pos (or (next-single-property-change pos 'gptel nil end)
-                    end)))
-    found))
+  (and (< start end)
+       (not (null (text-property-not-all start end 'gptel nil)))))
 
 (defun mevedel-transcript-restore-properties (&optional only-if-missing)
   "Restore and normalize transcript properties in the current Org buffer.
