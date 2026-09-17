@@ -71,22 +71,18 @@ until the next one replaces it."
       (and (file-directory-p dir) dir))))
 
 (defun mevedel-tool-media--write-media-store-record
-    (id items tool-results-dir tool-use-id &optional session)
-  "Persist ITEMS under ID in TOOL-RESULTS-DIR, returning the file path.
-
-TOOL-USE-ID records the tool call that owns the media.  When SESSION is
-non-nil, publish through its durability seam."
+    (record tool-results-dir &optional session)
+  "Persist RECORD in TOOL-RESULTS-DIR, returning the file path.
+When SESSION is non-nil, publish through its durability seam."
   (when (stringp tool-results-dir)
-    (let* ((dir (file-name-concat tool-results-dir "media"))
+    (let* ((id (plist-get record :id))
+           (dir (file-name-concat tool-results-dir "media"))
            (file (file-name-concat dir (concat "media-" id ".el")))
            (content
             (let ((print-level nil)
                   (print-length nil)
                   (print-circle t))
-              (prin1-to-string
-               (list :version 1 :id id
-                     :tool-use-id tool-use-id
-                     :items items)))))
+              (prin1-to-string record))))
       (if session
           (progn
             (require 'mevedel-session-artifacts)
@@ -177,7 +173,7 @@ publication when non-nil."
                          :tool-use-id tool-use-id
                          :items items)))
       (mevedel-tool-media--write-media-store-record
-       id items tool-results-dir tool-use-id session)
+       record tool-results-dir session)
       (mevedel-tool-media--cache-put id record)
       (append (list :id id)
               (when (stringp tool-use-id)
@@ -394,34 +390,26 @@ SESSION control trusted side-channel lookup."
          (stringp data)
          (> (length data) 0))))
 
-(defun mevedel-tool-media--valid-media-items-p (items)
-  "Return non-nil when ITEMS is a non-empty list of valid media items."
-  (and (consp items)
-       (cl-every #'mevedel-tool-media--valid-media-item-p items)))
-
-(defun mevedel-tool-media--sanitize-media-items (items)
-  "Return ITEMS with only supported media side-channel keys retained."
-  (mapcar
-   (lambda (item)
-     (let ((clean (list :mime (plist-get item :mime)
-                        :kind (plist-get item :kind)
-                        :data (plist-get item :data))))
-       (when-let* ((path (plist-get item :path)))
-         (when (stringp path)
-           (setq clean (plist-put clean :path path))))
-       (when-let* ((source (plist-get item :source)))
-         (when (stringp source)
-           (setq clean (plist-put clean :source source))))
-       (when-let* ((page (plist-get item :page)))
-         (when (integerp page)
-           (setq clean (plist-put clean :page page))))
-       clean))
-   items))
-
 (defun mevedel-tool-media-normalize-items (items)
   "Return sanitized media ITEMS, or nil when the collection is invalid."
-  (when (mevedel-tool-media--valid-media-items-p items)
-    (mevedel-tool-media--sanitize-media-items items)))
+  (when (and (consp items)
+             (cl-every #'mevedel-tool-media--valid-media-item-p items))
+    (mapcar
+     (lambda (item)
+       (let ((clean (list :mime (plist-get item :mime)
+                          :kind (plist-get item :kind)
+                          :data (plist-get item :data))))
+         (when-let* ((path (plist-get item :path)))
+           (when (stringp path)
+             (setq clean (plist-put clean :path path))))
+         (when-let* ((source (plist-get item :source)))
+           (when (stringp source)
+             (setq clean (plist-put clean :source source))))
+         (when-let* ((page (plist-get item :page)))
+           (when (integerp page)
+             (setq clean (plist-put clean :page page))))
+         clean))
+     items)))
 
 (defun mevedel-tool-media-reference-items (items)
   "Return media ITEMS without their payload bytes."
