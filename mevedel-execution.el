@@ -2180,47 +2180,38 @@ discards the process without invoking CALLBACK."
                 (mevedel-execution-telemetry-context-summary
                  telemetry-context)))
          nil)
-        ('unrestricted
+        ((or 'unrestricted 'confined)
          (setq current-facts (plist-get preparation :facts))
-         (mevedel-execution-telemetry-record
-          telemetry-context 'execution-unrestricted
-          (append
-           (list :name name :owner owner
-                 :reason-class
-                 (plist-get (plist-get preparation :facts) :sandbox))
-           (mevedel-execution-telemetry-safe-facts
-            (plist-get preparation :facts))))
+         (when (eq (plist-get preparation :state) 'unrestricted)
+           (mevedel-execution-telemetry-record
+            telemetry-context 'execution-unrestricted
+            (append
+             (list :name name :owner owner
+                   :reason-class (plist-get current-facts :sandbox))
+             (mevedel-execution-telemetry-safe-facts current-facts))))
          (setq started-p
                (setq child
                      (mevedel-execution--start-process
                       (lambda (child-result)
-                        (finish child-result (plist-get preparation :facts)))
+                        (if (eq (plist-get preparation :state) 'unrestricted)
+                            (finish child-result current-facts)
+                          (let* ((launch-failed
+                                  (mevedel-sandbox-launch-failed-p
+                                   preparation child-result))
+                                 (facts
+                                  (if launch-failed
+                                      (mevedel-sandbox--record-launch-failure
+                                       child-result workdir)
+                                    (plist-get preparation :facts)))
+                                 (clean-result
+                                  (mevedel-sandbox-strip-marker
+                                   preparation child-result)))
+                            (setq started-p (not launch-failed)
+                                  current-facts facts)
+                            (mevedel-sandbox-cleanup preparation)
+                            (finish clean-result facts))))
                       name (plist-get preparation :command) workdir timeout
                       session owner #'teardown))))
-        ('confined
-         (setq current-facts (plist-get preparation :facts))
-         (setq
-          started-p
-          (setq child
-                (mevedel-execution--start-process
-                 (lambda (child-result)
-                   (let ((launch-failed
-                          (mevedel-sandbox-launch-failed-p
-                           preparation child-result)))
-                     (let ((facts
-                            (if launch-failed
-                                (mevedel-sandbox--record-launch-failure
-                                 child-result workdir)
-                              (plist-get preparation :facts)))
-                           (clean-result
-                            (mevedel-sandbox-strip-marker
-                             preparation child-result)))
-                       (setq started-p (not launch-failed)
-                             current-facts facts)
-                       (mevedel-sandbox-cleanup preparation)
-                       (finish clean-result facts))))
-                 name (plist-get preparation :command) workdir timeout session owner
-                 #'teardown))))
         (_ (error "Unknown sandbox preparation state: %s"
                   (plist-get preparation :state))))
       (lambda ()
