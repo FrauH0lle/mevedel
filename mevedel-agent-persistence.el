@@ -28,12 +28,6 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-p "ext:gptel-request" (cl-x))
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-control-active-activity-p
-                  "mevedel-agent-control" (activity))
-(declare-function mevedel-agent-control-recover-interrupted
-                  "mevedel-agent-control" (session))
-
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-hydrate
                   "mevedel-agent-conversation"
@@ -42,27 +36,12 @@
 (autoload 'mevedel-agent-conversation-hydrate
   "mevedel-agent-conversation")
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-request-locals-p
-                  "mevedel-agents" (locals &optional complete))
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders--recipe-p
-                  "mevedel-reminders" (recipe))
-(declare-function mevedel-reminders-restore-agent-templates
-                  "mevedel-reminders" (recipes))
-(declare-function mevedel-reminders-serialize-agent-templates
-                  "mevedel-reminders" (reminders))
-
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
-
-;; `mevedel-utilities'
-(declare-function mevedel--plain-data-p "mevedel-utilities" (value))
 
 (define-error 'mevedel-agent-persistence-invalid-data
   "Invalid persisted agent data")
@@ -201,8 +180,6 @@ callers reverse it only when delivering the mailbox as FIFO."
      :request-locals
      (mapcar
       (lambda (entry)
-        (unless (and (consp entry) (symbolp (car entry)))
-          (error "Invalid live agent request local name"))
         (cons (car entry)
               (mevedel-agent-persistence--encode-local
                (car entry) (cdr entry))))
@@ -322,12 +299,7 @@ succeed after silently losing an addressable agent."
                     (cl-every #'stringp path))
          (mevedel-agent-persistence--invalid
           "Invalid persisted agent tool path"))
-       (let ((tool
-              (condition-case nil
-                  (gptel-get-tool path)
-                (error
-                 (mevedel-agent-persistence--invalid
-                  "Unknown persisted agent tool: %S" path)))))
+       (let ((tool (ignore-errors (gptel-get-tool path))))
          (unless (gptel-tool-p tool)
            (mevedel-agent-persistence--invalid
             "Unknown persisted agent tool: %S" path))
@@ -402,9 +374,6 @@ succeed after silently losing an addressable agent."
            (locals
             (mapcar
              (lambda (entry)
-               (unless (and (consp entry) (symbolp (car entry)))
-                 (mevedel-agent-persistence--invalid
-                  "Invalid persisted agent request local name"))
                (cons (car entry)
                      (mevedel-agent-persistence--decode-local
                       (car entry) (cdr entry))))
@@ -544,9 +513,8 @@ dropped or recovered records."
                                (assoc parent accepted))
                            (mevedel-agent-persistence-transcript-path-p
                             relative save-path)
-                           (progn
-                             (mevedel-session-artifacts-artifact-present-p
-                              session relative)))
+                           (mevedel-session-artifacts-artifact-present-p
+                            session relative))
                 (signal 'mevedel-agent-persistence-invalid-data
                         (list (format "Invalid retained agent conversation: %s"
                                       path))))
