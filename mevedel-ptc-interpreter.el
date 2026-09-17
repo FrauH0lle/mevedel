@@ -231,10 +231,7 @@ that exceeds the node or depth budget.  Return the canonical FORM."
               'input "Script nesting exceeds the depth limit of %d"
               mevedel-ptc-max-depth))
            (cond
-            ((null x) nil)
-            ((symbolp x) nil)
-            ((stringp x) nil)
-            ((numberp x) nil)
+            ((or (symbolp x) (stringp x) (numberp x)) nil)
             ((consp x)
              (let ((cur x))
                (while (consp cur)
@@ -807,10 +804,6 @@ bound interpreter bookkeeping that must not hold the Emacs command loop.")
   (let ((op (car form)))
     (and (symbolp op) (not (mevedel-ptc-keyword-p op)) op (symbol-name op))))
 
-(defun mevedel-ptc--lookup (env symbol)
-  "Return the binding cell for SYMBOL in ENV, or nil."
-  (assq symbol env))
-
 (defun mevedel-ptc--set-eval (state form env)
   "Make STATE evaluate FORM in ENV next."
   (setf (mevedel-ptc-state-control state) form
@@ -1192,13 +1185,10 @@ unknown wrapper around a tool call cannot run the tool first."
           (push (list :invoke closure) (mevedel-ptc-state-stack state))
           (mevedel-ptc--schedule-args state args env))))
 
-     ;; tool primitive
-     ((member name (mevedel-ptc-state-roster state))
-      (push (list :direct name) (mevedel-ptc-state-stack state))
-      (mevedel-ptc--schedule-args state args env))
-
-     ;; pure primitive
-     ((assoc name mevedel-ptc-pure-primitives)
+     ;; Tool and pure primitives share argument evaluation.  The :direct
+     ;; continuation dispatches through the same closed tables afterward.
+     ((or (member name (mevedel-ptc-state-roster state))
+          (assoc name mevedel-ptc-pure-primitives))
       (push (list :direct name) (mevedel-ptc-state-stack state))
       (mevedel-ptc--schedule-args state args env))
 
@@ -1214,7 +1204,7 @@ unknown wrapper around a tool call cannot run the tool first."
    ((eq form t) (mevedel-ptc--set-return state t))
    ((mevedel-ptc-keyword-p form) (mevedel-ptc--set-return state form))
    ((symbolp form)
-    (let ((cell (mevedel-ptc--lookup env form)))
+    (let ((cell (assq form env)))
       (unless cell
         (error "Unbound variable: %s" (symbol-name form)))
       (mevedel-ptc--set-return state (cdr cell))))
@@ -1273,7 +1263,7 @@ unknown wrapper around a tool call cannot run the tool first."
           state sequential bindings base-env (cons (cons var value) new-env)
           body))
         (`(:setq ,var ,forms ,env)
-         (let ((cell (mevedel-ptc--lookup env var)))
+         (let ((cell (assq var env)))
            (unless cell
              (error "'setq': unbound variable %s" (symbol-name var)))
            (setcdr cell value))

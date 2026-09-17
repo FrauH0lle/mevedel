@@ -284,32 +284,22 @@ dispatched), and `:pauses'."
   (should (string-match-p "Unknown functions"
                           (test-mevedel-ptc--error "(if nil (seq-take (list 1) 1) 2)")))
 
-  :doc "preflight rejects a literal unsafe regexp before any tool runs"
-  (let ((run (condition-case err
-                 (test-mevedel-ptc--run
-                  "(progn (Read :file_path \"x\")
-                          (string-match-p \"\\\\(a\\\\)+\" \"aaa\"))"
-                  '("Read"))
-               (mevedel-ptc-error (list :outcome 'error
+  :doc "preflight rejects unsafe and malformed literal regexps before any tool runs"
+  (dolist (regexp '("\\(a\\)+" "["))
+    (let ((run (condition-case err
+                   (test-mevedel-ptc--run
+                    (format "(progn (Read :file_path \"x\")
+                                    (string-match-p %S \"aaa\"))"
+                            regexp)
+                    '("Read"))
+                 (mevedel-ptc-error (list :outcome 'error
                                         :kind (nth 1 err)
                                         :value (nth 2 err)
                                         :calls nil)))))
-    (should (eq 'error (plist-get run :outcome)))
-    (should (null (plist-get run :calls))))
-
-  :doc "preflight rejects a malformed literal regexp before any tool runs"
-  (let ((run (condition-case err
-                 (test-mevedel-ptc--run
-                  "(progn (Read :file_path \"x\")
-                          (string-match-p \"[\" \"x\"))"
-                  '("Read"))
-               (mevedel-ptc-error (list :outcome 'error
-                                        :kind (nth 1 err)
-                                        :value (nth 2 err)
-                                        :calls nil)))))
-    (should (eq 'error (plist-get run :outcome)))
-    (should (string-match-p "Invalid guest regexp" (plist-get run :value)))
-    (should (null (plist-get run :calls))))
+      (should (eq 'error (plist-get run :outcome)))
+      (when (equal regexp "[")
+        (should (string-match-p "Invalid guest regexp" (plist-get run :value))))
+      (should (null (plist-get run :calls)))))
 
   :doc "funcall and apply reject a forbidden target before evaluating arguments"
   (let ((run (test-mevedel-ptc--run
@@ -367,7 +357,20 @@ dispatched), and `:pauses'."
                                 "(list (cond ((equal 1 2) :no) (t :yes)) (and 1 2) (or nil 3))")))
     (should (equal '(10 20 30) (test-mevedel-ptc--value
                                 "(mapcar (lambda (x) (* x 10)) (list 1 2 3))")))
-    (should (equal 6 (test-mevedel-ptc--value "(apply '+ 1 (list 2 3))"))))
+    (should (equal 6 (test-mevedel-ptc--value "(apply '+ 1 (list 2 3))")))
+    (should (equal '(3 nil 1)
+                   (test-mevedel-ptc--value
+                    "(let ((x 1))
+                       (list (let ((x nil)) (setq x 3) x)
+                             (let ((x nil)) x) x))")))
+    (should (equal 7
+                   (test-mevedel-ptc--value
+                    "(let* ((x nil) (read-x (lambda () x)))
+                       (setq x 7) (funcall read-x))")))
+    (should (string-match-p "Unbound variable: missing"
+                            (test-mevedel-ptc--error "missing")))
+    (should (string-match-p "setq.*unbound variable missing"
+                            (test-mevedel-ptc--error "(setq missing 1)"))))
 
   :doc "supports pure path, take, and fixed-comparator sort primitives"
   (progn
