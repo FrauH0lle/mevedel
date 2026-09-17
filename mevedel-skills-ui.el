@@ -112,7 +112,6 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
-(declare-function mevedel-goal-description "mevedel-goal" (&optional goal))
 (declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
