@@ -128,6 +128,35 @@
     (insert ";; End:\n")
     (should (= (mevedel-compact-estimation-estimate-tokens) 3))))
 
+(mevedel-deftest mevedel-compact-estimation-estimate-transformed-request-tokens ()
+  ,test
+  (test)
+  :doc "combines a baseline and visible growth without subtracting contractions"
+  (with-temp-buffer
+    (insert "abcdefgh")
+    (let ((source (current-buffer)))
+      (setq-local mevedel-compact-estimation--known-token-baseline
+                  (list :tokens 100 :position (point-marker)))
+      (with-temp-buffer
+        (insert "abcdefghijklmnop")
+        (insert (propertize "metadata" 'gptel 'ignore))
+        (should (= 102 (mevedel-compact-estimation-estimate-transformed-request-tokens
+                        source (current-buffer))))
+        (erase-buffer)
+        (should (= 100 (mevedel-compact-estimation-estimate-transformed-request-tokens
+                        source (current-buffer))))
+        (with-current-buffer source
+          (mevedel-compact-estimation-clear-baseline))
+        (should (= 0 (mevedel-compact-estimation-estimate-transformed-request-tokens
+                      source (current-buffer)))))))
+  :doc "returns nil if either buffer is dead"
+  (let ((dead (generate-new-buffer " *dead-compaction-input*")))
+    (kill-buffer dead)
+    (should-not (mevedel-compact-estimation-estimate-transformed-request-tokens
+                 dead (current-buffer)))
+    (should-not (mevedel-compact-estimation-estimate-transformed-request-tokens
+                 (current-buffer) dead))))
+
 (mevedel-deftest mevedel-compact-estimation-estimate-data-tokens ()
   ,test
   (test)
