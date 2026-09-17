@@ -11,6 +11,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-execution-target)
+(require 'mevedel-mentions)
 (require 'mevedel-session-persistence)
 (require 'mevedel-view)
 (require 'mevedel-view-markdown)
@@ -717,6 +718,27 @@
               (should (equal file
                              (button-get button 'mevedel-view-path)))
               (should (= 7 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "escaped file tokens retain pathname and range through mentions and rendering"
+  (let ((root (make-temp-file "mevedel-file-token-" t)))
+    (unwind-protect
+        (dolist (name '("plain.el" "space #hash}.el" "open{brace.el"
+                        "tab\tname.el"))
+          (let* ((file (file-name-concat root name))
+                 (token (mevedel-mentions-file-token file))
+                 (text (concat "See " token "#L2-3")))
+            (with-temp-file file (insert "one\ntwo\nthree\n"))
+            (should (equal (list file)
+                           (mevedel-mentions-file-paths-in-text text)))
+            (with-temp-buffer
+              (insert text)
+              (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+              (let ((button (button-at (+ (point-min) 4))))
+                (should button)
+                (should (equal file (button-get button 'mevedel-view-path)))
+                (should (= 2 (button-get button 'mevedel-view-line)))
+                (should (= (point-max) (button-end button)))))))
       (delete-directory root t)))
 
   :doc "Markdown local link #L range stores first line"

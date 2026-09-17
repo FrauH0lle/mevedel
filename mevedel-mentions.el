@@ -272,7 +272,7 @@ an absolute pathname even when the path is currently unavailable."
      (lambda (captures)
        (list :path
              (mevedel-resource-normalize-file-path
-              (mevedel-mentions--unescape-braced-file-path
+              (mevedel-mention-bindings-file-token-path
                (car captures))
               working-directory))))
     (mevedel-mentions--bind-user-input-matches
@@ -564,27 +564,6 @@ mention this reminder to the user."
                     :hash (secure-hash 'sha1 body)))
           (error
            (funcall deny (funcall resolver-error err)))))))))
-(defun mevedel-mentions--unescape-braced-file-path (token)
-  "Return TOKEN decoded as a braced @file path.
-TOKEN may be either a bare path or a `{...}' path.  Inside braces, a
-backslash quotes the following character."
-  (if (not (and (string-prefix-p "{" token)
-                (string-suffix-p "}" token)))
-      token
-    (let* ((body (substring token 1 -1))
-           (index 0)
-           (limit (length body))
-           chars)
-      (while (< index limit)
-        (let ((ch (aref body index)))
-          (if (and (= ch ?\\) (< (1+ index) limit))
-              (progn
-                (cl-incf index)
-                (push (aref body index) chars))
-            (push ch chars)))
-        (cl-incf index))
-      (apply #'string (nreverse chars)))))
-
 (defun mevedel-mentions-file-token (path)
   "Return the visible @file mention token for PATH."
   (format "@file:%s"
@@ -597,7 +576,7 @@ backslash quotes the following character."
   "Return the @file path represented by INFO."
   (or (when-let* ((captures (plist-get info :captures))
                   (token (nth 1 captures)))
-        (mevedel-mentions--unescape-braced-file-path token))
+        (mevedel-mention-bindings-file-token-path token))
       (plist-get info :capture)))
 
 (defun mevedel-mentions-file-paths-in-text (text)
@@ -612,7 +591,7 @@ boundary checks."
       (while (re-search-forward mevedel-mention-bindings-file-regexp nil t)
         (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
           (push (mevedel-resource-normalize-file-path
-                 (mevedel-mentions--unescape-braced-file-path
+                 (mevedel-mention-bindings-file-token-path
                   (match-string 1)))
                 paths))))
     (nreverse paths)))
@@ -1353,7 +1332,7 @@ Skips mentions in non-user regions or adjacent to quoting chars."
            '(:box (:line-width -1) :inherit shadow)))
      prepend)
     (mevedel--fontify-file-keyword
-     0 (let ((filepath (mevedel-mentions--unescape-braced-file-path
+     0 (let ((filepath (mevedel-mention-bindings-file-token-path
                         (match-string 1))))
          ;; Fontification runs from redisplay.  Probing a target path there
          ;; costs a synchronous round trip every time the mention is redrawn,

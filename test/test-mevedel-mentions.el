@@ -451,7 +451,7 @@ Returns (buffer . overlay)."
     (should (mevedel--fontify-file-keyword (point-max)))
     (should (equal "{/tmp/foo bar.el}" (match-string 1)))
     (should (equal "/tmp/foo bar.el"
-                   (mevedel-mentions--unescape-braced-file-path
+                   (mevedel-mention-bindings-file-token-path
                     (match-string 1))))))
 
 (mevedel-deftest mevedel--fontify-agent-keyword
