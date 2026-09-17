@@ -541,23 +541,16 @@
   :doc "reports no authoritative segment with a stable user error"
   (let ((directory (make-temp-file "mevedel-cold-empty-" t)))
     (unwind-protect
-        (condition-case err
-            (ert-fail
-             (format "Expected failure, got %S"
-                     (mevedel-session-artifacts-inspect-cold-session
-                      directory 'pid-lock)))
-          (user-error
-           (should
-            (equal
-             (format "No authoritative transcript segment is available: %s"
-                     directory)
-             (error-message-string err))))
-          ;; A portable record without a validated publication has no
-          ;; authoritative segment either.
-          (should-error
-           (mevedel-session-artifacts-inspect-cold-session
-            directory 'portable nil)
-           :type 'user-error))
+        (dolist (authority '(pid-lock portable))
+          (let ((err (should-error
+                      (mevedel-session-artifacts-inspect-cold-session
+                       directory authority)
+                      :type 'user-error)))
+            (should
+             (equal
+              (format "No authoritative transcript segment is available: %s"
+                      directory)
+              (error-message-string err)))))
       (delete-directory directory t)))
   :doc "kills a partially initialized buffer when mode setup fails"
   (let* ((directory (make-temp-file "mevedel-cold-failed-" t))
@@ -953,7 +946,7 @@
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "rewritten sidecar reflects current session state"
+  :doc "sidecar updates current state while preserving the first prompt"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -973,7 +966,17 @@
                                  (plist-get plist :first-user-message)))
                   (should (equal "Refactor the permission chain"
                                  (plist-get plist :latest-user-message)))
-                  (should (= 1 (plist-get plist :current-segment)))))
+                  (should (= 1 (plist-get plist :current-segment))))
+                (erase-buffer)
+                (insert "Later prompt\n")
+                (mevedel-session-artifacts-save session buf)
+                (let ((plist (mevedel-session-codec-read
+                              (mevedel-session-artifacts-sidecar-path
+                               (mevedel-session-save-path session)))))
+                  (should (equal "Refactor the permission chain"
+                                 (plist-get plist :first-user-message)))
+                  (should (equal "Later prompt"
+                                 (plist-get plist :latest-user-message)))))
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
@@ -997,31 +1000,6 @@
                   (should (equal "First prompt"
                                  (plist-get plist :first-user-message)))
                   (should (equal "Second prompt"
-                                 (plist-get plist :latest-user-message)))))
-            (kill-buffer buf)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "first sidecar preview stays stable across later saves"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (insert "Original prompt\n")
-                (mevedel-session-artifacts-save session buf)
-                (erase-buffer)
-                (insert "Later prompt\n")
-                (mevedel-session-artifacts-save session buf)
-                (let* ((sidecar-path
-                        (mevedel-session-artifacts-sidecar-path
-                         (mevedel-session-save-path session)))
-                       (plist (mevedel-session-codec-read sidecar-path)))
-                  (should (equal "Original prompt"
-                                 (plist-get plist :first-user-message)))
-                  (should (equal "Later prompt"
                                  (plist-get plist :latest-user-message)))))
             (kill-buffer buf)))
       (delete-directory tempdir t)
