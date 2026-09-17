@@ -171,8 +171,12 @@
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-control-transfer'
+(declare-function mevedel-view-control-transfer-stop-polling
+                  "mevedel-view-control-transfer" ())
 (declare-function mevedel-view-control-transfer-teardown
                   "mevedel-view-control-transfer" ())
+(autoload 'mevedel-view-control-transfer-stop-polling
+  "mevedel-view-control-transfer")
 (autoload 'mevedel-view-control-transfer-teardown
   "mevedel-view-control-transfer")
 
@@ -895,14 +899,7 @@ kill hook sees nil and exits without re-entering this function."
   (mevedel-view--stop-spinner-timer)
   (mevedel-view--cancel-scheduled-render)
   (mevedel-view-render-invalidate-live-tail)
-  (when (and (boundp 'mevedel-view--control-transfer-timer)
-             (timerp mevedel-view--control-transfer-timer))
-    (cancel-timer mevedel-view--control-transfer-timer)
-    (setq mevedel-view--control-transfer-timer nil))
-  ;; The latch keeps a session event delivered later in this teardown
-  ;; from re-arming the poll on the dying view.
-  (when (boundp 'mevedel-view--control-transfer-torn-down-p)
-    (setq mevedel-view--control-transfer-torn-down-p t))
+  (mevedel-view-control-transfer-stop-polling)
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
       ;; Both pair-kill orders pass here before root registration is cleared.

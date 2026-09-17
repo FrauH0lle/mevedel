@@ -14,6 +14,9 @@ and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
 `mevedel-view-control-transfer.el` owns cooperative transfer polling,
 presentation, commands, and view registration.
+On view closure, `mevedel-view-control-transfer-stop-polling` stops the timer
+and prevents rearming while retaining the root registration needed for journal
+sealing. Full transfer teardown removes the registrations after sealing.
 `mevedel-view-disclosure.el` owns source-backed disclosure identity, state,
 and expand/collapse actions. `mevedel-view-render.el` owns transcript
 projection, source mapping, and live transcript navigation.
