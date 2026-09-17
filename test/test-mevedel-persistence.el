@@ -85,8 +85,9 @@
                     (mevedel-directive-state record) 'implemented))
             (mevedel--write-instructions-file snapshot root t t t)
             (mevedel--clear-instruction-state workspace)
-            (mevedel--load-instructions-file
-             snapshot root nil t workspace))
+            (should (equal '(:restored 2 :lost 0 :total 2)
+                           (mevedel--load-instructions-file
+                            snapshot root nil t workspace))))
           (let* ((record (car (mevedel-workspace-directives workspace)))
                  (restored (mevedel--instruction-with-uuid id workspace)))
             (should (equal id (mevedel-directive-id record)))

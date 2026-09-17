@@ -36,21 +36,10 @@
 ;; `mevedel-directive-source'
 (declare-function mevedel--mark-buffer-source-missing
                   "mevedel-directive-source" (buffer))
-(declare-function mevedel--reattach-directive
-                  "mevedel-directive-source" (record workspace buffer start end))
-(declare-function mevedel--reattach-subdirective
-                  "mevedel-directive-source"
-                  (record owner workspace buffer start end))
 (declare-function mevedel--reconcile-directive-sources
                   "mevedel-directive-source" (workspace))
-(declare-function mevedel--refresh-directive-anchor
-                  "mevedel-directive-source" (directive))
 (declare-function mevedel--restore-source-missing-directives
                   "mevedel-directive-source" (buffer))
-
-;; `mevedel-overlays'
-(declare-function mevedel--subinstruction-of-p
-                  "mevedel-overlays" (sub parent))
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
@@ -60,11 +49,9 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-utilities'
@@ -342,12 +329,8 @@ enables that mode for an empty record list."
                              (file-name-parent-directory path)))))))
     (let ((total-restored 0)
           (total-kia 0)
-          (total (cl-reduce #'+
-                            (mapcar #'length
-                                    (mapcar (lambda (plist)
-                                              (plist-get plist :instructions))
-                                            (mapcar #'cdr (mevedel--instruction-alist))))
-                            :initial-value 0)))
+          (total (mevedel--instructions-saved-count
+                  (mevedel--instruction-alist))))
       (let ((mevedel--inhibit-source-missing-restore t))
         (cl-loop for (file . _) in (mevedel--instruction-alist)
                  do (cl-multiple-value-bind (_ restored kia)

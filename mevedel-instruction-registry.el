@@ -282,12 +282,11 @@ handles all the internal bookkeeping and cleanup."
                     in (if ,specific-buffer
                            (alist-get ,specific-buffer (mevedel--instruction-alist))
                          (flatten-tree
-                          (cl-remove nil
-                                     (mapcar (lambda (plist-or-instrs)
-                                               (if (plist-get plist-or-instrs :instructions)
-                                                   nil ; Plist
-                                                 plist-or-instrs))
-                                             (mapcar #'cdr (mevedel--instruction-alist))))))
+                          (mapcar (lambda (plist-or-instrs)
+                                    (if (plist-get plist-or-instrs :instructions)
+                                        nil ; Plist
+                                      plist-or-instrs))
+                                  (mapcar #'cdr (mevedel--instruction-alist)))))
                     ,@body))))))
 
 (defun mevedel-link-instructions (from-list to-list)
