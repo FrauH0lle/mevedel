@@ -347,14 +347,17 @@ DEPTH limits recursive collections.  Unsupported objects become their type
 symbol instead of their printed representation."
   (let ((depth (or depth 0)))
     (cond
-     ((or (null value) (eq value t) (numberp value) (symbolp value)) value)
+     ((or (numberp value) (symbolp value)) value)
      ((stringp value) (mevedel-telemetry--truncate-string value))
      ((>= depth 3) :truncated)
      ((vectorp value)
       (vconcat
        (mapcar (lambda (item)
                  (mevedel-telemetry--safe-value item (1+ depth)))
-               (mevedel-telemetry--take-bounded (append value nil) 32))))
+               ;; One extra element preserves the truncated-tail marker.
+               (mevedel-telemetry--take-bounded
+                (append (substring value 0 (min 33 (length value))) nil)
+                32))))
      ;; A keyword-headed list is a property list, so its keys are subject to
      ;; the same rule as the event's own: a nested field is the easy way to
      ;; smuggle a path or a command past a top-level check.
@@ -380,12 +383,10 @@ supplies them itself."
          ((not (keywordp key)) nil)
          ((memq key mevedel-telemetry--owned-keys) nil)
          ((memq key mevedel-telemetry--allowed-keys)
-          (setq safe
-                (append safe
-                        (list key
-                              (mevedel-telemetry--safe-value value depth)))))
+          (push key safe)
+          (push (mevedel-telemetry--safe-value value depth) safe))
          (t (cl-pushnew key mevedel-telemetry--dropped-keys)))))
-    safe))
+    (nreverse safe)))
 
 (defun mevedel-telemetry--envelope (session event props)
   "Build the common telemetry envelope for SESSION, EVENT, and PROPS."

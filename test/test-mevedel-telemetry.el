@@ -27,9 +27,7 @@
   (let* ((workspace
           (mevedel-workspace--create
            :type 'file :id root :root root :name "telemetry"
-           :file-cache (mevedel-file-cache--create
-                        :table (make-hash-table :test #'equal)
-                        :order nil :total-bytes 0)))
+           :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session-create "main" workspace)))
     (setf (mevedel-session-session-id session) "telemetry-test"
           (mevedel-session-turn-count session) 7)
@@ -98,9 +96,7 @@
             (should-not (plist-member entry :command))
             (should-not (string-match-p
                          "SECRET"
-                         (with-temp-buffer
-                           (prin1 entry (current-buffer))
-                           (buffer-string))))
+                         (prin1-to-string entry)))
             (with-temp-buffer
               (insert-file-contents
                (file-name-concat root "telemetry-log.el"))
@@ -474,6 +470,27 @@
     (should-not (plist-member safe :command))
     (should-not (plist-member safe :event))
     (should (equal '("ok" (1 2)) (plist-get safe :skill-names))))
+  :doc "preserves duplicate key order and input while reporting nested drops"
+  (let* ((props '(:status first :command "secret" :status second
+                  :modes (:path "secret" :status nested) :command "again"
+                  :event forged :outcome))
+         (before (copy-tree props))
+         (mevedel-telemetry--dropped-keys nil))
+    (should (equal '(:status first :status second :modes (:status nested)
+                     :outcome nil)
+                   (mevedel-telemetry--safe-props props)))
+    (should (equal '(:path :command) mevedel-telemetry--dropped-keys))
+    (should (equal before props)))
+  :doc "bounds vectors at thirty-two values without inspecting their tail"
+  (dolist (size '(0 1 31 32 33 10000))
+    (let ((value (vconcat (number-sequence 1 size)))
+          (mevedel-telemetry--dropped-keys nil))
+      (when (> size 32)
+        (aset value 32 '(:command "unvisited")))
+      (should (equal (vconcat (number-sequence 1 (min size 32))
+                              (when (> size 32) '(:truncated)))
+                     (mevedel-telemetry--safe-value value)))
+      (should-not mevedel-telemetry--dropped-keys)))
   :doc "drops a payload key that no denylist happened to name"
   (dolist (key '(:path :text :url :specifier-value :resource-path
                  :commands-summary))
@@ -773,8 +790,6 @@
 			 (should (eq session mevedel-telemetry--profiler-session))
 			 (should (string-prefix-p
 				  "run-" mevedel-telemetry--profiler-run-id)))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t)))
 
 		 :doc "leaves nothing running when setup fails after the profiler started"
@@ -799,8 +814,6 @@
 			 (should-not mevedel-telemetry--profiler-session)
 			 (should-not mevedel-telemetry--profiler-run-id)
 			 (should (= 16 profiler-max-stack-depth)))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t)))
 
 		 :doc "materializes a session that has not hit disk yet"
@@ -830,8 +843,6 @@
 				  (file-name-concat
 				   (mevedel-session-save-path session)
 				   "session.meta.el"))))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t)))
 
 		 :doc "refuses when the session cannot be materialized"
@@ -853,8 +864,6 @@
 					 :type 'user-error))
 			 (should-not started)
 			 (should-not mevedel-telemetry--profiler-session))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t)))
 
 		 :doc "does not materialize a cold session while another run is active"
@@ -870,8 +879,6 @@
 			 (should-error (mevedel-telemetry-profiler-start 'cpu)
 				       :type 'user-error)
 			 (should-not (mevedel-session-save-path session)))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry--write-profiler-artifacts
@@ -905,9 +912,7 @@
 			     (should-not
 			      (string-match-p
 			       "#<killed buffer>"
-			       (with-temp-buffer
-				 (insert-file-contents profile-file)
-				 (buffer-string)))))))
+			       (mevedel-test--read-file profile-file))))))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-profiler-stop
@@ -977,8 +982,6 @@
 			   (should (eq 'profiler-stop-failed (plist-get entry :event)))
 			   (should (eq 'save-artifacts
 				       (plist-get entry :failure-stage)))))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t)))
 
 		 :doc "stops the native profiler even when the stop snapshot fails"
@@ -1000,8 +1003,6 @@
 			 ;; Emacs must not be left profiling with no handle to stop it.
 			 (should stopped)
 			 (should-not mevedel-telemetry--profiler-session))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t)))
 
 		 :doc "restores the profiler depth the run raised"
@@ -1023,8 +1024,6 @@
 			   (mevedel-telemetry-profiler-stop))
 			 (should (= 16 profiler-max-stack-depth))
 			 (should-not mevedel-telemetry--profiler-prior-stack-depth))
-		     (setq mevedel-telemetry--profiler-session nil
-			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry--gptel-log-raw ()
@@ -1180,8 +1179,6 @@
         (kill-buffer log-buffer))
       (when (buffer-live-p view-buffer)
         (kill-buffer view-buffer))
-      (setq mevedel-telemetry--profiler-session nil
-            mevedel-telemetry--profiler-run-id nil)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-record-workspace ()
