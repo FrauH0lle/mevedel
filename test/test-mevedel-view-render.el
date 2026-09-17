@@ -56,6 +56,56 @@
 (mevedel-deftest mevedel-view--group-into-turns ()
   ,test
   (test)
+  :doc "prompt attachments stay with their user turn until assistant activity"
+  (dolist (attachment
+           (list
+            (list 'prompt ":PROMPT:\nPrepared prompt.\n:END:\n" t)
+            (list 'hook-context
+                  "<hook-context>\nContext.\n</hook-context>\n" t)
+            (list 'ignored
+                  (mevedel--format-hook-audit-record
+                   '(:type hook :event "UserPromptSubmit" :status success))
+                  t)
+            (list 'render-data
+                  (mevedel-tool-render-data-format
+                   '(:kind user-display :text "Visible prompt")) t)
+            (list 'ignored
+                  (mevedel-tool-render-data-format
+                   '(:kind inline-skill :prompt "Prepared skill.")) t)
+            (list 'render-data
+                  (mevedel-tool-render-data-format
+                   '(:kind inline-skill :prompt "Prepared skill.")) t)
+            (list 'render-data
+                  (mevedel-tool-render-data-format
+                   '(:kind user-display :text 7)) nil)))
+    (dolist (prefix '((user) (user response) (task-background) nil))
+      (with-temp-buffer
+        (let (segments)
+          (dolist (type prefix)
+            (let ((start (point)))
+              (insert "Visible text.\n")
+              (push (list type start (point)) segments)))
+          (let ((start (point)))
+            (insert (cadr attachment))
+            (push (list (car attachment) start (point)) segments))
+          (setq segments (nreverse segments))
+          (let* ((original (copy-tree segments))
+                 (text (buffer-string))
+                 (turns (mevedel-view--group-into-turns
+                         segments (current-buffer)))
+                 (user (cl-find 'user turns
+                                :key (lambda (turn) (plist-get turn :role)))))
+            (should (equal original segments))
+            (should (equal-including-properties text (buffer-string)))
+            (if (eq (car prefix) 'user)
+                (let ((attached (and (equal prefix '(user))
+                                     (nth 2 attachment))))
+                  (should (equal (plist-get user :segments)
+                                 (if attached segments (list (car segments)))))
+                  (should (= (plist-get user :end)
+                             (if attached (point-max) (caddar segments)))))
+              (should-not user)))))))
+
   :doc "single user turn"
   (let* ((segs '((user 1 10)))
          (turns (mevedel-view-test--group-synthetic-segments segs)))

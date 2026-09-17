@@ -784,52 +784,42 @@ turns rendered as usual.")
   "Shift rendered data-buffer source coordinates by DELTA."
   (unless (zerop delta)
     (mevedel-view-disclosure-rebase-state delta)
-    (cl-labels
-        ((shift-key
-          (key)
-          (if (and (consp key)
-                   (eq (car key) 'source)
-                   (integerp (nth 2 key)))
-              (let ((shifted (copy-tree key)))
-                (setcar (nthcdr 2 shifted) (+ (nth 2 key) delta))
-                shifted)
-            key)))
-      ;; Property values are ordinary Lisp objects.  Mutating each shared
-      ;; value once updates its coordinates without modifying the visible
-      ;; buffer and forcing a frame-wide redisplay.
-      (let ((seen-sources (make-hash-table :test #'eq))
-            (seen-keys (make-hash-table :test #'eq))
-            (limit (point-max))
-            (pos (point-min)))
-        (while (< pos limit)
-          (let* ((source (get-text-property pos 'mevedel-view-source))
-                 (next (or (next-single-property-change
-                            pos 'mevedel-view-source nil limit)
-                           limit)))
-            (when (and (consp source)
-                       (not (gethash source seen-sources)))
-              (puthash source t seen-sources)
-              (when (integerp (car source))
-                (setcar source (+ (car source) delta)))
-              (when (integerp (cdr source))
-                (setcdr source (+ (cdr source) delta))))
-            (setq pos next)))
-        (setq pos (point-min))
-        (while (< pos limit)
-          (let* ((key (get-text-property pos 'mevedel-view-source-key))
-                 (next (or (next-single-property-change
-                            pos 'mevedel-view-source-key nil limit)
-                           limit)))
-            (when (and (consp key)
-                       (not (gethash key seen-keys)))
-              (puthash key t seen-keys)
-              (when (and (eq (car key) 'source)
-                         (integerp (nth 2 key)))
-                (setcar (nthcdr 2 key) (+ (nth 2 key) delta))))
-            (setq pos next))))
-      (when (hash-table-p mevedel-view--tool-rendering-cache)
-        (clrhash mevedel-view--tool-rendering-cache)
-        (setq mevedel-view--render-cache-entries 0)))))
+    ;; Property values are ordinary Lisp objects.  Mutating each shared
+    ;; value once updates its coordinates without modifying the visible
+    ;; buffer and forcing a frame-wide redisplay.
+    (let ((seen-sources (make-hash-table :test #'eq))
+          (seen-keys (make-hash-table :test #'eq))
+          (limit (point-max))
+          (pos (point-min)))
+      (while (< pos limit)
+        (let* ((source (get-text-property pos 'mevedel-view-source))
+               (next (or (next-single-property-change
+                          pos 'mevedel-view-source nil limit)
+                         limit)))
+          (when (and (consp source)
+                     (not (gethash source seen-sources)))
+            (puthash source t seen-sources)
+            (when (integerp (car source))
+              (setcar source (+ (car source) delta)))
+            (when (integerp (cdr source))
+              (setcdr source (+ (cdr source) delta))))
+          (setq pos next)))
+      (setq pos (point-min))
+      (while (< pos limit)
+        (let* ((key (get-text-property pos 'mevedel-view-source-key))
+               (next (or (next-single-property-change
+                          pos 'mevedel-view-source-key nil limit)
+                         limit)))
+          (when (and (consp key)
+                     (not (gethash key seen-keys)))
+            (puthash key t seen-keys)
+            (when (and (eq (car key) 'source)
+                       (integerp (nth 2 key)))
+              (setcar (nthcdr 2 key) (+ (nth 2 key) delta))))
+          (setq pos next))))
+    (when (hash-table-p mevedel-view--tool-rendering-cache)
+      (clrhash mevedel-view--tool-rendering-cache)
+      (setq mevedel-view--render-cache-entries 0))))
 
 
 (defun mevedel-view--debug-buffer ()
@@ -1258,32 +1248,10 @@ real user message."
               (and (memq type '(user ignored))
                    seg-text
                    (mevedel-view--scaffolding-only-text-p seg-text)))
-             (prompt-drawer-after-user-p
-              (and (eq type 'prompt)
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)))
              (hook-audit-only-p
               (and (eq type 'ignored)
                    seg-text
                    (mevedel-view--hook-audit-only-text-p seg-text)))
-             (hook-audit-after-user-p
-              (and hook-audit-only-p
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)))
-             (hook-context-after-user-p
-              (and (eq type 'hook-context)
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)))
-             (user-display-after-user-p
-              (and (eq type 'render-data)
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)
-                   (eq seg-render-kind 'user-display)
-                   (stringp (plist-get seg-render-data :text))))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
                    seg-scaffolding-only-p
@@ -1344,14 +1312,14 @@ real user message."
           (push (list 'request-summary seg-start (caddr seg)) current-segs))
          (scaffolding-before-hook-audit-p
           nil)
-         ((or prompt-drawer-after-user-p
-              hook-audit-after-user-p
-              hook-context-after-user-p
-              user-display-after-user-p
-              (and inline-skill-render-p
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)))
+         ((and (null current-role)
+               (eq (plist-get (car turns) :role) 'user)
+               (or (memq type '(prompt hook-context))
+                   hook-audit-only-p
+                   (and (eq type 'render-data)
+                        (eq seg-render-kind 'user-display)
+                        (stringp (plist-get seg-render-data :text)))
+                   inline-skill-render-p))
           (let ((turn (car turns)))
             (setq turn
                   (plist-put turn :segments
@@ -1377,8 +1345,7 @@ real user message."
                 turns)
           (setq current-segs nil current-role nil turn-start nil))
          ((and (eq type 'user)
-               (or review-action-p
-                   agent-task-p
+               (or agent-task-p
                    (memq prev-type '(nil user response))
                    (and (memq prev-type '(reasoning tool))
                         data-buf
