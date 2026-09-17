@@ -339,6 +339,29 @@ caller scans the render span in display order."
       (puthash base index counts)
       (append base (list index)))))
 
+(defun mevedel-view-disclosure--state-key-at (position mailbox-counts)
+  "Return the current disclosure identity at POSITION.
+Rebase stamped keys after source movement or turn settlement while
+retaining owner discriminators.  MAILBOX-COUNTS distinguishes repeated
+mailbox cards as the caller scans in display order."
+  (let* ((vtype (get-text-property position 'mevedel-view-type))
+         (source (get-text-property position 'mevedel-view-source))
+         (source-key (get-text-property position 'mevedel-view-source-key))
+         (state-type (if (eq vtype 'tool-child)
+                         (or (cadr source-key) vtype)
+                       vtype)))
+    (cond
+     ((or (mevedel-view-disclosure--in-flight-source-p source)
+          (mevedel-view-disclosure--in-flight-key-p source-key)
+          (and (markerp (car-safe source))
+               (not (equal (nth 2 source-key)
+                           (mevedel-view-disclosure-source-start source)))))
+      (mevedel-view-disclosure-state-key source state-type source-key))
+     (source-key)
+     ((mevedel-view-disclosure-state-key source state-type))
+     ((eq vtype 'mailbox-delivery)
+      (mevedel-view-disclosure--mailbox-state-key position mailbox-counts)))))
+
 (defun mevedel-view-disclosure-capture-state (from to)
   "Return an alist of collapse states for sections in FROM..TO.
 
@@ -355,33 +378,14 @@ use their rendered kind, agent id, body hash, and ordinal."
         (pos from))
     (while (< pos to)
       (let* ((vtype (get-text-property pos 'mevedel-view-type))
-             (source (get-text-property pos 'mevedel-view-source))
              (collapsed (get-text-property pos 'mevedel-view-collapsed))
-             (source-key (get-text-property pos 'mevedel-view-source-key))
-             (state-type (if (eq vtype 'tool-child)
-                             (or (cadr source-key) vtype)
-                           vtype))
              (mailbox-bounds
               (and (eq vtype 'mailbox-delivery)
                    (mevedel-view-disclosure--mailbox-bounds-at pos)))
              (next (if mailbox-bounds
                        (min to (cdr mailbox-bounds))
                      (mevedel-view-disclosure--next-state-change pos to)))
-             (key
-              (cond
-               ((mevedel-view-disclosure--in-flight-source-p source)
-                (mevedel-view-disclosure-state-key source state-type source-key))
-               ((mevedel-view-disclosure--in-flight-key-p source-key)
-                (mevedel-view-disclosure-state-key source state-type source-key))
-               ((and (markerp (car-safe source))
-                     (not (equal (nth 2 source-key)
-                                 (mevedel-view-disclosure-source-start source))))
-                (mevedel-view-disclosure-state-key source state-type source-key))
-               (source-key)
-               ((mevedel-view-disclosure-state-key source state-type))
-               (mailbox-bounds
-                (mevedel-view-disclosure--mailbox-state-key
-                 pos mailbox-counts)))))
+             (key (mevedel-view-disclosure--state-key-at pos mailbox-counts)))
         (when (and key (not (assoc key states)))
           (let ((state (and collapsed t)))
             (push (cons key state) states)
@@ -417,34 +421,11 @@ knows the freshly rendered span was rewritten after insertion."
                          (force-expanded
                           (get-text-property pos
                                              'mevedel-view-force-expanded))
-                         (source-key (get-text-property
-                                      pos 'mevedel-view-source-key))
-                         (state-type (if (eq vtype 'tool-child)
-                                         (or (cadr source-key) vtype)
-                                       vtype))
                          (mailbox-bounds
                           (and (eq vtype 'mailbox-delivery)
                                (mevedel-view-disclosure--mailbox-bounds-at pos)))
-                         (key
-                          (cond
-                           ((mevedel-view-disclosure--in-flight-source-p source)
-                            (mevedel-view-disclosure-state-key
-                             source state-type source-key))
-                           ((mevedel-view-disclosure--in-flight-key-p source-key)
-                            (mevedel-view-disclosure-state-key
-                             source state-type source-key))
-                           ((and (markerp (car-safe source))
-                                 (not (equal
-                                       (nth 2 source-key)
-                                       (mevedel-view-disclosure-source-start
-                                        source))))
-                            (mevedel-view-disclosure-state-key
-                             source state-type source-key))
-                           (source-key)
-                           ((mevedel-view-disclosure-state-key source state-type))
-                           (mailbox-bounds
-                            (mevedel-view-disclosure--mailbox-state-key
-                             pos mailbox-counts)))))
+                         (key (mevedel-view-disclosure--state-key-at
+                               pos mailbox-counts)))
                     (when-let* (((not force-expanded))
                                 (entry (and key (assoc key states)))
                                 ((not (eq collapsed (cdr entry)))))

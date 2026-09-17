@@ -788,6 +788,137 @@ the preceding header."
                        (nth 3 (mevedel-view-disclosure-state-key
                                (cons start end) 'tool-summary))))))))
 
+(mevedel-deftest mevedel-view-disclosure--state-key-at ()
+  ,test
+  (test)
+  :doc "a displaced child keeps its owner's type and discriminator"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prefix\nChild body\n" 'response)
+    (with-current-buffer view-buf
+      (let ((source (mevedel-view-disclosure-source-range
+                     data-buf 8 (with-current-buffer data-buf (point-max))))
+            (counts (make-hash-table :test #'equal))
+            (inhibit-read-only t))
+        (goto-char (point-min))
+        (insert (propertize "Child" 'mevedel-view-type 'tool-child
+                            'mevedel-view-source source
+                            'mevedel-view-source-key
+                            '(source tool-summary 1 old-anchor child-id)))
+        (let ((key (mevedel-view-disclosure--state-key-at (point-min) counts)))
+          (should (eq 'tool-summary (cadr key)))
+          (should (= 8 (nth 2 key)))
+          (should (equal '(child-id) (nthcdr 4 key)))
+          (should (= 0 (hash-table-count counts))))))))
+
+(mevedel-deftest mevedel-view-disclosure-capture-state ()
+  ,test
+  (test)
+  :doc "capture and restore agree after source movement and terminal key changes"
+  (dolist (mode '(stamped unstamped moved active settled))
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf "Unique response.\nSecond response line.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (goto-char (point-min))
+        (search-forward "Unique response")
+        (let* ((bounds (mevedel-view-disclosure-section-bounds))
+               (source (get-text-property (point) 'mevedel-view-source))
+               (original-start (mevedel-view-disclosure-source-start source))
+               (mevedel-view-disclosure--settling-p (eq mode 'settled)))
+          (when (memq mode '(active settled))
+            (setq mevedel-view--data-turn-start
+                  (with-current-buffer data-buf
+                    (copy-marker original-start))))
+          (let ((inhibit-read-only t)
+                (mevedel-view-disclosure--settling-p nil))
+            (put-text-property
+             (car bounds) (cdr bounds) 'mevedel-view-source-key
+             (unless (eq mode 'unstamped)
+               (append (mevedel-view-disclosure-state-key source 'response)
+                       '(owner-discriminator)))))
+          (when (eq mode 'moved)
+            (with-current-buffer data-buf
+              (goto-char (point-min))
+              (insert "Prefix\n")))
+          (let* ((states (mevedel-view-disclosure-capture-state
+                          (car bounds) (cdr bounds)))
+                 (key (caar states)))
+            (should (= 1 (length states)))
+            (should-not (cdar states))
+            (should (= (nth 2 key)
+                       (+ original-start (if (eq mode 'moved) 7 0))))
+            (should (equal (nthcdr 4 key)
+                           (unless (eq mode 'unstamped) '(owner-discriminator))))
+            (should (eq (eq mode 'active)
+                        (equal (nth 3 key) '(in-flight))))
+            (mevedel-view-toggle-section)
+            (should-not (string-search "Second response line" (buffer-string)))
+            (goto-char (+ 4 (mevedel-view--input-start)))
+            (should (mevedel-view-disclosure-restore-state
+                     (point-min) mevedel-view--input-marker states))
+            (should (= 1 (mevedel-view-test--count-substring
+                          "Second response line" (buffer-string))))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+
+  :doc "identical mailbox cards keep independent captured fold states"
+  (mevedel-view-test--with-buffers
+    (dotimes (_ 2)
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "<agent-message type=\"MAIL\" sender=\"/root/worker\" recipient=\"/root\">\n"
+               "Repeated payload\n</agent-message>\n")
+       nil))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (goto-char (point-min))
+      (search-forward "Repeated payload")
+      (mevedel-view-toggle-section)
+      (let* ((states (mevedel-view-disclosure-capture-state
+                      (point-min) mevedel-view--input-marker))
+             (mailbox (cl-remove-if-not
+                       (lambda (entry) (eq (caar entry) 'mailbox-delivery))
+                       states)))
+        (should (= 2 (length mailbox)))
+        (should (equal '(2 1) (mapcar (lambda (entry) (car (last (car entry))))
+                                     mailbox)))
+        (should (equal '(t nil) (mapcar #'cdr mailbox)))
+        (dolist (ordinal '(1 2))
+          (goto-char (point-min))
+          (dotimes (_ ordinal) (search-forward "Repeated payload"))
+          (mevedel-view-toggle-section))
+        (goto-char (+ 4 (mevedel-view--input-start)))
+        (should (mevedel-view-disclosure-restore-state
+                 (point-min) mevedel-view--input-marker states))
+        (should (equal states (mevedel-view-disclosure-capture-state
+                               (point-min) mevedel-view--input-marker)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+
+  :doc "forced expansion overrides captured collapsed state"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf "Required details.\nSecond detail line.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "Required details")
+      (mevedel-view-toggle-section)
+      (let ((states (mevedel-view-disclosure-capture-state
+                     (point-min) mevedel-view--input-marker)))
+        (mevedel-view-toggle-section)
+        (let ((bounds (mevedel-view-disclosure-section-bounds))
+              (inhibit-read-only t))
+          (put-text-property (car bounds) (cdr bounds)
+                             'mevedel-view-force-expanded t))
+        (should-not (mevedel-view-disclosure-restore-state
+                     (point-min) mevedel-view--input-marker states))
+        (should (string-search "Second detail line" (buffer-string)))))))
+
 (mevedel-deftest mevedel-view-disclosure-restore-state ()
   ,test
   (test)
