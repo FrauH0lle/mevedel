@@ -329,23 +329,15 @@ accept still passes its own validator."
 
 (defun mevedel-session-durability--write-plist (path plist)
   "Atomically replace PATH with PLIST through a nearby temporary file."
-  (with-temp-buffer
-    (let ((print-length nil)
-          (print-level nil))
-      (prin1 plist (current-buffer))
-      (mevedel-session-control-fs-write-file
-       (mevedel-session-control-fs-physical-path path)
-       (buffer-string)))))
+  (mevedel-session-control-fs-write-file
+   (mevedel-session-control-fs-physical-path path)
+   (mevedel-session-durability--record-bytes plist)))
 
 (defun mevedel-session-durability--create-plist (path plist)
   "Atomically create PATH with PLIST, returning non-nil on success."
-  (with-temp-buffer
-    (let ((print-length nil)
-          (print-level nil))
-      (prin1 plist (current-buffer))
-      (mevedel-session-control-fs-create-file
-       (mevedel-session-control-fs-physical-path path)
-       (buffer-string)))))
+  (mevedel-session-control-fs-create-file
+   (mevedel-session-control-fs-physical-path path)
+   (mevedel-session-durability--record-bytes plist)))
 
 (defun mevedel-session-durability--valid-relative-path-p (path)
   "Return non-nil when PATH is a normalized session-relative file path."
@@ -489,13 +481,6 @@ two writers apart."
     (unless (mevedel-session-control-fs-directory-p directory)
       (error "Could not create portable session lease: %s" directory)))))
 
-(defun mevedel-session-durability--create-generation (directory record)
-  "Exclusively create RECORD below lease DIRECTORY."
-  (mevedel-session-durability--create-plist
-   (mevedel-session-durability--generation-path
-    directory (plist-get record :generation))
-   record))
-
 (defun mevedel-session-durability--write-generation (directory record)
   "Atomically replace RECORD's own generation below DIRECTORY."
   (mevedel-session-durability--write-plist
@@ -504,7 +489,7 @@ two writers apart."
    record))
 
 (defun mevedel-session-durability--record-bytes (record)
-  "Return the exact content RECORD occupies as a lease generation file."
+  "Return the complete printed content of control RECORD."
   (with-temp-buffer
     (let ((print-length nil)
           (print-level nil))

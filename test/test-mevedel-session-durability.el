@@ -17,6 +17,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-hooks)
 (require 'mevedel-structs)
+(require 'mevedel-turn)
 (require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
 (require 'helpers
@@ -1006,8 +1007,9 @@
             (let ((mevedel-session-durability--client-id contender))
               (let ((mevedel-session-durability--client-id blocker))
                 (should
-                 (mevedel-session-durability--create-generation
-                  (file-name-concat session-dir ".lease")
+                 (mevedel-session-durability--create-plist
+                  (mevedel-session-durability--generation-path
+                   (file-name-concat session-dir ".lease") 2)
                   (mevedel-session-durability--lease-record
                    "*paused-claim*" 2 'claiming nil nil
                    (mevedel-session-durability--target-time
@@ -1604,8 +1606,8 @@
                    session-dir "*owner*" session))
           (let ((mevedel-session-durability--client-id successor))
             (should
-             (mevedel-session-durability--create-generation
-              lease-directory
+             (mevedel-session-durability--create-plist
+              (mevedel-session-durability--generation-path lease-directory 2)
               (mevedel-session-durability--lease-record
                "*successor*" 2 'active nil nil
                (mevedel-session-durability--target-time lease-directory)))))
@@ -2212,15 +2214,15 @@
           (make-directory lease-directory)
           (let ((mevedel-session-durability--client-id (make-string 64 ?a)))
             (should
-             (mevedel-session-durability--create-generation
-              lease-directory
+             (mevedel-session-durability--create-plist
+              (mevedel-session-durability--generation-path lease-directory 1)
               (mevedel-session-durability--lease-record
                "*old*" 1 'active ".publications/old/manifest.el" nil
                (mevedel-session-durability--target-time lease-directory)))))
           (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
             (should
-             (mevedel-session-durability--create-generation
-              lease-directory
+             (mevedel-session-durability--create-plist
+              (mevedel-session-durability--generation-path lease-directory 2)
               (mevedel-session-durability--lease-record
                "*new*" 2 'active ".publications/new/manifest.el" nil
                (mevedel-session-durability--target-time lease-directory)))))
