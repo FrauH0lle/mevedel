@@ -254,9 +254,8 @@ When EXPANDED is non-nil, include record details."
          (when-let* ((reason (plist-get record :reason)))
            (concat "    Reason: " reason "\n"))
          "    Original prompt:\n"
-         (mapconcat (lambda (line) (concat "      " line))
-                    (split-string (or (plist-get record :original) "") "\n")
-                    "\n")
+         (mevedel-view--indent-hook-audit-text
+          (plist-get record :original))
          "\n"
          "    Submitted prompt:\n"
          (mevedel-view--indent-hook-audit-text
@@ -271,7 +270,7 @@ When EXPANDED is non-nil, include record details."
          "    Outcome: " (or (plist-get record :outcome) "unknown") "\n"
          (when-let* ((reason (plist-get record :reason)))
            (concat "    Reason: " reason "\n"))))))
-    ('tool-context
+    ((or 'tool-context 'subagent-context 'compact-context)
      (mevedel-view--format-hook-context-audit record expanded))
     ('tool-input-rewrite
      (concat
@@ -291,10 +290,6 @@ When EXPANDED is non-nil, include record details."
           (mevedel-view--hook-audit-value-text
            (plist-get record :updated-input)))
          "\n"))))
-    ('subagent-context
-     (mevedel-view--format-hook-context-audit record expanded))
-    ('compact-context
-     (mevedel-view--format-hook-context-audit record expanded))
     ('tool-result-rewrite
      (concat
       "  \u25c7 hook changed tool result\n"
