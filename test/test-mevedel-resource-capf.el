@@ -48,7 +48,6 @@
   (:doc "offers the canonical scheme prefixes without a session")
   (with-temp-buffer
     (let ((mevedel--session nil))
-      (insert "")
       (let ((result (mevedel-resource-capf)))
         (should (equal
                  '("agent://" "artifact://" "history://"
@@ -85,9 +84,9 @@
             (let ((candidates
                    (mevedel-resource-capf-test--candidates
                     (mevedel-resource-capf))))
-              (should (member "work://space%20name.md" candidates))
-              (should (member "work://nested" candidates))
-              (should-not (member "work://nested/note.md" candidates))))
+              (should (equal '("work://nested" "work://plans"
+                               "work://space%20name.md")
+                             candidates))))
           (with-temp-buffer
             (setq mevedel--session session)
             (insert "work://plans/")
@@ -454,10 +453,11 @@
                   (mevedel-resource-capf))))
         (erase-buffer)
         (insert "mcp://docs/")
-        (should
-         (member "mcp://docs/file%3A%2F%2F%2Fguide"
-                 (mevedel-resource-capf-test--candidates
-                  (mevedel-resource-capf))))))))
+        (let ((result (mevedel-resource-capf))
+              (address "mcp://docs/file%3A%2F%2F%2Fguide"))
+          (should (member address (mevedel-resource-capf-test--candidates result)))
+          (should (equal " [mcp] Guide (connected)"
+                         (mevedel-resource-capf-test--annotation result address))))))))
 
 (mevedel-deftest mevedel-resource-capf-no-session
   (:doc "does not materialize a session while completing local addresses")

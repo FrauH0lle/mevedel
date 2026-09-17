@@ -70,10 +70,7 @@ name without treating an encoded slash as a path separator."
   "Return visible immediate entries in DIRECTORY, or nil on failure."
   (condition-case nil
       (when (file-directory-p directory)
-        (sort (directory-files directory t "\\`[^.]" t)
-              (lambda (left right)
-                (string-lessp (file-name-nondirectory left)
-                              (file-name-nondirectory right)))))
+        (directory-files directory t "\\`[^.]"))
     (error nil)))
 
 (defun mevedel-resource-capf--address (prefix components)
@@ -109,8 +106,7 @@ consulted; no candidate file is opened."
                            (mevedel-resource-capf--decode
                             component metadata))
                          directory-raw))))
-      (when (and (or (null directory-components)
-                     (not (member nil directory-components))))
+      (unless (memq nil directory-components)
         (let* ((directory
                 (condition-case nil
                     (funcall (plist-get metadata :safe-path)
@@ -371,15 +367,11 @@ History candidates include saved workspace, root and retained conversations."
                        (string-prefix-p resource-tail encoded-uri))
               (push
                (cons address
-                     (format " [mcp] %s%s"
+                     (format " [mcp] %s (%s)"
                              (or (plist-get resource :name)
                                  (plist-get resource :description)
                                  "resource")
-                             (if info
-                                 (format " (%s)"
-                                         (or (plist-get info :status)
-                                             "unknown"))
-                               "")))
+                             (or (plist-get info :status) "unknown")))
                entries))))))))
 
 (defun mevedel-resource-capf ()
