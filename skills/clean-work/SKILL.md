@@ -21,7 +21,7 @@ Delete only confirmed duplicates, superseded drafts, or completed handoffs whose
 useful information is preserved elsewhere. Name the evidence and surviving
 source for each proposed deletion. Merge useful details into the relevant
 existing file before removing a duplicate; do not impose a directory taxonomy.
-If durable knowledge needs promotion to memory, report it for `/learn` rather
+If durable knowledge needs promotion to memory, report it for `$learn` rather
 than silently deleting its only working copy.
 
 Use ordinary ApplyPatch permissions, review and conflict checks. Re-read and

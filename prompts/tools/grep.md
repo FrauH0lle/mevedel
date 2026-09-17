@@ -14,8 +14,9 @@ Search file contents with ripgrep regular expressions.
 
 - Searches from the session working directory unless `path` selects another
   file or directory. Supported resources: `work://`, `artifact://`, `skill://`,
-  `memory://journal/`, `memory://root` or a memory descendant, and `mevedel://` or its
-  descendants. Agent, history, and MCP addresses do not support Grep.
+  `memory://journal/`, `memory://root` or a memory descendant, `history://saved`
+  or its descendants, and `mevedel://` or its descendants.
+  Live history, agent, and MCP addresses do not support Grep.
 - Patterns use ripgrep syntax. For literal parentheses or braces, character
   classes such as `[(]` and `[{]` avoid escaping ambiguity. `multiline=true`
   permits matches across lines; ordinary patterns match within one line.

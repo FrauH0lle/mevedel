@@ -88,7 +88,18 @@
      (string-match-p
       "explicitly selected ignored path"
       (nth 3 (assq 'path
-                   (mevedel-tool-args (mevedel-tool-get "Grep"))))))))
+                   (mevedel-tool-args (mevedel-tool-get "Grep")))))))
+
+  :doc "advertises saved-history searches while distinguishing live history"
+  (progn
+    (mevedel-tool-fs--register)
+    (dolist (name '("Glob" "Grep"))
+      (let ((prompt (mevedel-tool-prompt (mevedel-tool-get name))))
+        (should (string-search "`history://saved`" prompt))
+        (should (string-search
+                 (concat "Live history, agent, and MCP addresses do not support " name)
+                 prompt))
+        (should-not (string-search "Agent, history, and MCP addresses" prompt))))))
 
 (mevedel-deftest mevedel-tool-fs-strip-system-reminders ()
   ,test
