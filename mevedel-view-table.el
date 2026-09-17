@@ -823,7 +823,9 @@ layout targets; otherwise a window showing the buffer is used."
          (inhibit-read-only t))
     (progn
       ;; Preserve markers inside unchanged cell text as the layout changes.
-      (replace-region-contents start end rendered)
+      ;; Native string replacement reuses the coding-conversion buffer.  Keep
+      ;; read-only properties out of it; all properties are restored below.
+      (replace-region-contents start end (substring-no-properties rendered))
       ;; Native replacement retains old properties on equal text, but padding
       ;; and cell display properties belong to the newly computed layout.
       (let ((pos 0))
