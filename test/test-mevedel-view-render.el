@@ -3586,6 +3586,82 @@
     (should-not (mevedel-view--live-tail-lines-rendered-position
                  '("ok") (point-max)))))
 
+(mevedel-deftest mevedel-view--render-tool-activity ()
+  ,test
+  (test)
+  :doc "a single coalescing row groups only in an uninterrupted tool run"
+  (dolist (mixed '(nil t))
+    (mevedel-view-test--with-buffers
+      (let ((mevedel-view-tool-group-collapse-threshold 1)
+            (poll (mevedel-tool--create
+                   :name "PollBoundary" :category "mevedel"
+                   :renderer (lambda (&rest _)
+                               '(:header "PollBoundary: latest"
+                                 :body "latest" :coalesce-key "poll"))))
+            (get-tool (symbol-function 'mevedel-tool-get)))
+        (dotimes (i 3)
+          (mevedel-view-test--insert-data
+           data-buf
+           (if (= i 1)
+               "(:name \"PollBoundary\" :args nil)\n\nlatest\n"
+             (format "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\nbody\n" i))
+           `(tool . ,(format "call-%d" i)))
+          (when (and mixed (= i 1))
+            (mevedel-view-test--insert-data
+             data-buf "#+begin_reasoning\nConsider it.\n#+end_reasoning\n"
+             'ignore)))
+        (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+        (cl-letf (((symbol-function 'mevedel-tool-get)
+                   (lambda (name &optional category)
+                     (if (equal name "PollBoundary") poll
+                       (funcall get-tool name category)))))
+          (with-current-buffer view-buf
+            (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+            (mevedel-view--full-rerender)
+            (should (eq (not mixed)
+                        (and (text-property-any
+                              (point-min) mevedel-view--input-marker
+                              'mevedel-view-type 'tool-group) t)))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+
+  :doc "hidden rows separate coalescing runs when reasoning is interleaved"
+  (dolist (mixed '(nil t))
+    (mevedel-view-test--with-buffers
+      (let ((mevedel-view-tool-group-collapse-threshold 0)
+            (poll (mevedel-tool--create
+                   :name "PollBoundary" :category "mevedel"
+                   :renderer (lambda (&rest _)
+                               '(:header "PollBoundary: latest"
+                                 :body "latest" :coalesce-key "poll"))))
+            (hidden (mevedel-tool--create
+                     :name "HiddenBoundary" :category "mevedel"
+                     :renderer (lambda (&rest _) '(:header "hidden" :hidden-p t))))
+            (get-tool (symbol-function 'mevedel-tool-get)))
+        (cl-loop for name in '("PollBoundary" "HiddenBoundary" "PollBoundary")
+                 for i from 0 do
+                 (mevedel-view-test--insert-data
+                  data-buf (format "(:name %S :args nil)\n\nlatest\n" name)
+                  `(tool . ,(format "call-%d" i))))
+        (when mixed
+          (mevedel-view-test--insert-data
+           data-buf "#+begin_reasoning\nConsider it.\n#+end_reasoning\n" 'ignore))
+        (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+        (cl-letf (((symbol-function 'mevedel-tool-get)
+                   (lambda (name &optional category)
+                     (pcase name
+                       ("PollBoundary" poll)
+                       ("HiddenBoundary" hidden)
+                       (_ (funcall get-tool name category))))))
+          (with-current-buffer view-buf
+            (mevedel-view--full-rerender)
+            (should (= (if mixed 2 1)
+                       (mevedel-view-test--count-substring
+                        "PollBoundary: latest" (buffer-string))))
+            (should (eq (not mixed)
+                        (and (string-search "×2" (buffer-string)) t)))
+            (should-not (string-search "HiddenBoundary" (buffer-string)))))))))
+
 (mevedel-deftest mevedel-view--render-tool-group ()
   ,test
   (test)

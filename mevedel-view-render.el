@@ -5271,142 +5271,131 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
          mevedel-view-collapsed nil))))
   (let ((view-buf (current-buffer))
         tool-group thinking-group request-summary-group)
-    (dolist (seg segments)
-      (let ((type (car seg)))
-        (pcase type
-          ('response
-           ;; Flush accumulated groups
+    (cl-labels
+        ((flush-thinking ()
            (mevedel-view--flush-thinking-group thinking-group data-buf)
-           (setq thinking-group nil)
+           (setq thinking-group nil))
+         (flush-tools ()
            (when tool-group
              (mevedel-view--render-tool-activity
               (nreverse tool-group) data-buf)
-             (setq tool-group nil))
-           ;; Insert response text with source tracking
-           (let ((seg-start (cadr seg))
-                 (seg-end (caddr seg))
-                 (source nil))
-             (setq source
-                   (mevedel-view-disclosure-source-range data-buf seg-start seg-end))
-             (with-current-buffer data-buf
-               (let ((text (string-trim
-                             (buffer-substring-no-properties seg-start seg-end))))
-                 (setq text (mevedel-view--visible-response-text text))
-                 (with-current-buffer view-buf
-                   (unless (string-empty-p text)
-                     (let ((unit-start (point)))
-                       (mevedel-view--ensure-blank-line-before-response)
-                       (let ((start (point)))
-                       (insert (mevedel-view--fontify-response text) "\n")
-                       (let ((response-end (copy-marker (point) t)))
-                         (add-text-properties
-                          start response-end
-                          `(mevedel-view-source ,source
-                            mevedel-view-source-key ,(mevedel-view-disclosure-state-key
-                                                      source
-                                                      'response)
-                            mevedel-view-type response
-                            mevedel-view-collapsed nil))
-                         (mevedel-view--decorate-agent-result-blocks
-                          start response-end)
-                         (mevedel-view--decorate-agent-message-blocks
-                          start response-end)
-                         (mevedel-view--decorate-markdown-in-range
-                          start response-end)
-                         (goto-char response-end)
-                         (set-marker response-end nil)))
-                       (mevedel-view--mark-live-render-unit
-                        unit-start seg-start))))))))
-          ('tool
-           ;; Flush thinking group before tools
-           (mevedel-view--flush-thinking-group thinking-group data-buf)
-           (setq thinking-group nil)
-           ;; Accumulate consecutive tool segments
-           (push seg tool-group))
-          ('system-reminder
-           (mevedel-view--flush-thinking-group thinking-group data-buf)
-           (setq thinking-group nil)
-           (when tool-group
-             (mevedel-view--render-tool-activity
-              (nreverse tool-group) data-buf)
-             (setq tool-group nil))
-           (mevedel-view--render-system-reminder-segment seg data-buf))
-          ('request-summary
-           (push seg request-summary-group))
-          ('mailbox
-           (mevedel-view--flush-thinking-group thinking-group data-buf)
-           (setq thinking-group nil)
-           (if tool-group
-               (push seg tool-group)
-             (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
-                   (text-start nil))
-               (mevedel-view--ensure-blank-line-before-response)
-               (setq text-start (point))
-               (insert text "\n")
-               (mevedel-view--decorate-agent-result-blocks text-start (point))
-               (mevedel-view--decorate-agent-message-blocks text-start (point)))))
-          ('user
-           (let ((seg-start (cadr seg))
-                 (seg-end (caddr seg)))
-             ;; Drop org-only glue (`#+end_tool', `#+begin_tool …',
-             ;; blank lines) so it doesn't surface as a one-line
-             ;; `Thinking…' between adjacent tool blocks.  Skip without
-             ;; flushing the tool-group so consecutive tool segments
-             ;; separated only by glue still group / render together.
-             (unless (mevedel-view--scaffolding-only-p
-                      data-buf seg-start seg-end)
-               (when tool-group
-                 (mevedel-view--render-tool-activity
-                  (nreverse tool-group) data-buf)
-                 (setq tool-group nil))
-               (push seg thinking-group))))
-          ((or 'reasoning 'render-data 'ignored)
-           (cond
-            ((and (eq type 'ignored)
-                  (mevedel-view--hook-audit-only-segment-p
-                   data-buf (cadr seg) (caddr seg))
-                  (not tool-group))
-             (mevedel-view--flush-thinking-group thinking-group data-buf)
-             (setq thinking-group nil)
-             (let* ((source (mevedel-view-disclosure-source-range
-                             data-buf (cadr seg) (caddr seg)))
-                    (text (with-current-buffer data-buf
-                            (buffer-substring
-                             (cadr seg) (caddr seg)))))
-               (dolist (record
-                        (mevedel-view--hook-audit-records-from-text text))
-                 (mevedel-view--insert-hook-audit-block record source))))
-            ((mevedel-view--collaboration-event-segment-p
-              data-buf (cadr seg) (caddr seg))
-             (mevedel-view--flush-thinking-group thinking-group data-buf)
-             (setq thinking-group nil)
-             (when tool-group
-               (mevedel-view--render-tool-activity
-                (nreverse tool-group) data-buf)
-               (setq tool-group nil))
-             (mevedel-view--render-collaboration-event-segment data-buf seg))
-            ((and tool-group
-                  (mevedel-view--hook-audit-only-segment-p
-                   data-buf (cadr seg) (caddr seg)))
+             (setq tool-group nil))))
+      (dolist (seg segments)
+        (let ((type (car seg)))
+          (pcase type
+            ('response
+             ;; Flush accumulated groups
+             (flush-thinking)
+             (flush-tools)
+             ;; Insert response text with source tracking
+             (let ((seg-start (cadr seg))
+                   (seg-end (caddr seg))
+                   (source nil))
+               (setq source
+                     (mevedel-view-disclosure-source-range data-buf seg-start seg-end))
+               (with-current-buffer data-buf
+                 (let ((text (string-trim
+                               (buffer-substring-no-properties seg-start seg-end))))
+                   (setq text (mevedel-view--visible-response-text text))
+                   (with-current-buffer view-buf
+                     (unless (string-empty-p text)
+                       (let ((unit-start (point)))
+                         (mevedel-view--ensure-blank-line-before-response)
+                         (let ((start (point)))
+                         (insert (mevedel-view--fontify-response text) "\n")
+                         (let ((response-end (copy-marker (point) t)))
+                           (add-text-properties
+                            start response-end
+                            `(mevedel-view-source ,source
+                              mevedel-view-source-key ,(mevedel-view-disclosure-state-key
+                                                        source
+                                                        'response)
+                              mevedel-view-type response
+                              mevedel-view-collapsed nil))
+                           (mevedel-view--decorate-agent-result-blocks
+                            start response-end)
+                           (mevedel-view--decorate-agent-message-blocks
+                            start response-end)
+                           (mevedel-view--decorate-markdown-in-range
+                            start response-end)
+                           (goto-char response-end)
+                           (set-marker response-end nil)))
+                         (mevedel-view--mark-live-render-unit
+                          unit-start seg-start))))))))
+            ('tool
+             ;; Flush thinking group before tools
+             (flush-thinking)
+             ;; Accumulate consecutive tool segments
              (push seg tool-group))
-            (t
-               ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
-               ;; lines) so it doesn't surface as a one-line `Thinking…'
-               ;; between adjacent tool blocks.  Skip without flushing the
-               ;; tool-group so consecutive tool segments separated only
-               ;; by glue still group / render together.
-               ;; Thinking after a tool stays pending so a long plain tool run
-               ;; can fold across it.  Leading thinking keeps its old path.
-               (if tool-group
-                   (push seg tool-group)
-                 (push seg thinking-group))))))))
-    ;; Flush remaining groups
-    (mevedel-view--flush-thinking-group thinking-group data-buf)
-    (when tool-group
-      (mevedel-view--render-tool-activity
-       (nreverse tool-group) data-buf))
-    (dolist (seg (nreverse request-summary-group))
-      (mevedel-view--render-request-summary-segment seg data-buf))))
+            ('system-reminder
+             (flush-thinking)
+             (flush-tools)
+             (mevedel-view--render-system-reminder-segment seg data-buf))
+            ('request-summary
+             (push seg request-summary-group))
+            ('mailbox
+             (flush-thinking)
+             (if tool-group
+                 (push seg tool-group)
+               (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
+                     (text-start nil))
+                 (mevedel-view--ensure-blank-line-before-response)
+                 (setq text-start (point))
+                 (insert text "\n")
+                 (mevedel-view--decorate-agent-result-blocks text-start (point))
+                 (mevedel-view--decorate-agent-message-blocks text-start (point)))))
+            ('user
+             (let ((seg-start (cadr seg))
+                   (seg-end (caddr seg)))
+               ;; Drop org-only glue (`#+end_tool', `#+begin_tool …',
+               ;; blank lines) so it doesn't surface as a one-line
+               ;; `Thinking…' between adjacent tool blocks.  Skip without
+               ;; flushing the tool-group so consecutive tool segments
+               ;; separated only by glue still group / render together.
+               (unless (mevedel-view--scaffolding-only-p
+                        data-buf seg-start seg-end)
+                 (flush-tools)
+                 (push seg thinking-group))))
+            ((or 'reasoning 'render-data 'ignored)
+             (cond
+              ((and (eq type 'ignored)
+                    (mevedel-view--hook-audit-only-segment-p
+                     data-buf (cadr seg) (caddr seg))
+                    (not tool-group))
+               (flush-thinking)
+               (let* ((source (mevedel-view-disclosure-source-range
+                               data-buf (cadr seg) (caddr seg)))
+                      (text (with-current-buffer data-buf
+                              (buffer-substring
+                               (cadr seg) (caddr seg)))))
+                 (dolist (record
+                          (mevedel-view--hook-audit-records-from-text text))
+                   (mevedel-view--insert-hook-audit-block record source))))
+              ((mevedel-view--collaboration-event-segment-p
+                data-buf (cadr seg) (caddr seg))
+               (flush-thinking)
+               (flush-tools)
+               (mevedel-view--render-collaboration-event-segment data-buf seg))
+              ((and tool-group
+                    (mevedel-view--hook-audit-only-segment-p
+                     data-buf (cadr seg) (caddr seg)))
+               (push seg tool-group))
+              (t
+                 ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
+                 ;; lines) so it doesn't surface as a one-line `Thinking…'
+                 ;; between adjacent tool blocks.  Skip without flushing the
+                 ;; tool-group so consecutive tool segments separated only
+                 ;; by glue still group / render together.
+                 ;; Thinking after a tool stays pending so a long plain tool run
+                 ;; can fold across it.  Leading thinking keeps its old path.
+                 (if tool-group
+                     (push seg tool-group)
+                   (push seg thinking-group))))))))
+      ;; Flush remaining groups
+      (flush-thinking)
+      (flush-tools)
+      (dolist (seg (nreverse request-summary-group))
+        (mevedel-view--render-request-summary-segment seg data-buf)))))
 
 (defun mevedel-view--render-collaboration-event-segment (data-buf seg)
   "Render a canonical started collaboration event SEG from DATA-BUF."
