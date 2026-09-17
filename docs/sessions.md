@@ -499,8 +499,11 @@ before falling back to its captured committed manifest; readers never treat
 the fixed caches as authority.
 
 Cooperative control transfer uses immutable generation-specific request and
-decision records below `.lease/requests/`. Each lease records its open transfer
-generation. Ordinary rotations preserve it, so every contender uses the same
+decision records below `.lease/requests/`. Resolving request, decision, and
+release-fence paths does not create their directories. Only protocol writes
+create mailboxes or fence directories; inspecting a released lease or an absent
+decision leaves those control directories absent. Each lease records its open
+transfer generation. Ordinary rotations preserve it, so every contender uses the same
 exclusive request path even when a lease rotation lands between lookup and
 creation. A successful rejection rotation opens the next transfer generation;
 the decision alone does not. The owner pairs a decision with that request's

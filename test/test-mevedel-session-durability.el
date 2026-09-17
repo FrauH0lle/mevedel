@@ -513,6 +513,7 @@
                  (request-path
                   (mevedel-session-transfer--request-path
                    directory 1)))
+            (mevedel-session-transfer--directory directory "requests")
             (mevedel-session-durability--write-plist
              request-path '(:protocol-version 0))
             (should-error
@@ -577,10 +578,35 @@
              (equal (list :state 'foreign :host (system-name))
                     (mevedel-session-durability-lease-status session-dir))))
           (let ((mevedel-session-durability--client-id owner))
-            (mevedel-session-durability-lease-release session-dir session)))
+            (mevedel-session-durability-lease-release session-dir session))
+          (let ((fences (file-name-concat session-dir ".lease" "fences")))
+            (should-not (file-exists-p fences))
+            (should (eq 'available
+                        (mevedel-session-durability-lease-state session-dir)))
+            (should-not (file-exists-p fences))))
       (mevedel-session-durability--cancel-renewal session)
       (when (file-directory-p root)
         (delete-directory root t)))))
+
+(mevedel-deftest mevedel-session-transfer-observe-decision
+  (:doc "an absent decision does not create its mailbox while observing")
+  (let* ((root (make-temp-file "mevedel-decision-observe-" t))
+         (session (test-mevedel-session-durability--local-session root))
+         (directory (file-name-concat root ".lease"))
+         (requests (file-name-concat directory "requests"))
+         (request (list :session-id "decision-observe" :generation 1
+                        :requester-client-id
+                        mevedel-session-durability--client-id)))
+    (setf (mevedel-session-save-path session) root
+          (mevedel-session-session-id session) "decision-observe")
+    (make-directory directory)
+    (unwind-protect
+        (progn
+          (should-not (file-exists-p requests))
+          (should-not
+           (mevedel-session-transfer-observe-decision session request))
+          (should-not (file-exists-p requests)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-durability--bind-lease
   (:doc "keeps the heartbeat while another client's claim is still in flight")
