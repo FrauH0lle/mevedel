@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
@@ -29,6 +30,31 @@
 (mevedel-deftest mevedel-view-zone-reconcile ()
   ,test
   (test)
+  :doc "orders priorities stably on every redraw without changing caller descriptors"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (let* ((fragments
+              (list (list :namespace 'status :id 'first :priority 2 :body "First")
+                    (list :namespace 'status :id 'default :body "Default")
+                    (list :namespace 'status :id 'second :priority 2 :body "Second")
+                    (list :namespace 'status :id 'no-priority :priority nil :body "Nil")
+                    (list :namespace 'status :id 'last :priority -1 :body "Last")))
+             (before (copy-tree fragments)))
+        (dolist (order (list fragments (reverse fragments)))
+          (mevedel-view-zone-reconcile
+           'status mevedel-view--status-marker mevedel-view--status-marker order)
+          (let ((region (mevedel-view-zone-region 'status)))
+            (should (equal
+                     (if (eq order fragments)
+                         "First\nSecond\nDefault\nNil\nLast\n"
+                       "Second\nFirst\nNil\nDefault\nLast\n")
+                     (buffer-substring-no-properties
+                      (overlay-start region) (overlay-end region)))))
+          (should (equal before fragments))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+
   :doc "reconciles a fixed zone while preserving lower marker ordering"
   (with-temp-buffer
     (insert "> draft")
