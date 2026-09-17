@@ -478,60 +478,41 @@
 (mevedel-deftest mevedel-compact-target-begin-root-context-epoch ()
   ,test
   (test)
-  :doc "manual compaction leaves compact-start context for the next input"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "compact-epoch" :root "/tmp"
-                     :name "compact-epoch"))
-         (session (mevedel-session-create "main" workspace))
-         (buffer (generate-new-buffer " *mevedel-compact-epoch*"))
-         source)
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (insert "Transcript\n"))
-          (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
-                     (lambda (value)
-                       (setq source value)
-                       (mevedel-hooks-record-session-context
-                        session '(:additional-context ("fresh context"))
-                        'SessionStart))))
-            (mevedel-compact-target-begin-root-context-epoch
-             (list :buffer buffer :session session
-                   :begin-context-epoch t)
-             nil))
-          (should (equal "compact" source))
-          (should (mevedel-session-hook-context-pending session))
-          (with-current-buffer buffer
-            (should-not mevedel-compact-target-current-request-hook-context)
-            (should-not (string-match-p "fresh context" (buffer-string)))))
-      (kill-buffer buffer)))
-
-  :doc "automatic compaction consumes compact-start context into its request"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "compact-auto-epoch" :root "/tmp"
-                     :name "compact-auto-epoch"))
-         (session (mevedel-session-create "main" workspace))
-         (buffer (generate-new-buffer " *mevedel-compact-auto-epoch*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (insert "Pending prompt\n"))
-          (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
-                     (lambda (_source)
-                       (mevedel-hooks-record-session-context
-                        session '(:additional-context ("fresh context"))
-                        'SessionStart))))
-            (mevedel-compact-target-begin-root-context-epoch
-             (list :buffer buffer :session session
-                   :begin-context-epoch t)
-             t))
-          (should-not (mevedel-session-hook-context-pending session))
-          (with-current-buffer buffer
-            (should (string-match-p
-                     "fresh context"
-                     mevedel-compact-target-current-request-hook-context))
-            (should (string-match-p "fresh context" (buffer-string)))))
-      (kill-buffer buffer)))
+  :doc "routes compact-start context to the current or next input by mode"
+  (dolist (auto '(nil t))
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "compact-epoch" :root "/tmp"
+                       :name "compact-epoch"))
+           (session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *mevedel-compact-epoch*"))
+           source)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (insert (if auto "Pending prompt\n" "Transcript\n")))
+            (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
+                       (lambda (value)
+                         (setq source value)
+                         (mevedel-hooks-record-session-context
+                          session '(:additional-context ("fresh context"))
+                          'SessionStart))))
+              (mevedel-compact-target-begin-root-context-epoch
+               (list :buffer buffer :session session
+                     :begin-context-epoch t)
+               auto))
+            (should (equal "compact" source))
+            (with-current-buffer buffer
+              (if auto
+                  (progn
+                    (should-not (mevedel-session-hook-context-pending session))
+                    (should (string-match-p
+                             "fresh context"
+                             mevedel-compact-target-current-request-hook-context))
+                    (should (string-match-p "fresh context" (buffer-string))))
+                (should (mevedel-session-hook-context-pending session))
+                (should-not mevedel-compact-target-current-request-hook-context)
+                (should-not (string-match-p "fresh context" (buffer-string))))))
+        (kill-buffer buffer))))
 
   :doc "retained-agent compaction does not begin a root context epoch"
   (let ((buffer (generate-new-buffer " *mevedel-agent-compact-epoch*"))
