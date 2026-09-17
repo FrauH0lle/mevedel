@@ -116,13 +116,6 @@
 (declare-function mevedel-session-plan-metadata "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x)
-		  t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-session-id "mevedel-structs" (cl-x)
-		  t)
-(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x)
-		  t)
 (declare-function mevedel-session-working-directory "mevedel-structs"
 		  (cl-x) t)
 (defvar mevedel--data-buffer)
@@ -854,10 +847,6 @@ Warn when a standalone delimiter is present but no nonblank plan is recognized."
 ;;
 ;;; Shared single Plan approval interaction
 
-(defun mevedel-plan-approval--current-session ()
-  "Resolve the session that owns the pending Plan approval."
-  (mevedel-queue--current-session))
-
 (defun mevedel-plan-approval--deliver (entry outcome phase &optional retain)
   "Deliver OUTCOME to ENTRY during PHASE.
 When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
@@ -879,7 +868,7 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
   ;; The single installer for a pending approval: its renderer and every
   ;; later settlement reach `mevedel-queue\=' helpers.  Session resume
   ;; presents an approval before any other interaction has loaded them.
-  (let ((session (or session (mevedel-plan-approval--current-session))))
+  (let ((session (or session (mevedel-queue--current-session))))
     (if (not session)
         (mevedel-plan-approval--deliver entry 'aborted "no-session")
       (setq entry (plist-put (copy-sequence entry) :session session))
@@ -891,7 +880,7 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
 
 (defun mevedel-plan-approval-render (&optional session)
   "Render SESSION's pending Plan approval."
-  (when-let* ((session (or session (mevedel-plan-approval--current-session)))
+  (when-let* ((session (or session (mevedel-queue--current-session)))
               (entry (mevedel-session-pending-plan-approval session))
               ((not (plist-get entry :hidden))))
     (condition-case err
@@ -935,7 +924,7 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
 
 (defun mevedel-plan-approval-abort (&optional session outcome)
   "Settle SESSION's pending Plan approval with OUTCOME or `aborted'."
-  (when-let* ((session (or session (mevedel-plan-approval--current-session)))
+  (when-let* ((session (or session (mevedel-queue--current-session)))
               (entry (mevedel-session-pending-plan-approval session)))
     (setf (mevedel-session-pending-plan-approval session) nil)
     (mevedel-plan-approval--deliver entry (or outcome 'aborted) "abort")))
