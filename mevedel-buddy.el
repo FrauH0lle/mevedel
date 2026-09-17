@@ -273,18 +273,15 @@ record claiming it replaced nothing would make
 model a diff of edits the user never made.  Losing a record only costs
 one round of feedback; fabricating one costs trust in every note."
   (let* ((pending-beg mevedel-buddy--pending-beg)
-         (pending-old mevedel-buddy--pending-old-text)
+         (old-text mevedel-buddy--pending-old-text)
          (line-beg (or pending-beg
                        (save-excursion (goto-char beg)
                                        (line-beginning-position))))
          (line-end (mevedel-buddy--line-end end))
          (new-text (buffer-substring-no-properties line-beg line-end))
-         (old-text pending-old)
          (scope-key (mevedel-buddy--scope-key)))
     (setq mevedel-buddy--pending-beg nil
           mevedel-buddy--pending-old-text nil)
-    (unless pending-old
-      (setq old-text nil))
     (when (and old-text
                (not (mevedel-buddy--try-merge
                      scope-key line-beg old-text new-text)))
@@ -342,9 +339,7 @@ those offsets replayed against unrelated content."
   (remove-hook 'after-change-functions #'mevedel-buddy--after-change t)
   (remove-hook 'after-set-visited-file-name-hook #'mevedel-buddy--scope-key t)
   (remove-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer t)
-  (when mevedel-buddy--scope-cache
-    (mevedel-buddy-forget-buffer (car (car mevedel-buddy--scope-cache))))
-  (mevedel-buddy-forget-buffer (buffer-name))
+  (mevedel-buddy--on-kill-buffer)
   (setq mevedel-buddy--scope-cache nil))
 
 
@@ -460,14 +455,12 @@ are grouped per buffer and each group becomes one section."
       (let ((buffer-name (plist-get change :buffer)))
         (unless (gethash buffer-name groups)
           (push buffer-name order))
-        (puthash buffer-name
-                 (append (gethash buffer-name groups) (list change))
-                 groups)))
+        (push change (gethash buffer-name groups))))
     (string-join
      (delq nil
            (mapcar (lambda (buffer-name)
                      (mevedel-buddy--buffer-section
-                      buffer-name (gethash buffer-name groups)))
+                      buffer-name (nreverse (gethash buffer-name groups))))
                    (nreverse order)))
      "\n")))
 

@@ -54,11 +54,6 @@
         mevedel-buddy--timeout-timer nil)
   (mevedel-buddy-clear-changes))
 
-(defun mevedel-test--buddy-edit (buffer fn)
-  "Run FN in BUFFER so the change hooks record the edit."
-  (with-current-buffer buffer
-    (funcall fn)))
-
 (defun mevedel-test--buddy-all-changes ()
   "Return every recorded change across scopes, most recent first."
   (let (changes)
@@ -161,20 +156,19 @@
 
   :doc "`mevedel-buddy--record-change' records one edit for its buffer"
   (let ((buf (mevedel-test--buddy-buffer "buddy-record" "alpha\nbeta\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "gamma\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "gamma\n"))
     (should (= 1 (length (mevedel-buddy--changes-for-scope
                           (with-current-buffer buf
                             (mevedel-buddy--scope-key)))))))
 
   :doc "`mevedel-buddy--record-change' coalesces edits inside the window"
   (let ((buf (mevedel-test--buddy-buffer "buddy-coalesce" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda ()
-           (goto-char (point-max))
-           (insert "be")
-           (insert "ta")
-           (insert "\n")))
+    (with-current-buffer buf
+      (goto-char (point-max))
+      (insert "be")
+      (insert "ta")
+      (insert "\n"))
     (should (= 1 (length (mevedel-buddy--changes-for-scope
                           (with-current-buffer buf
                             (mevedel-buddy--scope-key)))))))
@@ -182,10 +176,10 @@
   :doc "`mevedel-buddy--record-change' starts a record outside the window"
   (let ((buf (mevedel-test--buddy-buffer "buddy-window" "alpha\nbeta\ngamma\n"))
         (mevedel-buddy-coalesce-window 0))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "delta\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-min)) (insert "prelude\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "delta\n"))
+    (with-current-buffer buf
+      (goto-char (point-min)) (insert "prelude\n"))
     (should (= 2 (length (mevedel-buddy--changes-for-scope
                           (with-current-buffer buf
                             (mevedel-buddy--scope-key)))))))
@@ -242,8 +236,8 @@
   :doc "`mevedel-buddy--format-changes' names the added line and its number"
   (let ((buf (mevedel-test--buddy-buffer
               "buddy-added.el" "(defun a ())\n(defun b ())\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "(defun c ())\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "(defun c ())\n"))
     (let ((diff (mevedel-test--buddy-diff buf)))
       (should (string-match-p "(defun c ())" diff))
       (should (string-match-p "^ *3 \\+" diff))))
@@ -255,12 +249,11 @@
               "buddy-region.el"
               (mapconcat (lambda (n) (format "(line %d)" n))
                          (number-sequence 1 20) "\n"))))
-    (mevedel-test--buddy-edit
-     buf (lambda ()
-           (goto-char (point-min))
-           (forward-line 9)
-           (end-of-line)
-           (insert " ; touched")))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (forward-line 9)
+      (end-of-line)
+      (insert " ; touched"))
     (let ((diff (mevedel-test--buddy-diff buf)))
       ;; The changed line, plus several unchanged lines either side of it.
       (should (string-match-p "touched" diff))
@@ -271,20 +264,18 @@
 
   :doc "`mevedel-buddy--format-changes' returns empty when edits cancel out"
   (let ((buf (mevedel-test--buddy-buffer "buddy-revert" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda ()
-           (goto-char (point-max))
-           (insert "typo\n")
-           (delete-region (- (point-max) 5) (point-max))))
+    (with-current-buffer buf
+      (goto-char (point-max))
+      (insert "typo\n")
+      (delete-region (- (point-max) 5) (point-max)))
     (should (string-empty-p (mevedel-test--buddy-diff buf))))
 
   :doc "`mevedel-buddy--format-changes' labels removed lines as old"
   (let ((buf (mevedel-test--buddy-buffer "buddy-removed" "alpha\nbeta\ngamma\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda ()
-           (goto-char (point-min))
-           (forward-line 1)
-           (delete-region (point) (line-beginning-position 2))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (forward-line 1)
+      (delete-region (point) (line-beginning-position 2)))
     (let ((diff (mevedel-test--buddy-diff buf)))
       (should (string-match-p "old -beta" diff))
       (should-not (string-match-p "[0-9] -beta" diff))))
@@ -292,8 +283,8 @@
   :doc "`mevedel-buddy--format-changes' carries a header with mode and cursor"
   (let ((buf (mevedel-test--buddy-buffer
               "buddy-header.el" "alpha\n" #'emacs-lisp-mode)))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (let ((diff (mevedel-test--buddy-diff buf)))
       (should (string-match-p "Buffer: buddy-header.el" diff))
       (should (string-match-p "Mode: emacs-lisp-mode" diff))
@@ -302,10 +293,10 @@
   :doc "`mevedel-buddy--format-changes' sections every buffer it is given"
   (let ((one (mevedel-test--buddy-buffer "buddy-one" "alpha\n"))
         (two (mevedel-test--buddy-buffer "buddy-two" "gamma\n")))
-    (mevedel-test--buddy-edit
-     one (lambda () (goto-char (point-max)) (insert "beta\n")))
-    (mevedel-test--buddy-edit
-     two (lambda () (goto-char (point-max)) (insert "delta\n")))
+    (with-current-buffer one
+      (goto-char (point-max)) (insert "beta\n"))
+    (with-current-buffer two
+      (goto-char (point-max)) (insert "delta\n"))
     (let ((diff (mevedel-buddy--format-changes
                  (mevedel-test--buddy-all-changes))))
       (should (string-match-p "Buffer: buddy-one" diff))
@@ -314,10 +305,10 @@
   :doc "`mevedel-buddy--format-changes' skips a killed buffer"
   (let ((live (mevedel-test--buddy-buffer "buddy-live" "alpha\n"))
         (dead (mevedel-test--buddy-buffer "buddy-dead" "gamma\n")))
-    (mevedel-test--buddy-edit
-     live (lambda () (goto-char (point-max)) (insert "beta\n")))
-    (mevedel-test--buddy-edit
-     dead (lambda () (goto-char (point-max)) (insert "delta\n")))
+    (with-current-buffer live
+      (goto-char (point-max)) (insert "beta\n"))
+    (with-current-buffer dead
+      (goto-char (point-max)) (insert "delta\n"))
     (kill-buffer dead)
     (let ((diff (mevedel-buddy--format-changes
                  (mevedel-test--buddy-all-changes))))
@@ -334,8 +325,8 @@
 
   :doc "`mevedel-buddy--settle' retires the changes a settled review covered"
   (let ((buf (mevedel-test--buddy-buffer "settle-retire" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (with-current-buffer buf
       (let ((scope (mevedel-buddy--scope-key)))
         (should (mevedel-buddy--changes-for-scope scope))
@@ -346,8 +337,8 @@
 
   :doc "`mevedel-buddy--settle' keeps the changes of an abandoned review"
   (let ((buf (mevedel-test--buddy-buffer "settle-keep" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (with-current-buffer buf
       (let ((scope (mevedel-buddy--scope-key)))
         (setq mevedel-buddy--running scope)
@@ -362,8 +353,8 @@
             (sent (current-time)))
         ;; The user keeps typing after the request went out; that edit was
         ;; never reviewed and must survive the settle.
-        (mevedel-test--buddy-edit
-         buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+        (with-current-buffer buf
+          (goto-char (point-max)) (insert "beta\n"))
         (setq mevedel-buddy--running scope)
         (mevedel-buddy--settle scope sent)
         (should (mevedel-buddy--changes-for-scope scope)))))
@@ -388,19 +379,18 @@
 
   :doc "`mevedel-buddy-review' refuses while a review is already running"
   (let ((buf (mevedel-test--buddy-buffer "review-busy" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (with-current-buffer buf
       (let ((mevedel-buddy--running "another-scope"))
         (should-not (mevedel-buddy-review)))))
 
   :doc "`mevedel-buddy-review' retires cancelling edits without a request"
   (let ((buf (mevedel-test--buddy-buffer "review-noop" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda ()
-           (goto-char (point-max))
-           (insert "typo\n")
-           (delete-region (- (point-max) 5) (point-max))))
+    (with-current-buffer buf
+      (goto-char (point-max))
+      (insert "typo\n")
+      (delete-region (- (point-max) 5) (point-max)))
     (with-current-buffer buf
       (should-not (mevedel-buddy-review))
       (should-not (mevedel-buddy--changes-for-scope
@@ -568,10 +558,10 @@
   :doc "`mevedel-buddy-forget-buffer' drops that buffer's records only"
   (let ((one (mevedel-test--buddy-buffer "forget-one" "alpha\n"))
         (two (mevedel-test--buddy-buffer "forget-two" "gamma\n")))
-    (mevedel-test--buddy-edit
-     one (lambda () (goto-char (point-max)) (insert "beta\n")))
-    (mevedel-test--buddy-edit
-     two (lambda () (goto-char (point-max)) (insert "delta\n")))
+    (with-current-buffer one
+      (goto-char (point-max)) (insert "beta\n"))
+    (with-current-buffer two
+      (goto-char (point-max)) (insert "delta\n"))
     (mevedel-buddy-forget-buffer "forget-one")
     (let ((names (mapcar (lambda (record) (plist-get record :buffer))
                          (mevedel-test--buddy-all-changes))))
@@ -580,8 +570,8 @@
 
   :doc "killing a tracked buffer discards its records"
   (let ((buf (mevedel-test--buddy-buffer "forget-killed" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (should (mevedel-test--buddy-all-changes))
     (kill-buffer buf)
     (should-not (mevedel-test--buddy-all-changes))))
@@ -857,8 +847,8 @@
   :doc "`mevedel-buddy--abandon' keeps the changes it abandoned"
   (let ((buf (mevedel-test--buddy-buffer "abandon-keep.el" "alpha\n"))
         (request-buffer (generate-new-buffer " *buddy-abandon-keep*")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (with-current-buffer buf
       (let ((scope (mevedel-buddy--scope-key)))
         (setq mevedel-buddy--running scope
@@ -875,8 +865,8 @@
   ;; reusing the name would have those offsets replayed against unrelated
   ;; content.
   (let ((buf (mevedel-test--buddy-buffer "untrack.el" "alpha\n")))
-    (mevedel-test--buddy-edit
-     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (goto-char (point-max)) (insert "beta\n"))
     (should (mevedel-test--buddy-all-changes))
     (with-current-buffer buf (mevedel-buddy--untrack-buffer))
     (should-not (mevedel-test--buddy-all-changes))))
