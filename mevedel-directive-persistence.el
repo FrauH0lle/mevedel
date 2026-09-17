@@ -82,7 +82,6 @@
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective--create
