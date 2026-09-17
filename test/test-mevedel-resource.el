@@ -641,7 +641,7 @@
                               (plist-get result :result)))
       (should-not (string-match-p "\\`agent://root\t"
                                   (plist-get result :result)))
-      (should (string-match-p "ready" (plist-get result :result))))))
+      (should (string-match-p "ready" (plist-get result :result)))))
   :doc "refreshes an unavailable agent when its record appears before execution"
   (let* ((session (mevedel-session--create))
          (attempt (mevedel-resource-prepare
@@ -654,7 +654,7 @@
     (mevedel-session--set-agent-registry
      session (list (cons "/root/reviewer" record)))
     (should (equal "now available"
-                   (plist-get (mevedel-resource-execute attempt) :result))))
+                   (plist-get (mevedel-resource-execute attempt) :result)))))
 
 (mevedel-deftest mevedel-resource-history-provider ()
   ,test

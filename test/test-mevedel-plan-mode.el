@@ -878,7 +878,7 @@
           (should (string-match-p "complete replacement" draft))
           (should (string-match-p "work://plans/current.md" draft))
           (should-not (string-match-p "local/plans/current.md" draft))
-          (should-not (string-match-p "old draft" draft)))))))
+          (should-not (string-match-p "old draft" draft))))))
 
   :doc "stashes a pre-existing draft into the input history, with a note"
   (mevedel-view-test--with-buffers
@@ -898,7 +898,7 @@
       (should (string-match-p "stashed in input history" captured))
       (with-current-buffer view-buf
         (should (member "precious unsent draft"
-                        (mevedel-view-history--entries)))))
+                        (mevedel-view-history--entries))))))
 
   :doc "an empty composer stashes nothing and stays quiet"
   (mevedel-view-test--with-buffers

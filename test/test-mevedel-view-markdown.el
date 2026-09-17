@@ -968,7 +968,7 @@
     (should (equal "plain"
                    (substring-no-properties
                     (mevedel-view--buffer-substring-filter 1 6 t))))
-    (should (equal " text\n" (buffer-string)))))
+    (should (equal " text\n" (buffer-string))))
 
   :doc "regions without tables retain the stock substring filter"
   (with-temp-buffer
@@ -976,7 +976,7 @@
     (cl-letf (((symbol-function 'buffer-substring--filter)
                (lambda (_beg _end _delete) "stock")))
       (should (equal "stock"
-                     (mevedel-view--buffer-substring-filter 1 6)))))
+                     (mevedel-view--buffer-substring-filter 1 6))))))
 
 (mevedel-deftest mevedel-view--position-in-ranges-p ()
   ,test
