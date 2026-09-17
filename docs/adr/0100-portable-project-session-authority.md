@@ -49,3 +49,9 @@ by path remoteness. Running its poisoned-cache regression through local project
 access reproduced a missing-record failure: settlement read the fixed cache
 instead of the immutable artifact. The handler now selects storage by the
 session's authority profile, completing the transport-independent decision.
+
+The same audit reproduced a strict metadata call reporting failure after its
+bytes had entered the publication queue. Strict metadata and archived-transcript
+updates now request the publisher's existing required-commit mode, which rejects
+reentrant calls before staging and treats committed-head cleanup failures as
+diagnostic. Callers no longer reconstruct commit semantics from a queued result.
