@@ -30,6 +30,36 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-instruction-test-support"))
 
+(mevedel-deftest mevedel--directive-at-point ()
+  ,test
+  (test)
+  :doc "resolves priority and highlighted selection to its directive owner"
+  (with-temp-buffer
+    (insert "abcdefghijklmn")
+    (let* ((overlays
+            (mapcar
+             (lambda (spec)
+               (let ((overlay (make-overlay (nth 0 spec) (nth 1 spec))))
+                 (overlay-put overlay 'mevedel-instruction t)
+                 (overlay-put overlay 'mevedel-instruction-type (nth 2 spec))
+                 (overlay-put overlay 'priority (nth 3 spec))
+                 overlay))
+             '((1 10 directive 10) (3 7 directive 20)
+               (4 12 directive 30) (5 8 reference 100)
+               (14 14 directive 40))))
+           (root (nth 0 overlays))
+           (other (nth 2 overlays)))
+      (goto-char 6)
+      (cl-loop for highlighted in (cons nil overlays)
+               for expected in (list other root root other other other)
+               do (let ((mevedel--highlighted-instruction highlighted))
+                    (should (eq expected (mevedel--directive-at-point)))))
+      (let ((mevedel--highlighted-instruction root))
+        (goto-char 13)
+        (should-not (mevedel--directive-at-point))
+        (goto-char 14)
+        (should (eq (nth 4 overlays) (mevedel--directive-at-point)))))))
+
 (mevedel-deftest mevedel-preview-directive-prompt ()
   ,test
   (test)

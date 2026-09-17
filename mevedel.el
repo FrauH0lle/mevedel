@@ -148,7 +148,6 @@
 
 ;; `cl-seq'
 (declare-function cl-remove-duplicates "cl-seq" (cl-seq &rest cl-keys))
-(declare-function cl-remove-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 
 ;; `gptel'
@@ -182,9 +181,6 @@
                   "mevedel-directive-request" (prompt record chat-buffer))
 (declare-function mevedel--directive-bound-session-buffer
                   "mevedel-directive-request" (record workspace))
-(declare-function mevedel--discuss-directive-prompt
-                  "mevedel-directive-request"
-                  (content &optional directive message attempt-index))
 (declare-function mevedel--dispatch-directive-implementation
                   "mevedel-directive-request"
                   (directive record action prompt-fn callback))
@@ -193,9 +189,6 @@
                   (directive &optional callback))
 (declare-function mevedel--implement-discussion-prompt "mevedel-directive-request"
                   (content directive))
-(declare-function mevedel--process-directive
-                  "mevedel-directive-request"
-                  (directive preset prompt-fn callback &optional options))
 
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-install "mevedel-gptel-bridge" ())
@@ -209,8 +202,6 @@
 
 ;; `mevedel-presets'
 (declare-function mevedel--define-presets "mevedel-presets")
-(declare-function mevedel-preset-apply
-                  "mevedel-presets" (name &optional buffer))
 (defvar mevedel-action-preset-alist)
 
 ;; `mevedel-session-persistence'
@@ -314,10 +305,7 @@ on success, a string error description on failure, or the symbol
 \\='abort if the request was aborted) and FSM (the gptel-fsm object for
 the request)."
   (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                      (mevedel--instructions-at (point) 'directive)
-                                                      t)
-                                                     'directive)))
+  (if-let* ((directive (mevedel--directive-at-point)))
       (progn
         (unless (memq 'implement
                       (mevedel-directive-actions
@@ -332,10 +320,7 @@ the request)."
 (defun mevedel-request-directive-changes ()
   "Open Request changes for the implemented directive at point."
   (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                     (mevedel--instructions-at (point) 'directive)
-                                                      t)
-                                                     'directive)))
+  (if-let* ((directive (mevedel--directive-at-point)))
       (progn
         (unless (memq 'request-changes
                       (mevedel-directive-actions
@@ -348,10 +333,7 @@ the request)."
 (defun mevedel-retry-directive ()
   "Open Retry for the failed or aborted directive at point."
   (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                      (mevedel--instructions-at (point) 'directive)
-                                                      t)
-                                                     'directive)))
+  (if-let* ((directive (mevedel--directive-at-point)))
       (progn
         (unless (memq 'retry
                       (mevedel-directive-actions
@@ -365,10 +347,7 @@ the request)."
   "Discuss the directive at point.
 Submit a Ready directive immediately; otherwise focus its follow-up composer."
   (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                      (mevedel--instructions-at (point) 'directive)
-                                                      t)
-                                                     'directive)))
+  (if-let* ((directive (mevedel--directive-at-point)))
       (progn
         (let ((actions
                (mevedel-directive-actions
@@ -386,11 +365,7 @@ Submit a Ready directive immediately; otherwise focus its follow-up composer."
   "Implement the directive at point using its complete local discussion.
 CALLBACK receives the ordinary directive terminal arguments."
   (interactive)
-  (if-let* ((directive
-             (mevedel--topmost-instruction
-              (mevedel--highest-priority-instruction
-               (mevedel--instructions-at (point) 'directive) t)
-              'directive)))
+  (if-let* ((directive (mevedel--directive-at-point)))
       (mevedel--implement-discussion directive callback)
     (user-error "No directive found at point")))
 
@@ -426,10 +401,7 @@ remain details of their topmost parent."
                                                            'directive)))))
              (setq found-directives toplevel-directives)))
           (t
-           (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                               (mevedel--instructions-at (point) 'directive)
-                                                               t)
-                                                              'directive)))
+           (if-let* ((directive (mevedel--directive-at-point)))
                (setq found-directives (list directive))
              (when-let* ((toplevel-directives (cl-remove-duplicates
                                                (mapcar (lambda (instr)
