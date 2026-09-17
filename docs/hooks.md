@@ -201,12 +201,6 @@ but not the three data variables: its workspace data is authoritative on the
 target, and a local command cannot consume a TRAMP file name.  Target identity
 and target-native workspace facts remain available in the JSON event input.
 
-Superpowers is treated specially when its hooks are enabled: mevedel
-installs a native `SessionStart` Elisp hook that loads the bundled
-`using-superpowers` skill plus a mevedel tool mapping, and skips the
-plugin's manifest hooks. Non-Superpowers plugin hooks keep their manifest
-behavior.
-
 Codex plugin `apps` and `mcpServers` manifest fields are not loaded by
 the hook subsystem. They are unsupported plugin components.
 
