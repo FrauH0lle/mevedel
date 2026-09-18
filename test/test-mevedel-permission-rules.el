@@ -253,6 +253,15 @@
   (let ((mevedel-protected-paths '(("~/.ssh/**" . inaccessible))))
     (should (mevedel-permission-rules-path-protected-p
              (expand-file-name "~/.ssh"))))
+  :doc "read access respects the protection level"
+  (let ((mevedel-protected-paths '(("**/.git/**" . read-only)
+                                   ("**/.ssh/**" . inaccessible))))
+    (should-not (mevedel-permission-rules-path-protected-p
+                 "/repo/.git/config" nil 'read))
+    (should (mevedel-permission-rules-path-protected-p
+             "/repo/.git/config" nil 'write))
+    (should (mevedel-permission-rules-path-protected-p
+             "/home/user/.ssh/key" nil 'read)))
   :doc "ssh directory is protected"
   (let ((mevedel-protected-paths '(("~/.ssh/*" . inaccessible))))
     (should (mevedel-permission-rules-path-protected-p

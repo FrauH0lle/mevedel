@@ -537,6 +537,10 @@ and its segment path."
             (write-region "repair bytes" nil (file-name-concat repair "before.el")
                           nil 'silent)
             (mevedel-session-recovery-record-failure session "incomplete rollback" repair)
+            (ert-info ((format "Recovery setup: %S"
+                               (mevedel-session-pending-publication session)))
+              (should (plist-get (mevedel-session-pending-publication session)
+                                 :recovery-portable)))
             (setq marker (plist-get (mevedel-session-pending-publication session)
                                     :manual-recovery-marker)
                   payload (plist-get (mevedel-session-pending-publication session)

@@ -59,7 +59,7 @@
            (workspace (mevedel-workspace-get-or-create 'project root root "profile"))
            (session (mevedel-session-create "main" workspace))
            (mevedel-permission-rules nil)
-           (mevedel-permission-guardian nil)
+           (mevedel-permission-reviewer 'user)
            (mevedel-protected-paths (list (cons source 'inaccessible)))
            (draft "> keep this draft\nsecond line")
            result)
@@ -82,7 +82,7 @@
             (set-file-modes script #o700)
             (mevedel-tool-fs--register)
             (mevedel-tool-exec--register)
-            (setf (mevedel-session-permission-mode session) 'full-auto
+            (setf (mevedel-session-permission-mode session) 'edits
                   (mevedel-session-sandbox-mode session) 'required)
             (with-current-buffer data
               (org-mode)
@@ -132,7 +132,7 @@
                   (let ((event (mevedel-permission-queue--log-props
                                 (car (mevedel-session-permission-queue session)))))
                     (should (equal "batch" (plist-get event :eval-mode)))
-                    (should (eq 'full-auto (plist-get event :permission-mode-effective)))))
+                    (should (eq 'edits (plist-get event :permission-mode-effective)))))
                 (let ((choices (list (format "Write %s (exact)" cache)
                                      (format "Write %s (recursive)" cache))))
                   (cl-letf (((symbol-function 'completing-read)
@@ -186,7 +186,9 @@
                 (with-temp-buffer
                   (insert-file-contents counter)
                   (should (equal "2" (buffer-string))))
-                ;; Native tools receive no independent authority from the profile.
+                ;; Ask still requires explicit outside-read authority; a command
+                ;; profile does not supply it to native tools.
+                (setf (mevedel-session-permission-mode session) 'ask)
                 (run "Read" (list :file_path cache))
                 (should-not result)
                 (should (= 1 (length (mevedel-session-permission-queue session))))
@@ -194,7 +196,7 @@
                 (should result)
                 ;; The same workload under a different command/expression cannot
                 ;; use the original command's mount, even with operation approval.
-                (setf (mevedel-session-permission-mode session) 'full-auto)
+                (setf (mevedel-session-permission-mode session) 'edits)
                 (run tool-name
                      (if (equal tool-name "Bash")
                          (list :command (concat "sh " (shell-quote-argument script)))
@@ -239,7 +241,7 @@
            (workspace (mevedel-workspace-get-or-create 'project root root "mixed"))
            (session (mevedel-session-create "main" workspace))
            (mevedel-permission-rules nil)
-           (mevedel-permission-guardian nil)
+           (mevedel-permission-reviewer 'user)
            results)
       (unwind-protect
           (progn
@@ -330,7 +332,7 @@
          (workspace (mevedel-workspace-get-or-create 'project root root "independent"))
          (session (mevedel-session-create "main" workspace))
          (mevedel-permission-rules nil)
-         (mevedel-permission-guardian nil)
+         (mevedel-permission-reviewer 'user)
          result)
     (unwind-protect
         (progn

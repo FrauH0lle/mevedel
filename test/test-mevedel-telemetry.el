@@ -748,7 +748,7 @@
                        (list :file-hash (symbol-name feature)
                              :git-head (format "%s-head" feature))))
                     ((symbol-function 'mevedel-sandbox-probe)
-                     (lambda () '(:available t))))
+                     (lambda (&optional _workdir) '(:available t))))
             (mevedel-telemetry--record-environment session 'start))
           (let ((entry (car (test-mevedel-telemetry--read
                              (mevedel-telemetry-path session)))))

@@ -60,6 +60,28 @@
       (call-interactively #'mevedel-permission--prompt-approve-once))
     (should (equal (buffer-string) "a")))
 
+  :doc "invalid directory scope leaves the approval card available for correction"
+  (let ((root (make-temp-file "mevedel-prompt-scope-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "permission")
+          (let ((ov (make-overlay (point-min) (point-max)))
+                received)
+            (overlay-put ov 'mevedel-permission-prompt t)
+            (overlay-put ov 'mevedel-view-interaction-entry
+                         (list :kind 'sandbox :resource-selection-cell
+                               (list (list (list :path root :access 'write)))))
+            (overlay-put ov 'mevedel--callback
+                         (lambda (outcome) (setq received outcome)))
+            (push ov mevedel--prompt-overlays)
+            (goto-char (point-min))
+            (should-error (mevedel-permission--prompt-approve-once)
+                          :type 'user-error)
+            (should-not received)
+            (should-not (overlay-get ov 'mevedel-settled))
+            (should (overlay-buffer ov))))
+      (delete-directory root t)))
+
   :doc "shows a newly-active parent warning before one-shot mutation approval"
   (let ((side-buffer (generate-new-buffer " *mevedel-side-late-warning*")))
     (unwind-protect
@@ -764,33 +786,7 @@
     (should (nth 5 captured))
     (should (nth 6 captured))))
 
-(mevedel-deftest mevedel-permission--format-bash-guardian
-  ()
-  ,test
-  (test)
-  :doc "formats guardian risk guidance"
-  (let ((text
-         (substring-no-properties
-          (mevedel-permission--format-bash-guardian
-           '(:risk high
-             :recommendation deny
-             :reason "Downloads and executes remote code.")))))
-    (should (string-match-p "Risk: High" text))
-    (should (string-match-p "Recommendation: Deny" text))
-    (should (string-match-p "Downloads and executes remote code" text)))
 
-  :doc "formats pending guidance"
-  (let ((text (substring-no-properties
-               (mevedel-permission--format-bash-guardian nil 'pending))))
-    (should (string-match-p "Status: Analyzing command risk" text))
-    (should-not (string-match-p "Risk:" text)))
-
-  :doc "formats unavailable guidance"
-  (let ((text (substring-no-properties
-               (mevedel-permission--format-bash-guardian
-                nil 'unavailable))))
-    (should (string-match-p "Unavailable" text))
-    (should-not (string-match-p "Risk:" text))))
 
 (mevedel-deftest mevedel-permission--prompt-async-bash
   ()

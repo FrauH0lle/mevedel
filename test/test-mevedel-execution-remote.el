@@ -2461,6 +2461,26 @@ work in flight genuinely unprovable rather than merely finished."
           (write-region "secret" nil secret nil 'silent)
           (write-region "sibling" nil sibling nil 'silent)
           (make-symbolic-link "secret.txt" link)
+          ;; The same remote child boundary follows the selected permission
+          ;; mode even when the stored sandbox preference says the opposite.
+          (dolist (mode '(edits full-auto))
+            (let* ((session (mevedel-session--create
+                             :authority-mode 'pid-lock :execution-target target
+                             :working-directory root :permission-mode mode
+                             :sandbox-mode (if (eq mode 'edits) 'off 'required)))
+                   (result (mevedel-execution-run-one-shot
+                            :session session :name "remote-permission-mode"
+                            :command (list "bash" "-c"
+                                           (if (eq mode 'edits)
+                                               "test ! -r \"$1\"" "cat \"$1\"")
+                                           "mode-probe" secret)
+                            :workdir root :writable-roots (list root) :timeout 30)))
+              (should-not (plist-get result :error))
+              (should (= 0 (plist-get result :exit-code)))
+              (should (eq (if (eq mode 'edits) 'bubblewrap 'off)
+                          (plist-get (plist-get result :sandbox-facts) :sandbox)))
+              (when (eq mode 'full-auto)
+                (should (equal "secret" (plist-get result :output))))))
           (let ((result
                  (mevedel-execution-run-one-shot
                   :name "mevedel-real-remote-bwrap"

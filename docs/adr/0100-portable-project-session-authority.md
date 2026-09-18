@@ -31,6 +31,10 @@ and hostname payload, so a replacement target invalidates old authority in
 either access mode.  Restore, takeover, unsettled-mutation recovery, and
 publication all use that same profile.
 
+Incarnation fencing checks target identity and reachability independently of
+child confinement. A missing sandbox must not prevent permission-mode changes;
+request and execution admission enforce the chosen confinement requirement.
+
 A missing or contradictory authority profile is an error. The session codec
 accepts one current format without migrations or a dual reader. See
 [Sessions](../sessions.md) for the current storage contract.
@@ -55,3 +59,16 @@ bytes had entered the publication queue. Strict metadata and archived-transcript
 updates now request the publisher's existing required-commit mode, which rejects
 reentrant calls before staging and treats committed-head cleanup failures as
 diagnostic. Callers no longer reconstruct commit semantics from a queued result.
+
+Mode-derived required confinement in Edits exposed another coupling: a remote
+target without Bubblewrap could not switch to Ask or Full Access because mode
+changes ran the current mode's sandbox readiness guard. The incarnation fence
+now probes identity without requiring child confinement, preserving ownership
+and replacement checks while allowing recovery through the mode controls.
+An initial correction forced an `off` probe at this fence. Review showed that
+request admission then alternated the mode-sensitive readiness cache between
+the session requirement and `off`, repeating the full remote probe suite.
+The fence now retains the cached confinement mode and ignores only its
+`sandbox-unavailable` block for identity observation. It still observes every
+mutation, preserves blocked child-execution readiness, and rejects other target
+failures.

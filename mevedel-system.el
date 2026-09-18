@@ -45,6 +45,11 @@
                   "mevedel-resource" (context &optional scheme))
 (autoload 'mevedel-resource-completion-metadata "mevedel-resource")
 
+;; `mevedel-sandbox'
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session permission-mode))
+(autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
+
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
                   "mevedel-skills-prompt" (session &optional buffer))
@@ -720,8 +725,8 @@ present."
 (mevedel-define-prompt-component tool-orchestration
   :producer #'mevedel-system--tool-orchestration-prompt)
 
-(mevedel-define-prompt-component bash-guardian-role
-  :file "prompts/permissions/bash-guardian-system.md")
+(mevedel-define-prompt-component permission-review-role
+  :file "prompts/permissions/approval-review-system.md")
 
 (mevedel-define-prompt-component buddy-role
   :file "prompts/system/buddy.md")
@@ -747,9 +752,9 @@ present."
                 active-goal
                 goal-policy))
 
-(mevedel-define-prompt-profile bash-guardian
-  :workspace-aware t
-  :components '(bash-guardian-role workspace-config environment))
+(mevedel-define-prompt-profile permission-review
+  :workspace-aware nil
+  :components '(permission-review-role))
 
 (mevedel-define-prompt-profile buddy
   :workspace-aware t
@@ -1010,8 +1015,9 @@ to conversation delivery, leaving only the stable system contract."
 							 (insert (format "Reasoning effort: %s\nWorking directory: %s\n"
 									 (or (mevedel-session-reasoning-effort session) "default")
 									 (mevedel-session-working-directory session)))
-							 (insert (format "Permission mode: %s\nSandbox mode: %s\n"
+							 (insert (format "Permission mode: %s\nEffective sandbox: %s\nSandbox preference: %s\n"
 									 (mevedel-session-permission-mode session)
+                                                                 (mevedel-sandbox-mode-effective session)
 									 (mevedel-session-sandbox-mode session)))
 							 (insert "External instructions: no separately exposed external instruction channel\n\n")
 							 (buffer-string)))

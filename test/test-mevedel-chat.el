@@ -548,6 +548,21 @@
                                      session t))))
                    (should (equal (list target t 'required) seen)))
 
+                 :doc "remote readiness uses effective confinement without changing preference"
+                 (dolist (pair '((edits off required) (full-auto required off)))
+                   (let* ((target (mevedel-execution-target-create
+                                   "/ssh:user@host:/srv/project/"))
+                          (session (mevedel-session--create
+                                    :execution-target target :permission-mode (car pair)
+                                    :sandbox-mode (cadr pair)))
+                          seen)
+                     (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                                (lambda (_target _refresh sandbox)
+                                  (setq seen sandbox))))
+                       (mevedel--probe-session-target session))
+                     (should (eq (caddr pair) seen))
+                     (should (eq (cadr pair) (mevedel-session-sandbox-mode session)))))
+
                  :doc "does not probe local sessions"
                  (let* ((workspace (mevedel-workspace--create
                                     :type 'project :id "/tmp/project/"
@@ -1551,6 +1566,39 @@
 		 (:doc "aborts active chat request state")
 		 ,test
 		 (test)
+
+  :doc "marks cancellation before cleanup while retaining pending settlement"
+  (dolist (pending '(nil t))
+    (with-temp-buffer
+      (let* ((session (mevedel-session--create :permission-mode 'full-auto))
+             (request (mevedel-request--create :id "abort-reentry" :session session))
+             (fsm (gptel-make-fsm))
+             (gptel--request-alist nil)
+             observed outcomes)
+        (setq-local mevedel--session session
+                    mevedel--current-request request)
+        (setf (gptel-fsm-info fsm)
+              (list :buffer (current-buffer) :mevedel-request-id "abort-reentry"))
+        (when pending (mevedel--turn-hold fsm))
+        (mevedel-request-push-canceller
+         request
+         (lambda ()
+           (push (mevedel-request-cancelled-p request) observed)
+           (mevedel-request-push-canceller
+            request (lambda () (push 'nested observed)))
+           (mevedel-permission--enqueue
+            (list :kind 'generic :tool-name "Read" :request request
+                  :callback (lambda (outcome) (push outcome outcomes))) session)))
+        (unwind-protect
+            (progn
+              (mevedel-abort (current-buffer))
+              (should (equal '(nested t) observed))
+              (should (equal '(aborted) outcomes))
+              (should (mevedel-request-cancelled-p request))
+              (should-not (mevedel-request-cancellers request))
+              (should (eq (and pending request) mevedel--current-request)))
+          (when pending (mevedel--turn-release fsm))
+          (mevedel-request-end)))))
 
   :doc "saves partial text even when compaction cancellation throws"
   (let* ((root (make-temp-file "mevedel-abort-save-" t))

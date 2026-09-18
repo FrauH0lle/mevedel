@@ -543,6 +543,7 @@ With RAW-P, retain the full pipeline result including hidden render data."
 
   :doc "keeps a queued permission from settling the envelope"
   (let ((mevedel-ptc-composable-tools '("PTCProbe")))
+    (setf (mevedel-session-permission-mode session) 'ask)
     (test-mevedel-ptc-driver--register-probe
      (lambda (args) (list :result (plist-get args :value)))
      nil

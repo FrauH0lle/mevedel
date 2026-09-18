@@ -5,7 +5,7 @@ Status: accepted
 Selecting `full-auto` authorizes model-generated live Eval without a separate
 permission rule or prompt, even though live Eval executes inside Emacs and
 cannot use child-process confinement. This follows the mode's contract of
-removing heuristic execution prompts; the UI and model reminder must disclose
+granting Full Access under the OS account; the UI and model reminder must disclose
 that live Eval is inherently unconfined.
 
 The full-auto reminder states: "Live Eval runs inside Emacs without confinement."

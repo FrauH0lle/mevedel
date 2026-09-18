@@ -19,8 +19,9 @@ its parent ends.
 Conversation ephemerality does not imply effect ephemerality. Inherently
 read-only tools and analyzer-proven read-only Bash run under the inherited
 sandbox and absolute denies. ApplyPatch and other mutation-capable operations
-must cross an explicit one-shot approval boundary even when the parent uses
-Full Auto or Plan mode; side approvals cannot create durable permission rules.
+cross an invocation-only approval boundary in Ask and Edits, including sides
+opened from Plan. Full Access bypasses ordinary asks, but not explicit denies
+or integrity checks; side approvals cannot create durable permission rules.
 Approved effects occur immediately in the shared workspace and survive side
 closure, while normally sanitized security and tool audit remains durable.
 Eval, delegation, tasks, Goals, skills, and parent workflow settlement remain
@@ -36,8 +37,15 @@ A durable session fork was rejected because lineage, locking, checkpoints,
 Rewind, and resume are contrary to an aside. A one-shot modal was rejected
 because follow-up questions are central to the intended use. A hard read-only
 boundary was rejected because read-only shell inspection and explicitly
-requested artifacts are useful. Ordinary inherited mutation authority was
-rejected because an ephemeral transcript must not silently exercise Full Auto
-or install reusable grants. Synchronization or automatic merge was rejected
+requested artifacts are useful. Installing reusable grants from an ephemeral
+transcript remains disallowed. Synchronization or automatic merge was rejected
 because concurrent histories would become timing-dependent and would
 contaminate the parent context.
+
+## Decision history
+
+The original design required human one-shot approval even in Full Auto.
+Mode-derived authority replaced that exception: Full Access now consistently
+bypasses ordinary asks, and optional automatic review can settle an invocation
+in Ask or Edits. Ephemerality still prevents persistent grants, not the effects
+the user-authorized permission mode allows.

@@ -99,6 +99,11 @@
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 (autoload 'mevedel-execution-target-workspace-root "mevedel-execution-target")
 
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode" (&optional session data-buffer surface-buffer))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-artifact-address
                   "mevedel-resource" (path session))
@@ -110,6 +115,8 @@
 (declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
 (declare-function mevedel-sandbox-launch-failed-p
                   "mevedel-sandbox" (preparation child-result))
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session permission-mode))
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
@@ -120,6 +127,7 @@
 (autoload 'mevedel-sandbox--record-launch-failure "mevedel-sandbox")
 (autoload 'mevedel-sandbox-cleanup "mevedel-sandbox")
 (autoload 'mevedel-sandbox-launch-failed-p "mevedel-sandbox")
+(autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
 (autoload 'mevedel-sandbox-prepare "mevedel-sandbox")
 (autoload 'mevedel-sandbox-strip-marker "mevedel-sandbox")
 
@@ -1545,7 +1553,8 @@ terminal settlement."
               mevedel-execution-live-limit)
       (signal 'mevedel-execution-limit
               (list "A session may have at most 64 live Bash processes")))
-    (let* ((raw-command (plist-get tool-args :command))
+    (let* ((permission-mode (mevedel-permission-mode-effective session data-buffer))
+           (raw-command (plist-get tool-args :command))
            (command-text (and (stringp raw-command) raw-command))
            (command-properties
             (and command-text
@@ -1622,10 +1631,14 @@ terminal settlement."
                     (mevedel-execution--start-admitted
                      record
                      (with-current-buffer (or data-buffer (current-buffer))
+                       (unless (eq permission-mode
+                                   (mevedel-permission-mode-effective session data-buffer))
+                         (signal 'mevedel-execution-error
+                                 '("Permission mode changed while execution was queued; submit the operation again")))
                        (mevedel-sandbox-prepare
                         command workdir writable-roots additional-permissions
                         sandbox-permissions
-                        (mevedel-session-sandbox-mode session)
+                        (mevedel-sandbox-mode-effective session)
                         temporary-root)))
                   (error
                    (setf (mevedel-execution--record-error-data record) err
@@ -2117,7 +2130,7 @@ discards the process without invoking CALLBACK."
           (mevedel-sandbox-prepare
            command workdir writable-roots additional-permissions
            sandbox-permissions
-           (and session (mevedel-session-sandbox-mode session))
+           (mevedel-sandbox-mode-effective session)
            temporary-root))
          (_
           (when (and (eq (plist-get preparation :state) 'unrestricted)

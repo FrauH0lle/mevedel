@@ -28,6 +28,9 @@
 (autoload 'mevedel-bash-policy-decision-specifier-value "mevedel-bash-policy")
 
 ;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-permission-persistence'
@@ -171,7 +174,11 @@ when the normal resolver returns `ask'; explicit denials stay intact."
     (pcase decision
       ('deny 'deny)
       ('ask
-       (if (memq outcome '(allow approve implement implement-clear))
+       (if (and (not (eq 'full-auto
+                        (mevedel-permission-mode-effective
+                         (plist-get context :session)
+                         (plist-get context :buffer))))
+                (memq outcome '(allow approve implement implement-clear)))
            'ask
          outcome))
       (_ outcome))))
@@ -231,6 +238,10 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
          (entry
           (append
            (list :tool-use-id (plist-get context :tool-use-id)
+                 :approval-source-cell (list 'user)
+                 :args (plist-get context :args)
+                 :patch-session-only-p
+                 (plist-get (plist-get context :patch-proposal) :session-only-p)
                  :data-buffer (plist-get context :buffer)
                  :request (plist-get context :request)
                  :invocation (plist-get context :invocation)
@@ -244,12 +255,37 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                   entry))
          (original-settle settle)
          (settle
-          (if one-shot-p
-              (lambda (updated outcome)
-                (funcall original-settle updated
-                         (mevedel-permission--one-shot-prompt-outcome
-                          outcome)))
-            settle))
+          (lambda (updated outcome)
+            (when one-shot-p
+              (setq outcome (mevedel-permission--one-shot-prompt-outcome outcome)))
+            (unless (eq 'full-auto
+                        (mevedel-permission-mode-effective
+                         session (plist-get context :buffer)))
+              (condition-case err
+                  (mevedel-permission-queue-validate-approval entry outcome)
+                (error (setq outcome (cons 'deny (error-message-string err))))))
+            ;; Every approval source crosses this boundary, including hooks
+            ;; and fallback outcomes before any queue entry exists.
+            (when (memq outcome '(allow allow-once allow-session always-allow))
+              (let* ((full-access-p
+                      (eq 'full-auto (mevedel-permission-mode-effective
+                                      session (plist-get context :buffer))))
+                     (resolved (mevedel-permission-queue--reevaluate
+                                (plist-put (copy-sequence entry) :session session)))
+                     (denied-p
+                      (or (mevedel-tool-permission--denial-outcome-p resolved)
+                          (and full-access-p (not (eq resolved 'allow))))))
+                (when denied-p
+                  (setq outcome (if (consp resolved) resolved 'deny)
+                        updated (plist-put updated :permission-denial-provenance 'policy)))
+                (when (or full-access-p denied-p)
+                  (mevedel-tool-permission-log-decision
+                   updated (list :outcome (mevedel-permission--normalize-outcome outcome)
+                                 :raw-outcome outcome :via 'policy)))))
+            (when-let* ((request (plist-get context :request))
+                        ((mevedel-request-cancelled-p request)))
+              (setq outcome 'aborted))
+            (funcall original-settle updated outcome)))
          (workspace (plist-get context :workspace)))
     (mevedel-hooks-run-tool-event
      'PermissionRequest
@@ -291,6 +327,10 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                       (plist-put updated :permission-denial-provenance
                                  'PermissionRequest)
                       `(deny . ,reason))))
+          ((eq 'full-auto
+               (mevedel-permission-mode-effective
+                session (plist-get context :buffer)))
+           (funcall settle updated 'allow))
           ((and (eq permission-decision 'allow) (not one-shot-p))
            (setq updated
                  (mevedel-hooks-record-tool-audit
@@ -337,7 +377,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                          (if (mevedel-tool-permission--denial-outcome-p
                               outcome)
                              (plist-put updated :permission-denial-provenance
-                                        'user)
+                                        (car (plist-get queued :approval-source-cell)))
                            updated)
                          outcome))))
                (when-let* ((progress (plist-get context :progress-callback)))

@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Owns conservative Bash classification, reusable permission patterns, and
-;; guardian guidance.  Permission adapters decide and persist authority; this
+;; argument matching.  Permission adapters decide and persist authority; this
 ;; module supplies Bash-specific policy facts.
 
 ;;; Code:
@@ -20,16 +20,6 @@
 (require 'mevedel-structs)
 (require 'seq)
 (require 'subr-x)
-
-;; `gptel'
-(declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
-(defvar gptel-backend)
-(defvar gptel-model)
-(defvar gptel-reasoning-effort)
-(defvar gptel-stream)
-(defvar gptel-tools)
-(defvar gptel-use-context)
-(defvar gptel-use-tools)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-skill-permission-rules
@@ -49,11 +39,6 @@
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
 
-;; `mevedel-models'
-(declare-function mevedel-model-resolve-workload
-                  "mevedel-models"
-                  (workload &optional explicit-selector explicit-effort))
-
 ;; `mevedel-permission-mode'
 (defvar mevedel-permission-mode)
 
@@ -70,17 +55,13 @@
                   "mevedel-permission-rules"
                   (invocation-rules request-rules
                                     session-rules persistent-rules))
-(declare-function mevedel-permission-rules-find
-                  "mevedel-permission-rules" (rules tool-name &rest keys))
 (declare-function mevedel-permission-rules-first-action-with-bucket
                   "mevedel-permission-rules"
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission-rules-path-in-allowed-roots-p
                   "mevedel-permission-rules" (path roots))
 (declare-function mevedel-permission-rules-path-protected-p
-                  "mevedel-permission-rules" (path &optional target))
-(declare-function mevedel-permission-rules-qualified-buckets
-                  "mevedel-permission-rules" (buckets qualifier value))
+                  "mevedel-permission-rules" (path &optional target access))
 (declare-function mevedel-permission-rules-resource-granted-p
                   "mevedel-permission-rules"
                   (path access grants &optional recursive))
@@ -91,13 +72,7 @@
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-mode-effective
-                  "mevedel-sandbox" (&optional session))
-(declare-function mevedel-sandbox-pending-facts
-                  "mevedel-sandbox"
-                  (&optional additional-permissions sandbox-permissions mode
-                             workdir))
-(declare-function mevedel-sandbox-status-text
-                  "mevedel-sandbox" (facts))
+                  "mevedel-sandbox" (&optional session permission-mode))
 (defvar mevedel-sandbox-intrinsic-paths)
 
 ;; `mevedel-structs'
@@ -116,10 +91,6 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
-
-;; `mevedel-system'
-(declare-function mevedel-system-build-prompt
-                  "mevedel-system" (profile &rest keys))
 
 ;; `seq'
 (declare-function seq-filter "seq" (pred seq))
@@ -265,8 +236,11 @@ the caller already analyzed COMMAND.  PERMISSION-CONTEXT supplies the target."
   "Return COMMAND resources lacking authority under PERMISSION-CONTEXT.
 REQUEST may supply exact additive filesystem grants for this invocation."
   (let ((resources
+         (and (not (memq (mevedel-bash-policy-effective-permission-mode
+                          permission-context)
+                         '(edits full-auto)))
          (mevedel-bash-policy--bash-resource-paths
-          command nil permission-context)))
+          command nil permission-context))))
     (when resources
       (let* ((session (plist-get permission-context :session))
              (base (mevedel-bash-policy--context-directory permission-context))
@@ -303,35 +277,6 @@ REQUEST may supply exact additive filesystem grants for this invocation."
 
 ;;
 ;;; Command Execution
-
-(defcustom mevedel-permission-guardian nil
-  "Whether to annotate Bash permission prompts with risk guidance.
-
-When nil, permission prompts are rendered without guardian guidance.
-When t, mevedel asks the current gptel model for advisory-only Bash
-risk classification while an `ask' prompt is pending.
-
-A function value is useful for custom classifiers and tests.  It is
-called as (FUNCTION COMMAND CONTEXT CALLBACK), where CONTEXT contains
-normalized analysis and pending confinement facts, and CALLBACK accepts
-either nil or a plist:
-
-  (:risk low|medium|high|critical
-   :recommendation proceed|ask|deny
-   :reason \"short explanation\")
-
-The result never grants authority or changes deterministic Bash analysis.
-Explicit denies, native-edit Goal restrictions, protected-path policy, and
-the user's decision remain authoritative."
-  :type '(choice (const :tag "Disabled" nil)
-                 (const :tag "Use gptel reviewer" t)
-                 function)
-  :group 'mevedel)
-
-(defcustom mevedel-permission-guardian-timeout 20
-  "Seconds to wait before giving up on Bash guardian guidance."
-  :type 'number
-  :group 'mevedel)
 
 (defconst mevedel-bash-policy--bash-safe-env-vars
   '("GOEXPERIMENT" "GOOS" "GOARCH" "CGO_ENABLED" "GO111MODULE"
@@ -498,7 +443,8 @@ avoids saving a brittle whole-chain string such as
   (mevedel-sandbox-mode-effective
    (if permission-context
        (plist-get permission-context :session)
-     (and (boundp 'mevedel--session) mevedel--session))))
+     (and (boundp 'mevedel--session) mevedel--session))
+   (mevedel-bash-policy-effective-permission-mode permission-context)))
 
 (defun mevedel-bash-policy--bash-protected-path-p
     (command &optional analysis permission-context)
@@ -642,24 +588,16 @@ the Bash tool path because Bash had its own flattened resolver."
 
 
 (cl-defun mevedel-bash-policy-check-permission
-    (command &key ignore-effective-trust-p
-             permission-context metadata-p)
+    (command &key permission-context metadata-p)
   "Decide Bash permission for COMMAND and PERMISSION-CONTEXT.
 
 Rules come from invocation, request, session, persistent, and
 defcustom buckets (in that innermost-first order) and are
 matched via `:pattern'.
 
-Normalized Bash analysis supplies read-only, dangerous, complex, or unknown
-classification.  Read-only commands run without a matching rule.  Unknown
-commands need matching authority.  Dangerous and complex commands require
-direct user authority rather than invocation- or request-delegated rules.
-
-In `full-auto' mode, explicit deny rules and protected path tokens still
-win, then unknown, dangerous, and complex Bash invocations are allowed.
-When IGNORE-EFFECTIVE-TRUST-P is non-nil, `full-auto' is ignored; this
-is used by the guardian to decide whether a command would have been
-suspicious under the normal classifier.
+Ask uses conservative Bash analysis.  Edits allows arbitrary commands within
+required confinement after explicit ask/deny rules.  Full-auto bypasses ordinary
+asks and default resource boundaries.  Hard denies and Plan remain effective.
 
 With METADATA-P, return decision metadata with the determining cause instead
 of the outcome symbol.
@@ -673,8 +611,6 @@ authorize dangerous or complex syntax."
          (buckets (mevedel-bash-policy-buckets permission-context))
          (mode (mevedel-bash-policy-effective-permission-mode
                 permission-context))
-         (full-auto-p (and (not ignore-effective-trust-p)
-                           (eq mode 'full-auto)))
          (full-match (mevedel-bash-policy--bash-bucket-match buckets command))
          (direct-match (mevedel-bash-policy--bash-direct-match buckets command))
          (segment-matches
@@ -706,7 +642,12 @@ authorize dangerous or complex syntax."
         (cl-return-from mevedel-bash-policy-check-permission
           (decide 'deny 'plan-mode)))
 
-      (when (and (not (plist-get permission-context
+      (when (eq mode 'full-auto)
+        (cl-return-from mevedel-bash-policy-check-permission
+          (decide 'allow 'mode)))
+
+      (when (and (not (eq mode 'edits))
+                 (not (plist-get permission-context
                                  :resource-authority-separated-p))
                  (mevedel-bash-policy--bash-protected-path-p
                   command analysis permission-context))
@@ -720,8 +661,8 @@ authorize dangerous or complex syntax."
 
       (cond
        ((eq (car full-match) 'ask) (decide 'ask 'rule))
-       ((memq 'deny segment-actions) (decide 'deny 'rule))
        ((memq 'ask segment-actions) (decide 'ask 'rule))
+       ((eq mode 'edits) (decide 'allow 'mode))
        ((and (memq class '(dangerous complex))
              (eq (car direct-match) 'allow))
         (decide 'allow 'rule))
@@ -733,275 +674,15 @@ authorize dangerous or complex syntax."
                                  (eq segment-class 'read-only))))
         (decide 'allow 'rule))
        ((memq class '(dangerous complex))
-        (decide (if full-auto-p 'allow 'ask) 'mode))
+        (decide 'ask 'mode))
        ((and segments (cl-every (lambda (action) (eq action 'allow))
                                 segment-actions))
         (decide 'allow 'rule))
        ((eq class 'read-only)
         (decide 'allow 'read-only))
        ((eq (car full-match) 'allow) (decide 'allow 'rule))
-       ((eq (car full-match) 'deny) (decide 'deny 'rule))
-       (full-auto-p (decide 'allow 'mode))
        (t (decide 'ask 'mode))))))
 
-
-;;
-;;; Bash guardian guidance
-
-(defun mevedel-bash-policy--bash-guardian-symbol (value allowed)
-  "Return VALUE as a normalized symbol when it is in ALLOWED."
-  (let* ((string (cond
-                  ((symbolp value) (symbol-name value))
-                  ((stringp value) value)))
-         (symbol (and string
-                      (intern
-                       (replace-regexp-in-string
-                        "_" "-"
-                        (downcase (string-trim string)))))))
-    (and (memq symbol allowed) symbol)))
-
-(defun mevedel-bash-policy--bash-guardian-truncate (string limit)
-  "Return STRING capped at LIMIT characters."
-  (let ((string (string-trim (or string ""))))
-    (if (> (length string) limit)
-        (concat (substring string 0 limit) "...")
-      string)))
-
-(defun mevedel-bash-policy--bash-guardian-normalize (guidance)
-  "Return normalized Bash guardian GUIDANCE plist, or nil."
-  (when (listp guidance)
-    (let* ((risk (mevedel-bash-policy--bash-guardian-symbol
-                  (plist-get guidance :risk)
-                  '(low medium high critical)))
-           (recommendation (mevedel-bash-policy--bash-guardian-symbol
-                            (plist-get guidance :recommendation)
-                            '(proceed ask deny)))
-           (reason (plist-get guidance :reason)))
-      (when (and risk recommendation (stringp reason)
-                 (not (string-empty-p (string-trim reason))))
-        (list :risk risk
-              :recommendation recommendation
-              :reason (mevedel-bash-policy--bash-guardian-truncate reason 240))))))
-
-(defun mevedel-bash-policy--bash-guardian-json-range (text)
-  "Return the first likely JSON object substring in TEXT, or nil."
-  (when-let* ((start (string-match "{" text)))
-    (let ((i (1- (length text)))
-          end)
-      (while (and (>= i start) (not end))
-        (when (eq (aref text i) ?\})
-          (setq end i))
-        (setq i (1- i)))
-      (and end (substring text start (1+ end))))))
-
-(defun mevedel-bash-policy--bash-guardian-parse (response)
-  "Decode guardian RESPONSE as a JSON plist, or return nil."
-  (when (stringp response)
-    (when-let* ((json (mevedel-bash-policy--bash-guardian-json-range response)))
-      (condition-case nil
-          (json-parse-string json
-                             :object-type 'plist
-                             :array-type 'list
-                             :null-object nil
-                             :false-object nil)
-        (error nil)))))
-
-(defun mevedel-bash-policy-guardian-context-string (context)
-  "Return CONTEXT formatted for the Bash guardian prompt."
-  (string-join
-   (delq nil
-         (list
-          (when-let* ((class (plist-get context :class)))
-            (format "Command class: %s" class))
-          (when-let* ((parser (plist-get context :parser)))
-            (format "Parser: %s" parser))
-          (format "Dangerous command detected: %s"
-                  (if (plist-get context :dangerous) "yes" "no"))
-          (format "Complex or unparseable syntax: %s"
-                  (if (plist-get context :unparseable) "yes" "no"))
-          (when-let* ((reasons (plist-get context :reasons)))
-            (format "Analysis reasons: %s"
-                    (if (cl-every #'stringp reasons)
-                        (string-join reasons "; ")
-                      (prin1-to-string reasons))))
-          (when-let* ((resources (plist-get context :resources)))
-            (format "Identified resources: %s"
-                    (if (and (listp resources)
-                             (cl-every #'stringp resources))
-                        (string-join resources ", ")
-                      (prin1-to-string resources))))
-          (when-let* ((commands (or (plist-get context :commands-summary)
-                                    (and-let* ((commands (plist-get context :commands)))
-                                      (string-join commands ", ")))))
-            (format "Detected commands: %s" commands))
-          (when-let* ((level (plist-get context :sandbox-permissions)))
-            (format "Requested sandbox permissions: %s" level))
-          (when-let* ((additional
-                       (plist-get context :additional-permissions)))
-            (format "Requested additional permissions: %S" additional))
-          (when-let* ((patterns
-                       (plist-get context :matching-allow-patterns)))
-            (format "Matching explicit allow patterns: %s"
-                    (string-join patterns ", ")))
-          (when-let* ((facts (plist-get context :sandbox-facts)))
-            (format "Confinement: %s"
-                    (mevedel-sandbox-status-text facts)))))
-   "\n"))
-
-(defun mevedel-bash-policy--bash-guardian-model-async (command context callback)
-  "Ask gptel for advisory-only Bash risk guidance about COMMAND.
-CONTEXT describes the classifier inputs.  CALLBACK receives parsed guidance
-or nil; the classifier entry point owns timeout and settlement."
-  (let* ((policy (mevedel-model-resolve-workload 'guardian))
-         (gptel-use-tools nil)
-         (gptel-tools nil)
-         (gptel-use-context nil)
-         (system-prompt
-          (mevedel-system-build-prompt
-           'bash-guardian
-           :workspace (plist-get context :workspace)
-           :working-directory (plist-get context :working-directory)
-           :session (plist-get context :session)))
-         (prompt
-          (format
-           "Bash source:\n```bash\n%s\n```\n\nDeterministic analysis and confinement evidence:\n```text\n%s\n```"
-           command (mevedel-bash-policy-guardian-context-string context)))
-         (gptel-backend (plist-get policy :backend))
-         (gptel-model (plist-get policy :model))
-         (gptel-reasoning-effort (plist-get policy :effort))
-         chunks)
-    (gptel-request
-     prompt
-     :buffer (current-buffer)
-     :stream gptel-stream
-     :system system-prompt
-     :transforms nil
-     :callback
-     (lambda (response info)
-       (cond
-        ((and (consp response) (eq (car response) 'reasoning)))
-        ((and (plist-get info :stream) (stringp response))
-         (push response chunks))
-        ((eq response t)
-         (funcall callback
-                  (mevedel-bash-policy--bash-guardian-parse
-                   (apply #'concat (nreverse chunks)))))
-        ((stringp response)
-         (funcall callback
-                  (mevedel-bash-policy--bash-guardian-parse response)))
-        ((or (null response) (eq response 'abort))
-         (funcall callback nil)))))))
-
-(defun mevedel-bash-policy-guardian-classify-async
-    (command context callback)
-  "Return optional guardian guidance for COMMAND and CONTEXT.
-CALLBACK receives nil or a normalized guidance plist exactly once, whether
-classification uses gptel or a custom function."
-  (require 'gptel)
-  (require 'mevedel-models)
-  (require 'mevedel-system)
-  (if (null mevedel-permission-guardian)
-      (funcall callback nil)
-    (let ((done nil)
-          timer)
-      (cl-labels
-          ((finish (guidance)
-             (unless done
-               (setq done t)
-               (when timer
-                 (cancel-timer timer))
-               (funcall callback
-                        (mevedel-bash-policy--bash-guardian-normalize
-                         guidance)))))
-        (setq timer
-              (run-at-time
-               mevedel-permission-guardian-timeout nil
-               (lambda ()
-                 (finish nil))))
-        (condition-case nil
-            (funcall (if (functionp mevedel-permission-guardian)
-                         mevedel-permission-guardian
-                       #'mevedel-bash-policy--bash-guardian-model-async)
-                     command context #'finish)
-          (error
-           (finish nil)))))))
-
-(defun mevedel-bash-policy-full-auto-guardian-needed-p
-    (command &optional permission-context)
-  "Return non-nil when COMMAND and PERMISSION-CONTEXT need guardian review.
-This is only for `full-auto' mode.  The guardian is consulted when the
-normal classifier would have asked, avoiding latency for routine allowed
-commands while still giving the optional guardian a chance to veto
-suspicious Bash."
-  (and mevedel-permission-guardian
-       (eq (mevedel-bash-policy-effective-permission-mode
-            permission-context)
-           'full-auto)
-       (eq (mevedel-bash-policy-check-permission
-            command :ignore-effective-trust-p t
-            :permission-context permission-context)
-           'ask)))
-
-(defun mevedel-bash-policy-guardian-context
-    (command &optional permission-context)
-  "Return guardian context for COMMAND and PERMISSION-CONTEXT."
-  (let* ((session (if permission-context
-                      (plist-get permission-context :session)
-                    (and (boundp 'mevedel--session) mevedel--session)))
-         (workspace (or (plist-get permission-context :workspace)
-                        (and session (mevedel-session-workspace session))))
-         (working-directory
-          (and session (mevedel-session-working-directory session)))
-         (analysis (mevedel-bash-analysis-analyze command))
-         (commands (mevedel-bash-policy-command-names analysis))
-         (buckets (mevedel-bash-policy-buckets permission-context))
-         (request (plist-get permission-context :sandbox-request))
-         (additional-permissions
-          (plist-get request :additional-permissions))
-         (sandbox-permissions
-          (plist-get request :sandbox-permissions))
-         (rule-buckets
-          (if sandbox-permissions
-              (append
-               buckets
-               (mevedel-permission-rules-qualified-buckets
-                buckets :sandbox-permissions sandbox-permissions))
-            buckets))
-         (matching-allow-patterns
-          (mevedel-bash-policy--dedupe-strings
-           (cl-loop
-            for (_bucket . rules) in rule-buckets
-            append
-            (cl-loop
-             for rule in
-             (mevedel-permission-rules-find
-              rules "Bash" :pattern command)
-             for pattern = (plist-get (cdr rule) :pattern)
-             when (and pattern
-                       (eq (plist-get (cdr rule) :action) 'allow))
-             collect pattern)))))
-    (list :session session
-          :workspace workspace
-          :working-directory working-directory
-          :analysis analysis
-          :class (plist-get analysis :class)
-          :dangerous (eq (plist-get analysis :class) 'dangerous)
-          :commands commands
-          :commands-summary (mevedel-bash-policy-commands-summary commands)
-          :parser (plist-get analysis :parser)
-          :reasons (plist-get analysis :reasons)
-          :resources (plist-get analysis :resources)
-          :unparseable (eq (plist-get analysis :class) 'complex)
-          :allow-patterns (mevedel-bash-policy-allow-patterns command)
-          :matching-allow-patterns matching-allow-patterns
-          :additional-permissions additional-permissions
-          :sandbox-permissions sandbox-permissions
-          :sandbox-facts
-          (mevedel-sandbox-pending-facts
-           additional-permissions sandbox-permissions
-           (mevedel-bash-policy-effective-sandbox-mode
-            permission-context)
-           working-directory))))
 
 (provide 'mevedel-bash-policy)
 

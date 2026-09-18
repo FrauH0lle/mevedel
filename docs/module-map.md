@@ -40,7 +40,7 @@ Data model
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
-  mevedel-bash-policy.el      Bash classification, reusable rules, guardian policy
+  mevedel-bash-policy.el      Bash classification and reusable rules
   mevedel-transport.el        remote reentrancy detection and idle-transport deferral
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
   mevedel-execution.el        managed execution registry, admission, and facade
@@ -73,6 +73,7 @@ Data model
   mevedel-tool-repair-diagnostics.el  repair audit and telemetry
   mevedel-queue.el            session lookup and interaction entry metadata
   mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
+  mevedel-permission-review.el optional invocation approval before human queue admission
   mevedel-reminders.el        system-reminder staging, delivery and firing policy
   mevedel-history.el          retained reminders and provider response reconstruction
   mevedel-history-search.el   cooperative saved-transcript discovery, filtering and search

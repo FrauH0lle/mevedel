@@ -932,20 +932,20 @@ the execution boundary owns the session's single unavailable warning"
          (mevedel-check-permission
           "WriteStdin" :tool-struct write-stdin
           :content '(:execution_id "exec-1" :chars "yes\n")
-          :mode 'full-auto :one-shot-mutations-p t)))
+          :mode 'edits :one-shot-mutations-p t)))
     (should
      (eq 'allow
          (mevedel-check-permission
           "StopExecution" :tool-struct stop
           :content '(:execution_id "exec-1")
-          :mode 'full-auto :one-shot-mutations-p t)))
+          :mode 'edits :one-shot-mutations-p t)))
     (dolist (chars (list nil "" "\C-c"))
       (should
        (eq 'allow
            (mevedel-check-permission
             "WriteStdin" :tool-struct write-stdin
             :content `(:execution_id "exec-1" :chars ,chars)
-            :mode 'full-auto :one-shot-mutations-p t))))
+            :mode 'edits :one-shot-mutations-p t))))
     (dolist (name '("WriteStdin" "StopExecution"))
       (let ((mevedel-permission-rules `((,name :action deny))))
         (should
@@ -953,7 +953,7 @@ the execution boundary owns the session's single unavailable warning"
              (mevedel-check-permission
               name :tool-struct (mevedel-tool-get name)
               :content '(:execution_id "exec-1" :chars "\C-c")
-              :mode 'full-auto :one-shot-mutations-p t))))))
+              :mode 'edits :one-shot-mutations-p t))))))
   :doc "registers Eval mode and preserve_ui optional arguments"
   (let* ((tool (mevedel-tool-get "Eval"))
          (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))

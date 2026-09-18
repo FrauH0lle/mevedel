@@ -72,6 +72,128 @@
 ;;
 ;;; Enqueue order + head render
 
+(mevedel-deftest mevedel-permission-queue-validate-approval ()
+  ,test
+  (test)
+  :doc "exact directory writes cannot settle or leave the queue as approved"
+  (let* ((root (make-temp-file "mevedel-grant-approval-" t))
+         (session (mevedel-session--create
+                   :permission-mode 'ask :sandbox-mode 'required))
+         (selection (list (list (list :path root :access 'write))))
+         received)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                   #'ignore))
+          (mevedel-permission--enqueue
+           (list :kind 'sandbox :tool-name "Bash" :origin "/root"
+                 :resource-selection-cell selection
+                 :callback (lambda (outcome) (push outcome received)))
+           session)
+          (let ((entry (car (mevedel-session-permission-queue session))))
+            (dolist (outcome '(allow-once allow-session always-allow))
+              (should-error
+               (mevedel-permission-queue-validate-approval entry outcome)
+               :type 'user-error)
+              (should-error
+               (mevedel-permission-queue--on-head-outcome entry outcome)
+               :type 'user-error)
+              (should (eq entry (car (mevedel-session-permission-queue session))))
+              (should-not received))
+            (setcar selection (list (list :path root :access 'write :recursive t)))
+            (mevedel-permission-queue-validate-approval entry 'allow-once)
+            (mevedel-permission-queue--on-head-outcome entry 'allow-once)
+            (should (equal '(allow-once) received))
+            (should-not (mevedel-session-permission-queue session))))
+      (delete-directory root t)))
+  :doc "unconfined Bash approves exact directory writes without widening them"
+  (dolist (sandbox-mode '(off best-effort))
+    (let* ((root (make-temp-file "mevedel-unconfined-approval-" t))
+           (mevedel-permission-rules nil)
+           (mevedel-permission-reviewer 'user)
+           (session (mevedel-session--create
+                     :permission-mode 'ask :sandbox-mode sandbox-mode
+                     :authority-mode 'pid-lock :working-directory root))
+           entry allowed)
+      (unwind-protect
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _payload callback &rest _) (funcall callback nil)))
+                      ((symbol-function 'mevedel-sandbox-probe)
+                       (lambda (&rest _) '(:available nil :reason "Test unavailable")))
+                      ((symbol-function 'mevedel-permission-queue--render-entry)
+                       (lambda (item) (setq entry item))))
+              (mevedel-tool-permission-step
+               (list :tool (mevedel-tool-ensure "Bash")
+                     :args (list :command "touch example"
+                                 :sandbox_permissions "with_additional_permissions"
+                                 :justification "Write the requested example directory"
+                                 :additional_permissions
+                                 (list :file_system (list :write (vector root))))
+                     :session session :buffer (current-buffer))
+               (lambda (_) (setq allowed t))
+               (lambda (&rest args) (ert-fail args)))
+              (should entry)
+              (mevedel-permission-queue--on-head-outcome entry 'allow-once)
+              (should allowed)
+              (should-not (plist-get
+                           (car (car (plist-get entry :resource-selection-cell)))
+                           :recursive))))
+        (mevedel-permission-queue-abort-all session)
+        (delete-directory root t))))
+  :doc "denial, native and live directory access need no recursive extent"
+  (let* ((root (make-temp-file "mevedel-grant-native-" t))
+         (entry (list :kind 'generic :resource-selection-cell
+                      (list (list (list :path root :access 'write))))))
+    (unwind-protect
+        (progn
+          (mevedel-permission-queue-validate-approval entry 'allow-once)
+          (plist-put entry :kind 'eval)
+          (mevedel-permission-queue-validate-approval entry 'allow-once)
+          (plist-put entry :kind 'sandbox)
+          (mevedel-permission-queue-validate-approval entry 'deny-once))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-permission-queue--pop ()
+  ,test
+  (test)
+  :doc "yielding validation preserves new siblings and respects a replaced head"
+  (dolist (cancel-head '(nil t))
+    (let* ((session (test-pq--make-session))
+           (root (make-temp-file "mevedel-queue-validation-" t))
+           (mevedel-permission-reviewer 'user)
+           (directory-p (symbol-function 'file-directory-p))
+           first second outcomes yielded)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry) #'ignore))
+            (mevedel-permission--enqueue
+             (list :kind 'sandbox :tool-name "Bash" :origin "/root"
+                   :resource-selection-cell (list (list (list :path root :access 'write)))
+                   :callback (lambda (value) (push (cons 'first value) outcomes))) session)
+            (setq first (car (mevedel-session-permission-queue session)))
+            (cl-letf (((symbol-function 'file-directory-p)
+                       (lambda (path)
+                         (when (and (equal path root) (not yielded))
+                           (setq yielded t)
+                           (when cancel-head
+                             (mevedel-permission-queue--on-head-outcome first 'aborted))
+                           (mevedel-permission--enqueue
+                            (list :kind 'generic :tool-name "Read" :origin "/root"
+                                  :callback (lambda (value) (push (cons 'second value) outcomes)))
+                            session)
+                           (setq second (car (last (mevedel-session-permission-queue session)))))
+                         (funcall directory-p path))))
+              ;; No mount restriction, but checking the actual directory still yields.
+              (setf (mevedel-session-sandbox-mode session) 'off)
+              (mevedel-permission-queue--on-head-outcome first 'allow-once))
+            (should yielded)
+            (should (equal (list second) (mevedel-session-permission-queue session)))
+            (should (equal (list (cons 'first (if cancel-head 'aborted 'allow-once))) outcomes))
+            (mevedel-permission-queue--on-head-outcome second 'deny-once)
+            (should (= 2 (length outcomes))))
+        (mevedel-permission-queue-abort-all session)
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-permission--enqueue
   (:quiet t :doc "FIFO permission queue contract")
   ,test
@@ -856,7 +978,7 @@
          (missing (list :path other :access 'read))
          (allow '(("Bash" :pattern "make *" :action allow)))
          (mevedel-permission-rules nil)
-         (mevedel-permission-guardian nil))
+         (mevedel-permission-reviewer 'user))
     (unwind-protect
         (progn
           (dolist (path (list source other))
@@ -870,11 +992,11 @@
                   ,allow (:kind bash :command "make test"
                           :requested-additional-permissions
                           (:file-system (,missing))) ask)
-                 ("covered resources do not cover an uncertain operation"
+                 ("confined edits authorizes an operation with covered resources"
                   nil (:kind sandbox :tool-name "Bash" :detail "make test"
                        :sandbox-permissions additive
                        :requested-additional-permissions (:file-system (,grant))
-                       :missing-additional-permissions (:file-system (,grant))) ask)
+                       :missing-additional-permissions (:file-system (,grant))) allow)
                  ("recheck includes a previously granted but now missing resource"
                   ,allow (:kind sandbox :tool-name "Bash" :detail "make test"
                           :sandbox-permissions additive
@@ -1493,12 +1615,12 @@
                          :path "/root/reader" :agent-id "/root/reader"
                          :parent-session session :parent-data-buffer data-buf
                          :buffer agent-buf)))
-          (setf (mevedel-session-permission-mode session) 'full-auto)
+          (setf (mevedel-session-permission-mode session) 'ask)
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
             (insert draft))
           (let ((mevedel-permission-rules nil)
-                (mevedel-permission-mode 'full-auto)
+                (mevedel-permission-mode 'ask)
                 (hook
                  (lambda (event)
                    (when (equal second
@@ -1552,7 +1674,7 @@
                             (overlay-start ov) (overlay-end ov))))
                   (let ((body (buffer-substring-no-properties
                                (overlay-start ov) (overlay-end ov))))
-                    (should (string-match-p "admission: full-auto" body))
+                    (should (string-match-p "admission: ask" body))
                     (should (string-match-p "outside the allowed roots" body)))
                   (goto-char (overlay-start ov))
                   (call-interactively
@@ -1603,7 +1725,7 @@
                   ;; The same documentation tree covers an explicitly requested
                   ;; confined decompressor after native reading and searching.
                   (let ((compressed (file-name-concat tree "manual.gz"))
-                        (mevedel-permission-guardian nil)
+                        (mevedel-permission-reviewer 'user)
                         decompressed)
                     (with-temp-buffer
                       (set-buffer-multibyte nil)
@@ -1612,7 +1734,7 @@
                         (should (zerop (process-file "gzip" nil t nil "-c" first)))
                         (write-region (point-min) (point-max) compressed nil 'silent)))
                     (mevedel-tool-exec--register)
-                    (setf (mevedel-session-permission-mode session) 'full-auto
+                    (setf (mevedel-session-permission-mode session) 'edits
                           (mevedel-session-sandbox-mode session) 'required)
                     (with-current-buffer data-buf
                       (mevedel-pipeline-run-tool
@@ -1667,8 +1789,8 @@
                                          (eq (plist-get event :event) 'permission-resolved)))
                                   events))
                        (scope (car (plist-get resolved :selected-resources))))
-                  (should (eq 'full-auto (plist-get resolved :permission-mode-base)))
-                  (should (eq 'full-auto (plist-get resolved :permission-mode-effective)))
+                  (should (eq 'ask (plist-get resolved :permission-mode-base)))
+                  (should (eq 'ask (plist-get resolved :permission-mode-effective)))
                   (should (equal (if tree-p tree first) (plist-get scope :path)))
                   (should (eq tree-p (plist-get scope :recursive)))
                   (should (eq (pcase approval
@@ -1748,7 +1870,7 @@
                              (setq-local temporary-file-directory root))
                            (mevedel-view--setup view-buf data-buf)
                            (let ((mevedel-permission-rules nil)
-                                 (mevedel-permission-guardian nil))
+                                 (mevedel-permission-reviewer 'user))
                              (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                                         (lambda () 'ask)))
                                       (dotimes (index (if remember-p 4 1))
@@ -1798,8 +1920,12 @@
                                            (mevedel-tool-get "Bash")
                                            (lambda (value) (setq result value))
                                            (list :command script)))
-                                        (should-not result)
-                                        (should (= 1 (length (mevedel-session-permission-queue session))))
+                                        (let ((deadline (+ (float-time) 15)))
+                                          (while (and (not result) (< (float-time) deadline))
+                                            (accept-process-output nil 0.01)))
+                                        (should result)
+                                        (should-not (string-match-p "confined validation complete" result))
+                                        (should-not (mevedel-session-permission-queue session))
                                         (should-not (file-exists-p (file-name-concat cache "run-2" "value")))))))
                        (mevedel-permission-queue-abort-all session)
                        (mevedel-execution-teardown-session session)

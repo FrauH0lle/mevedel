@@ -730,6 +730,7 @@ Created at request start, cleared in the termination handler."
   one-shot-mutations-p ; non-read-only tools require one-time approval
   ephemeral-p       ; suppress request-owned durable conversation artifacts
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
+  cancelled-p       ; terminal teardown has begun; later registrations cancel immediately
   started-at        ; wall-clock time when the request began
   active-work-pause-started-at ; wall-clock time when the current pause began
   (active-work-pause-duration 0) ; accumulated completed pause seconds

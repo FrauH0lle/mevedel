@@ -8,7 +8,7 @@ System prompts use ordered profiles of reusable named components and inline
 file/text components. A named component can read a file, supply literal text,
 or produce dynamic content. Workspace-aware profiles explicitly include
 workspace configuration and environment; validation rejects missing required
-components and duplicate names. Main, agent, Bash guardian, and Buddy prompts
+components and duplicate names. Main, agent, approval reviewer, and Buddy prompts
 use this mechanism. The isolated context-summary generator owns a fixed prompt.
 
 Role, tone, shared task policy, and memory use/save policy are separate
@@ -25,16 +25,15 @@ and Goal observations are delivered according to
 profile's selection. Authored inline components remain in the system prompt.
 Changing a retained role contract requires a new agent.
 
-The Bash guardian receives its dedicated risk policy first, then scoped
-`AGENTS.md`/`AGENTS.local.md` and environment data. Command text and deterministic
-classifier facts are separate untrusted user evidence. Workspace context can
-explain a documented workflow but cannot override risk criteria, advisory-only
-authority, or the response contract. The guardian excludes the coding-assistant
-prompt, ambient conversation, tools, memory, and skills.
+The approval reviewer receives only its trusted approval policy as a system
+component. Actual root user turns, Goal objective, operation, target and authority
+facts arrive as quoted evidence. It excludes tools, ambient conversation, memory,
+skills and workspace instructions from the trusted system prompt. Its profile
+is `permission-review`, with `:workspace-aware nil`.
 
 The [architecture manual](../architecture.md) describes composition and retained
-instruction delivery. The [guardian manual](../guardian-prompts.md) owns risk
-classification and examples.
+instruction delivery. The [guardian manual](../guardian-prompts.md) owns approval
+decisions, evidence bounds and examples.
 
 ## Rationale and consequences
 
@@ -82,3 +81,9 @@ established for every model.
   those questions better. The pedagogical purpose moved to optional Buddy notes
   that can be ignored without interaction. Tutor profiles, presets, components,
   and tools were removed; ordered composition remains.
+
+- **Delegated approval replaced advisory risk annotation in September 2026.**
+  The accepted friction reduction requires actual user intent and the complete
+  capability request. Because the reviewer can now approve an invocation,
+  workspace instructions were removed from trusted system policy; evidence is
+  supplied separately. The `guardian` workload is retained.

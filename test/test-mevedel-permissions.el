@@ -226,13 +226,53 @@
   (let ((mevedel-permission-rules '(("Edit" :action deny)))
         (mevedel-protected-paths nil))
     (should (eq (mevedel-check-permission "Edit" :mode 'full-auto) 'deny)))
-  :doc "protected path forces ask even in full-auto"
+  :doc "full-auto authorizes protected paths without resource grants"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should (eq (mevedel-check-permission "Edit"
                   :path "/repo/.git/config"
                   :mode 'full-auto)
-                'ask)))
+                'allow)))
+  :doc "full-auto ignores ordinary ask rules and tool-slot asks"
+  (let ((mevedel-permission-rules '(("Read" :action ask)))
+        (mevedel-protected-paths '(("**/.ssh/**" . inaccessible)))
+        (tool (mevedel-tool--create
+               :name "Read" :read-only-p t
+               :check-permission (lambda (_tool _input) 'ask))))
+    (should (eq 'allow
+                (mevedel-check-permission
+                 "Read" :tool-struct tool :mode 'full-auto
+                 :path "/outside/.ssh/key" :workspace-root "/project"))))
+  :doc "edits reads share the sandbox boundary while protected writes ask"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '(("**/.git/**" . read-only)
+                                   ("**/.ssh/**" . inaccessible)))
+        (read-tool (mevedel-tool--create :name "Read" :read-only-p t))
+        (edit-tool (mevedel-tool--create :name "Edit" :groups '(edit))))
+    (dolist (path '("/outside/manual.el" "/project/.git/config"))
+      (should (eq 'allow
+                  (mevedel-check-permission
+                   "Read" :tool-struct read-tool :mode 'edits
+                   :path path :workspace-root "/project"))))
+    (should (eq 'ask
+                (mevedel-check-permission
+                 "Read" :tool-struct read-tool :mode 'edits
+                 :path "/outside/.ssh/key" :workspace-root "/project")))
+    (dolist (path '("/outside/manual.el" "/project/.git/config"))
+      (should (eq 'ask
+                  (mevedel-check-permission
+                   "Edit" :tool-struct edit-tool :mode 'edits
+                   :path path :workspace-root "/project"))))
+    (should (eq 'deny
+                (mevedel-check-permission
+                 "Read" :tool-struct read-tool :mode 'edits
+                 :path "/outside/manual.el" :workspace-root "/project"
+                 :session-rules '(("Read" :path "/outside/**" :action deny)))))
+    (should (eq 'ask
+                (mevedel-check-permission
+                 "Read" :tool-struct read-tool :mode 'edits
+                 :path "/outside/manual.el" :workspace-root "/project"
+                 :session-rules '(("Read" :action ask))))))
   :doc "tool check-permission returning allow is respected"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -254,7 +294,7 @@
     (should
      (eq 'ask
          (mevedel-check-permission
-          "MockTool" :tool-struct mock-tool :mode 'full-auto
+          "MockTool" :tool-struct mock-tool :mode 'edits
           :one-shot-mutations-p t))))
   :doc "one-shot policy keeps emergency controls automatic"
   (let ((mevedel-permission-rules nil)
@@ -332,12 +372,12 @@
                   'allow)))
     (let ((mevedel-permission-rules
            '(("ApplyPatch" :action ask))))
-      (dolist (mode '(ask edits full-auto))
+      (dolist (mode '(ask edits))
         (should (eq (mevedel-check-permission
                      "ApplyPatch" :tool-struct tool :path "/project/a"
                      :mode mode :workspace-root "/project")
                     'ask)))))
-  :doc "one-shot reviewed edits avoid a duplicate prompt without bypassing policy"
+  :doc "full-auto reviewed edits bypass resource prompts but retain hard denies"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
         (tool (mevedel-tool--create
@@ -349,7 +389,7 @@
           :mode 'full-auto :workspace-root "/project"
           :one-shot-mutations-p t)))
     (should
-     (eq 'ask
+     (eq 'allow
          (mevedel-check-permission
           "ApplyPatch" :tool-struct tool :path "/outside/a"
           :mode 'full-auto :workspace-root "/project"
@@ -450,16 +490,16 @@
                   :tool-struct mock-tool
                   :mode 'ask)
                 'allow)))
-  :doc "one-shot mutation policy overrides full-auto and inherited allows"
+  :doc "full-auto authorizes one-shot mutations despite inherited ask rules"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
         (edit-tool (mevedel-tool--create :name "Edit" :read-only-p nil))
         (read-tool (mevedel-tool--create :name "Read" :read-only-p t)))
     (should (eq (mevedel-check-permission
                  "Edit" :tool-struct edit-tool
-                 :session-rules '(("Edit" :action allow))
+                 :session-rules '(("Edit" :action ask))
                  :mode 'full-auto :one-shot-mutations-p t)
-                'ask))
+                'allow))
     (should (eq (mevedel-check-permission
                  "Read" :tool-struct read-tool
                  :session-rules '(("Read" :action allow))
@@ -488,7 +528,7 @@
     (should (eq (mevedel-check-permission "Edit"
                   :tool-struct mock-tool
                   :content '(:file_path "/repo/.git/config")
-                  :mode 'full-auto)
+                  :mode 'edits)
                 'ask)))
   :doc "path inside workspace root is implicitly allowed"
   (let ((mevedel-permission-rules nil)

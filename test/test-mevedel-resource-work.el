@@ -182,7 +182,7 @@
               (let* ((mevedel-protected-paths (list (cons physical 'inaccessible)))
                      (facts (mevedel-permission--preflight
                              "ApplyPatch" :tool-struct (mevedel-tool-ensure "ApplyPatch")
-                             :path physical :workspace-root root :mode 'full-auto)))
+                             :path physical :workspace-root root :mode 'edits)))
                 (should (plist-get facts :protected-path-p))
                 (should (eq 'ask (plist-get (mevedel-permission--resource-decision facts)
                                            :outcome))))
@@ -220,7 +220,7 @@
          (workspace (mevedel-workspace--create :root root))
          (mevedel-memory-dirs '(".mevedel/memory"))
          (mevedel-permission-rules nil)
-         (mevedel-permission-guardian nil)
+         (mevedel-permission-reviewer 'user)
          (mevedel-resource-attempts-cell (list nil)))
     (unwind-protect
         (with-temp-buffer

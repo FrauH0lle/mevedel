@@ -238,8 +238,8 @@
   (:before-each (mevedel-tool-introspect--register))
   ,test
   (test)
-  :doc "variable_value waits for approval even in full-auto, then reads the global value"
-  (let ((session (mevedel-session--create :name "introspection" :permission-mode 'full-auto))
+  :doc "variable_value waits for approval in Edits, then reads the global value"
+  (let ((session (mevedel-session--create :name "introspection" :permission-mode 'edits))
         (mevedel-permission-rules nil)
         entry result)
     (with-temp-buffer

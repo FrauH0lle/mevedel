@@ -2,10 +2,11 @@
 
 Status: accepted
 
-New sessions default to `best-effort` sandbox mode because Bubblewrap is not a
+New sessions default to a `best-effort` sandbox preference because Bubblewrap is not a
 guaranteed dependency or platform capability. This preserves usable child
-execution while naming and disclosing the fail-open behavior; users who require
-a confinement guarantee select `required` globally or per session.
+execution in Ask while naming and disclosing the fail-open behavior. Ask uses
+the preference; Edits requires confinement regardless of it, and Full Access
+runs unrestricted. Users may also select `required` for Ask globally or per session.
 `Best-effort` selects disclosed direct execution without another prompt when
 the initial backend probe is unavailable. A failed confined preparation or
 launch returns its refusal without an unrestricted replacement, as decided in
@@ -21,5 +22,15 @@ item.
 
 Once the selected execution boundary is already unrestricted, an additive
 network request changes no capability and therefore creates no authority
-prompt. Exact identified filesystem resources still require independent
-resource authorization.
+prompt. In Ask, exact identified filesystem resources still require independent
+resource authorization. Full Access bypasses ordinary resource asks, while
+explicit denies, Plan, validation and session ownership remain authoritative.
+
+## Decision history
+
+Originally all permission modes used the sandbox preference and retained
+independent resource approval even when unrestricted. Mode-derived execution
+authority replaced that arrangement because advisory safety classification did
+not provide a containment boundary: Edits now means confined execution and
+Full Access means unrestricted execution. Ask retains the portable best-effort
+default; no mode silently retries a failed confined launch without confinement.

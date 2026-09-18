@@ -7,8 +7,14 @@ network access is still required.  Approval grants network only for that
 invocation while retaining filesystem and process confinement; it does not
 imply full unsandboxed execution.  This avoids speculative network-intent
 classification and automatic replay while limiting exfiltration by default.
-When optional confinement is unavailable and sandbox mode `best-effort` falls back to
-direct execution, Mevedel cannot enforce this boundary and must disclose that
-network is unrestricted.  Network-only escalation asks in `ask` and `edits`
-unless pre-authorized, and is automatic in `full-auto`; protected-path access
-continues to require confirmation in every mode.
+Edits requires real confinement and refuses an unavailable backend. Ask's
+configured `best-effort` may select disclosed direct execution on an unavailable
+initial probe. Network additions require authority in Ask and Edits, potentially
+through the optional invocation reviewer. Full Access disables network and
+filesystem confinement and bypasses those prompts.
+
+## Decision history
+
+The initial decision retained protected-resource prompts in every mode. Repeated
+approval-only session friction and the user's explicit Full Access requirement
+changed that scope in September 2026; default isolation still governs Edits.

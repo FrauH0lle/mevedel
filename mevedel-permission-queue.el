@@ -29,10 +29,30 @@
 ;; `mevedel-agents'
 (defvar mevedel--agent-invocation)
 
+
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
 ;; `mevedel-permission-prompt'
 (declare-function mevedel-permission-prompt-render
                   "mevedel-permission-prompt" (entry origin cont count))
 (autoload 'mevedel-permission-prompt-render "mevedel-permission-prompt")
+
+;; `mevedel-permission-review'
+(declare-function mevedel-permission-review-cancel
+                  "mevedel-permission-review" (session &optional request-id reason))
+(declare-function mevedel-permission-review-start
+                  "mevedel-permission-review" (entry fallback))
+(autoload 'mevedel-permission-review-start "mevedel-permission-review")
+(defvar mevedel-permission-reviewer 'user)
+
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-rules-resource-granted-p
+                  "mevedel-permission-rules" (path access grants &optional recursive))
+(autoload 'mevedel-permission-rules-resource-granted-p "mevedel-permission-rules")
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
@@ -48,6 +68,15 @@
 (autoload 'mevedel-permission--invocation-context "mevedel-permissions")
 (autoload 'mevedel-permission--normalize-outcome "mevedel-permissions")
 
+;; `mevedel-sandbox'
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session permission-mode))
+(declare-function mevedel-sandbox-pending-facts
+                  "mevedel-sandbox"
+                  (&optional additional-permissions sandbox-permissions mode workdir))
+(autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
+(autoload 'mevedel-sandbox-pending-facts "mevedel-sandbox")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
@@ -55,6 +84,7 @@
   "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-cancelled-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -70,8 +100,11 @@
 (autoload 'mevedel-telemetry-record-audit "mevedel-telemetry")
 
 ;; `mevedel-tool-exec-permission'
+(declare-function mevedel-tool-exec-permission-eval-mode
+                  "mevedel-tool-exec-permission" (args))
 (declare-function mevedel-tool-exec-permission-reevaluate
                   "mevedel-tool-exec-permission" (entry context))
+(autoload 'mevedel-tool-exec-permission-eval-mode "mevedel-tool-exec-permission")
 (autoload 'mevedel-tool-exec-permission-reevaluate "mevedel-tool-exec-permission")
 
 ;; `mevedel-utilities'
@@ -245,12 +278,38 @@ Return non-nil when this call delivered or consumed the outcome."
                          :permission-id :permission-mode-base :permission-mode-effective
                          :permission-via :approval-lifetime :eval-mode
                          :outcome :resolved :settlement-source
+                         :review-source :review-seconds
                          :sandbox-permissions))
             (when (plist-member diagnostic key)
               (setq safe (plist-put safe key (plist-get diagnostic key)))))
           (apply #'mevedel-telemetry-record-audit sess event safe))))))
 
 (defun mevedel-permission--enqueue (entry &optional session)
+  "Resolve automatic review for ENTRY before human admission to SESSION."
+  (let* ((session (or session (mevedel-queue--current-session)))
+         (entry (plist-put (copy-sequence entry) :session session))
+         (mode (mevedel-permission-mode-effective session (plist-get entry :data-buffer))))
+    (setq entry
+          (plist-put entry :permission-id
+                     (or (plist-get entry :permission-id)
+                         (format "%s-%s" (format-time-string "%s%N")
+                                 (gensym "permission-")))))
+    (cond
+     ((when-let* ((request (plist-get entry :request)))
+        (mevedel-request-cancelled-p request))
+      (mevedel-permission-queue--safe-settle entry 'aborted 'cancelled))
+     ((and session (eq mode 'full-auto))
+      (mevedel-permission-queue--safe-settle
+       entry
+       (pcase (mevedel-permission-queue--reevaluate entry)
+         ('allow 'allow-once) ('deny 'deny-once) (_ 'aborted))
+       'mode))
+     ((and session (eq mevedel-permission-reviewer 'auto))
+      (mevedel-permission-review-start
+       entry (lambda () (mevedel-permission-queue--admit entry session))))
+     (t (mevedel-permission-queue--admit entry session)))))
+
+(defun mevedel-permission-queue--admit (entry &optional session)
   "Append ENTRY (a plist) to the session permission queue.
 If the queue was empty, render ENTRY as the visible head immediately.
 
@@ -291,8 +350,7 @@ ENTRY plist keys:
   (let ((session (or session (mevedel-queue--current-session))))
     (setq entry
           (append
-           (list :permission-id (format "%s-%s" (format-time-string "%s%N")
-                                        (gensym "permission-"))
+           (list :permission-id (plist-get entry :permission-id)
                  :permission-mode-base
                  (and session (mevedel-session-permission-mode session)))
            entry))
@@ -369,6 +427,45 @@ ENTRY plist keys:
           (_ 'aborted))
         'render-failed)))))
 
+(defun mevedel-permission-queue-validate-approval (entry outcome)
+  "Reject an unrepresentable child directory grant in ENTRY's OUTCOME.
+Validation precedes settlement and persistence.  Native, live Eval and
+unconfined access need no child mount.  A covering tree grant may
+subsume an exact grant, but this function never broadens selected authority."
+  (when (and (memq outcome '(allow allow-once allow-session always-allow))
+             (memq (plist-get entry :kind) '(bash eval sandbox))
+             (not (and (eq (plist-get entry :kind) 'eval)
+                       (eq (mevedel-tool-exec-permission-eval-mode
+                            (or (plist-get entry :args)
+                                (list :mode (plist-get entry :mode))))
+                           'live))))
+    (let ((session (plist-get entry :session))
+          (grants (or (car (plist-get entry :resource-selection-cell))
+                      (plist-get (plist-get entry :requested-additional-permissions)
+                                 :file-system))))
+      (dolist (grant grants)
+        (let ((path (plist-get grant :path)))
+          (when (and (eq (plist-get grant :access) 'write)
+                     (not (plist-get grant :recursive))
+                     (file-directory-p path)
+                     (not (mevedel-permission-rules-resource-granted-p
+                           path 'write grants t))
+                     (memq
+                      (plist-get
+                       (mevedel-sandbox-pending-facts
+                        nil (plist-get entry :sandbox-permissions)
+                        (mevedel-sandbox-mode-effective
+                         session (mevedel-permission-mode-effective
+                                  session (plist-get entry :data-buffer)))
+                        (or (plist-get entry :execution-directory)
+                            (and session (mevedel-session-working-directory session))
+                            default-directory))
+                       :sandbox)
+                      '(bubblewrap refused)))
+            (user-error
+             "Exact directory writes cannot be confined: %s; select directory-tree scope before approving"
+             path)))))))
+
 (defun mevedel-permission-queue--pop (entry outcome &optional phase)
   "Settle queue head ENTRY with OUTCOME and render the next head."
   (let* ((session (plist-get entry :session))
@@ -376,6 +473,7 @@ ENTRY plist keys:
          (head (car queue)))
     (cond
      ((not session)
+      (mevedel-permission-queue-validate-approval entry outcome)
       (mevedel-permission-queue--safe-settle entry outcome (or phase 'pop)))
      ((not (or (eq entry head)
                (mevedel-permission-queue--same-interaction-entry-p
@@ -385,16 +483,21 @@ ENTRY plist keys:
        "permission-queue: stale queue entry settlement ignored"))
      (t
       (setq entry head)
-      (mevedel-permission-queue--set (cdr queue) session)
-      (when (mevedel-permission-queue--safe-settle entry outcome (or phase 'pop))
-        (when (memq outcome '(allow-session deny-session always-allow))
-          (condition-case err
-              (mevedel-permission-queue--coalesce outcome session)
-            (error
-             (mevedel--warn-once
-              'permission-queue-coalesce
-              "permission-queue: coalesce error: %S" err))))
-        (mevedel-permission-queue--render-head session))))))
+      (mevedel-permission-queue-validate-approval entry outcome)
+      ;; Directory and sandbox validation can yield to cancellation or enqueue.
+      ;; Only remove the validated head, from the queue that exists now.
+      (setq queue (mevedel-permission-queue--get session))
+      (when (eq entry (car queue))
+        (mevedel-permission-queue--set (cdr queue) session)
+        (when (mevedel-permission-queue--safe-settle entry outcome (or phase 'pop))
+          (when (memq outcome '(allow-session deny-session always-allow))
+            (condition-case err
+                (mevedel-permission-queue--coalesce outcome session)
+              (error
+               (mevedel--warn-once
+                'permission-queue-coalesce
+                "permission-queue: coalesce error: %S" err))))
+          (mevedel-permission-queue--render-head session)))))))
 
 (defun mevedel-permission-queue--on-head-outcome (entry outcome)
   "Settle ENTRY with OUTCOME, then advance ENTRY's session queue.
@@ -486,6 +589,7 @@ cannot be cleared by a remembered sibling approval."
                  :invocation (plist-get entry :invocation)
                  :args (plist-get entry :args)
                  :one-shot-mutations-p (plist-get entry :once-only)
+                 :patch-session-only-p (plist-get entry :patch-session-only-p)
                  :path (and (eq spec-key :path) spec-value)
                  :pattern (and (eq spec-key :pattern) spec-value)
                  :domain (and (eq spec-key :domain) spec-value)
@@ -495,14 +599,15 @@ cannot be cleared by a remembered sibling approval."
           (when-let* ((access (plist-get entry :resource-access)))
             (setq context (plist-put context :resource-access access)))
           (let ((resolved
-                 (pcase kind
-                   ('generic
+                 (cond
+                   ((member tool-name '("Bash" "Eval"))
+                    (mevedel-tool-exec-permission-reevaluate entry context))
+                   ((eq kind 'generic)
                     (apply #'mevedel-check-permission tool-name
                            (mevedel-permission--checker-args context)))
-                   ((or 'bash 'eval 'sandbox)
-                    (mevedel-tool-exec-permission-reevaluate entry context))
-                   (_ 'ask))))
+                   (t 'ask))))
             (if (and (eq resolved 'allow)
+                     (not (eq (plist-get context :mode) 'full-auto))
                      (or (memq (plist-get entry :permission-via)
                                '(pre-tool-hook permission-request-hook))
                          (plist-get entry :once-only)))
@@ -516,6 +621,8 @@ Called from `mevedel-abort' / request-cancel-fn."
   (let* ((session (or session (mevedel-queue--current-session)))
          (queue (and session (mevedel-permission-queue--get session))))
     (when session
+      (when (fboundp 'mevedel-permission-review-cancel)
+        (mevedel-permission-review-cancel session))
       (mevedel-permission-queue--set nil session))
     (dolist (entry queue)
       (mevedel-permission-queue--safe-settle entry 'aborted 'abort))))
@@ -531,6 +638,8 @@ sweeping."
            (queue (and session (mevedel-permission-queue--get session)))
            (head-before (car queue))
            kept swept)
+      (when (fboundp 'mevedel-permission-review-cancel)
+        (mevedel-permission-review-cancel session request-id))
       (dolist (entry queue)
         (if (equal (plist-get entry :request-id) request-id)
             (push entry swept)

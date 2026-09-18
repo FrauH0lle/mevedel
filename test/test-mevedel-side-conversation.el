@@ -928,7 +928,7 @@
          side-view side-data side-session fsm result
          (callback-count 0)
          (provider-aborts 0))
-    (setf (mevedel-session-permission-mode session) 'full-auto
+    (setf (mevedel-session-permission-mode session) 'ask
           (mevedel-session-sandbox-mode session) 'off)
     (unwind-protect
         (mevedel-view-test--with-buffers
@@ -955,7 +955,7 @@
                      :state 'TOOL :info (list :buffer side-data)))
           (with-current-buffer side-data
             (mevedel-side-conversation--handle-wait fsm)
-            (let ((mevedel-permission-guardian nil))
+            (let ((mevedel-permission-reviewer 'user))
               (mevedel-pipeline-run-tool
                (mevedel-tool-ensure "Bash")
                (lambda (value)
@@ -999,7 +999,7 @@
          (mevedel-execution-process--child-kill-delay 0.05)
          side-view side-data side-session fsm result pid)
     (skip-unless (not (eq system-type 'windows-nt)))
-    (setf (mevedel-session-permission-mode session) 'full-auto
+    (setf (mevedel-session-permission-mode session) 'ask
           (mevedel-session-sandbox-mode session) 'off)
     (unwind-protect
         (mevedel-view-test--with-buffers
@@ -1026,7 +1026,7 @@
                      :state 'TOOL :info (list :buffer side-data)))
           (with-current-buffer side-data
             (mevedel-side-conversation--handle-wait fsm)
-            (let ((mevedel-permission-guardian nil))
+            (let ((mevedel-permission-reviewer 'user))
               (mevedel-pipeline-run-tool
                (mevedel-tool-ensure "Bash")
                (lambda (value) (setq result value))
@@ -1080,7 +1080,7 @@
         (mevedel-execution-teardown-session side-session))
       (when (file-directory-p root)
         (delete-directory root t))))
-  :doc "Full Auto Bash mutation still allows once without storing authority"
+  :doc "Ask-mode Bash mutation still allows once without storing authority"
   (let* ((root (make-temp-file "mevedel-btw-bash-once-" t))
          (target (file-name-concat root "approved.txt"))
          (workspace
@@ -1088,7 +1088,7 @@
            :type 'file :id root :root root :name "btw-bash-once"))
          (session (mevedel-session-create "main" workspace root))
          side-view side-data side-session fsm result)
-    (setf (mevedel-session-permission-mode session) 'full-auto
+    (setf (mevedel-session-permission-mode session) 'ask
           (mevedel-session-permission-rules session)
           '(("Bash" :action allow))
           (mevedel-session-sandbox-mode session) 'off)
@@ -1117,7 +1117,7 @@
                      :state 'TOOL :info (list :buffer side-data)))
           (with-current-buffer side-data
             (mevedel-side-conversation--handle-wait fsm)
-            (let ((mevedel-permission-guardian nil))
+            (let ((mevedel-permission-reviewer 'user))
               (mevedel-pipeline-run-tool
                (mevedel-tool-ensure "Bash")
                (lambda (value) (setq result value))
@@ -1173,93 +1173,103 @@
         (mevedel-execution-teardown-session side-session))
       (when (file-directory-p root)
         (delete-directory root t))))
-  :doc "ApplyPatch reaches mandatory review despite inherited Full Auto"
-  (let* ((root (make-temp-file "mevedel-btw-patch-review-" t))
-         (path (file-name-concat root "target.txt"))
-         (workspace
-          (mevedel-workspace--create
-           :type 'file :id root :root root :name "btw-patch-review"
-           :file-cache (mevedel-test-file-cache-create)))
-         (session (mevedel-session-create "main" workspace root))
-         (patch
-          (string-join
-           '("*** Begin Patch"
-             "*** Update File: target.txt"
-             "@@"
-             "-before"
-             "+after"
-             "*** End Patch")
-           "\n"))
-         side-view side-data side-session fsm result)
-    (setf (mevedel-session-permission-mode session) 'full-auto
-          (mevedel-session-permission-rules session)
-          '(("ApplyPatch" :action allow)))
-    (unwind-protect
-        (progn
-          (with-temp-file path (insert "before\n"))
-          (mevedel-view-test--with-buffers
-            (with-current-buffer data-buf
-              (setq-local mevedel--workspace workspace
-                          mevedel--session session
-                          mevedel-permission-rules nil
-                          mevedel-protected-paths nil)
-              (insert "*** Parent prompt\n"
-                      (propertize "Parent answer\n" 'gptel 'response)))
-            (with-current-buffer view-buf
-              (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
-              (cl-letf (((symbol-function 'pop-to-buffer)
-                         (lambda (buffer &rest _)
-                           (setq side-view buffer))))
-                (mevedel-view-send)))
-            (setq side-data
-                  (buffer-local-value 'mevedel--data-buffer side-view)
-                  side-session
-                  (buffer-local-value 'mevedel--session side-data)
-                  fsm (gptel-make-fsm
-                       :state 'TOOL :info (list :buffer side-data)))
-            (with-current-buffer side-data
-              (mevedel-side-conversation--handle-wait fsm)
-              (mevedel-pipeline-run-tool
-               (mevedel-tool-ensure "ApplyPatch")
-               (lambda (value) (setq result value))
-               (list :patch patch)))
-            (should-not result)
-            (should-not (mevedel-session-permission-queue side-session))
-            (should
-             (equal "before\n"
-                    (with-temp-buffer
-                      (insert-file-contents path)
-                      (buffer-string))))
-            (with-current-buffer side-view
-              (let ((text
-                     (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker)))
-                (should-not (string-search "Permission Request" text))
-                (should (string-search "ApplyPatch ·" text))
-                (should (string-search "M target.txt" text))
-                (should (= 1 (length mevedel--prompt-overlays))))
-              (goto-char (point-min))
-              (search-forward "[ Apply 1 change in 1 file ]")
-              (backward-char 2)
-              (should (eq #'mevedel-patch-review-submit
-                          (key-binding (kbd "RET"))))
-              (mevedel-patch-review-submit))
-            (should (string-search "Applied patch" result))
-            (should
-             (equal "after\n"
-                    (with-temp-buffer
-                      (insert-file-contents path)
-                      (buffer-string))))
-            (with-current-buffer side-data
-              (mevedel-side-conversation--handle-terminal fsm))))
-      (when (buffer-live-p side-view)
-        (kill-buffer side-view))
-      (when side-session
-        (mevedel-execution-teardown-session side-session))
-      (when (file-directory-p root)
-        (delete-directory root t))))
+  :doc "ApplyPatch reviews in Edits and applies automatically in Full Access"
+  (dolist (mode '(edits full-auto))
+    (let* ((root (make-temp-file "mevedel-btw-patch-review-" t))
+           (path (file-name-concat root "target.txt"))
+           (workspace
+            (mevedel-workspace--create
+             :type 'file :id root :root root :name "btw-patch-review"
+             :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "main" workspace root))
+           (patch
+            (string-join
+             '("*** Begin Patch"
+               "*** Update File: target.txt"
+               "@@"
+               "-before"
+               "+after"
+               "*** End Patch")
+             "\n"))
+           side-view side-data side-session fsm result)
+      (setf (mevedel-session-permission-mode session) mode
+            (mevedel-session-permission-rules session)
+            '(("ApplyPatch" :action allow)))
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "before\n"))
+            (mevedel-view-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--workspace workspace
+                            mevedel--session session
+                            mevedel-permission-rules nil
+                            mevedel-protected-paths nil)
+                (insert "*** Parent prompt\n"
+                        (propertize "Parent answer\n" 'gptel 'response)))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session session)
+                (goto-char (mevedel-view--input-start))
+                (insert "/btw")
+                (cl-letf (((symbol-function 'pop-to-buffer)
+                           (lambda (buffer &rest _)
+                             (setq side-view buffer))))
+                  (mevedel-view-send)))
+              (setq side-data
+                    (buffer-local-value 'mevedel--data-buffer side-view)
+                    side-session
+                    (buffer-local-value 'mevedel--session side-data)
+                    fsm (gptel-make-fsm
+                         :state 'TOOL :info (list :buffer side-data)))
+              (with-current-buffer side-data
+                (mevedel-side-conversation--handle-wait fsm)
+                (mevedel-pipeline-run-tool
+                 (mevedel-tool-ensure "ApplyPatch")
+                 (lambda (value) (setq result value))
+                 (list :patch patch)))
+              (should-not (mevedel-session-permission-queue side-session))
+              (if (eq mode 'full-auto)
+                  (with-current-buffer side-view
+                    (should result)
+                    (should-not mevedel--prompt-overlays)
+                    (should-not
+                     (string-search
+                      "Permission Request"
+                      (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker))))
+                (should-not result)
+                (should
+                 (equal "before\n"
+                        (with-temp-buffer
+                          (insert-file-contents path)
+                          (buffer-string))))
+                (with-current-buffer side-view
+                  (let ((text
+                         (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))
+                    (should-not (string-search "Permission Request" text))
+                    (should (string-search "ApplyPatch ·" text))
+                    (should (string-search "M target.txt" text))
+                    (should (= 1 (length mevedel--prompt-overlays))))
+                  (goto-char (point-min))
+                  (search-forward "[ Apply 1 change in 1 file ]")
+                  (backward-char 2)
+                  (should (eq #'mevedel-patch-review-submit
+                              (key-binding (kbd "RET"))))
+                  (mevedel-patch-review-submit)))
+              (should (string-search "Applied patch" result))
+              (should
+               (equal "after\n"
+                      (with-temp-buffer
+                        (insert-file-contents path)
+                        (buffer-string))))
+              (with-current-buffer side-data
+                (mevedel-side-conversation--handle-terminal fsm))))
+        (when (buffer-live-p side-view)
+          (kill-buffer side-view))
+        (when side-session
+          (mevedel-execution-teardown-session side-session))
+        (when (file-directory-p root)
+          (delete-directory root t)))))
   :doc "settles a side request when an earlier terminal handler fails"
   (let* ((workspace
           (mevedel-workspace--create

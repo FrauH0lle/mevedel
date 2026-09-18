@@ -1,6 +1,6 @@
 # Confine protected paths by default
 
-Child-process confinement reinforces protected-path permission checks so
+In Ask and Edits, child-process confinement reinforces protected-path permission checks so
 indirect access cannot bypass shallow Bash operand analysis.  Project `.git`
 is read-only by default, preserving Git inspection while requiring additive
 write authority for mutation.  Other protected paths, including `~/.ssh` and
@@ -29,7 +29,17 @@ A read-only mount whose source has disappeared is skipped. Other confinement
 preparation or launch failures follow
 [ADR 0116](0116-return-failed-confined-launches-without-retry.md).
 
+Full Access deliberately removes these default protections. Explicit hard
+denies remain. Native Edits reads mirror the ordinary readable boundary and
+retain inaccessible credential masks; read-only protection does not prohibit
+inspection.
+
 ## Decision history
+
+The September 2026 permission audit found repeated outside-read approvals and
+the user explicitly chose Full Access semantics. Protected defaults therefore
+apply to Ask/Edits rather than silently limiting Full Access.
+
 
 A September 2026 unattended-session profile found protected glob discovery walking
 all of `/tmp` before every Bash launch. A transient helper tree containing `.git`

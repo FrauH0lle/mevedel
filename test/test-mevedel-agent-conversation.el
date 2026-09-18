@@ -501,7 +501,7 @@
 			        (buffer-local-value 'mevedel--session buffer))))
 			 (with-current-buffer nested-buf
 			   (should
-			    (eq 'required
+			    (eq 'off
 			        (mevedel-sandbox-mode-effective mevedel--session)))
 			   (should
 			    (eq 'deny

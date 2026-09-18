@@ -33,7 +33,10 @@
                   "mevedel-execution-target" (target))
 
 ;; `mevedel-sandbox'
-(declare-function mevedel-sandbox-probe "mevedel-sandbox" ())
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session permission-mode))
+(declare-function mevedel-sandbox-probe "mevedel-sandbox" (&optional workdir))
+(autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
 (autoload 'mevedel-sandbox-probe "mevedel-sandbox")
 
 ;; `mevedel-session-artifacts'
@@ -706,7 +709,9 @@ artifacts, or a nil commit when only provenance is unavailable."
   (let* ((directory (mevedel-session-working-directory session))
          (git (and directory (mevedel-telemetry--git-snapshot directory)))
          (gptel (mevedel-telemetry--library-snapshot 'gptel))
-         (sandbox (ignore-errors (mevedel-sandbox-probe))))
+         (mode (mevedel-sandbox-mode-effective session))
+         (sandbox (and (not (eq mode 'off))
+                       (ignore-errors (mevedel-sandbox-probe directory)))))
     (apply #'mevedel-telemetry-record
            session 'reproduction-environment
            :boundary boundary
@@ -715,7 +720,8 @@ artifacts, or a nil commit when only provenance is unavailable."
            :gptel-version (and (boundp 'gptel-version) gptel-version)
            :gptel-file-hash (plist-get gptel :file-hash)
            :gptel-commit (plist-get gptel :git-head)
-           :sandbox-mode (mevedel-session-sandbox-mode session)
+           :sandbox-mode mode
+           :sandbox-preference (mevedel-session-sandbox-mode session)
            :bubblewrap-available (and sandbox
                                        (plist-get sandbox :available))
            git)))

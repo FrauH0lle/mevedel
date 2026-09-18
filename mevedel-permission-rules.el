@@ -122,8 +122,9 @@ Example:
     ("~/.kube/**" . inaccessible))
   "Protected path globs and their child-confinement access modes.
 
-Even `full-auto' mode prompts when a matching path lacks a covering resource
-grant.  `read-only' keeps matched content visible but immutable;
+Ask and Edits require authority for inaccessible paths.  Full Access removes
+these default protections; explicit hard denies remain.
+`read-only' keeps matched content visible but immutable;
 `inaccessible' hides it.  This alist is also compiled into the Bubblewrap
   profile for Bash and batch Eval."
   :type '(alist :key-type string
@@ -374,18 +375,20 @@ unqualified rules.  Within each group, deny > ask > allow.  Return
       (error "Invalid protected path entry: %S" entry)))
   mevedel-protected-paths)
 
-(defun mevedel-permission-rules-path-protected-p (path &optional target)
+(defun mevedel-permission-rules-path-protected-p (path &optional target access)
   "Check if PATH matches any pattern in `mevedel-protected-paths'.
 
-TARGET supplies the path domain for target-home patterns.
+TARGET supplies the path domain for target-home patterns.  When ACCESS is
+`read', read-only entries permit access; inaccessible entries still protect it.
 Returns non-nil if the path is protected."
   (when path
     (let ((expanded (expand-file-name path)))
-      (cl-loop for (pattern . _mode) in
+      (cl-loop for (pattern . mode) in
                (mevedel-permission-protected-path-policy)
                thereis
-               (mevedel-permission-rules-match-path-p
-                expanded pattern target)))))
+               (and (not (and (eq access 'read) (eq mode 'read-only)))
+                    (mevedel-permission-rules-match-path-p
+                     expanded pattern target))))))
 
 (defun mevedel-permission-rules--path-contained-p (path root)
   "Return non-nil when PATH is ROOT or is contained by it."

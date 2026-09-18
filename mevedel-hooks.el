@@ -19,6 +19,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'mevedel-structs)
+(require 'mevedel-transport)
 (require 'mevedel-utilities)
 
 ;; `mevedel-utilities'
@@ -1806,8 +1807,11 @@ record only that context was added, without duplicating the body."
          (remote (file-remote-p default-directory))
          (stdout-buffer (generate-new-buffer " *mevedel-hook-stdout*"))
          (stderr-buffer (generate-new-buffer " *mevedel-hook-stderr*"))
+         (completion-key (list 'hook-completion stdout-buffer))
+         (completion-path default-directory)
          (start-time (float-time))
          (settled nil)
+         (completion-requested nil)
          (stdout-truncated nil)
          (stderr-truncated nil)
          process stderr-cap-timer stderr-process timer)
@@ -1884,6 +1888,7 @@ record only that context was added, without duplicating the body."
            ;; notice later reports a dead child as still running.
            (unless settled
              (setq settled t)
+             (mevedel-transport-cancel-pending completion-key)
              (with-demoted-errors "mevedel: hook teardown failed: %S"
                (release-children))
              (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
@@ -1895,14 +1900,9 @@ record only that context was added, without duplicating the body."
                :elapsed (- (float-time) start-time)
                :exit-status 'cancelled))
              (funcall callback 'cancelled)))
-         (finish (status reason)
+         (complete (status reason)
            (unless settled
              (setq settled t)
-             ;; Teardown must never cost the caller its settlement: a
-             ;; sentinel signalling during release would otherwise leave
-             ;; the event unsettled forever.
-             (with-demoted-errors "mevedel: hook teardown failed: %S"
-               (release-children))
              (truncate-remote-stderr)
              (let* ((stdout (buffer-string-safe stdout-buffer))
                     (stderr (buffer-string-safe stderr-buffer))
@@ -1955,63 +1955,95 @@ record only that context was added, without duplicating the body."
                  :decision decision))
                (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
                (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
-               (funcall callback decision)))))
+               (funcall callback decision))))
+         (continue-startup ()
+           (when (or settled completion-requested)
+             (throw 'hook-startup-done nil)))
+         (finish (status reason)
+           (unless (or settled completion-requested)
+             ;; Keep the first terminal result, including while deferred.
+             (setq completion-requested t)
+             (with-demoted-errors "mevedel: hook teardown failed: %S"
+               (release-children))
+             ;; A local child's sentinel can run inside unrelated TRAMP I/O.
+             ;; The next handler may be remote; keep cancellation live until
+             ;; the transport owner can safely deliver this continuation.
+             (if (mevedel-transport-busy-p completion-path)
+                 (unless (mevedel-transport-run-when-idle
+                          completion-key completion-path
+                          (lambda () (complete status reason)) #'cancel)
+                   (cancel))
+               (complete status reason)))))
       (when request
         (mevedel-request-push-canceller request #'cancel))
-      (condition-case err
-          (let ((process-environment
-                 (mevedel-hooks--command-process-environment
-                  handler session)))
-            (if remote
-                (with-current-buffer stderr-buffer
-                  (add-hook 'after-change-functions
-                            #'cap-remote-stderr nil t))
-              (setq stderr-process
-                    (make-pipe-process
-                     :name "mevedel-hook-stderr"
-                     :buffer nil
-                     :filter (lambda (_proc chunk)
-                               (append-buffer-output
-                                stderr-buffer chunk 'stderr))
-                     :noquery t)))
-            (setq process
-                  (make-process
-                   :name "mevedel-hook"
-                   :buffer stdout-buffer
-                   :filter (lambda (_proc chunk)
-                             (append-buffer-output stdout-buffer chunk 'stdout))
-                   :stderr (or stderr-process stderr-buffer)
-                   :command
-                   (mevedel-hooks--command-process-command command remote)
-                   :connection-type 'pipe
-                   :file-handler t
-                   :noquery t
-                   :sentinel
-                   (lambda (proc _event)
-                     (when (memq (process-status proc) '(exit signal))
-                       (let ((code (process-exit-status proc)))
-                         (cond
-                          ((= code 0) (finish 'ok nil))
-                          ((= code 2) (finish 'block nil))
-                          (t (finish 'error
-                                     (format "Hook exited with status %s"
-                                             code)))))))))
-            ;; Armed before stdin is written: the child is already running,
-            ;; so a write that fails or blocks must be bounded too.
-            (when timeout
-              (setq timer
-                    (run-at-time
-                     timeout nil
-                     (lambda () (finish 'timeout nil)))))
-            (process-send-string process
-                                 (concat (mevedel-hooks--event-json
-                                          (mevedel-hooks--command-event-plist
-                                           event-plist session))
-                                         "\n"))
-            (unless remote
-              (process-send-eof process)))
-        (error
-         (finish 'error (error-message-string err)))))))
+      (unwind-protect
+          (catch 'hook-startup-done
+            (continue-startup)
+            (condition-case err
+                (let ((process-environment
+                       (mevedel-hooks--command-process-environment
+                        handler session))
+                      input process-command)
+                  (continue-startup)
+                  (setq input (concat (mevedel-hooks--event-json
+                                       (mevedel-hooks--command-event-plist
+                                        event-plist session)) "\n")
+                        process-command
+                        (mevedel-hooks--command-process-command command remote))
+                  (continue-startup)
+                  (if remote
+                      (with-current-buffer stderr-buffer
+                        (add-hook 'after-change-functions
+                                  #'cap-remote-stderr nil t))
+                    (setq stderr-process
+                          (make-pipe-process
+                           :name "mevedel-hook-stderr"
+                           :buffer nil
+                           :filter (lambda (_proc chunk)
+                                     (append-buffer-output
+                                      stderr-buffer chunk 'stderr))
+                           :noquery t)))
+                  (continue-startup)
+                  (setq process
+                        (make-process
+                         :name "mevedel-hook"
+                         :buffer stdout-buffer
+                         :filter (lambda (_proc chunk)
+                                   (append-buffer-output stdout-buffer chunk 'stdout))
+                         :stderr (or stderr-process stderr-buffer)
+                         :command process-command
+                         :connection-type 'pipe
+                         :file-handler t
+                         :noquery t
+                         :sentinel
+                         (lambda (proc _event)
+                           (when (memq (process-status proc) '(exit signal))
+                             (let ((code (process-exit-status proc)))
+                               (cond
+                                ((= code 0) (finish 'ok nil))
+                                ((= code 2) (finish 'block nil))
+                                (t (finish 'error
+                                           (format "Hook exited with status %s"
+                                                   code)))))))))
+                  (continue-startup)
+                  ;; Bound stdin writes once the child is running.
+                  (when timeout
+                    (setq timer
+                          (run-at-time
+                           timeout nil
+                           (lambda () (finish 'timeout nil)))))
+                  (continue-startup)
+                  (process-send-string process input)
+                  (continue-startup)
+                  (unless remote
+                    (process-send-eof process)))
+              (error
+               (finish 'error (error-message-string err)))))
+        ;; Acquisition can yield before assigning the returned handle.  Teardown
+        ;; may already have run; collect those late resources without redelivery.
+        (when (or settled completion-requested)
+          (with-demoted-errors "mevedel: hook teardown failed: %S"
+            (release-children)))))))
 
 
 ;;

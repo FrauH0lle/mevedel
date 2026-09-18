@@ -785,8 +785,8 @@ Falls back to the global `mevedel-permission-mode' default."
       'ask))
 
 (defvar mevedel-reminders--mode-constraint-messages
-  '((edits . "Permission mode: `edits'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
-    (full-auto . "Permission mode: `full-auto'. Most confirmation prompts are skipped. Double-check destructive operations before calling tools; protected paths still prompt."))
+  '((edits . "Permission mode: `edits'. Native edits and confined Bash/batch Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
+    (full-auto . "Permission mode: `full-auto'. Full Access under the target OS account: no confinement or permission prompts. Native tools and live Eval are automatic. Explicit hard denies, Plan restrictions and integrity checks remain."))
   "Alist mapping permission mode symbols to reminder body strings.")
 
 (defun mevedel-reminders-make-mode-constraints (&optional interval)
@@ -859,7 +859,7 @@ sparsely while that mode remains active."
    :trigger (lambda (session)
               (eq (mevedel-reminders--session-mode session) 'full-auto))
    :content (lambda (_session)
-              "Full-auto mode is active. Heuristic Bash and Eval prompts are skipped, but explicit denies and protected-resource authority still apply. Live Eval runs inside Emacs without confinement. Keep destructive tool calls deliberate.")
+              "Full-auto mode is active. Full Access disables confinement and permission prompts, including default protected paths. Explicit hard denies, Plan restrictions and integrity checks remain. Live Eval runs inside Emacs without confinement. Keep destructive tool calls deliberate.")
    :interval (or interval 5)))
 
 (defun mevedel-reminders-make-full-auto-mode-exit ()

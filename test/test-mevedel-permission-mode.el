@@ -12,6 +12,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
+(require 'mevedel-tool-exec-permission)
 (require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
@@ -77,7 +78,87 @@
       (when (buffer-live-p view-buffer)
         (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer)))))
+        (kill-buffer data-buffer))))
+
+  :doc "full-auto settles pending operation and capability approvals once"
+  (let ((session (mevedel-session--create
+                  :name "mode-queue" :permission-mode 'ask))
+        (mevedel-permission-rules nil)
+        (mevedel-permission-reviewer 'user)
+        outcomes)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                 #'ignore))
+        (mevedel-tool-exec-permission-check-bash-async
+         nil
+         (list :command "unknown-mode-command"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions '(:network t)
+               :justification "Test pending authority"
+               :permission-context (list :mode 'ask :session session))
+         (lambda (outcome) (push outcome outcomes)))
+        (should (= 1 (length (mevedel-session-permission-queue session))))
+        (should-not outcomes)
+        (mevedel-permission-mode-transition 'full-auto)
+        (should (equal '(allow) outcomes))
+        (should-not (mevedel-session-permission-queue session))
+        (mevedel-permission-mode-transition 'full-auto)
+        (should (equal '(allow) outcomes)))))
+
+  :doc "identity fencing preserves warm confinement readiness and observes each mutation"
+  (dolist (reason '(nil sandbox-unavailable))
+    (with-temp-buffer
+      (let* ((target (mevedel-execution-target-create "/ssh:review.invalid:/srv/project/"))
+             (readiness (list :status (if reason 'blocked 'ready)
+                              :reason reason :sandbox-mode 'required))
+             (session (mevedel-session--create
+                       :authority-mode 'pid-lock :execution-target target
+                       :permission-mode 'edits))
+             (full-probes 0) (observations 0))
+        (setq-local mevedel--session session)
+        (setf (mevedel-execution-target-readiness target) readiness)
+        (cl-letf (((symbol-function 'mevedel-execution-target--live-connection) #'ignore)
+                  ((symbol-function 'mevedel-execution-target--process-output)
+                   (lambda (&rest _)
+                     (cl-incf full-probes)
+                     (error "Unexpected full readiness probe")))
+                  ((symbol-function 'mevedel-execution-target-observe-incarnation)
+                   (lambda (_) (cl-incf observations))))
+          (dotimes (_ 3)
+            (should (eq readiness (mevedel-execution-target-probe target nil 'required)))
+            (mevedel-session-artifacts-check-target-incarnation session (current-buffer)))
+          (should (= 0 full-probes))
+          (should (= 3 observations))
+          (should (eq readiness (mevedel-execution-target-readiness target)))
+          (should (eq 'full-auto (mevedel-permission-mode-transition 'full-auto)))
+          (should (= 4 observations))))))
+
+  :doc "remote Edits can change mode without weakening target identity checks"
+  (dolist (mode '(ask full-auto))
+    (with-temp-buffer
+      (let* ((target (mevedel-execution-target-create "/ssh:review.invalid:/srv/project/"))
+             (session (mevedel-session--create
+                       :authority-mode 'pid-lock :execution-target target
+                       :permission-mode 'edits :sandbox-mode 'best-effort))
+             observed)
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                   (lambda (target &optional _refresh sandbox-mode)
+                     (mevedel-execution-target--apply-sandbox-readiness
+                      target '(:status ready) sandbox-mode)))
+                  ((symbol-function 'mevedel-sandbox-probe)
+                   (lambda (&rest _) '(:available nil :reason "No Bubblewrap")))
+                  ((symbol-function 'mevedel-execution-target-observe-incarnation)
+                   (lambda (_) (setq observed t))))
+          (should (eq mode (mevedel-permission-mode-transition mode)))
+          (should observed)
+          (should (eq mode (mevedel-session-permission-mode session)))
+          (setq observed nil)
+          (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                     (lambda (&rest _) '(:status blocked :reason unreachable))))
+            (should-error (mevedel-permission-mode-transition 'edits) :type 'user-error)
+            (should (eq mode (mevedel-session-permission-mode session)))))))))
 
 (mevedel-deftest mevedel-permission-mode-decision ()
   ,test

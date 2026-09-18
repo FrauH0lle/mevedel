@@ -294,7 +294,7 @@ stable child environments, process-group signaling, timeout cleanup, and
 bounded disk spooling. Bubblewrap admission and refusal remain with the
 managed facade. `mevedel-execution-scheduler.el` admits managed Bash through a
 fair session-scoped readers/writer lane. `mevedel-bash-policy.el` owns Bash
-classification, reusable rules, and guardian guidance;
+classification and reusable rules;
 `mevedel-tool-exec-permission.el` owns Bash/Eval authority and prompt adapters;
 and `mevedel-tool-exec.el` retains their tool lifecycle, rendering, and
 registration. Native filesystem tools use the execution facade's confined
@@ -434,7 +434,7 @@ The built-in selection is deliberate:
 | Explorer | Explorer role, task policy, report tone, tool orchestration, workspace config, environment, skills |
 | Verifier | Verifier role, task policy, report tone, tool orchestration, workspace config, environment |
 | Reviewer | Reviewer role, task policy, tool orchestration, workspace config, environment |
-| Bash guardian | Guardian role, workspace config, environment |
+| Approval reviewer | Isolated approval policy; intent and authority arrive as quoted evidence |
 | Context summary | Fixed continuation/handoff summary contract only |
 | Buddy / Buddy guide | Respective role, memory use policy, workspace config, memory data, environment |
 
@@ -550,7 +550,8 @@ change repeats neither their instructions nor the other fact sections.
 by an agent's frozen definition reach that agent. Workers do not inherit the
 root Goal or the main journal map. An instruction-only recipient receives no fact
 sections. Authored inline components remain in the system prompt even when named like a built-in
-observation. Stateless buddy and guardian requests retain their current snapshot;
+observation. Stateless Buddy requests retain their current snapshot; the permission reviewer
+receives explicit quoted evidence without ambient instruction context;
 they do not own a growing conversation prefix.
 
 ### Acknowledgement and context loss

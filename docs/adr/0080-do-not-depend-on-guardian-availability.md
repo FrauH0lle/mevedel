@@ -2,13 +2,17 @@
 
 Status: accepted
 
-When the opt-in Bash guardian reviews a heuristically suspicious command in
-`full-auto`, only a valid `deny` recommendation vetoes execution. An `ask` or
-`proceed` recommendation, timeout, request failure, or invalid response leaves
-the otherwise authorized unattended path unchanged. The experimental advisory
-reviewer must not make `full-auto` execution depend on another model's
-availability; explicit denies, resource authority, and confinement still apply.
+Full Access bypasses the optional approval reviewer entirely, including its
+vetoes, latency and availability. In Ask and Edits, unavailable, timed-out,
+malformed or uncertain review falls back to human approval before any execution.
+A valid denial blocks that invocation; a positive result grants it once after
+fresh policy and integrity checks. The harness cancels provider work and ignores
+late callbacks. It never invents approval from a timeout.
 
-In `ask` and `edits`, every guardian recommendation remains advisory. Even
-`deny` is displayed prominently without removing the user's allow controls;
-only `full-auto` interprets it as a veto.
+## Decision history
+
+The former advisory Bash guardian could veto full-auto but an unavailable result
+left the unattended path unchanged; Ask/Edits only displayed guidance. The user's
+September 2026 Full Access decision removed review from that mode. Optional
+exception approval now runs in interactive modes, making human fallback the
+availability contract. See ADR 0014 for the authority decision.
