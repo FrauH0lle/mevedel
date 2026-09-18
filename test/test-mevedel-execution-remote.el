@@ -2296,11 +2296,47 @@ work in flight genuinely unprovable rather than merely finished."
               (lambda (entry) (plist-get entry :owner))
               (mevedel-execution-list-user session))
              #'string<)))
-    (should
-     (string-match-p
-      "acceptance needle"
-      (test-mevedel-execution-remote--run-tool
-       session "Read" (list :file_path readable-file))))
+    ;; Model a transport coalescing the final shell exec and an immediate
+    ;; stdin write.  The old interactive shell can read ahead and discard that
+    ;; input on exec.  A ready handshake must separate those two writes.
+    (let (held-process held-command flush-timer intercepted)
+      (unwind-protect
+          (cl-letf* ((send (symbol-function 'process-send-string))
+                     (make (symbol-function 'make-process))
+                     ((symbol-function 'process-send-string)
+                      (lambda (proc text)
+                        (cond
+                         ((and (equal (process-name proc) "mevedel-hook")
+                               (string-prefix-p "cd " text)
+                               (string-match-p " exec " text))
+                          (setq held-process proc held-command text intercepted t))
+                         ((and held-command (eq proc held-process))
+                          (let ((combined (concat held-command text)))
+                            (setq held-command nil)
+                            (funcall send proc combined)))
+                         (t (funcall send proc text)))))
+                     ((symbol-function 'make-process)
+                      (lambda (&rest args)
+                        (let ((proc (apply make args)))
+                          (when (and held-command (eq proc held-process))
+                            ;; Arm outside the TRAMP frame: its temporary timer
+                            ;; list must not discard the probe's bounded flush.
+                            (setq flush-timer
+                                  (run-at-time
+                                   0.1 nil
+                                   (lambda ()
+                                     (when held-command
+                                       (let ((text held-command))
+                                         (setq held-command nil)
+                                         (funcall send proc text)))))))
+                          proc))))
+            (should
+             (string-match-p
+              "acceptance needle"
+              (test-mevedel-execution-remote--run-tool
+               session "Read" (list :file_path readable-file))))
+            (should intercepted))
+        (when flush-timer (cancel-timer flush-timer))))
     (should (= 2 (mevedel-execution-count-user session)))))
 
 (defun test-mevedel-execution-remote--exercise-transport (variable method)
