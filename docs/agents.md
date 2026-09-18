@@ -281,9 +281,11 @@ canonical call remains in the transcript.
 Independently completed yielded Bash executions use the session or invocation
 object captured for their fixed owner when Bash starts. A retained invocation
 holds its terminal response while an owned execution is live. Completion is
-captured across that boundary in either arrival order, appended to the final
-answer, and settled directly without a model request. Bash completion does not
-wake `WaitAgent`; execution-only contents never start a paid continuation.
+captured across that boundary in either arrival order. Settlement publishes the
+unchanged final answer as `RESULT` and each captured Bash completion as a separate
+`EXECUTION` record to the spawn parent, attributed to the child. These records
+commit together; workflow result handlers consume only the `RESULT`. Bash
+completion does not wake `WaitAgent` before settlement, and starts no model request.
 
 ## Review and verify commands
 

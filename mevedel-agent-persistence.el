@@ -77,7 +77,12 @@ callers reverse it only when delivering the mailbox as FIFO."
           (pcase type
             ('USER (and (equal sender "user") (equal recipient "/root")))
             ('EXECUTION
-             (and (equal sender "/root") (equal recipient "/root")))
+             (and (mevedel-agent-path-p sender)
+                  (mevedel-agent-path-p recipient)
+                  (or (and (equal sender "/root") (equal recipient "/root"))
+                      (string-match-p
+                       (concat "\\`" (regexp-quote recipient) "/[^/]+\\'")
+                       sender))))
             ('MAIL (mevedel-agent-path-p sender))
             ('RESULT
              (and (mevedel-agent-path-p sender)

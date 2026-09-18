@@ -4243,7 +4243,7 @@ KIND identifies the mailbox block flavor.  Shared engine for
 `<agent-message>' and `<agent-result>'
 rendering.  OPEN-REGEX must capture the canonical sender path in match group
 1.  Ordinary bodies between the matched open and close tags are preserved
-verbatim; root EXECUTION bodies are summarized from their trailing facts.
+verbatim; EXECUTION bodies are summarized from their trailing facts.
 If a body's line count exceeds CLOSE-TAG's threshold,
 `mevedel-view-mailbox-collapse-line-threshold', the body is marked
 invisible (with the `mailbox-delivery' vtype tag for downstream
@@ -4278,7 +4278,6 @@ hint.  Searches that region."
                      (sender (match-string-no-properties 1))
                      (bash-summary
                       (and execution-p
-                           (equal sender "/root")
                            (save-excursion
                              (goto-char open-end)
                              (when-let* ((close

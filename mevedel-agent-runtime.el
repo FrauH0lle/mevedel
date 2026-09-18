@@ -305,18 +305,6 @@
     (mevedel-execution-owner-live-p
      session (mevedel-agent-invocation-require-path invocation))))
 
-(defun mevedel-agent-runtime--with-execution-results (invocation response)
-  "Append INVOCATION's yielded execution results to RESPONSE."
-  (if-let* ((results
-             (nreverse
-              (copy-sequence
-               (mevedel-agent-invocation-runtime-execution-results
-                invocation)))))
-      (concat (or response "Agent turn finished without a text response.")
-              "\n\nBash completion after the agent's final response:\n\n"
-              (string-join results "\n\n"))
-    response))
-
 (defun mevedel-agent-runtime--transcript-path (invocation)
   "Return INVOCATION's qualified logical transcript path when published."
   (when-let* ((relative
@@ -515,8 +503,7 @@
                     invocation
                     (or (mevedel-agent-invocation-terminal-reason invocation)
                         "interrupted")))
-                  (_ (mevedel-agent-runtime--with-execution-results
-                      invocation response)))
+                  (_ response))
                 terminal-publication-p
                 (and session
                      save-path

@@ -6123,6 +6123,35 @@
       (should (equal "/root"
                      (get-text-property (point) 'mevedel-view-agent-path)))))
 
+  :doc "review results and child Bash completions retain separate cards and draft"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> keep\ndraft" 3))
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "<agent-result sender=\"/root/review\" recipient=\"/root\" outcome=\"completed\">\n"
+      "{\"findings\": []}\n</agent-result>\n\n"
+      "<agent-message type=\"EXECUTION\" sender=\"/root/review\" recipient=\"/root\">\n"
+      "Bash test output\n"
+      "<bash-execution execution_id=\"exec-review\" state=\"completed\" "
+      "termination=\"exited\" exit_code=\"0\" outcome=\"success\"/>\n"
+      "</agent-message>\n")
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (should (equal "> keep\ndraft" (mevedel-view--input-text)))
+      (goto-char (point-min))
+      (search-forward "findings")
+      (let ((result-card (get-text-property (point) 'mevedel-view-mailbox-card)))
+        (should result-card)
+        (search-forward "Bash completed")
+        (should-not (eq result-card
+                        (get-text-property (point) 'mevedel-view-mailbox-card))))
+      (search-forward "exec-review")
+      (should-not (search-forward "Bash test output" nil t))))
+
   :doc "Bash completion keeps following reasoning on a separate line"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'gptel-request)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
@@ -614,37 +615,58 @@
   ()
   ,test
   (test)
-  :doc "holds a terminal response until yielded Bash completion is secured"
-  (let* ((invocation (mevedel-agent-runtime-test--invocation))
-         (live-p t)
-         settled
-         finalizations)
-    (setf (mevedel-agent-invocation-runtime-settle-callback invocation)
-          (lambda (_invocation response _event)
-            (setq settled response)))
-    (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
-               (lambda (_invocation) live-p))
-              ((symbol-function 'mevedel-agent-runtime--finalize)
-               (lambda (_invocation status)
-                 (push status finalizations))))
-      (mevedel-agent-runtime--handle-provider-result invocation "Agent answer")
-      (should-not settled)
-      (should (equal "Agent answer"
-                     (mevedel-agent-invocation-runtime-pending-response
-                      invocation)))
-      (should-not
-       (mevedel-agent-runtime-queue-execution-completion
-        invocation "/root/other" "wrong owner"))
-      (setq live-p nil)
-      (should
-       (mevedel-agent-runtime-queue-execution-completion
-        invocation "/root/explore" "Bash exited with code 0"))
-      (should (string-match-p "Agent answer" settled))
-      (should (string-match-p "Bash exited with code 0" settled))
-      (should (equal '(completed) finalizations))
-      (should-not
-       (mevedel-agent-runtime-queue-execution-completion
-       invocation "/root/explore" "duplicate")))))
+  :doc "keeps the terminal answer separate from Bash output in either arrival order"
+  (dolist (response-first-p '(nil t))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+           (invocation (mevedel-agent-runtime-test--invocation))
+           (record (mevedel-agent-record--create
+                    :path "/root/explore" :parent-path "/root"
+                    :activity 'running :invocation invocation))
+           (live-p t)
+           finalizations)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/explore" record))
+            (mevedel-agent-invocation-parent-session invocation) session
+            (mevedel-agent-invocation-runtime-settle-callback invocation)
+            (lambda (invocation response event)
+              (mevedel-agent-control--settle
+               session record invocation response event)))
+      (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+                 (lambda (_invocation) live-p))
+                ((symbol-function 'mevedel-agent-runtime--finalize)
+                 (lambda (_invocation status)
+                   (push status finalizations))))
+        (when response-first-p
+          (mevedel-agent-runtime--handle-provider-result invocation "Agent answer")
+          (should (equal "Agent answer"
+                         (mevedel-agent-invocation-runtime-pending-response
+                          invocation))))
+        (should-not
+         (mevedel-agent-runtime-queue-execution-completion
+          invocation "/root/other" "wrong owner"))
+        (should
+         (mevedel-agent-runtime-queue-execution-completion
+          invocation "/root/explore" "First Bash exited with code 0"))
+        (should-not (mevedel-session-messages session))
+        (should-not finalizations)
+        (setq live-p nil)
+        (should
+         (mevedel-agent-runtime-queue-execution-completion
+          invocation "/root/explore" "Second Bash exited with code 1"))
+        (unless response-first-p
+          (should-not (mevedel-session-messages session))
+          (mevedel-agent-runtime--handle-provider-result invocation "Agent answer"))
+        (let ((messages (mevedel-agent-control-context-mailbox session)))
+          (should (equal '(RESULT EXECUTION EXECUTION)
+                         (mapcar (lambda (msg) (plist-get msg :type)) messages)))
+          (should (equal '("Agent answer" "First Bash exited with code 0"
+                           "Second Bash exited with code 1")
+                         (mapcar (lambda (msg) (plist-get msg :payload)) messages))))
+        (should (equal "Agent answer" (mevedel-agent-record-settled-result record)))
+        (should (equal '(completed) finalizations))
+        (should-not
+         (mevedel-agent-runtime-queue-execution-completion
+          invocation "/root/explore" "duplicate"))))))
 
 (defun test-mevedel-agent-runtime--terminal-settlement-events (artifact-p)
   "Return a local portable session's terminal persistence events.
