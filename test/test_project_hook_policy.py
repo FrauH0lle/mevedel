@@ -11,6 +11,18 @@ POLICY = Path(__file__).resolve().parents[1] / ".mevedel/hooks/policy.py"
 
 
 class ProjectHookPolicyTests(unittest.TestCase):
+    def test_configured_handlers_accept_event_payload(self):
+        config = json.loads((POLICY.parent.parent / "hooks.json").read_text())
+        for event, groups in config["hooks"].items():
+            for group in groups:
+                for handler in group["hooks"]:
+                    with self.subTest(event=event, command=handler["command"]):
+                        command = handler["command"].split()
+                        self.assertEqual(
+                            ["python3", ".mevedel/hooks/policy.py"], command[:-1]
+                        )
+                        self.decision(command[-1], {})
+
     def decision(self, hook, inputs):
         result = subprocess.run(
             [sys.executable, "-B", str(POLICY), hook],

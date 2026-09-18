@@ -1,5 +1,6 @@
 - [Mevedel project-local skills](mevedel-project-local-skills.md) - dev workflow skills are local to this repo, not bundled for users
-- [Debugging process feedback](debugging-process-feedback.md) - bisect recurring test/log emitters before implementation changes
+- [Debugging process feedback](debugging-process-feedback.md) - Bisect recurring test/log emitters before implementation changes
 - [Eask clean before tests](eask-clean-before-tests.md) - run clean elc before project tests to avoid stale bytecode
 - [View composer preservation feedback](view-composer-preservation-feedback.md) - test active drafts during async view/status redraws
 - [Forward declaration formatting feedback](forward-declaration-formatting-feedback.md) - sort declarations before defvars within source groups
+- [Verify against the compiled library the runtime loads](verify-compiled-runtime-artifacts.md) - Repository edits do not reach the running Emacs until Straight's compiled build artifacts are rebuilt; live availability is not cold-start correctness
