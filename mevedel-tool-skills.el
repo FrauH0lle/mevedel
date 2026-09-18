@@ -37,7 +37,7 @@
     :read-only-p t
     :get-name (lambda (args) (plist-get args :name))
     :groups (util)
-    :renderer #'mevedel-skills--render-skill-tool)
+    :renderer '((success . mevedel-skills--render-skill-tool)))
   (mevedel-define-tool
     :name "ListSkills"
     :description "List active model-invocable skills, optionally filtered by query."

@@ -1167,7 +1167,7 @@ this runs after the task mutation it accompanies."
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (tasks)
-    :renderer #'mevedel-tool-task--render-mutation)
+    :renderer '((success . mevedel-tool-task--render-mutation)))
 
   (mevedel-define-tool
     :name "TaskUpdate"
@@ -1195,7 +1195,7 @@ this runs after the task mutation it accompanies."
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (tasks)
-    :renderer #'mevedel-tool-task--render-mutation)
+    :renderer '((success . mevedel-tool-task--render-mutation)))
 
   (mevedel-define-tool
     :name "TaskNote"
@@ -1208,7 +1208,7 @@ this runs after the task mutation it accompanies."
                   "Owner for the note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (tasks)
-    :renderer #'mevedel-tool-task--render-event)
+    :renderer '((success . mevedel-tool-task--render-event)))
 
   (mevedel-define-tool
     :name "TaskList"
@@ -1219,7 +1219,7 @@ this runs after the task mutation it accompanies."
                    "Optional filter: \"pending\", \"in_progress\", or \"completed\"."))
     :read-only-p t
     :groups (tasks)
-    :renderer #'mevedel-tool-task--render-list)
+    :renderer '((success . mevedel-tool-task--render-list)))
 
   (mevedel-define-tool
     :name "TaskGet"
@@ -1230,7 +1230,7 @@ this runs after the task mutation it accompanies."
                "The integer ID of the task to retrieve."))
     :read-only-p t
     :groups (tasks)
-    :renderer #'mevedel-tool-task--render-get))
+    :renderer '((success . mevedel-tool-task--render-get))))
 
 (provide 'mevedel-tool-task)
 ;;; mevedel-tool-task.el ends here

@@ -314,12 +314,19 @@ handles, compound tools, rows carrying hook audits, rows their renderer wants ex
 compact, and coalesced rows — never fold into a group; they split the run
 around themselves, including runs interleaved with reasoning. An unfinished
 activity run remains mutable across streaming events so later calls can join
-its group. Failed calls and calls with warning-class sandbox disclosures split
-that run into separate groups around their standalone rows. Failed tool rows,
-including nested calls inside compound tools, start collapsed. Only the `!`
-marker uses warning highlighting; the tool name, argument, metadata, and sandbox
-summary text keep their normal faces. Explicit expansion survives redraws.
-A `note`-class sandbox disclosure stays with its nested row inside the group.
+its group. Failed calls split that run around their standalone rows and use
+a red `×` in the `error` face. Warning rows stay groupable; a group containing
+a warning carries `!`, and the warning stays visible on its nested row.
+Failed tool rows, including nested calls inside compound tools, start collapsed.
+Only the marker uses warning or error highlighting; the tool name, argument,
+metadata, and sandbox summary text keep their normal faces. An error takes
+precedence over an accompanying sandbox warning. Explicit expansion survives
+redraws. A `note`-class sandbox disclosure stays with its nested row without
+marking the group. The same rules apply to native, wrapped/MCP, and generic
+tools. A valid empty search is successful; a search that failed to run shows
+an error instead of a zero-match count. Terminal Bash metadata includes its
+outcome, exit code when available, and abnormal termination rather than only
+the process lifecycle label `completed`.
 Expanding a group rebuilds its rows from the
 folded run alone: `mevedel-transcript-segments` expands its end bound to the
 containing property run, so the segment beginning where the run ended is

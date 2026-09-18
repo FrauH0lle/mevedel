@@ -26,6 +26,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-view-render)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
 
@@ -1782,8 +1783,8 @@ description: Yell
            (visible (car parts))
            (render-data (cdr parts))
            (rendering
-            (funcall (mevedel-tool-renderer tool)
-                     "Skill" '(:name "costly") visible render-data)))
+            (mevedel-view--invoke-renderer
+             tool render-data '(:name "costly") visible)))
       (should (equal "Prepared body" visible))
       (should (equal '(:kind skill-invocation
                              :prompt nil :attachments nil

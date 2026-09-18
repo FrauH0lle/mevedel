@@ -365,8 +365,8 @@
         (should (string-match-p "rm -rf /tmp/x" summary))
         (should (string-match-p "blocked by PreToolUse: blocked rm -rf test"
                                 summary))
-        (should (string-match "!" summary))
-        (should (eq 'mevedel-view-tool-warning
+        (should (string-match "×" summary))
+        (should (eq 'error
                     (get-text-property (match-beginning 0)
                                        'font-lock-face summary))))))
 
@@ -385,7 +385,7 @@
       (should-not (mevedel-view--tool-one-liner
                    data-buf (point-min) (point-max)))))
 
-  :doc "tool-level errors use warning marker"
+  :doc "tool-level errors use error marker"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -393,8 +393,8 @@
      '(tool . "call_error"))
     (with-current-buffer data-buf
       (let ((summary (mevedel-view--tool-one-liner data-buf (point-min) (point-max))))
-        (should (string-match "!" summary))
-        (should (eq 'mevedel-view-tool-warning
+        (should (string-match "×" summary))
+        (should (eq 'error
                     (get-text-property (match-beginning 0)
                                        'font-lock-face summary))))))
 
@@ -3690,7 +3690,7 @@
                    (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
                    data-buf)))
               (goto-char (point-min))
-              (should (search-forward "! Edit: mevedel-goal.el (1 lines)" nil t))
+              (should (search-forward "× Edit: mevedel-goal.el (1 lines)" nil t))
               (goto-char (point-min))
               (search-forward "mevedel-goal.el")
               (let ((button (button-at (match-beginning 0))))
@@ -3721,7 +3721,7 @@
                  (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
                  data-buf)))
             (goto-char (point-min))
-            (should (search-forward "! Edit: missing-file.el (1 lines)" nil t))
+            (should (search-forward "× Edit: missing-file.el (1 lines)" nil t))
             (goto-char (point-min))
             (search-forward "missing-file.el")
             (should-not (button-at (match-beginning 0)))))
@@ -4078,9 +4078,9 @@
                 (get-text-property (match-beginning 0)
                                    'font-lock-face line))))
 
-  :doc "tool errors use a warning marker"
+  :doc "tool errors use an error marker"
   (should (string-match-p
-           "\\`  ! Bash:"
+           "\\`  × Bash:"
            (mevedel-view--rendering-header-line
             '(:header "Bash: npx test" :status error))))
 
@@ -6943,7 +6943,6 @@
              (:header "h" :status error)
              (:header "h" :status failed)
              (:header "h" :status blocked)
-             (:header "h" :status warning)
              (:header "h" :vtype agent-handle)
              (:header "h" :child-calls ((:id "1")))
              (:header "h" :hook-audits ((:type x)))
@@ -6955,7 +6954,7 @@
   :doc "coalesced rows are not groupable"
   (should-not (mevedel-view--tool-group-entry-p
                '(:count 2 :rendering (:header "h"))))
-  :doc "only warning-class sandbox disclosures split the run"
+  :doc "sandbox disclosures alone do not split a successful run"
   (dolist (summary
            '((:attempt-count 1 :started-count 1 :refused-count 0
               :sandbox unavailable :filesystem unrestricted
@@ -6969,13 +6968,10 @@
               :sandbox refused :filesystem unavailable
               :network unavailable :proc nil
               :additional-read-count 0 :additional-write-count 0)))
-    (should (eq (not (eq 'warning
-                            (mevedel-execution-telemetry-sandbox-summary-class
-                             summary)))
-                (and (mevedel-view--tool-group-entry-p
-                      (list :count 1 :rendering
-                            (list :header "Bash: ls" :sandbox-summary summary)))
-                     t)))))
+    (should (mevedel-view--tool-group-entry-p
+             (list :count 1 :rendering
+                   (list :header "Bash: ls" :status 'success
+                         :sandbox-summary summary))))))
 
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test
@@ -7177,7 +7173,7 @@
           (should (= 2 (cl-count-if
                         (lambda (line) (string-match-p "✓ Read 4 files" line))
                         (split-string text "\n"))))
-          (should (string-match-p "! Bash:" text))
+          (should (string-match-p "× Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))
         (goto-char (point-min))
         (search-forward "Bash:")

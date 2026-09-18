@@ -14,9 +14,11 @@ Streaming updates retain completed semantic units and reconcile the mutable
 tail. A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
-changes in presentation. Failed tool calls and sandbox refusals split activity
-groups and start collapsed; warning highlighting is confined to their `!`
-markers. Full rerender is the correctness fallback. One scheduler coalesces redraws;
+changes in presentation. Failed tool calls split activity groups and start
+collapsed with a red `×`; warning rows remain groupable and mark their group
+with `!`. Only markers receive severity highlighting, and an accompanying
+sandbox warning cannot downgrade an error. Full rerender is the correctness
+fallback. One scheduler coalesces redraws;
 unattended graphical views defer visual work, then reconcile when attended.
 Transcript writers also share per-view mutation ownership: nested projection,
 terminal, disclosure, and agent-refresh work coalesces rather than mutating
@@ -100,8 +102,24 @@ automatically when the group was expanded, with warning coloring across their
 entire headers. A user review of a mixed run containing a failed Bash call and
 a sandbox refusal showed that this hid which calls failed until the group was
 opened, then gave their output disproportionate space and emphasis. Failures
-now split their surrounding groups, start collapsed, and highlight only `!`.
+were changed to split their surrounding groups, start collapsed, and highlight
+only `!`, including warning-class sandbox disclosures.
 Explicit user expansion remains source-backed and survives redraws.
+
+### September 2026: distinguish warnings from failed tool operations
+
+A subsequent live-session inspection found that Grep displayed an unreadable
+path as `0 matches`, while Bash described a test runner that exited 1 as
+`completed`. Both used the same `!` as warnings. The previous split rule also
+prevented otherwise useful warning results from joining activity groups.
+
+Errors now remain separate with a red `×`; warnings stay grouped and mark
+only the group's `!`. Shared status dispatch routes failed operations away
+from success-only summaries across the tool roster. Execution summaries expose
+outcome and exit status. A successful compound program that handled a failed
+child warns without changing its execution outcome, while the child remains
+an error. These changes distinguish a usable result with caveats from an
+operation that failed, without restoring full-line coloring or auto-expansion.
 
 ### September 2026: streaming groups and managed boundaries
 

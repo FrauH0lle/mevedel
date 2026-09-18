@@ -341,7 +341,7 @@
     :groups (agents)
     :get-name (lambda (args) (plist-get args :task_name))
     :read-only-p t
-    :renderer #'mevedel-tool-ui--render-agent)
+    :renderer '((success . mevedel-tool-ui--render-agent)))
   (mevedel-define-tool
     :name "FollowupAgent"
     :description "Continue or steer one retained non-root agent."
@@ -354,7 +354,7 @@
     :groups (agents)
     :get-name (lambda (args) (plist-get args :target))
     :read-only-p t
-    :renderer #'mevedel-tool-ui--render-agent-interaction)
+    :renderer '((success . mevedel-tool-ui--render-agent-interaction)))
   (mevedel-define-tool
     :name "ListAgents"
     :description "List retained agent paths, roles, and activity."
@@ -364,7 +364,7 @@
                         "Canonical subtree path prefix. Omit to list all."))
     :groups (agents)
     :read-only-p t
-    :renderer #'mevedel-tool-ui--render-list-agents)
+    :renderer '((success . mevedel-tool-ui--render-list-agents)))
   (mevedel-define-tool
     :name "InterruptAgent"
     :description "Interrupt one retained agent's current turn."
@@ -374,7 +374,7 @@
                    "Canonical path or relative descendant path."))
     :groups (agents)
     :read-only-p t
-    :renderer #'mevedel-tool-ui--render-interrupt-agent)
+    :renderer '((success . mevedel-tool-ui--render-interrupt-agent)))
   (mevedel-define-tool
     :name "ToolSearch"
     :description "Find specialist tool contracts and calling expressions."
@@ -385,7 +385,7 @@
     :async-p t
     :read-only-p t
     :groups (util)
-    :renderer #'mevedel-tool-ui--render-tool-search)
+    :renderer '((success . mevedel-tool-ui--render-tool-search)))
   (mevedel-define-tool
     :name "SendMessage"
     :description "Queue an interim, non-duplicative message for any retained agent without starting a turn."
@@ -397,7 +397,7 @@
                     "Message body to deliver."))
     :read-only-p t
     :groups (agents)
-    :renderer #'mevedel-tool-ui--render-agent-interaction)
+    :renderer '((success . mevedel-tool-ui--render-agent-interaction)))
   (mevedel-define-tool
     :name "WaitAgent"
     :description "Wait for mailbox activity, user steering, or timeout. Only RESULT delivery is terminal."
@@ -409,7 +409,7 @@
     :async-p t
     :read-only-p t
     :groups (agents)
-    :renderer #'mevedel-tool-ui--render-wait-agent))
+    :renderer '((success . mevedel-tool-ui--render-wait-agent))))
 
 (provide 'mevedel-tool-ui)
 

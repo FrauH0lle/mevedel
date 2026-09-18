@@ -542,9 +542,21 @@ Alist form dispatches on the visible result status:
 The view first uses structured `:status` from render-data, then falls back to
 the visible result: `error` when `mevedel-view--tool-result-error-p` matches,
 otherwise `success`. Lookup tries the exact status first, then `default`, then
-the generic renderer. Explicit pipeline status also overrides a custom
-rendering plist's visual `:status`; without explicit status, the rendering
-plist controls only the visual marker and does not participate in dispatch.
+the generic renderer. Built-in count and success-summary renderers register
+only for `success`, so a failed search, fetch, or mutation uses the generic
+error summary and retains its diagnostic body. Bash and ToolCall retain
+their structured failure details. This dispatch also applies to nested calls
+and wrapped tools; unregistered tools use the generic renderer.
+
+Explicit pipeline errors override custom visual status. Explicit success
+overrides a renderer's inferred error but preserves visual warnings and
+running/cancelled lifecycle states. Visual status does not change the
+pipeline's `success`/`error` outcome or participate in renderer dispatch.
+Errors use a red `×` (`error` face); warnings use `!` with warning highlighting.
+Only the marker is emphasized. Expected empty results are successful.
+Completed ToolCall programs with handled child failures or warning disclosures
+carry a visual warning; failed programs carry an error. Children retain their
+own outcomes and start collapsed, including in the browser projection.
 
 Rendering plist: `(:header STRING :body STRING :preview-body STRING
 :body-mode SYMBOL :status SYMBOL :expandable-p BOOL :hidden-p BOOL

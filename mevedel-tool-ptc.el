@@ -19,6 +19,7 @@
   (require 'mevedel-tool-registry))
 
 (require 'mevedel-system)
+(require 'mevedel-execution-telemetry)
 
 ;; `gptel'
 (defvar gptel-tools)
@@ -254,8 +255,19 @@ nested-row machinery."
                                                :tool "Returned"
                                                :status 'success
                                                :result returned-value)))))
-            :status (if live-p 'running
-                      (if (eq outcome 'completed) 'success 'error))
+            :status (cond
+                     (live-p 'running)
+                     ((not (eq outcome 'completed)) 'error)
+                     ((or (> error-count 0)
+                          (cl-some (lambda (call)
+                                     (or (eq (plist-get call :status) 'warning)
+                                         (eq (mevedel-execution-telemetry-sandbox-summary-class
+                                              (plist-get (plist-get call :render-data)
+                                                         :sandbox-summary))
+                                             'warning)))
+                                   calls))
+                      'warning)
+                     (t 'success))
             :initially-collapsed-p t))))
 
 

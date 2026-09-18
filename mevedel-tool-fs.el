@@ -247,7 +247,7 @@ whole PATH from inside gptel's curl sentinel."
     :max-result-size 30000
     :groups (read)
     :get-path (lambda (args) (plist-get args :path))
-    :renderer #'mevedel-tool-fs-search-render-glob)
+    :renderer '((success . mevedel-tool-fs-search-render-glob)))
 
   (mevedel-define-tool
     :name "Read"
@@ -271,7 +271,7 @@ whole PATH from inside gptel's curl sentinel."
     :read-only-p t
     :groups (read)
     :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-fs-read-render)
+    :renderer '((success . mevedel-tool-fs-read-render)))
 
   (mevedel-define-tool
     :name "Grep"
@@ -311,7 +311,7 @@ whole PATH from inside gptel's curl sentinel."
     :max-result-size 20000
     :groups (read)
     :get-path (lambda (args) (plist-get args :path))
-    :renderer #'mevedel-tool-fs-search-render-grep))
+    :renderer '((success . mevedel-tool-fs-search-render-grep))))
 
 (provide 'mevedel-tool-fs)
 

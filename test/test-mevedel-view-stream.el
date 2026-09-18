@@ -360,7 +360,7 @@
               (should (string-match-p
                        "Sandbox:.*additional filesystem write access"
                        visible))
-              (should (string-match-p "completed" visible)))
+              (should (string-match-p "success · exit 0" visible)))
             (save-excursion
               (goto-char (point-min))
               (search-forward "Bash: printf run")
