@@ -13,6 +13,33 @@
 (require 'mevedel-view-render)
 (require 'mevedel-view-table)
 
+(mevedel-deftest mevedel-view-table--pad-string ()
+  (let ((mevedel-view-table--column-pixels 10)
+        (text ,text) (pixels ,pixels) (expected ,expected))
+    (cl-letf (((symbol-function 'mevedel-view-table--pixel-capable-p) (lambda (_) t))
+              ((symbol-function 'mevedel-view-table--measure-string) (lambda (&rest _) pixels)))
+      (let ((result (mevedel-view-table--pad-string text 3 (selected-window))))
+        (should (equal result (if expected (concat text " ") text)))
+        (should (equal (get-text-property (1- (length result)) 'display result)
+                       (when expected (list 'space :width (list expected))))))))
+  (text pixels expected)
+  :doc "an exactly full cell receives no character-based padding"
+  "WWW" 30 nil
+  :doc "a pixel overflow does not add more padding"
+  "WWW" 31 nil
+  :doc "padding occupies the exact remaining pixels, irrespective of font"
+  "iii" 12 18)
+
+(mevedel-deftest mevedel-view-table--layer-face ()
+  ,test
+  (test)
+  :doc "applying a row face twice does not compound relative font heights"
+  (let ((text (propertize "header" 'face 'italic)))
+    (mevedel-view-table--layer-face text 'mevedel-view-table-header)
+    (let ((once (copy-sequence text)))
+      (mevedel-view-table--layer-face text 'mevedel-view-table-header)
+      (should (equal-including-properties once text)))))
+
 (mevedel-deftest mevedel-view-table-fontified-source ()
   ,test
   (test)
@@ -255,19 +282,14 @@
                                       'mevedel-view-table-width)))))
 
   :doc "variable-pitch ASCII uses the window pixel measurement path"
-  ;; `window-font-width' signals in batch, so the space measurement that
-  ;; scales pixels back into columns has to be stubbed as well.  Without
-  ;; it the pixel path cannot complete at all, and asserting on
-  ;; measurement counts would only witness measurements whose result the
-  ;; caller discards.
+  ;; The graphical suite checks actual glyph positions.  Here the batch
+  ;; test supplies pixel metrics to exercise the same layout branch.
   (mevedel-test--with-displayed-buffer
     (let ((measurements 0))
       (variable-pitch-mode 1)
       (insert "| Name | Role |\n|---|---|\n| millie | reviewer |\n")
       (cl-letf (((symbol-function 'display-graphic-p)
                  (lambda (&optional _display) t))
-                ((symbol-function 'window-font-width)
-                 (lambda (&rest _) 10))
                 ((symbol-function 'buffer-text-pixel-size)
                  (lambda (&rest _)
                    (cl-incf measurements)
@@ -275,28 +297,26 @@
         (mevedel-view-table-decorate (point-min) (point-max) nil))
       (should (> measurements 0))))
 
-  :doc "plain ASCII column widths need no measurement at all"
+  :doc "graphical ASCII measures the frame font even without remapping"
   (mevedel-test--with-displayed-buffer
     (let ((measurements 0))
       (cl-letf (((symbol-function 'display-graphic-p)
                  (lambda (&optional _display) t))
-                ((symbol-function 'window-font-width)
-                 (lambda (&rest _) 10))
                 ((symbol-function 'buffer-text-pixel-size)
                  (lambda (&rest _)
                    (cl-incf measurements)
                    (cons (* 10 (string-width (buffer-string))) 1))))
-        (should (equal [1 1 1 1]
+        (should (equal [1.0 1.0 1.0 1.0]
                        (mevedel-view-table--char-widths
                         "Name" (selected-window)))))
-      (should (= 0 measurements))))
+      (should (= 5 measurements))))
 
   :doc "a measurement failure falls back to character widths"
   (mevedel-test--with-displayed-buffer
     (variable-pitch-mode 1)
     (cl-letf (((symbol-function 'display-graphic-p)
                (lambda (&optional _display) t))
-              ((symbol-function 'window-font-width)
+              ((symbol-function 'mevedel-view-table--measure-string)
                (lambda (&rest _) (error "No font in batch"))))
       (should (equal [1 1 1 1]
                      (mevedel-view-table--char-widths
