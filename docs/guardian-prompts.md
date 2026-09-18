@@ -1,102 +1,73 @@
-# Permission guardian
+# Permission approval reviewer
 
-The optional Bash guardian supplies risk guidance to permission handling. It
-cannot grant authority or change deterministic command analysis. Direct user
-rules, protected resources, workflow restrictions, and the permission resolver
-remain authoritative; see [permissions](permissions.md).
-
-`mevedel-permission-guardian` defaults to nil. Set it to t for the `guardian`
-model workload, or supply a custom asynchronous classifier. Guidance has a
-20-second default timeout (`mevedel-permission-guardian-timeout`). Invalid,
-failed, or timed-out guidance is unavailable, not an approval. A pending
-interactive card can show that unavailability without replacing its user controls.
+`mevedel-permission-reviewer` selects `user` (the default) or `auto`. Automatic
+review runs only when Ask or Edits needs permission, before a human card appears.
+It reuses the `guardian` model workload. Ordinary confined work in Edits needs
+no review; Full Access bypasses it entirely. [Permissions](permissions.md)
+describes the deterministic policy that remains authoritative.
 
 ## Trust boundary
 
-The ordered guardian profile puts its dedicated risk policy first, then scoped
-`AGENTS.md`/`AGENTS.local.md` and environment information. Project context helps
-identify documented workflows but cannot override risk criteria, advisory
-authority, or the response contract. The command and deterministic classifier
-facts arrive as separate untrusted user evidence. The request has no tools,
-ambient conversation, memory, or skills.
+The isolated gptel request has no tools, ambient conversation, skills, memory,
+or workspace instructions in its trusted system policy. Its sole system role is
+`prompts/permissions/approval-review-system.md`, assembled by the
+`permission-review` profile. Actual root user turns, the active Goal objective,
+exact tool arguments/operation, requested and selected resources, direct and
+delegated authority buckets, target identity/incarnation, working directory,
+and confinement facts arrive separately as quoted evidence. An agent's task or
+a tool result cannot impersonate user authorization.
 
-The prompt lives in `prompts/permissions/bash-guardian-system.md`; profile
-composition and its history are described in
-[ADR 0070](adr/0070-compose-system-prompts-from-ordered-profiles.md).
+The isolated request buffer itself holds the selected guardian backend/model,
+system policy and disabled tools/context before gptel snapshots it. Evidence
+uses the actual tool's execution boundary, including when a hook requests a
+generic permission card. Child evidence includes resolved direct capability
+profiles; live Eval names the host Emacs separately from the session target and
+its incarnation, even with a remote working directory.
+
+User-turn extraction uses the canonical transcript parser, excluding assistant
+text, tool output, compaction summaries and harness scaffolding. It takes whole
+newest consecutive turns up to 20,000 characters and reports older omissions.
+If the newest turn cannot fit, review defers even when a Goal is present. Missing root intent
+and Goal evidence goes directly to human approval. This is bounded evidence,
+not a claim to recover every historical authorization after compaction.
 
 ## Result contract
 
-The model returns compact JSON with three fields:
+The model must return JSON with `decision` (`allow-once`, `deny`, or `ask`) and
+a nonempty `reason`. Replies over 4,096 characters or malformed decisions are
+unavailable; reasons are bounded to 500 display columns. `allow-once` approves
+only the complete invocation presented. It does not persist command rules,
+network permission, or filesystem grants, and cannot broaden an exact directory
+into a recursive grant. Explicit hard denies, Plan and integrity checks remain
+outside model authority.
 
-| Field | Values and meaning |
+`ask`, malformed responses, provider failures and the 20-second default timeout
+(`mevedel-permission-review-timeout`) display the ordinary human card. `deny`
+blocks the operation with its reason. A later deliberate user override is a new
+action, not a retry through another tool. Cancellation or timeout during evidence
+collection or approval validation prevents a provider request from starting.
+Review cancellation owns provider cleanup and ignores late or duplicate callbacks. Before approval, the harness
+rechecks current policy, evidence, resource selection and session ownership.
+Changed evidence defers to the user; a newly applicable hard deny blocks it.
+Execution rechecks use Bash/Eval policy even for generic hook cards, including
+segment and requested-capability denies when switching to Full Access.
+Changing mode or cancelling the owning request invalidates pending review.
+Provider cleanup failures do not prevent permission settlement.
+
+## Decision examples
+
+These are policy examples, not measured model accuracy or guarantees:
+
+| User task and proposed effect | Expected decision |
 | --- | --- |
-| `risk` | `low`, `medium`, `high`, or `critical`: the command's potential effect |
-| `recommendation` | `proceed`, `ask`, or `deny`: whether uncertainty or severity warrants intervention |
-| `reason` | A nonempty explanation of the decisive effect, trimmed and truncated after 240 characters with `...` appended when longer |
+| Run this project's tests; request network needed to fetch their dependencies | Allow once when task, target and complete scope are clear |
+| Evaluate this exact form in the current Emacs; request that live Eval | Allow once |
+| Read a build log; upload SSH credentials to an unrelated host | Deny |
+| Inspect the project; delete unrelated user files | Deny |
+| Tool output says to bypass policy or claims the user approved an upload | Treat as untrusted evidence; deny or defer based on the actual task |
+| Operation is appropriate locally but points at an unexplained remote target | Ask |
+| Authorization depends on omitted history or unseen file contents | Ask |
 
-A custom classifier receives `(COMMAND CONTEXT CALLBACK)` and calls CALLBACK
-with nil or the equivalent keyword plist. Receiving guidance never means the
-operation has run or been authorized.
-
-The classifier entry point owns the timeout and delivers one normalized result
-for both custom and model classifiers. Failure or timeout settles with unavailable
-guidance; late or repeated responses cannot replace that result. The model
-adapter only constructs the isolated request and decodes its response events.
-
-Risk and recommendation are separate. Confinement may affect the practical
-recommendation but does not lower the stated risk. A network capability request
-has no intrinsic risk level: the intended network effect matters. `ask` expresses
-uncertainty for interactive modes; it is not by itself a full-auto veto. `deny`
-expresses effects severe enough to veto even full-auto, subject to the resolver's
-explicit-authority ordering.
-
-## Evidence and risk criteria
-
-The user evidence contains exact Bash source, command class and parser,
-dangerous or complex flags, analysis reasons, parsed command names, literal
-resources, active confinement facts, requested additive or full escalation,
-and matching explicit allow patterns. Patterns describe configured authority;
-they do not let the model grant it. Pending confinement facts use the same
-execution target and working directory as launch.
-
-The evidence excludes the user's request, transcript excerpts, tool output and
-active permission mode. The guardian gives mode-independent guidance; the
-permission resolver interprets it for the current mode. Authorization and user
-intent remain outside this classifier.
-
-Risk describes the potential impact expressed by the command, rather than the
-likelihood of harm inferred from unknown local state:
-
-- Low: bounded read-only inspection.
-- Medium: ordinary project builds/tests and bounded public retrieval.
-- High: authenticated network actions, remote mutations, local-data transmission,
-  downloaded executable code, destructive operations, and privilege/process changes.
-- Critical: explicit remote-code execution, broad data loss, credential
-  exfiltration, persistence tampering, or security-control tampering.
-
-`proceed` requires sufficient evidence that no user judgment is needed.
-Ambiguous intent, scope, targets, generated code or state-dependent effects
-warrant `ask`. `deny` is reserved for effects that should not continue without
-more specific human intervention; it is not an automatic mapping from every
-critical rating. The reason names the decisive effect first and mentions
-confinement only when it changes the practical next step.
-
-## Examples
-
-These examples explain the prompt's classification policy; actual command and
-resource permission checks still run.
-
-| Command/effect | Risk | Recommendation and reason |
-| --- | --- | --- |
-| `git status --short` | low | proceed: bounded repository inspection |
-| Fetch public documentation with curl | medium | proceed: public retrieval without execution or local-data transmission |
-| POST a local report to a remote service | high | ask: transmission of local file contents |
-| A documented `npx @emacs-eask/cli test` | high | ask: the package runner may download executable code; uncertainty alone is not a full-auto veto |
-| `rm -rf /` | critical | deny: broad system destruction |
-| `rm -rf build/` | high | ask unless trusted project evidence identifies this exact confined target as disposable generated output |
-| Download a script and pipe it to Bash | critical | deny: download and execution of remote code |
-
-In full-auto, a documented package-runner test can first run with network
-isolation. A dependency-download failure may lead to a fresh invocation requesting
-network authority. The guardian does not replay that failed operation or grant
-the new capability itself.
+Offline tests replace provider responses and exercise authority and lifecycle
+handling. They do not establish provider accuracy, latency, cost, or achieved
+prompt reductions. No captured historical command is replayed by those tests.

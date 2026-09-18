@@ -1,11 +1,12 @@
 # Permission system
 
-The subsystem has four owners. `mevedel-permission-mode.el` owns mode
+The core policy has four owners. `mevedel-permission-mode.el` owns mode
 normalization and session-scoped transitions; `mevedel-permission-rules.el`
 owns rule matching, precedence buckets, protected-path policy, and resource
 grants; `mevedel-permission-persistence.el` owns authority-store validation and
 target-aware I/O. `mevedel-permissions.el` is the decision facade that combines
-those facts with tool policy.
+those facts with tool policy. `mevedel-permission-review.el` owns optional
+automatic exception review before human queue admission.
 
 ## Decision flow
 
@@ -38,13 +39,16 @@ Single decision function `mevedel-check-permission`. Decision chain:
    Eval, except ApplyPatch whose every operand is a session-owned `work://`
    descendant. Directive Planning denies all native edits and Eval. These
    restrictions apply regardless of allow rules or permission mode.
-4. Tool's own `check-permission` slot decides command authority
+4. Full Access bypasses ordinary asks, resource defaults and review; explicit
+   tool denials still apply. Otherwise the tool's own `check-permission` slot
+   decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. For a path not directly covered by a native path rule, resolve an allowed
    root, exact allowed path, or covering resource grant
 7. A protected or outside-root path without that authority → ask
-8. Permission-mode fallback when no earlier policy decides; satisfied resource
-   authority does not itself authorize a mutating operation
+8. Permission-mode fallback when no earlier policy decides; in Edits, ordinary
+   native reads cover the OS-readable filesystem except inaccessible protected
+   paths, and Bash/batch Eval run with required confinement
 
 The permission mode itself never denies: modes decide between automatic
 allowance and a prompt, and every hard denial is a step-2 or step-3 policy.
@@ -65,17 +69,25 @@ resource-grant requirement.
 Hook integration sits around this chain:
 
 - `PreToolUse` runs before the chain. A hook `deny` is final. A hook
-  `ask` can tighten an allow into a prompt. A hook `allow` can only skip
+  `ask` can tighten an allow into a prompt in Ask or Edits. A hook `allow` can only skip
   a prompt when the normal resolver would have returned `ask`; explicit
   denies still win. The resulting `ask` still crosses `PermissionRequest`
-  once before that earlier allow suppresses queue admission.
+  once before that earlier allow suppresses queue admission. Full Access ignores
+  hook asks but retains hook denies.
 - `PermissionRequest` runs whenever generic, Bash, Eval, or sandbox authority
   resolution reaches `ask`, before the corresponding entry enters the shared
   queue. It can allow, deny, or leave the prompt in place. Queue display and
-  rule-driven re-evaluation do not rerun it.
+  rule-driven re-evaluation do not rerun it. Every approval source, including
+  hook and fallback approvals, rechecks current policy at settlement in every
+  mode. Hard denies still apply before queue admission, even without a mode
+  transition. A cancelled request cannot admit a new card or automatic review,
+  or resume execution through a late approval.
+  Prepared session-owned patch classification is retained through prompts and
+  automatic review, so valid Plan-file edits remain distinguishable from forbidden
+  ordinary or shared writes.
 - `PermissionDenied` runs after any final denial. It can adjust the
   reason/context shown to the model, but it cannot turn the denial into an
-  allow. Its payload identifies the original policy, user, `PreToolUse`, or
+  allow. Its payload identifies the original policy, user, reviewer, `PreToolUse`, or
   `PermissionRequest` provenance.
 
 Permission invocation context is normalized in the decision facade before
@@ -154,13 +166,13 @@ One specifier per rule:
 | `:name`    | free-form name (glob)  | Agent (`role`)                    |
 
 Precedence: specifier rules outrank generic; within a group
-`deny > ask > allow`. Protected paths prompt unless a covering resource grant
-with sufficient access already exists.
+`deny > ask > allow`. Ask and Edits retain explicit ask rules. Full Access
+ignores ask rules and default protected paths; explicit denies remain absolute.
 
 `:sandbox-permissions` is an execution-level qualifier, not a request to raise
 authority. A rule carrying `require-escalated` is considered only after Bash or
 batch Eval has explicitly requested that level. Ordinary command allows cannot
-authorize full escalation. Only direct user-authored session, persistent, and
+authorize full escalation in Ask or Edits. Only direct user-authored session, persistent, and
 defcustom rules may allow it; delegated invocation/request rules cannot. A
 pattern scopes authority to the matching Bash command or Eval expression, and
 omitting the pattern deliberately authorizes every expression for that tool at
@@ -209,14 +221,22 @@ glob-discovered protection.
 
 The three canonical modes are `ask`, `edits`, and `full-auto`:
 
-- `ask` allows recognized inspection, sends ApplyPatch directly to its
-  mandatory review when its paths are authorized, and prompts for other edits
-  and uncertain Bash or Eval execution.
-- `edits` additionally applies native edits inside allowed roots, but grants no
-  blanket Bash or Eval authority.
-- `full-auto` bypasses heuristic Bash and Eval prompts, including live Eval,
-  while explicit denies and protected resources without exact authority still
-  win.
+| Mode | Native tools | Bash and Eval | Confinement |
+| --- | --- | --- | --- |
+| `ask` | Root/resource checks and patch review | Recognized inspection automatic; uncertain execution asks | Configured sandbox preference |
+| `edits` | Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks | Arbitrary Bash and batch Eval automatic; live Eval and additional authority require approval | Required; an unavailable backend refuses execution |
+| `full-auto` | Full Access | Automatic, including live Eval and explicit escalation | Off; filesystem and network unrestricted under the target OS account |
+
+Full Access bypasses ordinary ask rules, default protections, resource boundaries,
+hook asks and automatic review. Explicit hard denies, Plan restrictions,
+validation, and session ownership remain. It does not override OS access controls:
+other users' files are readable only when the target account can read them.
+Edits also exposes broad ordinary read access, including outside the workspace;
+its configured inaccessible credential paths remain protected. Choosing Full
+Access deliberately removes those default credential masks.
+
+This is Codex's Full Access analogue, not the historical sandboxed `--full-auto`
+CLI preset. Mode changes do not overwrite the stored sandbox preference.
 
 Configuration, interactive commands, and persisted sessions accept only these
 canonical values.
@@ -285,8 +305,10 @@ authority snapshot.
 
 Default allowed roots are the workspace root, the system temporary directory,
 configured memory roots, and manually configured additional roots. A native
-filesystem operation outside those roots prompts for exact `read` or `write`
-authority. A session grant is stored in the durable session sidecar and
+filesystem write outside those roots prompts for exact `write` authority in
+Ask and Edits. Ask also gates outside reads. Edits permits ordinary OS-readable
+paths, retaining inaccessible credential protections. Full Access removes these
+default resource restrictions. A session grant is stored in the durable session sidecar and
 survives save/resume of that same session; an always grant is stored only in
 the workspace permission file. Neither enters an unrelated session. ApplyPatch
 authority covers reading the same exact path, but read authority does not cover
@@ -315,7 +337,10 @@ the exact resource or an existing containing directory tree, including a higher
 ancestor, and its read/write access. For several execution resources, first
 choose which resource to change. The card shows the selected path in the
 execution target's native notation and labels exact and recursive scope.
-Selection alone neither creates a grant nor runs the tool. `RET` approves the
+Selection alone neither creates a grant nor runs the tool. A child exact-directory
+write cannot be represented by a bind mount: approval leaves the card pending
+with an actionable error until the user explicitly chooses a directory tree.
+No automatic reviewer, hook or persistence path silently broadens that extent. `RET` approves the
 current invocation, `s` remembers session authority, and `A` remembers workspace
 authority; one-shot interactions retain only their permitted lifetime choices.
 Approving a tree installs its grant before checking queued siblings. Rechecks
@@ -336,7 +361,8 @@ modify the shared workspace permission store.
 An ephemeral `/btw` side also copies that policy, but every side request carries
 an immutable one-shot mutation boundary. Analyzer-proven read-only Bash and
 read-only tools remain automatic when the ordinary policy allows them. Other
-mutations ask even under `full-auto` or an inherited allow rule, and the prompt
+mutations ask in Ask and Edits even under an inherited allow rule; Full Access
+authorizes them without a prompt. When a prompt is needed it
 offers only allow-once, deny-once, or feedback; defensive outcome normalization
 prevents hooks or non-UI callers from creating reusable authority. ApplyPatch's
 mandatory hunk review itself satisfies this boundary, so it does not show a
@@ -399,15 +425,16 @@ callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
 queued siblings by re-running the decision chain. Resolved siblings leave the
 queue before any callback runs. Execution admission and rechecks share one
 pure decision in `mevedel-tool-exec-permission.el`: it orders operation
-policy, guardian review, full escalation, denied capabilities, command
+policy, full escalation, denied capabilities, command
 resources, and missing capabilities, and names the one thing that still
-stands in the way. Admission resolves that need with a prompt or guardian
-review and decides again; a recheck reports it as a pending ask. Rechecks
+stands in the way. Admission resolves that need through hooks, optional approval
+review and then a human card if needed; a recheck reports unresolved asks. Rechecks
 therefore cover the operation and its complete requested filesystem/network
 authority, including capabilities that were already granted at admission. They retain the originating request,
 agent invocation, Plan restrictions, and frozen policy context. An operation
 rule alone cannot release a sibling that still lacks a capability; a directory
-grant alone cannot release an uncertain command in edits mode. Every queue exit
+grant alone cannot release an uncertain command in Ask. Edits already authorizes
+ordinary commands under required confinement. Every queue exit
 uses the permission
 queue's exactly-once settlement gate. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
@@ -488,8 +515,8 @@ The desktop wrappers request a non-expiring critical notification.  The
 notification server may ignore the timeout hint.
 
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
-kinds. It owns generic permission controls, agent attribution, Bash guardian
-and dangerous-command presentation, and Eval presentation. The queue passes
+kinds. It owns generic permission controls, agent attribution, dangerous-command
+presentation, and Eval presentation. The queue passes
 the entry, attribution, pending count, and settlement callback through
 `mevedel-permission-prompt-render`; the UI owner selects its presentation.
 Rendering an Eval card does not load the execution-policy adapter. The queue
@@ -501,7 +528,7 @@ characters) and an Eval expression longer than
 `mevedel-eval-expression-display-limit` (20 lines) are elided in the prompt
 behind a `TAB` toggle, which names how much is hidden and re-renders the queue
 head in place. Only the command or expression body elides: agent attribution,
-the guardian verdict, the detected-command summary, the patterns a
+the detected-command summary, the patterns a
 session/always allow would add, and every warning stay visible, because those
 are what the decision rests on. The `mevedel--remote` descriptor a browser
 collaborator reads always carries the whole command, elided or not -- a guest
@@ -509,8 +536,7 @@ has no `TAB` to press and must not approve what it cannot see. Both surfaces
 show the captured admission mode, approval cause, and selected resource scope,
 including directory selections on one-shot cards without remembering controls.
 
-`mevedel-bash-policy.el` supplies Bash classification, reusable rule patterns,
-and guardian guidance. `mevedel-tool-exec-permission.el` combines that policy
+`mevedel-bash-policy.el` supplies Bash classification and reusable rule patterns. `mevedel-tool-exec-permission.el` combines that policy
 with the generic permission chain, persists approved authority, and adapts
 Bash and Eval decisions to the permission queue. Execution and rendering stay
 in `mevedel-tool-exec.el`.
@@ -539,8 +565,10 @@ resource boundary, protected resource, explicit ask rule, hook, missing
 additive filesystem/network authority, or execution without confinement.
 
 Count `permission-displayed` to measure actual initial card displays. Admission
-is `permission-enqueued`; refreshing a card's scope, queue count, or guardian
-guidance does not emit another display. Each admitted request settles once as
+is `permission-enqueued`; refreshing a card's scope or queue count does not emit
+another display. Automatic review records `permission-review-completed` with
+outcome, source and elapsed seconds, without raw user evidence. It does not count
+as a displayed card or a human answer. Each admitted request settles once as
 `permission-resolved` for a user answer, `permission-coalesced` for a covering
 policy decision, `permission-swept` for owner-request teardown, or
 `permission-aborted` for cancellation, queue abort, or rendering failure.
@@ -573,10 +601,10 @@ these narrow policies remain unknown.
 Bash keeps its specialized permission entry and controls, but an `ask` passes
 through the pipeline's shared `PermissionRequest` boundary before that entry
 is admitted.
-Under `full-auto`, unknown, dangerous, and complex Bash commands are
-allowed without a prompt after explicit deny rules and literal protected
-path tokens have been checked. Outside `full-auto`, unknown commands
-default to ask. Direct user-authored session, persistent, and defcustom
+Edits authorizes arbitrary Bash syntax within required confinement; unknown
+commands, pipes, redirects and substitutions alone do not prompt. Full Access
+runs without confinement or prompts. Ask uses conservative classification: unknown
+commands default to ask. Explicit hard denies still apply in all modes. Direct user-authored session, persistent, and defcustom
 patterns may authorize dangerous or complex forms. Invocation- and
 request-scoped delegated patterns may not. Explicit denies always win.
 When a prompted dangerous command is literal and contains no dynamic shell or
@@ -587,8 +615,8 @@ broader rules directly.
 ### Child confinement
 
 Bash, batch Eval, and native external tool helpers share the guarded child
-launcher and, independently of the permission mode, consult
-the session's `mevedel-sandbox-mode`. On Linux, `best-effort` resolves
+launcher and use one effective policy: required in Edits, off in Full Access,
+and the session's configured `mevedel-sandbox-mode` in Ask. On Linux, the backend resolves
 `bwrap` with `executable-find` and caches a real probe of the core mount, user,
 process, and network namespaces. Each probe attempt defaults to a 500 ms bound
 and retains at most 64 KiB of combined diagnostics. If the full probe fails,
@@ -601,9 +629,9 @@ roots, and session working directory writable, installs a fresh `/proc`, and
 changes to the canonical working directory. Its private `/dev` supplies
 `/dev/null` without host authority; redundant additive grants for that device
 are ignored rather than remounted. The default profile also isolates the
-network. A justified additive network request prompts in `ask` and `edits`,
-proceeds automatically in `full-auto` after command authorization, and changes
-only network isolation for that invocation. The namespace and mount boundary
+network. A justified additive network request requires authority in Ask and
+Edits and changes only network isolation for that invocation. Full Access already
+has unrestricted network and filesystem access. The namespace and mount boundary
 is inherited by descendants.
 
 Native tools pass already-authorized input and search paths to the launcher as
@@ -634,15 +662,16 @@ existing descriptor-backed launcher with distinct descriptor numbers.
 
 Bubblewrap cannot add authority for only a directory inode: binding a directory
 also exposes its descendants. Exact directory write grants, and exact directory
-read grants beneath inaccessible masks, therefore refuse preparation with a
+read grants beneath inaccessible masks, therefore refuse confined preparation with a
 message identifying the directory and the prompt's recursive-scope selection.
 An exact directory read already available through the baseline filesystem adds
 no mount. An explicitly approved recursive grant subsumes redundant exact
 mounts, without merging their separate identities in the authority store.
 
 A justified additive filesystem request names exact absolute paths and marks
-each as read or write. Ungranted paths prompt in every permission mode;
-invocation approval applies only to the current child. Reusable approval
+each as read or write. Ungranted paths require approval in Ask and Edits;
+Full Access bypasses ordinary resource asks. Invocation approval applies only
+to the current child. Reusable approval
 stores each selected path either in the matching operation profile or as an
 independent resource grant shared with native filesystem tools. It never
 creates both entries implicitly. The card's `g` selection can
@@ -690,8 +719,8 @@ matching approved profile is not inferred from failures or earlier commands:
 the model must make a new explicit invocation with the missing capability and
 justification. A started process is never replayed.
 
-Before Bash executes, identified literal resources are resolved against the
-working directory. Resources outside the allowed roots require a covering
+In Ask, before Bash executes, identified literal resources are resolved against
+the working directory. Resources outside the allowed roots require a covering
 additive grant — exact, or recursive over an ancestor directory; bare `.` and
 `..` operands participate in this check. Command
 authorization is resolved first so an explicit command deny retains precedence.
@@ -702,13 +731,14 @@ justification.
 
 `require_escalated` is a separate complete bypass for Bash and batch Eval. It
 requires a justification and cannot be combined with additive permissions. It
-prompts in every permission mode, including `full-auto`, unless a matching
+prompts in Ask and Edits unless a matching
 direct user-authored `:sandbox-permissions require-escalated` rule already
-exists. The prompt and diagnostics explicitly identify that filesystem,
+exists or the optional reviewer approves that invocation. Full Access already
+authorizes direct execution. The prompt and diagnostics identify that filesystem,
 network, and process confinement will all be disabled. Operation denials,
 including Bash mutations prohibited by Plan, still apply before escalation.
-Explicit operation ask rules retain their prompt even when a remembered rule
-already authorizes escalation. Once approved, the child runs directly as the
+In Ask and Edits, explicit operation ask rules still need approval even when a
+remembered rule already authorizes escalation. Once approved, the child runs directly as the
 user and reports `sandbox: escalated`. Delegated rules
 cannot grant this authority, and non-interactive trusted skill expansion cannot
 request it or create reusable escalation rules. An ordinary sub-agent may still
@@ -727,7 +757,9 @@ with no wildcard expansion or whitespace normalization. Approving
 Deliberately authored `:pattern` rules retain glob semantics; the remembered
 authority cockpit labels literal expression rules explicitly.
 
-`best-effort` executes directly when the initial probe is unavailable. Once
+`best-effort` in Ask executes directly when the initial probe is unavailable.
+Edits always requires confinement, regardless of the stored preference. Full
+Access deliberately selects direct execution. Once
 confined preparation begins, a failure is returned without an unrestricted
 replacement. A private marker emitted immediately before `exec` distinguishes
 launch refusal from a started command; grant refusals do not emit that marker.
@@ -757,23 +789,25 @@ are removed after settlement. A protected path crossing a symlink that the
 child could rewrite fails closed instead of relying on a racy canonical-path
 snapshot.
 
-### Bash guardian guidance
+### Optional approval review
 
-The optional guardian runs after an interactive Bash decision reaches `ask`.
-The permission card appears immediately with “Analyzing command risk...” and is
-redrawn with risk, recommendation and reason when guidance arrives. Failed,
-timed-out or invalid guidance leaves an “Unavailable” section. The normal
-permission chain and the user's answer remain authoritative.
+`mevedel-permission-reviewer` is `user` by default. Set it to `auto` to review
+permission exceptions before displaying a card. The `guardian` workload may
+approve the complete invocation once, deny with a reason, or defer. It sees
+actual root user intent, exact arguments, requested capabilities, current target
+and confinement facts. It cannot persist grants or change mode. Failure,
+timeout and uncertainty fall back to the ordinary human card. Full Access
+bypasses review entirely.
 
-In `full-auto`, guardian review is deny-only for commands that would otherwise
-have asked under ordinary classification. A `deny` vetoes that unattended path;
-`proceed`, `ask` or unavailable guidance lets the already-authorized path
-continue. Direct user authority and escalation follow the resolver's ordering;
-the guardian cannot grant missing filesystem or network capabilities.
+Review cancellation and evidence revalidation prevent late responses, mode
+changes, target replacement or revoked authority from reusing an obsolete
+approval. Human queues also recheck policy on mode changes. Already-running
+processes retain their admitted authority; queued children refuse launch if
+the captured permission mode has changed.
 
-[Permission guardian](guardian-prompts.md) owns configuration, trust boundaries,
-command-evidence fields, risk criteria and examples. Its output is guidance,
-not a grant or proof that execution occurred.
+[Approval reviewer](guardian-prompts.md) owns the trusted prompt, bounded evidence
+and JSON response contract. Historical approval counts do not measure the new
+reviewer's safety or achieved reduction in prompts.
 
 ## Introspection source reads
 
@@ -787,7 +821,8 @@ needed; its path goes through the normal resource permission boundary.
 ## Eval
 
 Eval asks through the same session permission queue's Eval-specific
-entry type unless the effective permission mode is `full-auto`. Like Bash,
+entry type when approval is required. Edits automatically permits confined
+batch Eval, while live Eval remains an exception. Full Access permits both. Like Bash,
 an `ask` fires `PermissionRequest` before queue admission without changing the
 specialized card. The expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.  The prompt also shows the
@@ -805,15 +840,16 @@ callers can pass `preserve_ui: false` only when intentional UI
 manipulation is desired.  `batch` starts a child `emacs --batch -Q`
 process with the current `load-path` and the session working directory.
 Batch Eval protects the interactive Emacs session from UI/global-state
-mutation and uses the same optional child confinement as Bash. When
-confinement is unavailable or disabled, it still runs as the same OS user and
-the result explicitly reports unrestricted filesystem and network access.
+mutation and uses the same effective child confinement as Bash. Edits refuses
+unavailable confinement; Ask may use its configured fallback, and Full Access
+runs directly as the same OS user with unrestricted filesystem/network disclosure.
 
 Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
 are the exception: they pass a trusted-literal flag because the
 expression is author-written SKILL.md content, not model-generated Eval
 input. A matching Eval allow authorizes model-generated or trusted Eval, while
-a matching ask prompts even in `full-auto`; deny rules still win absolutely.
+a matching ask requires approval in Ask and Edits; Full Access bypasses it. Deny
+rules still win absolutely.
 Trusted skill expansion cannot create an interactive prompt and therefore
 requires existing authority, typically from the skill's `allowed-tools:
 [Eval]`.

@@ -827,7 +827,7 @@
                        "prompt for edits and uncertain execution current")
                (substring-no-properties
                 (mevedel-menu--mode-ask-description))))
-      (should (string= "edits      auto-apply edit previews"
+      (should (string= "edits      automatic edits and confined execution"
                        (substring-no-properties
                         (mevedel-menu--mode-edits-description))))))
 
@@ -837,7 +837,7 @@
       (mevedel-menu--set-mode 'full-auto)
       (should (string=
                (concat "full-auto  "
-                       "auto-allow tools                         current")
+                       "Full Access, no confinement or prompts   current")
                (substring-no-properties
                 (mevedel-menu--mode-full-auto-description))))
       (should (string= (concat "ask        "
@@ -857,7 +857,7 @@
                "Plan mode  on · inspect and discuss, no edits"
                (substring-no-properties
                 (mevedel-menu--mode-plan-description))))
-      (should (string= "full-auto  auto-allow tools"
+      (should (string= "full-auto  Full Access, no confinement or prompts"
                        (substring-no-properties
                         (mevedel-menu--mode-full-auto-description)))))))
 

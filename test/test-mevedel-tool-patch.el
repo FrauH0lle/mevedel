@@ -1600,8 +1600,12 @@
   (let ((mevedel--current-request
          (mevedel-request--create :one-shot-mutations-p t))
         (mevedel-pipeline--auto-apply-edit-p t)
+        (mevedel-permission-mode 'edits))
+    (should (eq 'ask (mevedel-tool-patch--effective-mode))))
+  :doc "Full Access bypasses side-conversation patch review"
+  (let ((mevedel--current-request (mevedel-request--create :one-shot-mutations-p t))
         (mevedel-permission-mode 'full-auto))
-    (should (eq 'ask (mevedel-tool-patch--effective-mode)))))
+    (should (eq 'full-auto (mevedel-tool-patch--effective-mode)))))
 
 (mevedel-deftest mevedel-tool-patch--get-paths
   (:doc "Extracts every source and destination path") ,test (test)

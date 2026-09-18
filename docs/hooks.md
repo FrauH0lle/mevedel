@@ -179,7 +179,14 @@ cancellation, or a failed stdin write — leaves no child running and writes
 one log entry.  A cancellation logs status `cancelled` and closes the
 event's telemetry span without running the remaining handlers or the
 caller's continuation, because the request that owned them is being torn
-down.  Each
+down. Cancellation also stops command startup before preparation or launch;
+resources returned after cancellation during yielding startup are released.
+`Stop` and `StopFailure` handlers remain independent of request cancellation
+and retain their own timeout. Command completion waits for idle transport before
+advancing the handler chain when its sentinel interrupts remote I/O. The first terminal result is
+retained, the child is released immediately, and request cancellation remains
+effective while that continuation is queued. This applies to local predecessors
+too, because a later handler may be remote. Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.

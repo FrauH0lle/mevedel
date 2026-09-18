@@ -602,8 +602,9 @@ steering, or timeout), `InterruptAgent` (abort one current turn without removing
 the agent), and `ToolSearch` (look up deferred tool schemas on demand)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
-evaluation, confirmed in `ask` and `edits`, automatic in `full-auto`; supports
-`live` and `batch` modes, with optional UI preservation for live evaluation)
+evaluation: live Eval asks unless explicitly allowed in `ask` and `edits`;
+batch Eval runs automatically under required confinement in `edits`;
+`full-auto` bypasses ordinary asks in either mode. Live Eval optionally preserves UI state.)
 
 **Web:** `WebSearch`, `WebFetch` (native EWW/SHR retrieval, including
 YouTube descriptions and transcripts)
@@ -755,17 +756,22 @@ Precedence: specifier rules outrank generic; within a group `deny > ask >
 allow`. `mevedel-protected-paths` maps globs to `read-only` or `inaccessible`.
 The defaults keep `.git/` readable but immutable and hide `~/.ssh/` and
 `~/.gnupg/` plus common AWS, Azure, Google Cloud, and Kubernetes credential
-directories; covering resource authority is still required even when the
-permission mode would otherwise allow an operation.
+directories. These protections apply in Ask and Edits; Full Access removes
+these defaults while retaining explicit hard denies.
 
 **Permission modes** (`mevedel-permission-mode`):
 
 - `ask` — allow recognized inspection and prompt for edits and uncertain Bash
   or Eval execution.
-- `edits` — apply native edits inside allowed roots automatically, while Bash
-  and Eval still use their normal checks.
-- `full-auto` — skip policy prompts except explicit hard policies; protected
-  and outside-root paths still require resource authority.
+- `edits` — automatically apply native edits inside allowed roots and run Bash
+  and batch Eval with required confinement. Ordinary native reads include all
+  OS-readable paths except configured credential masks. Live Eval and additional
+  authority require approval. Missing confinement refuses execution.
+- `full-auto` — **Full Access** under the target's OS account: unrestricted
+  filesystem/network execution, native operations and live Eval, without
+  permission cards or automatic review. Ordinary ask rules and default protected
+  paths do not limit it. Explicit hard denies, Plan, validation and ownership
+  checks remain effective.
 
 Configuration, interactive commands, and persisted sessions use only these
 three values.
@@ -795,13 +801,16 @@ Dynamic shell syntax always classifies as complex.  Direct user-authored
 session, persistent, and global patterns may deliberately authorize dangerous
 or complex forms; rules delegated by a skill or request may not.  Explicit
 denies remain final.  Argument-aware policies recognize narrow read-only forms
-of Git, find, ripgrep, base64, sed, and awk; output options, mutation, and
-helper execution remain unknown and therefore prompt outside `full-auto`.
+of find, ripgrep, base64, sed, and awk; output options, mutation, and
+helper execution remain unknown and therefore prompt in `ask`. Edits relies on
+required confinement rather than syntax classification for automatic execution.
 
 **Dangerous commands** (`mevedel-bash-dangerous-commands`): command names that
 contribute the `dangerous` class (e.g., `rm`, `sudo`, `dd`, `chmod`, `curl`).
 
-**Child confinement** (`mevedel-sandbox-mode`): Bash and batch Eval use
+**Child confinement** (`mevedel-sandbox-mode`): Edits requires Bubblewrap;
+Full Access disables confinement. Ask uses this configured preference without
+changing it when the permission mode changes. Bash and batch Eval use
 Bubblewrap on Linux when available. Mevedel finds `bwrap` through the current
 executable path and probes the real namespace profile before first use. Each
 probe attempt is time-bounded and retains at most 64 KiB of diagnostics. If the
@@ -821,12 +830,12 @@ immutable, inaccessible paths are hidden, Git directory pointer targets follow
 the same alist shape, for example `(("~/public-metadata/**" . read-only)
           ("~/.credentials/**" . inaccessible))`.
 
-**Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
-guidance shown in Bash permission prompts. It can use the current gptel model or
-a custom function, and never overrides explicit deny rules, filesystem resource
-authority, or the user's decision.
-`mevedel-permission-guardian-timeout` caps how long the prompt waits for
-guidance.
+**Approval reviewer** (`mevedel-permission-reviewer`): `user` displays ordinary
+permission cards; `auto` first asks the `guardian` model workload to approve one
+invocation, deny it, or defer. It receives actual root user intent and the complete
+requested authority. It never creates persistent grants. Errors, uncertainty
+and `mevedel-permission-review-timeout` (20 seconds) fall back to the user.
+Full Access bypasses review. See [the reviewer contract](docs/guardian-prompts.md).
 
 Persistent rules accepted via the prompt's "always" choices are saved to
 `.mevedel/permissions.el` per workspace.
@@ -1041,8 +1050,8 @@ Useful commands:
 | `mevedel-sandbox-mode`                     | Child confinement (`best-effort` / `required` / `off`).                   |
 | `mevedel-protected-paths`                  | Protected path globs mapped to `read-only` or `inaccessible`.             |
 | `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
-| `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |
-| `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |
+| `mevedel-permission-reviewer`              | Permission decisions: `user`, or `auto` review before a human card. |
+| `mevedel-permission-review-timeout`         | Seconds before automatic review falls back to a human card. |
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
 | `mevedel-model-tiers`                      | Default named provider/effort tier map inherited by session presets.     |
 | `mevedel-model-workloads`                  | Default tier/provider/effort policy per model workload.                  |

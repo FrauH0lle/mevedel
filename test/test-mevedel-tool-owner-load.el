@@ -23,6 +23,7 @@
          (emacs (expand-file-name invocation-name invocation-directory))
          (owners '("mevedel-bash-policy.el"
                    "mevedel-hooks.el"
+                   "mevedel-permission-review.el"
                    "mevedel-pipeline.el"
                    "mevedel-tool-exec-permission.el"
                    "mevedel-tool-exec.el"
@@ -47,38 +48,36 @@
                                      'defun)
                         ""))
                  (error "Bash policy behavior has the wrong owner"))))
-            (guardian
+            (approval-review
              (progn
-               (require 'mevedel-bash-policy)
-               (let* ((directory (make-temp-file "mevedel-cold-guardian-" t))
-                      (workspace (mevedel-workspace--create
-                                  :type 'test :id directory :root directory
-                                  :name "cold-guardian"))
-                      (mevedel-permission-guardian t)
-                      results)
-                 (unwind-protect
-                     (progn
-                       (cl-letf (((symbol-function 'gptel-request)
-                                  (lambda (_prompt &rest args)
-                                    (let ((callback (plist-get args :callback)))
-                                      (funcall callback
-                                               "{\"risk\":\"high\",\"recommendation\":\"ask\",\"reason\":\"Inspect scope.\"}"
-                                               nil)
-                                      (funcall callback 'abort nil)))))
-                         (mevedel-bash-policy-guardian-classify-async
-                          "make test"
-                          (list :workspace workspace :working-directory directory)
-                          (lambda (value) (push value results))))
-                       (unless (equal '((:risk high :recommendation ask
-                                         :reason "Inspect scope.")) results)
-                         (error "Cold guardian did not settle once: %S" results))
-                       (unless (string-suffix-p
-                                "mevedel-bash-policy.elc"
-                                (or (symbol-file
-                                     'mevedel-bash-policy-guardian-classify-async
-                                     'defun) ""))
-                         (error "Guardian did not load its compiled owner")))
-                   (delete-directory directory t)))))
+               (require 'mevedel-permission-review)
+               (let ((mevedel-permission-reviewer 'auto)
+                     results)
+                 (with-temp-buffer
+                   (org-mode)
+                   (insert "Evaluate (+ 1 2) in this Emacs.\n")
+                   (let* ((session (mevedel-session--create
+                                    :permission-mode 'edits
+                                    :root-buffer (current-buffer)))
+                          (entry (list :kind 'eval :session session
+                                       :data-buffer (current-buffer)
+                                       :expression "(+ 1 2)" :mode "live"
+                                       :callback (lambda (value) (push value results)))))
+                     (cl-letf (((symbol-function 'gptel-request)
+                                (lambda (_prompt &rest args)
+                                  (let ((callback (plist-get args :callback)))
+                                    (funcall callback
+                                             "{\"decision\":\"allow-once\",\"reason\":\"Exact user request\"}"
+                                             nil)
+                                    (funcall callback 'abort nil)))))
+                       (mevedel-permission-review-start
+                        entry (lambda () (error "Unexpected human fallback")))))
+                   (unless (equal '(allow-once) results)
+                     (error "Cold reviewer did not settle once: %S" results)))
+                 (unless (string-suffix-p
+                          "mevedel-permission-review.elc"
+                          (or (symbol-file 'mevedel-permission-review-start 'defun) ""))
+                   (error "Reviewer did not load its compiled owner")))))
             (exec-permission
              (progn
                (require 'mevedel-structs)

@@ -27,8 +27,10 @@ Evaluate one Elisp form and return its value and printed output.
   `prin1`, and `princ` output is returned as STDOUT. `message` is not captured.
   Errors can include output produced before failure. Large results have a bounded
   preview and retrieval address.
-- Batch confinement, when available, restricts filesystem/process access and
-  defaults to no network. Non-default permission requests apply only to batch:
+- In Edits, batch Eval runs automatically with required confinement and no
+  network by default; live Eval needs approval. Full Access automatically runs
+  either mode without confinement. Ask uses the configured sandbox preference.
+  Non-default permission requests apply only to batch:
   `with_additional_permissions` requests network and/or exact absolute read/write
   paths; `require_escalated` requests unrestricted child execution. Put the reason
   in `justification` on the new tool call. Expression authorization is separate;

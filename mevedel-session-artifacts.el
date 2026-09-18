@@ -1061,9 +1061,11 @@ environment, capabilities, and sandbox facts are fixed for the life of a
 connection, while the fingerprint is one target command.  A first probe or a
 reconnect still runs the full probe, because a new connection may be a new
 target.  A failed observation falls back to the full probe, which settles a
-blocked readiness the caller reports."
+blocked readiness the caller reports.  Unavailable child confinement does not
+prevent observing target identity."
   (let ((readiness (mevedel-execution-target-probe target nil sandbox-mode)))
-    (if (not (eq 'ready (plist-get readiness :status)))
+    (if (not (or (eq 'ready (plist-get readiness :status))
+                 (eq 'sandbox-unavailable (plist-get readiness :reason))))
         readiness
       (condition-case nil
           (progn
@@ -1097,9 +1099,14 @@ every durable mutation boundary; unchanged targets take no durability I/O."
           (if (mevedel-execution-target-remote-p target)
               (let ((readiness
                      (or (mevedel-session-artifacts--observe-target-incarnation
-                          target (mevedel-session-sandbox-mode session))
+                          ;; Reuse connection readiness without changing its
+                          ;; confinement requirement at every identity fence.
+                          target (or (plist-get (mevedel-execution-target-readiness target)
+                                                :sandbox-mode)
+                                     'off))
                          (mevedel-execution-target-readiness target))))
-                (unless (eq 'ready (plist-get readiness :status))
+                (unless (or (eq 'ready (plist-get readiness :status))
+                            (eq 'sandbox-unavailable (plist-get readiness :reason)))
                   (user-error "Execution target is not ready: %s"
                               (or (plist-get readiness :error)
                                   (plist-get readiness :reason)

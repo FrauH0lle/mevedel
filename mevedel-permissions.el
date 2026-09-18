@@ -69,7 +69,7 @@
 (declare-function mevedel-permission-rules-path-in-exact-allowed-paths-p
                   "mevedel-permission-rules" (path allowed-paths))
 (declare-function mevedel-permission-rules-path-protected-p
-                  "mevedel-permission-rules" (path &optional target))
+                  "mevedel-permission-rules" (path &optional target access))
 (declare-function mevedel-permission-rules-resource-grant
                   "mevedel-permission-rules" (path access &optional recursive))
 (declare-function mevedel-permission-rules-resource-granted-p
@@ -491,7 +491,8 @@ session-owned work descendants; workspace-owned shared files are excluded."
             :protected-path-p
             (mevedel-permission-rules-path-protected-p
              path (and session
-                       (mevedel-session-execution-target session)))
+                       (mevedel-session-execution-target session))
+             (and (eq mode 'edits) resource-access))
             :workspace-boundary-p
             (and path
                  (not (mevedel-permission-rules-path-in-allowed-roots-p
@@ -629,10 +630,15 @@ exact-match in-bounds path list."
   (when-let* ((path (plist-get context :path)))
     (let ((granted-p (plist-get context :resource-granted-p)))
       (cond
+       ((eq (plist-get context :mode) 'full-auto)
+        (mevedel-permission--decision 'allow 'mode))
        ((and (plist-get context :protected-path-p) granted-p)
         (mevedel-permission--decision 'allow 'resource-grant))
        ((plist-get context :protected-path-p)
         (mevedel-permission--decision 'ask 'protected-path))
+       ((and (eq (plist-get context :mode) 'edits)
+             (eq (plist-get context :resource-access) 'read))
+        (mevedel-permission--decision 'allow 'sandbox-read))
        ((not (plist-get context :workspace-boundary-p))
         (mevedel-permission--decision 'allow 'allowed-root))
        ((mevedel-permission-rules-path-in-exact-allowed-paths-p
@@ -658,12 +664,16 @@ authoritative despite one-shot."
          (command-context
           (plist-put (copy-sequence context) :skip-resource-boundary-p t))
          (policy-decision
-          (if (and (plist-get context :one-shot-mutations-p)
+          (cond
+           ((and (eq (plist-get context :mode) 'full-auto)
+                 (memq slot-outcome '(nil allow ask)))
+            (mevedel-permission--decision 'allow 'mode))
+           ((and (plist-get context :one-shot-mutations-p)
                    (eq slot-outcome 'allow)
                    (eq (plist-get slot-decision :via) 'tool-slot))
-              (mevedel-check-permission--tail-decision command-context)
-            (or slot-decision
-                (mevedel-check-permission--tail-decision command-context))))
+            (mevedel-check-permission--tail-decision command-context))
+           (t (or slot-decision
+                  (mevedel-check-permission--tail-decision command-context)))))
          (policy-outcome
           (mevedel-permission-decision-raw-outcome policy-decision)))
     (if (eq policy-outcome 'allow)
@@ -696,6 +706,8 @@ mode, and native-resource tail."
           (and (not skip-resource-boundary-p)
                (mevedel-permission--resource-decision context))))
     (cond
+     ((eq mode 'full-auto)
+      (mevedel-permission--decision 'allow 'mode))
      ;; Protected resources require covering grants even when a path rule
      ;; allows.
      ((and (not skip-resource-boundary-p)

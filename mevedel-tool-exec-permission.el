@@ -4,7 +4,7 @@
 
 ;; Owns execution-specific authority normalization, persistence, permission
 ;; queue adapters, and Bash/Eval permission prompt orchestration.  One pure
-;; decision orders operation policy, guardian review, full escalation, and
+;; decision orders operation policy, full escalation, and
 ;; child capabilities; admission settles what it names through prompts or
 ;; review and decides again, while queued rechecks read the same decision.
 
@@ -53,20 +53,11 @@
 (declare-function mevedel-bash-policy-explicit-deny-p
                   "mevedel-bash-policy"
                   (buckets command &optional analysis))
-(declare-function mevedel-bash-policy-full-auto-guardian-needed-p
-                  "mevedel-bash-policy"
-                  (command &optional permission-context))
-(declare-function mevedel-bash-policy-guardian-classify-async
-                  "mevedel-bash-policy" (command context callback))
-(declare-function mevedel-bash-policy-guardian-context
-                  "mevedel-bash-policy"
-                  (command &optional permission-context))
 (declare-function mevedel-bash-policy-missing-resource-paths
                   "mevedel-bash-policy"
                   (command permission-context request))
 (declare-function mevedel-bash-policy-reusable-operation-p
                   "mevedel-bash-policy" (command))
-(defvar mevedel-permission-guardian)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -83,10 +74,7 @@
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
                   (entry &optional session))
-(declare-function mevedel-permission-queue--render-head
-                  "mevedel-permission-queue" (&optional session))
 (autoload 'mevedel-permission--enqueue "mevedel-permission-queue")
-(autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
 
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-persistence-load-resource-grants
@@ -134,7 +122,6 @@
 (autoload 'mevedel-queue--current-session "mevedel-queue")
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
@@ -154,8 +141,6 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
-(declare-function mevedel-request-push-canceller
-                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -223,6 +208,7 @@ The pipeline supplies these invocation-only capabilities, never model input.")
   (let* ((copy (copy-sequence input))
          (context (copy-sequence (plist-get copy :permission-context))))
     (setq context (plist-put context :sandbox-request request))
+    (setq context (plist-put context :eval-mode (plist-get request :eval-mode)))
     (when (plist-get (plist-get request :additional-permissions) :file-system)
       (setq context
             (plist-put context :resource-authority-separated-p t)))
@@ -252,6 +238,13 @@ Fall back to direct queue admission for callers outside the tool pipeline."
         (plist-put entry :permission-mode-effective
                    (mevedel-bash-policy-effective-permission-mode
                     permission-context)))
+  (dolist (pair '((:buffer . :data-buffer) (:request . :request)
+                 (:invocation . :invocation) (:args . :args)))
+    (when (plist-member permission-context (car pair))
+      (setq entry (plist-put entry (cdr pair)
+                             (plist-get permission-context (car pair))))))
+  (when-let* ((request (plist-get entry :request)))
+    (setq entry (plist-put entry :request-id (mevedel-request-id request))))
   (when (plist-member permission-context :execution-directory)
     (setq entry
           (plist-put (copy-sequence entry) :execution-directory
@@ -470,7 +463,7 @@ PERMISSION-CONTEXT supplies the session execution target."
       ('use-default
        (when normalized-additional
          (error "Default sandbox execution cannot include escalation arguments"))
-       '(:level use-default :additional-permissions nil))
+       (list :level 'use-default :additional-permissions nil))
       ('additive
        (unless (and (stringp justification)
                     (not (string-empty-p (string-trim justification))))
@@ -601,6 +594,8 @@ remembered direct user authority."
          (mevedel-tool-exec-permission--sandbox-request
           args (if (equal tool-name "Bash") 'bash 'eval) eval-mode
           permission-context)))
+    (when eval-mode
+      (setq request (plist-put request :eval-mode eval-mode)))
     (if (eq (plist-get request :level) 'escalated)
         request
       (let ((profile
@@ -1026,17 +1021,24 @@ once with the applied prompt result."
     (&key expression permission-context)
   "Return Eval decision metadata for EXPRESSION under PERMISSION-CONTEXT.
 
-Eval asks unless a rule settles it or the effective permission mode is
-`full-auto'.  Deny and ask rules remain final in every mode.  The metadata
+Live Eval asks unless a rule settles it or the mode is `full-auto'.
+Batch Eval runs automatically in Edits under required confinement.
+Deny rules remain final; Full Access bypasses ask rules.
+The metadata
 identifies rule or mode authority."
   (let* ((buckets (mevedel-bash-policy-buckets permission-context))
          (mode (mevedel-bash-policy-effective-permission-mode
                 permission-context))
          (action (mevedel-permission-rules-bucket-decision
                   buckets "Eval" nil expression nil nil)))
-    (mevedel-permission--decision
-     (or action (if (eq mode 'full-auto) 'allow 'ask))
-     (if action 'rule 'mode))))
+    (cond
+     ((eq action 'deny) (mevedel-permission--decision 'deny 'rule))
+     ((eq mode 'full-auto) (mevedel-permission--decision 'allow 'mode))
+     (action (mevedel-permission--decision action 'rule))
+     ((and (eq mode 'edits)
+           (eq (plist-get permission-context :eval-mode) 'batch))
+      (mevedel-permission--decision 'allow 'mode))
+     (t (mevedel-permission--decision 'ask 'mode)))))
 
 (defun mevedel-tool-exec-permission--normalize-prompt-result
     (outcome apply-stored feedback-prefix)
@@ -1109,41 +1111,6 @@ Feedback: TEXT\"."
 
 ;;; Bash Prompt UI
 
-(defun mevedel-tool-exec-permission--bash-deny-only-guardian-async
-    (command cont &optional metadata-p permission-context)
-  "Run deny-only guardian review for COMMAND, then call CONT.
-METADATA-P controls decision metadata.  PERMISSION-CONTEXT supplies the
-pending child-confinement request.  Guardian deny recommendations become
-`deny'; unavailable or non-deny guidance allows by default."
-  (let ((active t)
-        (request (plist-get permission-context :request)))
-    (when (mevedel-request-p request)
-      (mevedel-request-push-canceller
-       request (lambda () (setq active nil))))
-    (mevedel-bash-policy-guardian-classify-async
-     command
-     (mevedel-bash-policy-guardian-context command permission-context)
-     (lambda (guardian)
-       (when active
-         (setq active nil)
-         (let ((outcome
-                (if (eq (plist-get guardian :recommendation) 'deny)
-                    'deny
-                  'allow)))
-           (when metadata-p
-             (mevedel-tool-exec-permission--log-permission-decision
-              "Bash" outcome 'bash-guardian permission-context
-              :specifier-key :pattern
-              :specifier-value
-              (mevedel-bash-policy-decision-specifier-value command)))
-           (funcall
-            cont
-            (mevedel-tool-exec-permission--permission-decision-result
-             metadata-p outcome 'bash-guardian
-             :specifier-key :pattern
-             :specifier-value
-             (mevedel-bash-policy-decision-specifier-value command)))))))))
-
 (defun mevedel-tool-exec-permission--apply-bash-prompt-result
     (outcome session workspace command allow-patterns)
   "Apply Bash prompt OUTCOME for SESSION, WORKSPACE, and COMMAND.
@@ -1191,92 +1158,34 @@ stays exact to avoid broad negative rules from a single rejection."
 
 (defun mevedel-tool-exec-permission--bash-operation-prompt-async
     (command input via cont)
-  "Queue the Bash card for COMMAND and call CONT with its result.
-VIA is the operation decision's cause.  INPUT supplies permission context
-and metadata mode.  The queue's head renderer dispatches to the Bash UI, and
-an optional guardian review fills the card while it waits.  CONT receives
-`allow', `deny', `(deny . REASON)', or `aborted', with feedback shaped as
-\"Command cancelled by user. Feedback: TEXT\"."
-  (let* ((permission-context (plist-get input :permission-context))
+  "Request complete Bash COMMAND authority from INPUT, then call CONT.
+VIA identifies why approval is required.  Shared permission admission owns
+optional automatic review before any human card is displayed."
+  (let* ((context (plist-get input :permission-context))
          (metadata-p (plist-get input :permission-decision-metadata))
-         (source-buffer (current-buffer))
-         (session (or (plist-get permission-context :session)
-                      (mevedel-queue--current-session)))
-         (guardian-pending t)
-         (workspace (or (plist-get permission-context :workspace)
+         (session (or (plist-get context :session) (mevedel-queue--current-session)))
+         (workspace (or (plist-get context :workspace)
                         (and session (mevedel-session-workspace session))))
-         (guardian-context
-          (and mevedel-permission-guardian
-               (mevedel-bash-policy-guardian-context
-                command permission-context)))
-         (analysis
-          (or (plist-get guardian-context :analysis)
-              (mevedel-bash-analysis-analyze command)))
-         (command-class (plist-get analysis :class))
+         (analysis (mevedel-bash-analysis-analyze command))
+         (class (plist-get analysis :class))
          (commands (mevedel-bash-policy-command-names analysis))
-         (commands-summary (mevedel-bash-policy-commands-summary commands))
-         (allow-patterns
-          (or (plist-get guardian-context :allow-patterns)
-              (mevedel-bash-policy-allow-patterns command)))
-         (rule-creating-p (mevedel-bash-policy-reusable-operation-p command))
-         (guardian-cell (list nil (and mevedel-permission-guardian 'pending)))
-         (entry
-          (list :kind 'bash
-                :permission-via via
-                :command command
-                :mutation-p (not (eq command-class 'read-only))
-                :specifier-key :pattern
-                :specifier-value command
-                :analysis analysis
-                :command-class command-class
-                :commands commands
-                :commands-summary commands-summary
-                :unparseable (eq command-class 'complex)
-                :allow-patterns allow-patterns
-                :reusable-operation-p rule-creating-p
-                :guardian-cell guardian-cell
-                :workspace workspace
-                :include-always (and rule-creating-p (not (null workspace)))
-                :origin
-                (mevedel-tool-exec-permission--permission-origin
-                 permission-context)
-                :callback
-                (lambda (outcome)
-                  (setq guardian-pending nil)
-                  (funcall
-                   cont
-                   (mevedel-tool-exec-permission--bash-prompt-result
-                    outcome session workspace command allow-patterns
-                    metadata-p))))))
-    (when metadata-p
-      (mevedel-tool-exec-permission--log-permission-decision
-       "Bash" 'ask 'bash-classifier permission-context
-       :specifier-key :pattern
-       :specifier-value (mevedel-bash-policy-decision-specifier-value command)))
-    (if (buffer-live-p source-buffer)
-        (with-current-buffer source-buffer
-          (mevedel-tool-exec-permission--request-permission
-           entry permission-context session))
-      (mevedel-tool-exec-permission--request-permission
-       entry permission-context session))
-    (when mevedel-permission-guardian
-      (setq guardian-context
-            (plist-put guardian-context :workspace workspace))
-      (mevedel-bash-policy-guardian-classify-async
-       command guardian-context
-       (lambda (guardian)
-         (when guardian-pending
-           (let ((was-pending (eq (cadr guardian-cell) 'pending)))
-             (setcar guardian-cell guardian)
-             (when was-pending
-               (setcar (cdr guardian-cell)
-                       (if guardian 'done 'unavailable)))
-             (when (or guardian was-pending)
-               ;; Replace the pending placeholder in-place with either
-               ;; guidance or an unavailable note.
-               (when (buffer-live-p source-buffer)
-                 (with-current-buffer source-buffer
-                   (mevedel-permission-queue--render-head session)))))))))))
+         (patterns (mevedel-bash-policy-allow-patterns command))
+         (reusable (mevedel-bash-policy-reusable-operation-p command)))
+    (mevedel-tool-exec-permission--request-permission
+     (list :kind 'bash :permission-via via :command command
+           :mutation-p (not (eq class 'read-only))
+           :specifier-key :pattern :specifier-value command
+           :analysis analysis :command-class class :commands commands
+           :commands-summary (mevedel-bash-policy-commands-summary commands)
+           :unparseable (eq class 'complex) :allow-patterns patterns
+           :reusable-operation-p reusable :workspace workspace
+           :include-always (and reusable (not (null workspace)))
+           :origin (mevedel-tool-exec-permission--permission-origin context)
+           :callback (lambda (outcome)
+                       (funcall cont
+                                (mevedel-tool-exec-permission--bash-prompt-result
+                                 outcome session workspace command patterns metadata-p))))
+     context session)))
 
 ;;
 
@@ -1295,10 +1204,10 @@ CONTEXT is the permission invocation context.  REQUEST carries the validated
 child-authority request: `:sandbox-permissions', `:additional-permissions',
 `:operation-pattern', and the operation card's `:approval-cell'.  SETTLED
 lists facts this invocation already established: `:operation' once the user
-or guardian approved the operation, `:guardian' once guardian review ran.
+or delegated reviewer approved the operation.
 
 Return decision metadata.  An `ask' names what still stands in the way in
-`:needs': `operation', `guardian', `escalation', `capabilities' with the
+`:needs': `operation', `escalation', `capabilities' with the
 additive `:state', or `resources' with the command `:paths' lacking
 authority.  Every result carries the `:operation' decision it rests on.
 Admission and queued rechecks share this one ordering."
@@ -1311,6 +1220,14 @@ Admission and queued rechecks share this one ordering."
                              (and (or escalation-p
                                       (plist-get requested :file-system))
                                   t)))
+         (context (plist-put context :eval-mode (plist-get request :eval-mode)))
+         (full-auto-p
+          (eq (mevedel-bash-policy-effective-permission-mode context) 'full-auto))
+         (escalation-rule
+          (and (eq (plist-get request :sandbox-permissions) 'require-escalated)
+               (mevedel-tool-exec-permission-full-escalation-rule-decision
+                tool-name detail (mevedel-bash-policy-buckets context)
+                'require-escalated)))
          (operation (mevedel-tool-exec-permission--operation-decision
                      tool-name detail context))
          (outcome (plist-get operation :outcome))
@@ -1321,23 +1238,24 @@ Admission and queued rechecks share this one ordering."
                        :operation operation props)))
       (cond
        ((eq outcome 'deny) (decide 'deny (plist-get operation :via)))
+       ((eq escalation-rule 'deny) (decide 'deny 'sandbox-full-escalation))
+       (full-auto-p
+        (let ((state
+               (and requested
+                    (mevedel-tool-exec-permission--additional-authority-state
+                     tool-name request context))))
+          (if (plist-get state :deny-via)
+              (decide 'deny (plist-get state :deny-via))
+            (decide 'allow 'mode :state state))))
        (escalation-p
-        (let ((rule (mevedel-tool-exec-permission-full-escalation-rule-decision
-                     tool-name detail (mevedel-bash-policy-buckets context)
-                     'require-escalated)))
-          (cond
-           ((eq rule 'deny) (decide 'deny 'sandbox-full-escalation))
-           (explicit-ask-p (decide 'ask 'rule :needs 'escalation))
-           ((and (eq rule 'allow)
-                 (not (plist-get context :one-shot-mutations-p)))
-            (decide 'allow 'sandbox-full-escalation))
-           (t (decide 'ask 'sandbox-full-escalation :needs 'escalation)))))
+        (cond
+         (explicit-ask-p (decide 'ask 'rule :needs 'escalation))
+         ((and (eq escalation-rule 'allow)
+               (not (plist-get context :one-shot-mutations-p)))
+          (decide 'allow 'sandbox-full-escalation))
+         (t (decide 'ask 'sandbox-full-escalation :needs 'escalation))))
        ((and (eq outcome 'ask) (not (plist-get settled :operation)))
         (decide 'ask (plist-get operation :via) :needs 'operation))
-       ((and bash-p (eq outcome 'allow)
-             (not (plist-get settled :guardian))
-             (mevedel-bash-policy-full-auto-guardian-needed-p detail context))
-        (decide 'ask 'bash-guardian :needs 'guardian))
        (t
         (let* ((state
                 (and requested
@@ -1365,7 +1283,8 @@ granted capabilities are checked again; admission's missing subset does not
 describe the complete authority needed at settlement."
   (let ((detail (or (plist-get entry :command)
                     (plist-get entry :expression)
-                    (plist-get entry :detail)))
+                    (plist-get entry :detail)
+                    (plist-get context :pattern)))
         (early (plist-get context :early-decision)))
     (cond
      (early (mevedel-permission-decision-raw-outcome early))
@@ -1374,14 +1293,21 @@ describe the complete authority needed at settlement."
       (plist-get
        (mevedel-tool-exec-permission--decide
         (plist-get context :tool-name) detail
-        (list :sandbox-permissions (plist-get entry :sandbox-permissions)
-              :additional-permissions
-              (plist-get entry :requested-additional-permissions)
-              :operation-pattern detail)
-        context
-        ;; A capability card's operation already passed guardian review
-        ;; when it was admitted.
-        (and (eq (plist-get entry :kind) 'sandbox) '(:guardian t)))
+        (plist-put
+         (if (eq (plist-get entry :kind) 'generic)
+             (mevedel-tool-exec-permission-effective-sandbox-request
+              (plist-get entry :args) (plist-get context :tool-name) detail
+              (and (equal (plist-get context :tool-name) "Eval")
+                   (mevedel-tool-exec-permission-eval-mode (plist-get entry :args)))
+              context)
+           (list :sandbox-permissions (plist-get entry :sandbox-permissions)
+                 :eval-mode (and (equal (plist-get context :tool-name) "Eval")
+                                 (if (equal (plist-get entry :mode) "live")
+                                     'live 'batch))
+                 :additional-permissions
+                 (plist-get entry :requested-additional-permissions)))
+         :operation-pattern detail)
+        context)
        :outcome)))))
 
 (defun mevedel-tool-exec-permission--authorize-async
@@ -1389,7 +1315,7 @@ describe the complete authority needed at settlement."
   "Authorize TOOL-NAME's DETAIL for REQUEST and call CONT once.
 INPUT supplies permission context, delegated trust, and metadata mode.
 `mevedel-tool-exec-permission--decide' names what still stands in the way;
-this loop settles one need at a time through guardian review or a prompt,
+this loop settles one need at a time through the shared approval boundary,
 then decides again until the invocation is allowed or denied."
   (let* ((input (mevedel-tool-exec-permission--command-permission-input
                  input request))
@@ -1440,6 +1366,10 @@ then decides again until the invocation is allowed or denied."
                  (step))
              (funcall cont outcome)))
          (step ()
+           (when session
+             (setq permission-context
+                   (plist-put permission-context :mode
+                              (mevedel-permission-mode-effective session))))
            (let* ((decision (mevedel-tool-exec-permission--decide
                              tool-name detail request permission-context
                              settled))
@@ -1452,8 +1382,7 @@ then decides again until the invocation is allowed or denied."
              (when (and (not escalation-p)
                         (not operation-logged)
                         (not (plist-get settled :operation))
-                        (eq (plist-get operation :outcome) 'allow)
-                        (not (eq needs 'guardian)))
+                        (eq (plist-get operation :outcome) 'allow))
                (setq operation-logged t)
                (apply #'record 'allow operation-via specifier-props))
              (cond
@@ -1503,13 +1432,6 @@ then decides again until the invocation is allowed or denied."
                      (apply #'record 'allow via escalation-props)
                      (funcall cont (apply #'result 'allow via escalation-props)))
                  (finish-allow (plist-get decision :state))))
-              ((eq needs 'guardian)
-               (mevedel-tool-exec-permission--bash-deny-only-guardian-async
-                detail
-                (lambda (outcome)
-                  (setq settled (plist-put settled :guardian t))
-                  (after-operation outcome))
-                metadata-p permission-context))
               ((eq needs 'resources)
                (funcall
                 cont

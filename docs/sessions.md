@@ -32,6 +32,13 @@ requires explicit confirmation and does not rewrite historical checkpoints.
 Sessions materialize lazily and save at turn settlement, including errors and
 aborts. Compaction rotates segments rather than rewriting in place.
 
+Request cancellation is terminal before cleanup callbacks run. Later canceller
+registrations run immediately rather than reopening the request. Permission
+admission rejects that cancelled request even if cancellation happened before
+there was a queue entry or provider review to drain.
+Public abort uses the same terminal cancellation boundary while preserving the
+request reservation and file snapshots until pending durable settlement finishes.
+
 Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
 persistence contract that compaction relies on.
@@ -329,6 +336,15 @@ the life of a connection, so they are probed when the session opens, when the
 connection is replaced, and on `mevedel-retry-target-readiness`.  A failed
 observation falls back to the full probe, which settles the blocked readiness
 that admission reports.
+
+Durable mutation's incarnation fence checks target identity and reachability,
+not the current mode's child-confinement requirement. This lets a session leave
+Edits when remote confinement is unavailable without skipping ownership or
+replacement checks. Request and child-execution admission still enforce the
+selected mode's confinement requirement. The fence reuses the cached confinement
+mode so an unchanged connection does not alternate between full readiness probes.
+Unavailable child confinement still requires a fresh identity observation; other
+readiness failures remain blocking.
 
 A lost settlement records the target process-group identity, so a mutating
 request re-proves that group against the target before it is refused: an

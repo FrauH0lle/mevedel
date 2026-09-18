@@ -1618,6 +1618,72 @@
       (mevedel-request-drain-cancellers request)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-hooks-run-event/startup-cancellation
+  (:quiet t)
+  ,test
+  (test)
+  :doc "cancellation fences preparation and releases handles returned after teardown"
+  (dolist (stage '(before environment input pipe child))
+    (let* ((root (make-temp-file "mevedel-hook-startup-" t))
+           (session (mevedel-hooks-test--session root))
+           (request (mevedel-request--create :session session))
+           (mevedel-hooks-slow-threshold nil)
+           (mevedel-hook-rules
+            '((PreToolUse ((:matcher "Bash"
+                           :hooks ((:type command :command "sleep 5" :timeout 1)))))))
+           children pipes timers prepared callback-called)
+      (unwind-protect
+          (progn
+            (when (eq stage 'before) (mevedel-request-cancel request))
+            (cl-letf* ((environment (symbol-function 'mevedel-hooks--command-process-environment))
+                       (json (symbol-function 'mevedel-hooks--event-json))
+                       (pipe (symbol-function 'make-pipe-process))
+                       (child (symbol-function 'make-process))
+                       (timer (symbol-function 'run-at-time))
+                       ((symbol-function 'mevedel-hooks--command-process-environment)
+                        (lambda (&rest args)
+                          (setq prepared t)
+                          (when (eq stage 'environment) (mevedel-request-cancel request))
+                          (apply environment args)))
+                       ((symbol-function 'mevedel-hooks--event-json)
+                        (lambda (&rest args)
+                          (when (eq stage 'input) (mevedel-request-cancel request))
+                          (apply json args)))
+                       ((symbol-function 'make-pipe-process)
+                        (lambda (&rest args)
+                          (let ((proc (apply pipe args)))
+                            (push proc pipes)
+                            (when (eq stage 'pipe) (mevedel-request-cancel request))
+                            proc)))
+                       ((symbol-function 'make-process)
+                        (lambda (&rest args)
+                          (let ((proc (apply child args)))
+                            (push proc children)
+                            (when (eq stage 'child) (mevedel-request-cancel request))
+                            proc)))
+                       ((symbol-function 'run-at-time)
+                        (lambda (&rest args)
+                          (let ((value (apply timer args)))
+                            (push value timers)
+                            value))))
+              (mevedel-hooks-run-event
+               'PreToolUse '(:tool-name "Bash")
+               (lambda (_) (setq callback-called t)) session nil request))
+            (should-not callback-called)
+            (when (eq stage 'before) (should-not prepared))
+            (should (= (if (eq stage 'child) 1 0) (length children)))
+            (should-not (cl-find-if #'process-live-p (append children pipes)))
+            (dolist (timer timers)
+              (should-not (memq timer timer-list)))
+            (should (equal '(cancelled)
+                           (mapcar (lambda (entry) (plist-get entry :status))
+                                   (mevedel-session-hook-log session)))))
+        (mevedel-request-cancel request)
+        (dolist (proc (append children pipes))
+          (when (process-live-p proc) (delete-process proc)))
+        (dolist (timer timers) (cancel-timer timer))
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-hooks-run-event/settled-child-release
   (:quiet t)
   ,test
@@ -1713,7 +1779,56 @@
                                   (plist-get decision :stop-reason))))
       (dolist (proc children)
         (when (process-live-p proc) (delete-process proc)))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "transport-deferred completion stays cancellable before the next handler"
+  (dolist (cancel-p '(nil t))
+    (let* ((root (make-temp-file "mevedel-hooks-deferred" t))
+           (next-file (file-name-concat root "next"))
+           (session (mevedel-hooks-test--session root))
+           (request (mevedel-request--create :session session))
+           (mevedel-transport--enabled-p t)
+           (mevedel-hooks-slow-threshold nil)
+           (mevedel-hook-rules
+            `((PreToolUse
+               ((:matcher "Bash"
+                 :hooks ((:type command :command "cat >/dev/null" :timeout 5)
+                         (:type command :command
+                          ,(format "cat >/dev/null; printf next > %s"
+                                   (shell-quote-argument next-file)))))))))
+           callback-called)
+      (unwind-protect
+          (progn
+            (let ((mevedel-transport--depth 1))
+              (mevedel-hooks-run-event
+               'PreToolUse '(:tool-name "Bash")
+               (lambda (_) (setq callback-called t)) session nil request)
+              (let ((deadline (+ (float-time) 2)))
+                (while (and (not (cl-find 'hook-completion
+                                         (hash-table-keys mevedel-transport--pending)
+                                         :key #'car-safe))
+                            (< (float-time) deadline))
+                  (accept-process-output nil 0.01)))
+              (should (cl-find 'hook-completion
+                               (hash-table-keys mevedel-transport--pending)
+                               :key #'car-safe))
+              (should-not callback-called)
+              (should-not (file-exists-p next-file))
+              (when cancel-p (mevedel-request-drain-cancellers request)))
+            (let ((deadline (+ (float-time) 2)))
+              (while (and (not cancel-p) (not callback-called)
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should (eq (not cancel-p) callback-called))
+            (should (eq (not cancel-p) (file-exists-p next-file)))
+            (should-not (cl-find 'hook-completion
+                                 (hash-table-keys mevedel-transport--pending)
+                                 :key #'car-safe))
+            (should (equal (if cancel-p '(cancelled) '(ok ok))
+                           (mapcar (lambda (entry) (plist-get entry :status))
+                                   (mevedel-session-hook-log session)))))
+        (mevedel-request-drain-cancellers request)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-hooks-run-event/teardown-failure
   (:doc "a signalling teardown still settles the event")

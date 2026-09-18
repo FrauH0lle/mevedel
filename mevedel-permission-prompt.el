@@ -51,8 +51,11 @@
                   "mevedel-permission-queue" (event entry &optional session &rest props))
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+(declare-function mevedel-permission-queue-validate-approval
+                  "mevedel-permission-queue" (entry outcome))
 (autoload 'mevedel-permission-queue--log "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
+(autoload 'mevedel-permission-queue-validate-approval "mevedel-permission-queue")
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get
@@ -194,7 +197,7 @@ Selection changes the visible card only; approval chooses its lifetime."
             (progn
               (mevedel-permission-queue--render-head
                (plist-get entry :session)))
-          (mevedel--prompt--settle ov 'allow-once)))
+          (mevedel-permission--prompt-finish 'allow-once)))
     (mevedel-permission--prompt-self-insert)))
 
 (defun mevedel-permission--prompt-approve-session ()
@@ -300,13 +303,15 @@ Selection changes the visible card only; approval chooses its lifetime."
   "Settle the permission prompt overlay at point with RESULT."
   (when-let* ((ov (mevedel--prompt--overlay-at-point
                    'mevedel-permission-prompt)))
+    (mevedel-permission-queue-validate-approval
+     (overlay-get ov 'mevedel-view-interaction-entry) result)
     (mevedel--prompt--settle ov result)
     t))
 
 (defcustom mevedel-permission-command-display-limit 400
   "Maximum number of characters of a Bash command shown inline.
 Longer commands are elided with a TAB toggle that reveals the rest.
-The guardian verdict and detected-command summary are never elided, and
+The detected-command summary is never elided, and
 a remote collaborator always receives the whole command."
   :type 'integer
   :group 'mevedel)
@@ -639,55 +644,6 @@ CONT receives the user's outcome; the caller owns queue settlement."
      content (and include-always (not once-only)) cont count entry
      once-only once-only)))
 
-(defun mevedel-permission--bash-guardian-label (value)
-  "Return a display label for Bash guardian VALUE."
-  (capitalize (replace-regexp-in-string "-" " " (format "%s" value))))
-
-(defun mevedel-permission--bash-guardian-face (risk)
-  "Return face for Bash guardian RISK."
-  (pcase risk
-    ('low 'success)
-    ('medium 'warning)
-    ((or 'high 'critical) 'error)
-    (_ 'font-lock-comment-face)))
-
-(defun mevedel-permission--format-bash-guardian (guardian &optional status)
-  "Return formatted Bash GUARDIAN guidance for optional STATUS."
-  (cond
-   (guardian
-    (let ((risk (plist-get guardian :risk))
-          (recommendation (plist-get guardian :recommendation))
-          (reason (plist-get guardian :reason)))
-      (concat
-       "\n"
-       (propertize "Guardian guidance\n" 'font-lock-face '(:inherit bold))
-       (propertize "Risk: " 'font-lock-face 'font-lock-escape-face)
-       (propertize (format "%s\n" (mevedel-permission--bash-guardian-label risk))
-                   'font-lock-face
-                   (mevedel-permission--bash-guardian-face risk))
-       (propertize "Recommendation: "
-                   'font-lock-face 'font-lock-escape-face)
-       (propertize
-        (format "%s\n"
-                (mevedel-permission--bash-guardian-label recommendation))
-        'font-lock-face 'font-lock-constant-face)
-       (propertize "Reason: " 'font-lock-face 'font-lock-escape-face)
-       (propertize (format "%s\n" reason)
-                   'font-lock-face 'font-lock-comment-face))))
-   ((eq status 'pending)
-    (concat
-     "\n"
-     (propertize "Guardian guidance\n" 'font-lock-face '(:inherit bold))
-     (propertize "Status: " 'font-lock-face 'font-lock-escape-face)
-     (propertize "Analyzing command risk...\n"
-                 'font-lock-face 'font-lock-comment-face)))
-   ((eq status 'unavailable)
-    (concat
-     "\n"
-     (propertize "Guardian guidance\n" 'font-lock-face '(:inherit bold))
-     (propertize "Unavailable\n"
-                 'font-lock-face 'font-lock-comment-face)))))
-
 (defun mevedel-permission--prompt-async-bash
     (command command-class include-always origin cont &optional count entry)
   "Display a Bash permission prompt and call CONT with its outcome."
@@ -703,11 +659,6 @@ CONT receives the user's outcome; the caller owns queue settlement."
                    (and commands (mapconcat #'identity commands ", ")))))
          (unparseable (and entry (plist-get entry :unparseable)))
          (allow-patterns (and entry (plist-get entry :allow-patterns)))
-         (guardian-cell (and entry (plist-get entry :guardian-cell)))
-         (guardian (and entry
-                        (or (plist-get entry :guardian)
-                            (car guardian-cell))))
-         (guardian-status (and guardian-cell (cadr guardian-cell)))
          (faced-command (propertize command
                                     'font-lock-face 'font-lock-string-face))
          ;; Built twice: once elided for the prompt, once whole for the
@@ -730,8 +681,6 @@ CONT receives the user's outcome; the caller owns queue settlement."
              "\n"
              (mevedel-permission--format-authority-capabilities entry)
              (mevedel-permission--format-remember-authority entry)
-             (mevedel-permission--format-bash-guardian
-              guardian guardian-status)
              (when commands-summary
                (concat
                 "\n"

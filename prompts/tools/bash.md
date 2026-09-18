@@ -14,9 +14,10 @@ Execute Bash commands for builds, tests, version control, and system operations.
 
 - Commands start in the session working directory. Quote shell arguments
   correctly; command substitution still executes inside double quotes.
-- Execution is confined without network by default when the sandbox is
-  available. Request known necessary capabilities together in the tool call;
-  approval for one operation does not grant unrelated command authority.
+- In Edits, commands run automatically with required confinement and no network
+  by default. Full Access runs without confinement or permission prompts. Ask
+  uses the configured sandbox preference and command policy. Request known
+  necessary capabilities together; approval is scoped to that invocation.
 - Use `sandbox_permissions="with_additional_permissions"`, a `justification`,
   and `additional_permissions` for network or exact absolute filesystem paths.
   Read and write grants are distinct. Ask through these fields, not a separate

@@ -84,7 +84,19 @@
     (should (eq 'off (mevedel-sandbox-mode-effective session)))
     (setf (mevedel-session-sandbox-mode session) 'auto)
     (should-error (mevedel-sandbox-mode-effective session)
-                  :type 'user-error)))
+                  :type 'user-error))
+  :doc "permission modes derive confinement without changing the preference"
+  (let ((session (mevedel-session--create
+                  :permission-mode 'edits :sandbox-mode 'best-effort)))
+    (should (eq 'required (mevedel-sandbox-mode-effective session)))
+    (setf (mevedel-session-permission-mode session) 'full-auto)
+    (should (eq 'off (mevedel-sandbox-mode-effective session)))
+    (should (eq 'best-effort (mevedel-session-sandbox-mode session)))
+    (setf (mevedel-session-permission-mode session) 'ask)
+    (should (eq 'best-effort (mevedel-sandbox-mode-effective session)))
+    (setf (mevedel-session-sandbox-mode session) 'off
+          (mevedel-session-permission-mode session) 'edits)
+    (should (eq 'required (mevedel-sandbox-mode-effective session)))))
 
 
 ;;

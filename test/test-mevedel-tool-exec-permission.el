@@ -102,7 +102,7 @@
               (list (plist-get decision :outcome) (plist-get decision :via))))))
   :doc "an unsettled operation ask names the operation and its cause"
   (let ((mevedel-permission-rules nil)
-        (mevedel-permission-guardian nil))
+        (mevedel-permission-reviewer 'user))
     (let ((decision (mevedel-tool-exec-permission--decide
                      "Bash" "make test" '(:sandbox-permissions additive)
                      (mevedel-permission--invocation-context
@@ -112,7 +112,7 @@
       (should (eq 'mode (plist-get decision :via)))))
   :doc "a settled operation moves on to the remaining capabilities"
   (let ((mevedel-permission-rules nil)
-        (mevedel-permission-guardian nil))
+        (mevedel-permission-reviewer 'user))
     (let ((decision (mevedel-tool-exec-permission--decide
                      "Bash" "make test"
                      '(:sandbox-permissions additive
@@ -127,7 +127,7 @@
       (should (plist-get (plist-get decision :state) :missing))))
   :doc "the operation card's approval covers the requested capabilities"
   (let ((mevedel-permission-rules nil)
-        (mevedel-permission-guardian nil))
+        (mevedel-permission-reviewer 'user))
     (should
      (eq 'allow
          (plist-get (mevedel-tool-exec-permission--decide
@@ -140,21 +140,6 @@
                       :tool-name "Bash" :pattern "make test" :mode 'ask)
                      '(:operation t))
                     :outcome))))
-  :doc "full-auto guardian review is needed once and then settled"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-permission-guardian t))
-    (let ((context (mevedel-permission--invocation-context
-                    :tool-name "Bash" :pattern "make test" :mode 'full-auto)))
-      (should (eq 'guardian
-                  (plist-get (mevedel-tool-exec-permission--decide
-                              "Bash" "make test" '(:sandbox-permissions additive)
-                              context)
-                             :needs)))
-      (should (eq 'allow
-                  (plist-get (mevedel-tool-exec-permission--decide
-                              "Bash" "make test" '(:sandbox-permissions additive)
-                              context '(:guardian t))
-                             :outcome)))))
   :doc "escalation honors qualified allows, explicit asks, and denies in order"
   (let ((mevedel-permission-rules nil)
         (mevedel-sandbox-mode 'required)
@@ -164,7 +149,7 @@
                        (mevedel-tool-exec-permission--decide
                         "Bash" "make test" request
                         (mevedel-permission--invocation-context
-                         :tool-name "Bash" :pattern "make test" :mode 'full-auto
+                         :tool-name "Bash" :pattern "make test" :mode 'edits
                          :session-rules rules))))
                   (list (plist-get decision :outcome) (plist-get decision :via)
                         (plist-get decision :needs)))))
@@ -193,7 +178,7 @@
          (entry `(:kind sandbox :tool-name "Bash" :detail "make test"
                   :sandbox-permissions additive
                   :requested-additional-permissions (:file-system (,grant))))
-         (mevedel-permission-guardian nil))
+         (mevedel-permission-reviewer 'user))
     (dolist (case (list (list (list operation profile) nil 'allow)
                        (list (list operation) nil 'ask)
                        (list (list operation) (list grant) 'allow)
@@ -217,17 +202,9 @@
           '(:kind sandbox :tool-name "Bash" :detail "make test"
             :sandbox-permissions require-escalated)
           (mevedel-permission--invocation-context
-           :tool-name "Bash" :pattern "make test" :mode 'full-auto
+           :tool-name "Bash" :pattern "make test" :mode 'edits
            :session-rules '(("Bash" :pattern "make *" :action allow)))))))
-  :doc "a pending operation does not skip an outstanding guardian decision"
-  (let ((mevedel-permission-guardian t)
-        (mevedel-permission-rules nil))
-    (should
-     (eq 'ask
-         (mevedel-tool-exec-permission-reevaluate
-          '(:kind bash :command "make test")
-          (mevedel-permission--invocation-context
-           :tool-name "Bash" :pattern "make test" :mode 'full-auto))))))
+)
 
 (mevedel-deftest mevedel-tool-exec-permission--request-permission ()
   ,test
@@ -304,6 +281,12 @@
 `mevedel-tool-exec-permission--sandbox-request' normalizes omitted authority"
   (should (equal '(:level use-default :additional-permissions nil)
                  (mevedel-tool-exec-permission--sandbox-request nil 'bash)))
+  :doc "batch and live mode normalization cannot contaminate later default requests"
+  (dolist (mode '(batch live))
+    (mevedel-tool-exec-permission-effective-sandbox-request
+     (list :mode (symbol-name mode)) "Eval" "(+ 1 2)" mode)
+    (should (equal '(:level use-default :additional-permissions nil)
+                   (mevedel-tool-exec-permission--sandbox-request nil 'bash))))
   :doc "provider-shaped default request:
 empty optional capabilities and an unused justification do not request authority"
   (should
@@ -793,7 +776,7 @@ additive child permissions are available only to batch Eval"
       '(:level escalated
                :sandbox-permissions require-escalated
                :additional-permissions nil
-               :justification "Run directly?")
+               :justification "Run directly?" :eval-mode batch)
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:expression "(+ 1 2)" :mode "batch"
                      :sandbox_permissions "require_escalated"
@@ -807,7 +790,7 @@ additive child permissions are available only to batch Eval"
          (context `(:buckets ((:session ,@rules)))))
     (should
      (equal
-      '(:level additive :additional-permissions (:network t))
+      '(:level additive :additional-permissions (:network t) :eval-mode batch)
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:expression "(url-retrieve-synchronously url)" :mode "batch")
        "Eval" "(url-retrieve-synchronously url)" 'batch context))))
@@ -818,7 +801,7 @@ additive child permissions are available only to batch Eval"
          (context `(:buckets ((:session ,@rules)))))
     (should
      (equal
-      '(:level use-default :additional-permissions nil)
+      '(:level use-default :additional-permissions nil :eval-mode live)
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:expression "(url-retrieve-synchronously url)" :mode "live")
        "Eval" "(url-retrieve-synchronously url)" 'live context)))))
@@ -941,7 +924,7 @@ additive child permissions are available only to batch Eval"
   :doc "a prompted capability approval stores and logs each capability once"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
-        (mevedel-permission-guardian nil)
+        (mevedel-permission-reviewer 'user)
         logged outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                (lambda (queued &optional _session)
@@ -1202,16 +1185,16 @@ network authority changes no boundary and does not prompt"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'allow outcome)))
-  :doc "full-auto protected resource:
+  :doc "edits protected resource:
 an ungranted exact filesystem path still prompts and stores session authority"
   (let* ((root (make-temp-file "mevedel-bash-resource-" t))
          (path (file-name-concat root "secret"))
          (workspace (mevedel-workspace--create :type 'file :root root))
          (session (mevedel-session--create
                    :name "resource" :workspace workspace
-                   :permission-mode 'full-auto))
+                   :permission-mode 'edits))
          (mevedel--session session)
-         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-mode 'edits)
          (mevedel-permission-rules nil)
          (mevedel-protected-paths `((,path . inaccessible)))
          entry outcome)
@@ -1235,7 +1218,7 @@ an ungranted exact filesystem path still prompts and stores session authority"
                         :additional_permissions (:file_system (:read [,path]))
                         :justification "Read the protected file?"
                         :permission-context
-                        (:mode full-auto :session ,session :workspace ,workspace
+                        (:mode edits :session ,session :workspace ,workspace
                                :resource-grants nil))
              (lambda (result) (setq outcome result))))
           (should (eq 'sandbox (plist-get entry :kind)))
@@ -1257,9 +1240,9 @@ the complete requested path profile is selected by default"
          (workspace (mevedel-workspace--create :type 'file :root root))
          (session (mevedel-session--create
                    :name "resource" :workspace workspace
-                   :permission-mode 'full-auto))
+                   :permission-mode 'edits))
          (mevedel--session session)
-         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-mode 'edits)
          (mevedel-permission-rules nil)
          (mevedel-protected-paths `((,path . inaccessible)))
          outcome)
@@ -1283,7 +1266,7 @@ the complete requested path profile is selected by default"
                         :additional_permissions (:file_system (:read [,path]))
                         :justification "Read the protected file?"
                         :permission-context
-                        (:mode full-auto :session ,session :workspace ,workspace
+                        (:mode edits :session ,session :workspace ,workspace
                                :resource-grants nil))
              (lambda (result) (setq outcome result))))
           (should (eq 'allow outcome))
@@ -1303,10 +1286,10 @@ an exact session grant skips only the filesystem prompt"
          (grant `(:path ,path :access read))
          (session (mevedel-session--create
                    :name "resource" :workspace workspace
-                   :permission-mode 'full-auto
+                   :permission-mode 'edits
                    :resource-grants (list grant)))
          (mevedel--session session)
-         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-mode 'edits)
          (mevedel-permission-rules nil)
          (mevedel-protected-paths `((,path . inaccessible)))
          enqueued outcome)
@@ -1322,7 +1305,7 @@ an exact session grant skips only the filesystem prompt"
                         :additional_permissions (:file_system (:read [,path]))
                         :justification "Read the protected file?"
                         :permission-context
-                        (:mode full-auto :session ,session :workspace ,workspace
+                        (:mode edits :session ,session :workspace ,workspace
                                :resource-grants (,grant)))
              (lambda (result) (setq outcome result))))
           (should-not enqueued)
@@ -1384,12 +1367,12 @@ an exact ask rule remains authoritative over the stored grant"
          (grant `(:path ,path :access read))
          (session (mevedel-session--create
                    :name "resource" :workspace workspace
-                   :permission-mode 'full-auto
+                   :permission-mode 'edits
                    :resource-grants (list grant)
                    :permission-rules
                    `(("Bash" :path ,path :action ask))))
          (mevedel--session session)
-         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-mode 'edits)
          entry outcome)
     (unwind-protect
         (progn
@@ -1405,7 +1388,7 @@ an exact ask rule remains authoritative over the stored grant"
                         :additional_permissions (:file_system (:read [,path]))
                         :justification "Read the protected file?"
                         :permission-context
-                        (:mode full-auto :session ,session :workspace ,workspace
+                        (:mode edits :session ,session :workspace ,workspace
                                :session-rules (("Bash" :path ,path :action ask))
                                :resource-grants (,grant)))
              (lambda (result) (setq outcome result))))
@@ -1664,7 +1647,7 @@ both Eval and network authority proceed without prompts"
   :doc "explicit operation asks survive remembered escalation at admission and recheck"
   (dolist (command '("make test" "cat /tmp/review-protected/value"))
     (let ((mevedel-protected-paths '(("/tmp/review-protected/**" . inaccessible)))
-          (mevedel-permission-mode 'full-auto)
+          (mevedel-permission-mode 'edits)
           (mevedel-permission-rules
            `(("Bash" :pattern ,command :action ask)
              ("Bash" :pattern ,command :sandbox-permissions require-escalated :action allow)))
@@ -1680,11 +1663,11 @@ both Eval and network authority proceed without prompts"
       (should (eq 'rule (plist-get entry :permission-via)))
       (should (eq 'ask
                   (mevedel-tool-exec-permission-reevaluate
-                   entry (list :tool-name "Bash" :mode 'full-auto
+                   entry (list :tool-name "Bash" :mode 'edits
                                :buckets (list (cons :defcustom mevedel-permission-rules))))))))
-  :doc "full-auto still asks:
+  :doc "edits still asks:
 full escalation prompts without a directly authored qualified rule"
-  (let ((mevedel-permission-mode 'full-auto)
+  (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         entry outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -1769,7 +1752,7 @@ an inherited escalation rule still requires one-time sandbox approval"
     (should-not (mevedel-session-permission-rules session)))
   :doc "ordinary allow is insufficient:
 an unqualified command rule cannot authorize full escalation"
-  (let ((mevedel-permission-mode 'full-auto)
+  (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules
          '(("Bash" :pattern "pwd" :action allow)))
         enqueued outcome)
@@ -1787,7 +1770,7 @@ an unqualified command rule cannot authorize full escalation"
     (should (eq 'deny outcome)))
   :doc "delegated allow is insufficient:
 an invocation-qualified rule cannot grant full escalation"
-  (let ((mevedel-permission-mode 'full-auto)
+  (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         enqueued outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -1885,7 +1868,7 @@ the prompt stores an exact execution-level-qualified pattern rule"
       (mevedel-session-permission-rules session))))
   :doc "delegated expansion:
 trust-literal execution cannot use even a matching direct escalation rule"
-  (let ((mevedel-permission-mode 'full-auto)
+  (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules
          '(("Bash" :pattern "pwd"
             :sandbox-permissions require-escalated
@@ -2050,7 +2033,7 @@ default Bash authorizes the resolved outside resource"
            nil
            `(:command ,(format "cat %s" link)
                       :permission-context
-                      (:mode full-auto :allowed-roots (,root) :resource-grants nil))
+                      (:mode ask :allowed-roots (,root) :resource-grants nil))
            (lambda (result) (setq outcome result)))
           (should (eq 'deny (car-safe outcome)))
           (should (string-match-p (regexp-quote secret) (cdr outcome))))
@@ -2077,10 +2060,10 @@ default Bash keeps bare dot inspection automatic"
      nil '(:other "value") (lambda (r) (setq outcome r)))
     (should (null outcome)))
   :doc "queued Bash retains the policy cause and admission mode"
-  (dolist (case '((edits nil mode)
-                  (full-auto (("Bash" :pattern "make *" :action ask)) rule)))
+  (dolist (case '((ask nil mode)
+                  (edits (("Bash" :pattern "make *" :action ask)) rule)))
     (pcase-let ((`(,mode ,rules ,via) case))
-      (let ((mevedel-permission-guardian nil) entry outcome)
+      (let ((mevedel-permission-reviewer 'user) entry outcome)
         (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                    (lambda (queued &optional _session)
                      (setq entry queued)
@@ -2166,36 +2149,6 @@ default Bash keeps bare dot inspection automatic"
         (should-not
          (string-match-p (regexp-opt '("git" "secret-token"))
                          (prin1-to-string props))))))
-  :doc "does not call guardian when permission resolves without prompting"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-permission-rules
-         '(("Bash" :pattern "echo*" :action allow)))
-        (mevedel-bash-dangerous-commands nil)
-        (mevedel-permission-guardian
-         (lambda (_command _context _callback)
-           (error "Guardian should not run")))
-        outcome)
-    (mevedel-tool-exec-permission-check-bash-async
-     nil '(:command "echo hello") (lambda (r) (setq outcome r)))
-    (should (eq outcome 'allow)))
-  :doc "interactive modes keep a guardian deny advisory"
-  (dolist (mode '(ask edits))
-    (let ((mevedel-permission-mode mode)
-          (mevedel-permission-rules nil)
-          (mevedel-bash-dangerous-commands '("sudo"))
-          (mevedel-permission-guardian
-           (lambda (_command _context callback)
-             (funcall callback
-                      '(:risk "critical"
-                              :recommendation "deny"
-                              :reason "Requires user judgment."))))
-          outcome)
-      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (entry &optional _session)
-                   (funcall (plist-get entry :callback) 'allow-once))))
-        (mevedel-tool-exec-permission-check-bash-async
-         nil '(:command "sudo ls") (lambda (result) (setq outcome result))))
-      (should (eq outcome 'allow))))
   :doc "literal dangerous approval stores only the exact command"
   (let* ((workspace
           (mevedel-workspace--create
@@ -2206,7 +2159,7 @@ default Bash keeps bare dot inspection automatic"
            :name "dangerous-rule" :workspace workspace
            :permission-mode 'ask))
          (mevedel-permission-rules nil)
-         (mevedel-permission-guardian nil)
+         (mevedel-permission-reviewer 'user)
          ;; The resource has to sit inside the allowed root, or the exact
          ;; command never reaches the rule it is meant to store.
          (target (file-name-concat temporary-file-directory
@@ -2242,113 +2195,6 @@ default Bash keeps bare dot inspection automatic"
        nil '(:command "rm foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
     (should-not enqueued))
-  :doc "full-auto deny-only guardian can block suspicious Bash"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("rm"))
-        (mevedel-permission-guardian
-         (lambda (_command _context callback)
-           (funcall callback
-                    '(:risk "critical"
-                            :recommendation "deny"
-                            :reason "Deletes files."))))
-        enqueued
-        outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (&rest _)
-                 (setq enqueued t))))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "rm foo") (lambda (r) (setq outcome r))))
-    (should (eq outcome 'deny))
-    (should-not enqueued))
-  :doc "request cancellation prevents a late full-auto guardian continuation"
-  (let* ((request
-          (mevedel-request--create
-           :origin "/root"))
-         (mevedel-permission-mode 'full-auto)
-         (mevedel-permission-rules nil)
-         (mevedel-bash-dangerous-commands '("rm"))
-         guardian-callback
-         outcome)
-    (let ((mevedel-permission-guardian
-           (lambda (_command _context callback)
-             (setq guardian-callback callback))))
-      (with-temp-buffer
-        (setq-local mevedel--current-request request)
-        (mevedel-tool-exec-permission-check-bash-async
-         nil
-         `(:command "rm foo"
-                    :permission-context (:request ,request :mode full-auto))
-         (lambda (result) (setq outcome result)))))
-    (should guardian-callback)
-    (should (= 1 (length (mevedel-request-cancellers request))))
-    (mevedel-request-cancel request)
-    (funcall guardian-callback
-             '(:risk "low"
-                     :recommendation "proceed"
-                     :reason "Late response."))
-    (should-not outcome))
-  :doc "full-auto deny-only guardian timeout or invalid output allows"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("rm"))
-        (mevedel-permission-guardian
-         (lambda (_command _context callback)
-           (funcall callback nil)))
-        outcome)
-    (mevedel-tool-exec-permission-check-bash-async
-     nil '(:command "rm foo") (lambda (r) (setq outcome r)))
-    (should (eq outcome 'allow)))
-  :doc "full-auto deny-only guardian treats ask as advisory"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("rm"))
-        (mevedel-permission-guardian
-         (lambda (_command _context callback)
-           (funcall callback
-                    '(:risk "high"
-                            :recommendation "ask"
-                            :reason "The target is ambiguous."))))
-        outcome)
-    (mevedel-tool-exec-permission-check-bash-async
-     nil '(:command "rm foo") (lambda (r) (setq outcome r)))
-    (should (eq outcome 'allow)))
-  :doc "full-auto guardian proceed, invalid output, and failure allow"
-  (dolist (behavior '(proceed invalid failure))
-    (let ((mevedel-permission-mode 'full-auto)
-          (mevedel-permission-rules nil)
-          (mevedel-bash-dangerous-commands '("rm"))
-          (mevedel-permission-guardian
-           (lambda (_command _context callback)
-             (pcase behavior
-               ('proceed
-                (funcall callback
-                         '(:risk "high"
-                                 :recommendation "proceed"
-                                 :reason "Documented cleanup.")))
-               ('invalid
-                (funcall callback '(:recommendation "deny")))
-               ('failure
-                (error "Guardian unavailable")))))
-          outcome)
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "rm foo") (lambda (result) (setq outcome result)))
-      (should (eq outcome 'allow))))
-  :doc "full-auto deny-only guardian function timeout allows"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("rm"))
-        (mevedel-permission-guardian-timeout 0.01)
-        (mevedel-permission-guardian
-         (lambda (_command _context _callback)
-           nil))
-        outcome)
-    (mevedel-tool-exec-permission-check-bash-async
-     nil '(:command "rm foo") (lambda (r) (setq outcome r)))
-    (with-timeout (1 (error "Timed out"))
-      (while (not outcome)
-        (accept-process-output nil 0.01)))
-    (should (eq outcome 'allow)))
   :doc "queued prompt entries preserve raw commands and add counted summary"
   (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands nil)
@@ -2387,179 +2233,6 @@ default Bash keeps bare dot inspection automatic"
       (mevedel-tool-exec-permission-check-bash-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
-  :doc "adds advisory guardian guidance to queued Bash prompts"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("sudo"))
-        (mevedel-permission-guardian
-         (lambda (_command _context callback)
-           (funcall callback
-                    '(:risk "medium"
-                            :recommendation "ask"
-                            :reason "Uses privilege escalation."))))
-        captured
-        outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (setq captured entry)))
-              ((symbol-function 'mevedel-permission-queue--render-head)
-               (lambda (&optional _session) nil)))
-      (mevedel-tool-exec-permission-check-bash-async
-       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
-    (should (equal '(:risk medium
-                           :recommendation ask
-                           :reason "Uses privilege escalation.")
-                   (car (plist-get captured :guardian-cell))))
-    (should (eq 'done (cadr (plist-get captured :guardian-cell))))
-    (funcall (plist-get captured :callback) 'deny-once)
-    (should (eq outcome 'deny))
-    (should (null (plist-get captured :guardian))))
-  :doc "shows pending guardian guidance until a nil result marks it unavailable"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("sudo"))
-        callback
-        captured
-        rendered)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (setq captured entry)))
-              ((symbol-function 'mevedel-permission-queue--render-head)
-               (lambda (&optional _session)
-                 (push (copy-sequence (plist-get captured :guardian-cell))
-                       rendered))))
-      (let ((mevedel-permission-guardian
-             (lambda (_command _context guardian-callback)
-               (setq callback guardian-callback))))
-        (mevedel-tool-exec-permission-check-bash-async
-         nil '(:command "sudo ls") #'ignore))
-      (should (eq 'pending (cadr (plist-get captured :guardian-cell))))
-      (funcall callback nil)
-      (should (equal '((nil unavailable)) rendered))
-      (should-not (car (plist-get captured :guardian-cell)))
-      (should (eq 'unavailable
-                  (cadr (plist-get captured :guardian-cell))))))
-  :doc "enqueues prompts before guardian guidance completes"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-bash-dangerous-commands '("sudo"))
-        callbacks
-        enqueued
-        rendered)
-    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-               (lambda (entry &optional _session)
-                 (push (plist-get entry :command) enqueued)))
-              ((symbol-function 'mevedel-permission-queue--render-head)
-               (lambda (&optional _session)
-                 (push 'render rendered))))
-      (let ((mevedel-permission-guardian
-             (lambda (command _context callback)
-               (push (cons command callback) callbacks))))
-        (mevedel-tool-exec-permission-check-bash-async
-         nil '(:command "sudo first") #'ignore)
-        (mevedel-tool-exec-permission-check-bash-async
-         nil '(:command "sudo second") #'ignore))
-      (should (equal '("sudo first" "sudo second") (nreverse enqueued)))
-      (funcall (cdr (assoc "sudo second" callbacks))
-               '(:risk "high"
-                       :recommendation "deny"
-                       :reason "Second completes first."))
-      (funcall (cdr (assoc "sudo first" callbacks))
-               '(:risk "medium"
-                       :recommendation "ask"
-                       :reason "First completes later.")))
-    (should (= 2 (length rendered))))
-  :doc "late guardian guidance re-renders with the captured session context"
-  (let* ((root (make-temp-file "mevedel-guardian-session-" t))
-         (workspace (mevedel-workspace-get-or-create
-                     'file root root "test"))
-         (session (mevedel-session-create "main" workspace))
-         (data-buffer (generate-new-buffer " *mevedel-guardian-data*"))
-         (source-buffer (generate-new-buffer " *mevedel-guardian-source*"))
-         (mevedel-permission-rules nil)
-         (mevedel-bash-dangerous-commands '("sudo"))
-         guardian-callback
-         enqueue-session
-         enqueue-buffer
-         render-session
-         render-buffer
-         captured
-         outcome)
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional session-arg)
-                       (setq enqueue-session session-arg)
-                       (setq enqueue-buffer (current-buffer))
-                       (setq captured entry)))
-                    ((symbol-function 'mevedel-permission-queue--render-head)
-                     (lambda (&optional session-arg)
-                       (setq render-session session-arg)
-                       (setq render-buffer (current-buffer)))))
-            (with-current-buffer data-buffer
-              (setq-local mevedel--session session))
-            (with-current-buffer source-buffer
-              (setq-local mevedel--data-buffer data-buffer)
-              (let ((mevedel-permission-guardian
-                     (lambda (_command _context callback)
-                       (setq guardian-callback callback))))
-                (mevedel-tool-exec-permission-check-bash-async
-                 nil '(:command "sudo ls") (lambda (r) (setq outcome r)))))
-            (should guardian-callback)
-            (let ((mevedel--session nil))
-              (funcall guardian-callback
-                       '(:risk "medium"
-                               :recommendation "ask"
-                               :reason "Uses privilege escalation."))))
-          (should (eq enqueue-session session))
-          (should (eq enqueue-buffer source-buffer))
-          (should (eq render-session session))
-          (should (eq render-buffer source-buffer))
-          (funcall (plist-get captured :callback) 'deny-once)
-          (should (eq outcome 'deny)))
-      (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer))
-      (when (buffer-live-p source-buffer)
-        (kill-buffer source-buffer))
-      (delete-directory root t)
-      (mevedel-workspace-clear-registry)))
-  :doc "settled prompts ignore late guardian guidance"
-  (let* ((root (make-temp-file "mevedel-guardian-cancel-" t))
-         (workspace (mevedel-workspace-get-or-create
-                     'file root root "test"))
-         (session (mevedel-session-create "main" workspace))
-         (source-buffer (generate-new-buffer " *mevedel-guardian-cancel*"))
-         (mevedel-permission-rules nil)
-         (mevedel-bash-dangerous-commands '("sudo"))
-         guardian-callback
-         captured
-         rendered
-         outcome)
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-                     (lambda (entry &optional _session)
-                       (setq captured entry)))
-                    ((symbol-function 'mevedel-permission-queue--render-head)
-                     (lambda (&optional _session)
-                       (setq rendered t))))
-            (with-current-buffer source-buffer
-              (let ((mevedel--session session)
-                    (mevedel-permission-guardian
-                     (lambda (_command _context callback)
-                       (setq guardian-callback callback))))
-                (mevedel-tool-exec-permission-check-bash-async
-                 nil '(:command "sudo ls") (lambda (r) (setq outcome r)))))
-            (should guardian-callback)
-            (funcall (plist-get captured :callback) 'aborted)
-            (should (eq outcome 'aborted))
-            (funcall guardian-callback
-                     '(:risk "low"
-                             :recommendation "proceed"
-                             :reason "Late read-only guidance.")))
-          (should-not rendered)
-          (should-not (car (plist-get captured :guardian-cell))))
-      (when (buffer-live-p source-buffer)
-        (kill-buffer source-buffer))
-      (delete-directory root t)
-      (mevedel-workspace-clear-registry)))
   :doc "feedback maps to (deny . REASON) with the historical message"
   ;; Feedback is part of the authoritative queued prompt vocabulary.
   ;; Mock the queue entry point and deliver it directly to the
@@ -2883,8 +2556,8 @@ default Bash keeps bare dot inspection automatic"
                            :outcome))))
 
   :doc "queued Eval retains permission cause separately from execution mode"
-  (dolist (case '((edits nil mode)
-                  (full-auto (("Eval" :action ask)) rule)))
+  (dolist (case '((ask nil mode)
+                  (edits (("Eval" :action ask)) rule)))
     (pcase-let ((`(,mode ,rules ,via) case))
       (let (entry outcome)
         (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -2961,8 +2634,8 @@ default Bash keeps bare dot inspection automatic"
     (should (eq outcome 'allow))
     (should-not enqueued))
 
-  :doc "explicit Eval ask prompts even in full-auto"
-  (let ((mevedel-permission-mode 'full-auto)
+  :doc "explicit Eval ask prompts in edits"
+  (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules '(("Eval" :action ask)))
         outcome enqueued)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)

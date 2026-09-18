@@ -52,8 +52,10 @@ with a concise justification. This removes filesystem, network, and process
 confinement and runs directly as the user; command approval still applies.
 Do not request it merely to avoid a command permission prompt.
 
-When confinement is unavailable, the result discloses unrestricted execution.
-That disclosure does not authorize unrelated operations or expand user scope.
+Edits refuses execution when confinement is unavailable. Ask may select direct
+execution under its configured best-effort preference. Full Access already
+authorizes unrestricted execution without a separate escalation request. Direct
+results disclose that boundary; it does not expand the user's task scope.
 
 ## Yielding, polling, and input
 

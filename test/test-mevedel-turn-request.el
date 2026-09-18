@@ -577,7 +577,8 @@
                      :execution-target target
                      :working-directory "/ssh:user@host:/srv/project/")))
       (setf (mevedel-execution-target-readiness target)
-            '(:status blocked :reason missing-dependencies
+            `(:status blocked :reason missing-dependencies
+              :sandbox-mode ,(mevedel-sandbox-mode-effective session)
               :missing-dependencies (rg bash)))
       (let ((message
              (condition-case err
@@ -760,6 +761,20 @@
       "request-1"
       (car swept)))
     (should (eq session (cadr swept))))
+  :doc "late and nested cancellation registrations settle without reopening the request"
+  (let ((request (mevedel-request--create)) fired)
+    (mevedel-request-push-canceller
+     request (lambda ()
+               (should (mevedel-request-cancelled-p request))
+               (push 'original fired)
+               (mevedel-request-push-canceller
+                request (lambda () (push 'nested fired)))))
+    (mevedel-request-cancel request)
+    (mevedel-request-push-canceller request (lambda () (error "Late cleanup failed")))
+    (mevedel-request-push-canceller request (lambda () (push 'late fired)))
+    (mevedel-request-cancel request)
+    (should (equal '(late nested original) fired))
+    (should-not (mevedel-request-cancellers request)))
   :doc "drains registered cancellers without changing the ambient request"
   (let* ((ambient (mevedel-request--create))
          (request (mevedel-request--create))

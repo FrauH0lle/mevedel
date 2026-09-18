@@ -12,8 +12,8 @@
   that the user has not authorized; respect actual permission gates.
 - A final permission denial means do not repeat or circumvent that action
   through another tool. Consider a materially safer alternative or seek informed
-  explicit approval. A guardian/reviewer timeout is an infrastructure failure,
-  not a final denial, and may be retried once.
+  explicit approval. Automatic reviewer failures and timeouts fall back to the
+  human permission card; the harness owns that recovery.
 - Inspect relevant code and applicable project guidance, including nested
   `AGENTS.md` / `AGENTS.local.md`, before changing it. Preserve
   existing user/agent edits; resolve conflicts rather than discard them. Keep

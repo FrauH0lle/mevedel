@@ -10,6 +10,18 @@
 (eval-when-compile
   (require 'mevedel-structs))
 
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue--coalesce
+                  "mevedel-permission-queue" (rule-outcome &optional session))
+(declare-function mevedel-permission-queue--render-head
+                  "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission-queue--coalesce "mevedel-permission-queue")
+(autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
+
+;; `mevedel-permission-review'
+(declare-function mevedel-permission-review-cancel
+                  "mevedel-permission-review" (session &optional request-id reason))
+
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode-active-p
                   "mevedel-plan-mode" (&optional session))
@@ -176,6 +188,11 @@ Runs mode-specific lifecycle hooks."
           (mevedel-permission-mode-set-raw target)
           (mevedel-permission-mode--apply-full-auto-lifecycle
            previous target session)
+          (when (and (not (eq previous target))
+                     (fboundp 'mevedel-permission-review-cancel))
+            (mevedel-permission-review-cancel session nil 'policy))
+          (mevedel-permission-queue--coalesce 'mode-change session)
+          (mevedel-permission-queue--render-head session)
           ;; Permission mode can change before any view exists; the
           ;; composer module loads with the view, so a missing function
           ;; here just means there is no prompt to refresh yet.
@@ -285,20 +302,21 @@ made from inside a session; otherwise returns the global default."
 (defcustom mevedel-permission-mode 'ask
   "Current permission mode.
 
-Controls the default permission behavior when no explicit rules match.
+Controls execution authority, confinement and approval behavior.
 
-  `ask'       - Allow recognized inspection and prompt for edits,
-                uncertain Bash, and Eval.
-  `edits'     - Apply native edits inside allowed roots automatically;
-                Bash and Eval retain their normal checks.
-  `full-auto' - Skip heuristic Bash and Eval prompts and run live Eval
-                automatically.  Explicit denies and missing protected
-                resource authority remain effective.
+  `ask'       - Allow recognized inspection; review patches and prompt for
+                uncertain execution.  Use the configured sandbox preference.
+  `edits'     - Automatically apply native edits within allowed roots and run
+                Bash and batch Eval with required child confinement.  Native
+                reads cover OS-readable paths except configured credential
+                masks.  Live Eval and additional authority require approval.
+  `full-auto' - Full Access under the target OS account: no confinement or
+                permission prompts, including native tools and live Eval.
+                Ordinary ask rules and protected-path defaults do not apply.
 
-At the generic permission layer, `edits' authorizes tools in the native
-`edit' group after their resource boundary is satisfied.  It does not
-authorize Bash, Eval, or unrelated mutating tools.  Native edit previews
-also apply without an interactive overlay in `edits'; `ask' prompts.
+Explicit hard denies, Plan restrictions, validation and session ownership
+checks remain effective in every mode.  Edits refuses child execution if real
+confinement is unavailable; it never silently falls back to Full Access.
 
 To change this mode at runtime, use `setopt' from the relevant buffer:
 when called from inside a session buffer (a data buffer or its view
@@ -322,8 +340,8 @@ old value.  See `mevedel-permission-mode--set' and
 `mevedel-permission-mode-set-session-scoped'."
   :type '(choice
           (const :tag "Ask -- prompt for edits and uncertain execution" ask)
-          (const :tag "Edits -- apply native edits, check Bash and Eval" edits)
-          (const :tag "Full Auto -- skip heuristic execution prompts" full-auto))
+          (const :tag "Edits -- automatic edits and confined execution" edits)
+          (const :tag "Full Auto -- Full Access without confinement or prompts" full-auto))
   :set #'mevedel-permission-mode--set
   :get #'mevedel-permission-mode--get
   :local 'permanent

@@ -890,11 +890,11 @@ descriptions so they stay aligned and read as a comparison."
 (defun mevedel-menu--mode-edits-description ()
   "Return the edits mode row description."
   (mevedel-menu--mode-choice-description
-   'edits "auto-apply edit previews"))
+   'edits "automatic edits and confined execution"))
 
 (defun mevedel-menu--mode-full-auto-description ()
   "Return the full-auto mode row description."
-  (mevedel-menu--mode-choice-description 'full-auto "auto-allow tools"))
+  (mevedel-menu--mode-choice-description 'full-auto "Full Access, no confinement or prompts"))
 
 (defun mevedel-menu--mode-plan-description ()
   "Return the Plan mode row description.
@@ -1383,7 +1383,7 @@ nothing to restore."
 			(list :id 'help-2 :title "Direct slash commands"
 			      :body (string-join (list "/plugin enable NAME, disable NAME, reload, update NAME" "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..." "/skills enable NAME, disable NAME, help NAME" "/mode MODE, /model MODEL" "/worktree create [NAME] [--for \"purpose\"] [--clean]" "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear" "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens") "\n"))
 			(list :id 'help-3 :title "Modes"
-			      :body (string-join (list "ask       Prompt for edits and uncertain execution." "edits     Auto-apply native edits; check Bash and Eval." "full-auto Skip heuristic Bash and Eval prompts.") "\n"))
+			      :body (string-join (list "ask       Prompt for edits and uncertain execution." "edits     Automatic native edits and confined Bash/batch Eval." "full-auto Full Access: no confinement or permission prompts.") "\n"))
 			(list :id 'help-4 :title "View and data buffers"
 			      :body (string-join (list "The view buffer owns the composer, compact transcript, and status strip." "The data buffer owns raw gptel state, tools, model, and transcript data." "The cockpit resolves the view/data pair once and routes actions to the owning buffer." "Cockpit N opens Navigate: [ / ] / g inspect session segments," "n / p move through displays, C-n / C-p through queries, TAB folds a section." "The raw data buffer keeps gptel header behavior for the gptel menu.") "\n")))))
 

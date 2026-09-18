@@ -38,9 +38,9 @@ to the decision bearing that ID.
 | 0009 | Hook Audit Surfaces | [ADR 0009](0009-hook-audit-surfaces.md) |
 | 0010 | Worktree session owns plan execution | [ADR 0010](0010-worktree-session-owns-plan-execution.md) |
 | 0011 | Repair model tool input before pipeline execution | [ADR 0011](0011-repair-model-tool-input-before-pipeline.md) |
-| 0012 | Layer Bash command and resource authorization | [ADR 0012](0012-layer-bash-command-and-resource-authorization.md) |
+| 0012 | Layer Bash authority within the selected permission mode | [ADR 0012](0012-layer-bash-command-and-resource-authorization.md) |
 | 0013 | Full-auto includes unconfined live Eval | [ADR 0081 — history](0081-full-auto-authorizes-live-eval.md#decision-history) |
-| 0014 | Permission guardian never grants authority | [ADR 0014](0014-permission-guardian-never-grants-authority.md) |
+| 0014 | Delegate invocation approval before human interruption | [ADR 0014](0014-permission-guardian-never-grants-authority.md) |
 | 0015 | Best-effort confinement falls back only before execution | [ADR 0116 — history](0116-return-failed-confined-launches-without-retry.md#decision-history) |
 | 0016 | Deny network by default and escalate additively | [ADR 0016](0016-deny-network-by-default-and-escalate-additively.md) |
 | 0017 | Confine protected paths by default | [ADR 0017](0017-confine-protected-paths-by-default.md) |
@@ -111,7 +111,7 @@ to the decision bearing that ID.
 | 0082 | Full-auto authorizes additive network access | [ADR 0086 — history](0086-reuse-approved-execution-permission-profiles.md#decision-history) |
 | 0083 | Store network authority in qualified tool rules | [ADR 0086 — history](0086-reuse-approved-execution-permission-profiles.md#decision-history) |
 | 0084 | Limit reusable full escalation to literal operations | [ADR 0084](0084-limit-reusable-full-escalation-to-literal-operations.md) |
-| 0085 | Full-auto permits destructive workspace writes | [ADR 0085](0085-full-auto-permits-destructive-workspace-writes.md) |
+| 0085 | Full-auto permits destructive operations | [ADR 0085](0085-full-auto-permits-destructive-workspace-writes.md) |
 | 0086 | Reuse approved execution permission profiles | [ADR 0086](0086-reuse-approved-execution-permission-profiles.md) |
 | 0087 | Keep directive identity outside source overlays | [ADR 0087](0087-keep-directive-identity-outside-source-overlays.md) |
 | 0088 | Keep directive activity outside main chat | [ADR 0091 — history](0091-render-directive-turns-in-the-shared-session-view.md#decision-history) |

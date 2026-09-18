@@ -171,6 +171,12 @@
 (declare-function mevedel-reminders-install-defaults
 		  "mevedel-reminders" (session))
 
+
+;; `mevedel-sandbox'
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session permission-mode))
+(autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-inhibit-so-long
                   "mevedel-session-artifacts" ())
@@ -257,11 +263,11 @@
                   "mevedel-transcript-restore" ())
 
 ;; `mevedel-turn'
-(declare-function mevedel-request-drain-cancellers "mevedel-turn"
-                  (request))
+(declare-function mevedel-request-cancel "mevedel-turn"
+                  (request &optional abort-plan-approval))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
-(autoload 'mevedel-request-drain-cancellers "mevedel-turn")
+(autoload 'mevedel-request-cancel "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
 (defvar mevedel--turn-settlements-pending)
 
@@ -519,7 +525,7 @@ sessions keep their existing startup behavior and return nil."
     (when (and target
                (mevedel-execution-target-remote-p target))
       (mevedel-execution-target-probe
-       target refresh (mevedel-session-sandbox-mode session)))))
+       target refresh (mevedel-sandbox-mode-effective session)))))
 
 ;;;###autoload
 (defun mevedel-retry-target-readiness ()
@@ -1067,7 +1073,7 @@ BUF defaults to the current buffer if not specified."
 			(_ (buffer-live-p view-buf)))
               (with-current-buffer view-buf
 		(mevedel-view-stream-stop)))
-	    ;; Phase 1: drain the request's cancellers.  Each canceller
+	    ;; Phase 1: mark cancellation before draining.  Each canceller
 	    ;; settles its owned overlays with `aborted' so FSMs parked in
 	    ;; TOOL can advance out. Draining before the
 	    ;; `gptel-abort' loop is load-bearing -- follow-up HTTP
@@ -1076,7 +1082,7 @@ BUF defaults to the current buffer if not specified."
 	    (with-current-buffer chat-buffer
               (when (bound-and-true-p mevedel--current-request)
 		(mevedel--queue-reconciliation-reminder mevedel--session)
-		(mevedel-request-drain-cancellers mevedel--current-request))
+		(mevedel-request-cancel mevedel--current-request))
               ;; flush any queued permission entries with 'aborted
               ;; so callbacks fire and the FSMs they belong to can unwind.
               ;; Run after the canceller drain so canceller-driven entries

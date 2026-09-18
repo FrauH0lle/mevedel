@@ -41,7 +41,11 @@ Target replacement strips filesystem entries from session profiles and invalidat
 frozen authority alongside session resource grants. It preserves command and
 network approvals and does not rewrite durable workspace/global configuration.
 
-Confinement refuses exact directory writes and exact reads beneath inaccessible
+For confined execution, approval and persistence reject exact directory writes
+before settling a card.
+The user must explicitly select directory-tree scope; automatic review cannot
+widen it. Native, live Eval and unconfined exact directory operations remain valid. Confinement also
+refuses exact reads beneath inaccessible
 masks that Bubblewrap cannot represent without widening authority. Explicit tree
 grants can admit protected Git metadata. File masks use private mode-000 files,
 and approved exact file mounts replace only their matching masks. These are
@@ -154,3 +158,17 @@ file shape is unchanged, but existing profiles no longer depend on companion
 grants; old independent entries are not removed automatically. Regression tests
 cover command-only authority, independent selection, revocation, target
 replacement, and actual confined cache reuse without companion grants.
+
+### Reject unusable directory approval before settlement
+
+The September 2026 audit found repeated full escalation after this project's
+npm profile approved an exact directory write that Bubblewrap could not mount.
+The configuration now explicitly selects recursive extent. The generic approval
+validator rejects an unusable confined exact-directory write before a human card settles,
+and on hook/model approval. No package name, cache path or command-specific
+exception was added to product policy. Full Access needs no grants or mounts.
+
+Review then reproduced rejection of an Ask-mode directory approval with the
+sandbox off, where no child mount exists. Validation now consults the selected
+execution boundary, retaining the mount restriction for confined execution but
+not forcing recursive authority for native, live or disclosed unconfined work.

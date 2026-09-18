@@ -764,7 +764,7 @@ the model which path or expression fields to narrow before retrying.
 ## Managed Bash execution
 
 `mevedel-tool-exec.el` owns Bash/Eval tool registration, execution lifecycle,
-and rendering. Bash classification and guardian policy live in
+and rendering. Bash classification and reusable rules live in
 `mevedel-bash-policy.el`; execution-specific permission normalization and
 prompt adaptation live in `mevedel-tool-exec-permission.el`.
 

@@ -96,12 +96,20 @@ inside a session updates only that session."
   :get #'mevedel-sandbox-mode--get
   :group 'mevedel)
 
-(defun mevedel-sandbox-mode-effective (&optional session)
-  "Return canonical sandbox mode for SESSION or the global default."
-  (mevedel-sandbox-mode-normalize
-   (or (and session (mevedel-session-sandbox-mode session))
-       (default-toplevel-value 'mevedel-sandbox-mode)
-       'best-effort)))
+(defun mevedel-sandbox-mode-effective (&optional session permission-mode)
+  "Return effective confinement for SESSION and PERMISSION-MODE.
+Permission mode defaults to SESSION's effective mode.  Full-auto grants full
+access; edits requires confinement.  Ask uses the configured preference.
+Deriving this policy never changes the stored sandbox preference."
+  (let ((preference
+         (mevedel-sandbox-mode-normalize
+          (or (and session (mevedel-session-sandbox-mode session))
+              mevedel-sandbox-mode
+              'best-effort))))
+    (pcase (or permission-mode (mevedel-permission-mode-effective session))
+      ('full-auto 'off)
+      ('edits 'required)
+      (_ preference))))
 
 (defcustom mevedel-sandbox-probe-timeout 0.5
   "Maximum seconds to wait for a local Bubblewrap capability probe."

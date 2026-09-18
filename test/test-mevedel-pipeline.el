@@ -2618,7 +2618,7 @@ cover, so the permission step's warning about it is captured here."
 				   :root temporary-file-directory))
 				(session (mevedel-session--create
 					  :name "one-shot" :workspace workspace
-					  :permission-mode 'full-auto))
+					  :permission-mode 'edits))
 			(request (mevedel-request--create
 				  :session session
 				  :one-shot-mutations-p t

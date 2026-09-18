@@ -60,8 +60,11 @@
 (declare-function mevedel-patch-review-start
                   "mevedel-patch-review" (proposal callback data-buffer))
 
-;; `mevedel-permissions'
-(defvar mevedel-permission-mode)
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-canonical-path
@@ -90,7 +93,6 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
@@ -1615,18 +1617,19 @@ file buttons, rewritten links, or inline images."
 
 (defun mevedel-tool-patch--effective-mode ()
   "Return the active permission mode for patch review."
-  (or (and (boundp 'mevedel--current-request)
+  (let ((mode (mevedel-permission-mode-effective
+               (and (boundp 'mevedel--session) mevedel--session)
+               (current-buffer))))
+    (cond
+     ((eq mode 'full-auto) mode)
+     ((and (boundp 'mevedel--current-request)
            mevedel--current-request
-           (mevedel-request-one-shot-mutations-p mevedel--current-request)
-           'ask)
-      (and (boundp 'mevedel-pipeline--auto-apply-edit-p)
-           mevedel-pipeline--auto-apply-edit-p
-           'edits)
-      (and (boundp 'mevedel--session)
-           mevedel--session
-           (mevedel-session-permission-mode mevedel--session))
-      (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
-      'ask))
+           (mevedel-request-one-shot-mutations-p mevedel--current-request))
+      'ask)
+     ((and (boundp 'mevedel-pipeline--auto-apply-edit-p)
+           mevedel-pipeline--auto-apply-edit-p)
+      'edits)
+     (t mode))))
 
 (defun mevedel-tool-patch-handler (callback args)
   "Handle an ApplyPatch call with CALLBACK and ARGS."

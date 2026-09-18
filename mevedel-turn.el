@@ -113,6 +113,12 @@
                   "mevedel-reminders" (buffer))
 (autoload 'mevedel-reminders-restore-reserved-context "mevedel-reminders")
 
+
+;; `mevedel-sandbox'
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session permission-mode))
+(autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
                   "mevedel-session-artifacts" (session &optional buffer))
@@ -218,23 +224,25 @@
 Each canceller is invoked exactly once during teardown via the
 drain-then-invoke helper.  Primitives that own pending overlays
 register a thunk that drains their own overlays with the
-`aborted' sentinel."
+`aborted' sentinel.  A registration after cancellation runs immediately,
+without reopening REQUEST or retaining the thunk."
   (when request
-    (setf (mevedel-request-cancellers request)
-          (append (mevedel-request-cancellers request)
-                  (list canceller)))))
+    (if (mevedel-request-cancelled-p request)
+        (ignore-errors (funcall canceller))
+      (setf (mevedel-request-cancellers request)
+            (append (mevedel-request-cancellers request)
+                    (list canceller))))))
 
 (defun mevedel-request-drain-cancellers (request)
   "Atomically clear and invoke every canceller on REQUEST.
 
-Drains the list before invoking, so a canceller that registers a new
-canceller during its run does not re-enter the current drain.  Each
-canceller runs inside `ignore-errors' so a misbehaving thunk cannot
-strand the others.
+Drains the list before invoking, so a recursive drain cannot invoke the
+same thunk twice.  Each canceller runs inside `ignore-errors' so a
+misbehaving thunk cannot strand the others.  Registration on a cancelled
+request invokes the new thunk immediately rather than adding to this list.
 
 Used by `mevedel-abort', `mevedel-request-end', and the stale-request
-replacement path in `mevedel-request-begin'.  Together these are the
-only call sites that may invoke cancellers."
+replacement path in `mevedel-request-begin'."
   (when request
     (let ((cancellers (mevedel-request-cancellers request)))
       (setf (mevedel-request-cancellers request) nil)
@@ -276,7 +284,7 @@ only call sites that may invoke cancellers."
               (target (mevedel-session-execution-target session)))
     (when (mevedel-execution-target-remote-p target)
       (mevedel-execution-target-probe
-       target nil (mevedel-session-sandbox-mode session))
+       target nil (mevedel-sandbox-mode-effective session))
       (unless (mevedel-execution-target-ready-p target)
         (user-error "Execution target is not ready: %s"
                     (mevedel-execution-target-readiness-message target))))
@@ -345,21 +353,22 @@ directive being processed.  Return the new request struct."
       (mevedel-telemetry-record
        session 'request-queued :request-id id :origin origin
        :permission-mode (mevedel-session-permission-mode session)
-       :sandbox-mode (mevedel-session-sandbox-mode session))
+       :sandbox-mode (mevedel-sandbox-mode-effective session))
       (mevedel-telemetry-record
        session 'request-start :request-id id :origin origin
        :permission-mode (mevedel-session-permission-mode session)
-       :sandbox-mode (mevedel-session-sandbox-mode session)))
+       :sandbox-mode (mevedel-sandbox-mode-effective session)))
     request))
 
 (defun mevedel-request-cancel (request &optional abort-plan-approval)
-  "Cancel REQUEST and its owned pending interactions.
+  "Cancel REQUEST terminally and drain its owned pending interactions.
 Queued permission prompts are swept only for REQUEST's identity.  Plan
 approvals normally outlive the request that presented them; when
 ABORT-PLAN-APPROVAL is non-nil, abort it too."
   (when request
     (let ((session (mevedel-request-session request))
           (request-id (mevedel-request-id request)))
+      (setf (mevedel-request-cancelled-p request) t)
       (mevedel-request-drain-cancellers request)
       (when (and request-id
                  (fboundp 'mevedel-permission-queue-sweep-request))

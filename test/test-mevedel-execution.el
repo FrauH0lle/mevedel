@@ -170,6 +170,38 @@
 (mevedel-deftest mevedel-execution-run-one-shot ()
   ,test
   (test)
+  :doc "edits refuses an unavailable sandbox while full-auto starts directly"
+  (let* ((root (make-temp-file "mevedel-mode-launch-" t))
+         (session (mevedel-session--create
+                   :name "mode-launch" :working-directory root
+                   :sandbox-mode 'best-effort :permission-mode 'edits))
+         (mevedel-sandbox--probe-cache
+          '((nil . (:available nil :reason "Test backend unavailable")))))
+    (unwind-protect
+        (progn
+          (let ((result
+                 (mevedel-execution-run-one-shot
+                  :name "mevedel-mode-refusal" :command '("sh" "-c" "touch marker")
+                  :workdir root :writable-roots (list root) :session session)))
+            (should (plist-get result :error))
+            (should-not (file-exists-p (file-name-concat root "marker")))
+            (should (= 0 (plist-get (plist-get result :sandbox-summary)
+                                   :started-count))))
+          (setf (mevedel-session-permission-mode session) 'full-auto)
+          (let ((result
+                 (mevedel-execution-run-one-shot
+                  :name "mevedel-mode-direct" :command '("sh" "-c" "touch marker")
+                  :workdir root :writable-roots nil :session session)))
+            (should (= 0 (plist-get result :exit-code)))
+            (should (file-exists-p (file-name-concat root "marker")))
+            (should (eq 'unrestricted
+                        (plist-get (plist-get result :sandbox-summary)
+                                   :filesystem)))
+            (should (eq 'unrestricted
+                        (plist-get (plist-get result :sandbox-summary)
+                                   :network)))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "returns complete output and structured terminal facts"
   (let ((mevedel-sandbox-mode 'off))
     (let ((result
@@ -657,6 +689,37 @@
   (:doc "runs managed commands through confinement and resource capture")
   ,test
   (test)
+  :doc "queued full-access work cannot launch after a restrictive mode change"
+  (let* ((root (make-temp-file "mevedel-queued-mode-" t))
+         (session (test-mevedel-execution--session root))
+         first second
+         (settlements 0))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-permission-mode session) 'full-auto)
+          (mevedel-execution-start-bash
+           (lambda (value) (setq first value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "touch ready; while test ! -e release; do sleep 0.02; done")
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms nil)
+          (test-mevedel-execution--wait
+           (lambda () (file-exists-p (file-name-concat root "ready"))))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq second value) (cl-incf settlements))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "touch obsolete-authority")
+           :sandbox-permissions 'require-escalated
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms nil)
+          (setf (mevedel-session-permission-mode session) 'edits)
+          (write-region "release" nil (file-name-concat root "release") nil 'silent)
+          (test-mevedel-execution--wait (lambda () (and first second)))
+          (should (= 1 settlements))
+          (should (= -1 (plist-get (plist-get second :facts) :exit-code)))
+          (should-not (file-exists-p (file-name-concat root "obsolete-authority"))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "settles a failed confined launcher once without a replacement process"
   (let* ((root (make-temp-file "mevedel-managed-fallback-" t))
          (session (test-mevedel-execution--session root))

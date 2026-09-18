@@ -157,6 +157,28 @@
           (should (eq 'PermissionRequest
                       (plist-get settled-context
                                  :permission-denial-provenance)))))))
+  :doc "hook approval cannot authorize an unrepresentable directory write"
+  (let ((root (make-temp-file "mevedel-hook-directory-" t))
+        outcome)
+    (unwind-protect
+        (dolist (available-p '(t nil))
+          (with-temp-buffer
+            (setq-local mevedel-permission-mode 'edits)
+            (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _payload callback &rest _)
+                         (funcall callback '(:permission-decision allow))))
+                      ((symbol-function 'mevedel-sandbox-probe)
+                       (lambda (&rest _)
+                         (list :available available-p :reason "Fixture confinement"))))
+              (mevedel-tool-permission--request
+               (list :buffer (current-buffer))
+               (list :kind 'sandbox :requested-additional-permissions
+                     (list :file-system (list (list :path root :access 'write))))
+               nil (lambda (_context value) (setq outcome value)))
+              (should (eq 'deny (car-safe outcome)))
+              (should (string-match-p "directory-tree scope" (cdr outcome))))))
+      (delete-directory root t)))
+
   :doc "an unresolved request uses its card-free fallback"
   (let (queued settled-outcome)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
@@ -462,7 +484,7 @@
            :session session))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         (mevedel-permission-guardian nil)
+         (mevedel-permission-reviewer 'user)
          content)
     (cl-letf
         (((symbol-function 'mevedel-permission-queue--render-entry)
@@ -604,159 +626,6 @@
             (should (eq 'permission-enqueued
                         (plist-get (nth 1 entries) :event)))))
       (delete-directory dir t)))
-  :doc "guardian context is advisory and includes deterministic confinement facts"
-  (let* ((session (mevedel-session--create
-                   :name "guardian" :permission-mode 'ask))
-         (tool (mevedel-tool-ensure "Bash"))
-         (facts '(:sandbox bubblewrap
-                           :filesystem workspace-write
-                           :proc fresh
-                           :network isolated))
-         (mevedel-permission-rules nil)
-         (mevedel-protected-paths nil)
-         (mevedel-bash-dangerous-commands '("rm"))
-         guardian-context
-         (mevedel-permission-guardian
-          (lambda (_command context callback)
-            (setq guardian-context context)
-            (funcall callback
-                     '(:risk "critical"
-                             :recommendation "deny"
-                             :reason "Deletes a file."
-                             :class "read-only"))))
-         entry
-         next-called
-         fail-reason)
-    (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-               (lambda (&rest _) facts))
-              ((symbol-function 'mevedel-permission--enqueue)
-               (lambda (queued &optional _session)
-                 (setq entry queued)))
-              ((symbol-function
-                'mevedel-permission-queue--render-head)
-               #'ignore))
-      (mevedel-tool-permission-step
-       (list :tool tool :args '(:command "rm file")
-             :session session)
-       (lambda (_context) (setq next-called t))
-       (lambda (reason &rest _) (setq fail-reason reason))))
-    (should (eq 'dangerous (plist-get guardian-context :class)))
-    (should
-     (equal facts
-            (plist-get guardian-context :sandbox-facts)))
-    (should-not next-called)
-    (should-not fail-reason)
-    (should-not
-     (plist-member
-      (car (plist-get entry :guardian-cell)) :class))
-    ;; Even a deny recommendation remains advisory in ask mode.
-    (funcall (plist-get entry :callback) 'allow-once)
-    (should next-called)
-    (should-not fail-reason))
-  :doc "guardian failure preserves interactive Bash prompts in ask and edits"
-  (dolist (mode '(ask edits))
-    (let* ((session (mevedel-session--create
-                     :name "guardian" :permission-mode mode))
-           (tool (mevedel-tool-ensure "Bash"))
-           (mevedel-permission-rules nil)
-           (mevedel-protected-paths nil)
-           (mevedel-bash-dangerous-commands '("rm"))
-           (mevedel-permission-guardian
-            (lambda (_command _context callback)
-              (funcall callback nil)))
-           entry
-           next-called
-           fail-reason)
-      (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-                 (lambda (&rest _)
-                   '(:sandbox bubblewrap
-                              :filesystem workspace-write
-                              :network isolated)))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (queued &optional _session)
-                   (setq entry queued)))
-                ((symbol-function
-                  'mevedel-permission-queue--render-head)
-                 #'ignore))
-        (mevedel-tool-permission-step
-         (list :tool tool :args '(:command "rm file")
-               :session session)
-         (lambda (_context) (setq next-called t))
-         (lambda (reason &rest _) (setq fail-reason reason))))
-      (should entry)
-      (should-not next-called)
-      (should-not fail-reason)
-      (funcall (plist-get entry :callback) 'allow-once)
-      (should next-called)))
-  :doc "model guardian errors preserve prompts and full-auto execution"
-  (dolist (mode '(ask edits full-auto))
-    (let* ((session (mevedel-session--create
-                     :name "guardian" :permission-mode mode))
-           (tool (mevedel-tool-ensure "Bash"))
-           (mevedel-permission-rules nil)
-           (mevedel-protected-paths nil)
-           (mevedel-bash-dangerous-commands '("rm"))
-           (mevedel-permission-guardian t)
-           entry
-           next-called
-           fail-reason)
-      (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-                 (lambda (&rest _)
-                   '(:sandbox bubblewrap
-                              :filesystem workspace-write
-                              :network isolated)))
-                ((symbol-function 'mevedel-model-resolve-workload)
-                 (lambda (&rest _)
-                   (user-error "Guardian model unavailable")))
-                ((symbol-function 'mevedel-permission--enqueue)
-                 (lambda (queued &optional _session)
-                   (setq entry queued)))
-                ((symbol-function
-                  'mevedel-permission-queue--render-head)
-                 #'ignore))
-        (mevedel-tool-permission-step
-         (list :tool tool :args '(:command "rm file")
-               :session session)
-         (lambda (_context) (setq next-called t))
-         (lambda (reason &rest _) (setq fail-reason reason))))
-      (if (eq mode 'full-auto)
-          (should next-called)
-        (should entry)
-        (should-not next-called))
-      (should-not fail-reason)))
-  :doc "full-auto guardian may veto suspicious Bash but failure allows"
-  (dolist (guardian-result
-           '((:risk "high" :recommendation "deny"
-                    :reason "Deletes a file.")
-             nil))
-    (let* ((session (mevedel-session--create
-                     :name "guardian"
-                     :permission-mode 'full-auto))
-           (tool (mevedel-tool-ensure "Bash"))
-           (mevedel-permission-rules nil)
-           (mevedel-protected-paths nil)
-           (mevedel-bash-dangerous-commands '("rm"))
-           (mevedel-permission-guardian
-            (lambda (_command _context callback)
-              (funcall callback guardian-result)))
-           next-called
-           fail-reason)
-      (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-                 (lambda (&rest _)
-                   '(:sandbox bubblewrap
-                              :filesystem workspace-write
-                              :network isolated))))
-        (mevedel-tool-permission-step
-         (list :tool tool :args '(:command "rm file")
-               :session session)
-         (lambda (_context) (setq next-called t))
-         (lambda (reason &rest _) (setq fail-reason reason))))
-      (if guardian-result
-          (progn
-            (should-not next-called)
-            (should (equal "Permission denied" fail-reason)))
-        (should next-called)
-        (should-not fail-reason))))
   :doc "tool check-permission returning allow is respected"
   (let* ((tool (mevedel-tool--create
                 :name "CustomTool"
@@ -1285,7 +1154,7 @@
                  (mevedel--session session)
                  (mevedel-permission-rules nil)
                  (mevedel-protected-paths nil)
-                 (mevedel-permission-guardian nil)
+                 (mevedel-permission-reviewer 'user)
                  (hook-count 0))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (event _payload callback &rest _)
@@ -1326,7 +1195,7 @@
                            :permission-mode 'ask))
                  (mevedel-permission-rules nil)
                  (mevedel-protected-paths nil)
-                 (mevedel-permission-guardian nil)
+                 (mevedel-permission-reviewer 'user)
                  (enqueued nil)
                  (events nil)
                  (next-called nil))
@@ -1343,6 +1212,21 @@
       (should next-called)
       (should-not enqueued)
       (should (equal '(PermissionRequest) events))))
+  :doc "full-auto ignores PreToolUse asks but retains hook denies"
+  (dolist (hook '(ask deny))
+    (let ((session (mevedel-session--create :permission-mode 'full-auto))
+          (mevedel-permission-rules nil)
+          enqueued allowed denied)
+      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                 (lambda (&rest _) (setq enqueued t))))
+        (mevedel-tool-permission-step
+         (list :tool (mevedel-tool--create :name "HookProbe")
+               :session session :hook-permission-decision hook)
+         (lambda (_context) (setq allowed t))
+         (lambda (&rest _) (setq denied t))))
+      (should-not enqueued)
+      (should (eq (eq hook 'ask) allowed))
+      (should (eq (eq hook 'deny) denied))))
   :doc "PermissionRequest allow settles generic Bash and Eval asks without cards"
   (dolist (case
            (list
@@ -1359,7 +1243,7 @@
                            :permission-mode 'ask))
                  (mevedel-permission-rules nil)
                  (mevedel-protected-paths nil)
-                 (mevedel-permission-guardian nil)
+                 (mevedel-permission-reviewer 'user)
                  (enqueued nil)
                  (next-called nil))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
@@ -1389,7 +1273,7 @@
                            :permission-mode 'ask))
                  (mevedel-permission-rules nil)
                  (mevedel-protected-paths nil)
-                 (mevedel-permission-guardian nil)
+                 (mevedel-permission-reviewer 'user)
                  (events nil)
                  (provenance nil)
                  (enqueued nil)
