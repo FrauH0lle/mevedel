@@ -1007,9 +1007,13 @@ Markdown rendering adds small view-only affordances:
   path passes, so buttons and faces inside cells survive. Columns wider
   than 90% of the usable window width (window columns minus any
   `line-prefix` or `wrap-prefix` inset) shrink proportionally toward their
-  longest-word minima and wrap their cells; plain ASCII is measured by
-  `string-width`, faced or non-ASCII content pixel-measured against the
-  displaying window. The rendered region retains the canonical Markdown
+  longest-word minima and wrap their cells. Graphical layout measures all
+  text, including header and stripe faces, against the displaying window.
+  Column units use the box-drawing glyph width, and padding uses exact
+  pixel widths so proportional fonts, bold headers and mixed fonts keep
+  their borders aligned. Terminal layout uses `string-width`. Font metrics
+  are scoped to one table render rather than retained across font changes.
+  The rendered region retains the canonical Markdown
   source and the layout's window pixel width as text properties and
   carries the view's own source/read-only/turn properties across the
   rewrite;
