@@ -27,6 +27,9 @@ parent or broadcast. Outcomes are completed, errored, or interrupted; payloads
 carry the final response, concise failure, or interruption reason with useful
 partial text. A workflow awaiting its child may consume that exact committed
 record through its result handler; failed delivery leaves it for ordinary mail.
+Captured yielded Bash completions are committed alongside that result as separate
+`EXECUTION` records to the spawn parent, with the child as sender. They do not
+alter the final-response payload or the workflow result handler's input.
 
 Inline terminal previews use a 32,768-character head-and-tail budget and point
 to the persisted transcript when truncated. Complete settled results and
@@ -51,6 +54,12 @@ turning the model into a delivery-protocol participant.
 
 ## Decision history
 
+- **Separate captured Bash output from terminal results.** Previously the runtime
+  concatenated every captured completion onto the final response. A persisted
+  reviewer result contained JSON followed by two Bash test logs inside one result
+  envelope, so the live view could not display them independently and the settled
+  response no longer matched the reviewer's output. Separate existing `EXECUTION`
+  records preserve the output and atomic settlement without changing that response.
 - **ADR 0035 separated queue-only information from activation.** ADR 0046 chose
   one plain-text message shape instead of speculative structured payloads.
 - **ADR 0047 kept acknowledgements minimal** because target/message metadata

@@ -863,8 +863,9 @@ or the user stops it outside the model tool, root-owned output is queued
 synchronously in the root mailbox without starting a model request. Agent-owned
 completion is captured by the retained invocation instead: it does not wake
 `WaitAgent`, and once the provider has produced its terminal response the
-runtime appends every captured completion and settles the turn directly in
-either arrival order. This starts no model request. Passive progress/view
+runtime settles the turn directly in either arrival order. Each captured completion
+is published to the spawn parent as a separate `EXECUTION` record alongside the
+unchanged agent `RESULT`. This starts no model request. Passive progress/view
 subscribers cannot acknowledge delivery, and finished records never appear in
 live execution listings.
 

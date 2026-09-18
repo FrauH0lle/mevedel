@@ -727,6 +727,39 @@
 (mevedel-deftest mevedel-agent-control--settle ()
   ,test
   (test)
+  :doc "publishes Bash completions separately from the exact terminal result"
+  (dolist (parent-path '("/root" "/root/parent"))
+    (dolist (workflow-p '(nil t))
+      (let* ((session (mevedel-agent-control-test--session))
+             (path (concat parent-path "/review"))
+             (invocation (mevedel-agent-invocation--create
+                          :path path :parent-session session
+                          :runtime-execution-results '("second Bash" "first Bash")))
+             (parent (mevedel-agent-record--create :path parent-path))
+             (answer "{\"findings\": []}")
+             delivered
+             (record (mevedel-agent-record--create
+                      :path path :parent-path parent-path
+                      :activity 'running :invocation invocation
+                      :result-handler
+                      (and workflow-p
+                           (lambda (result) (setq delivered result))))))
+        (setf (mevedel-session-agent-registry session)
+              (list (cons path record) (cons parent-path parent)))
+        (mevedel-agent-control-test--settle session record invocation answer)
+        (mevedel-agent-control-test--settle session record invocation "duplicate")
+        (let ((messages (mevedel-agent-control--mailbox session parent-path)))
+          (unless workflow-p
+            (setq delivered (pop messages)))
+          (should (eq 'RESULT (plist-get delivered :type)))
+          (should (equal answer (plist-get delivered :payload)))
+          (should (equal answer (mevedel-agent-record-settled-result record)))
+          (should (equal '("first Bash" "second Bash")
+                         (mapcar (lambda (msg) (plist-get msg :payload)) messages)))
+          (dolist (message messages)
+            (should (eq 'EXECUTION (plist-get message :type)))
+            (should (equal path (plist-get message :sender)))
+            (should (equal parent-path (plist-get message :recipient))))))))
   :doc "settles once, releases capacity, and emits concise canonical RESULT"
   (let* ((session (mevedel-agent-control-test--session))
          (invocation (mevedel-agent-invocation-create
@@ -824,6 +857,8 @@
           (mevedel-agent-waiter--create
            :callback (lambda (reason) (push reason reasons)))
           (mevedel-agent-invocation-transcript-status invocation) 'completed)
+    (setf (mevedel-agent-invocation-runtime-execution-results invocation)
+          '("Bash output"))
     (dolist (failure '(nil error))
       (cl-letf (((symbol-function
                   'mevedel-session-persistence-save-agent-state)

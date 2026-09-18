@@ -374,9 +374,11 @@ mailbox sink, using the session or agent invocation captured at spawn. The
 agent runtime parks an invocation while its owner has an unsettled execution.
 The agent's terminal callback remains gated while any owned execution is
 unsettled. Whether the last completion arrives before or after the agent's
-terminal response, the runtime appends the queued completion to that response
-and settles the turn directly. Agent execution completion is invocation-local,
-does not wake `WaitAgent`, and launches no model request. Ordinary mailbox
+terminal response, the runtime settles the turn directly. The agent's final
+answer remains its `RESULT`; captured completions are separate `EXECUTION`
+records committed to the spawn parent's mailbox in the same settlement.
+Agent execution completion is invocation-local until settlement, does not
+wake `WaitAgent` early, and launches no model request. Ordinary mailbox
 messages are delivered before the next model sample or wake an explicit
 `WaitAgent`.
 

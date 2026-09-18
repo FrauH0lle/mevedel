@@ -346,6 +346,13 @@
     (should (eq 'RESULT (plist-get (car clean) :type)))
     (should (eq 'EXECUTION (plist-get (cadr clean) :type)))
     (should (equal "hello" (plist-get (caddr clean) :payload))))
+  :doc "retains child execution deliveries to root and nested spawn parents"
+  (dolist (parent '("/root" "/root/parent"))
+    (let ((raw (list (list :type 'EXECUTION :sender (concat parent "/child")
+                           :recipient parent :payload "Bash output"
+                           :timestamp '(1 0 0 0)))))
+      (should (equal raw (mevedel-agent-persistence-sanitize-mailbox
+                         raw parent)))))
   :doc "drops wrong recipients, malformed outcomes, payloads, and timestamps"
   (dolist (entry
            (list
@@ -353,7 +360,7 @@
                   :payload "x" :timestamp '(1 0 0 0))
             (list :type 'RESULT :sender "/root/a" :recipient "/root"
                   :outcome 'future :payload "x" :timestamp '(1 0 0 0))
-            (list :type 'EXECUTION :sender "/root/a" :recipient "/root"
+            (list :type 'EXECUTION :sender "/root/a/b" :recipient "/root"
                   :payload "x" :timestamp '(1 0 0 0))
             (list :type 'MAIL :sender "/root/a" :recipient "/root"
                   :payload 4 :timestamp '(1 0 0 0))

@@ -907,7 +907,16 @@ Return rollback and post-commit delivery closures for INVOCATION."
                     (mevedel-agent-control--bounded-result record payload)
                     :timestamp (current-time)))
         (mevedel-agent-control--set-mailbox-queue
-         session recipient (cons result previous-queue))
+         session recipient
+         (append
+          (mapcar
+           (lambda (body)
+             (list :type 'EXECUTION
+                   :sender (mevedel-agent-record-path record)
+                   :recipient recipient :payload body
+                   :timestamp (current-time)))
+           (mevedel-agent-invocation-runtime-execution-results invocation))
+          (cons result previous-queue)))
         (cons #'rollback #'deliver)))))
 
 (defun mevedel-agent-control--record-invocation

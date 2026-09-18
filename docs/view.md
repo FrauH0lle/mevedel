@@ -126,6 +126,10 @@ their own disclosures rather than becoming generic tool rows.
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
 
+Agent terminal results and captured Bash completions are separate mailbox cards.
+The result card contains the agent's final answer; each completion card uses the
+existing compact Bash facts display and links to the child that ran the command.
+
 Directive requests render in the ordinary session view as first-class turns.
 The directive header carries id, action, turn, and an exclusion badge; the
 submitted prompt is folded, while responses, tool blocks, permission prompts,
