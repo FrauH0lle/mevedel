@@ -174,7 +174,12 @@ machines.  Project-relative commands such as
 session cwd.  A command handler without trusted project, user, or plugin
 provenance is refused before launch.  Default timeout is 30 seconds with a
 global cap, armed as soon as the child exists rather than after its stdin is
-written; whatever settles a command handler — exit, timeout, request
+written. Remote commands acknowledge startup before mevedel writes JSON: this
+prevents the preceding transport shell from reading ahead into input and
+discarding it on `exec`. Waiting for that acknowledgment uses the same timeout
+and cancellation ownership; the internal acknowledgment is not hook output, and
+event payloads remain on stdin rather than in process arguments.
+Whatever settles a command handler — exit, timeout, request
 cancellation, or a failed stdin write — leaves no child running and writes
 one log entry.  A cancellation logs status `cancelled` and closes the
 event's telemetry span without running the remaining handlers or the

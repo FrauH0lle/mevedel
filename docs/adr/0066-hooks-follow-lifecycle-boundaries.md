@@ -22,6 +22,10 @@ remains request-cancellable; it does not change hook ordering or authority.
 Command startup checks cancellation before preparation and after yielding work,
 and releases child handles returned after teardown. Terminal `Stop` and
 `StopFailure` handlers run independently under their own timeout.
+Remote wrappers acknowledge startup before receiving JSON on stdin. The runner
+consumes this internal prefix even when it arrives before filter installation,
+and sends only after owning the returned child and its deadline. Readiness does
+not settle the hook or change its existing timeout and cancellation contract.
 Hook approvals and fallback approvals recheck current hard restrictions at
 settlement in every mode, including before permission queue admission.
 
@@ -70,3 +74,12 @@ Terminal cancellation made late cleanup registration synchronous. A subsequent
 public-event probe showed command startup continuing after that cleanup, leaving
 a child outside timeout ownership. Startup now fences each yielding acquisition
 and collects late-returned resources without repeating settlement.
+
+A real SSH acceptance probe reproduced a ten-second command-hook timeout by
+coalescing the transport's final `exec` command with the immediately following
+JSON write, preserving their bytes and order. The preceding interactive shell
+read ahead into the JSON and discarded it on `exec`; the wrapper remained alive
+waiting for stdin. Immediate input delivery was replaced with an acknowledgment
+from the exec'd wrapper, not a delay or increased timeout. Payloads stay on stdin
+instead of being embedded in command arguments, avoiding extra quoting, argument
+size limits, and process-list exposure.

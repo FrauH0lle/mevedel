@@ -1523,6 +1523,112 @@
         (delete-directory root t)
         (mevedel-workspace-clear-registry)))))
 
+(mevedel-deftest mevedel-hooks-run-event/remote-stdin-readiness
+  (:quiet t)
+  ,test
+  (test)
+  :doc "remote stdin waits for wrapper readiness, ownership, and the deadline"
+  (dolist (stage '(normal early-filter early-buffer cancel-early cancel-wait
+                         missing send-failure reentrant zero-cap no-timeout))
+    (let* ((root (make-temp-file "mevedel-hook-ready-" t))
+           (session (mevedel-hooks-test--session root))
+           (request (mevedel-request--create :session session))
+           (mevedel-hooks-slow-threshold nil)
+           (mevedel-hooks-command-timeout (unless (eq stage 'no-timeout) 1))
+           (mevedel-hooks-command-output-max-chars
+            (if (eq stage 'zero-cap) 0 10000))
+           (mevedel-hook-rules
+            '((PreToolUse
+               ((:hooks ((:type command
+                          :command "cat >/dev/null; printf '{\"system_message\":\"ready\"}'"
+                          :fail-closed t)))))))
+           child ready returned armed done decision (writes 0))
+      (unwind-protect
+          (cl-letf* ((make (symbol-function 'make-process))
+                     (send (symbol-function 'process-send-string))
+                     (timer (symbol-function 'run-at-time))
+                     ((symbol-function 'run-at-time)
+                      (lambda (time &rest args)
+                        (prog1 (apply timer time args)
+                          (when (equal time 1) (setq armed t)))))
+                     ((symbol-function 'mevedel-hooks--command-default-directory)
+                      (lambda (&rest _) "/ssh:hook-readiness.invalid:/workspace/"))
+                     ((symbol-function 'make-process)
+                      (lambda (&rest args)
+                        ;; Replace only the transport: run the actual wrapper
+                        ;; locally, with real pipes, filters and cancellation.
+                        (let ((default-directory root)
+                              (filter (plist-get args :filter)))
+                          (setq args (plist-put args :file-handler nil))
+                          (when (memq stage '(missing cancel-wait))
+                            (setq args (plist-put args :command '("sleep" "5"))))
+                          (setq args
+                                (plist-put
+                                 args :filter
+                                 (unless (eq stage 'early-buffer)
+                                   (lambda (proc text)
+                                     (when (string-prefix-p (string 0) text)
+                                       (setq ready t))
+                                     (funcall filter proc text)))))
+                          (setq child (apply make args))
+                          (when (memq stage '(early-filter early-buffer cancel-early))
+                            (let ((deadline (+ (float-time) 2)))
+                              (while (and (not ready) (< (float-time) deadline))
+                                (accept-process-output child 0.01)
+                                (when (eq stage 'early-buffer)
+                                  (setq ready
+                                        (with-current-buffer (process-buffer child)
+                                          (> (buffer-size) 0))))))
+                            (should ready)
+                            (should (= writes 0)))
+                          (when (eq stage 'early-buffer)
+                            (set-process-filter child filter))
+                          (when (eq stage 'cancel-early)
+                            (mevedel-request-cancel request))
+                          (setq returned t)
+                          child)))
+                     ((symbol-function 'process-send-string)
+                      (lambda (proc text)
+                        (should ready)
+                        (should returned)
+                        (should (or armed (eq stage 'no-timeout)))
+                        (cl-incf writes)
+                        (when (eq stage 'send-failure)
+                          (signal 'file-error '("Readiness stdin failed")))
+                        (when (eq stage 'reentrant)
+                          (funcall (process-filter proc) proc " "))
+                        (funcall send proc text))))
+            (mevedel-hooks-run-event
+             'PreToolUse '(:tool-name "Read")
+             (lambda (value) (setq done t decision value)) session nil request)
+            (when (eq stage 'cancel-wait) (mevedel-request-cancel request))
+            (when (memq stage '(cancel-early cancel-wait))
+              ;; A queued readiness notification must not resurrect stdin.
+              (funcall (process-filter child) child (string 0)))
+            (let ((deadline (+ (float-time) 3)))
+              (while (and (process-live-p child) (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should-not (process-live-p child))
+            (let ((entries (mevedel-session-hook-log session)))
+              (should (= (length entries) 1))
+              (should
+               (eq (plist-get (car entries) :status)
+                   (pcase stage
+                     ((or 'cancel-early 'cancel-wait) 'cancelled)
+                     ('missing 'timeout)
+                     ('send-failure 'error)
+                     ('zero-cap 'parse-error)
+                     (_ 'ok)))))
+            (if (memq stage '(cancel-early cancel-wait missing))
+                (should (= writes 0))
+              (should (= writes 1)))
+            (unless (memq stage '(cancel-early cancel-wait missing send-failure zero-cap))
+              (should done)
+              (should (equal (plist-get decision :system-message) "ready"))))
+        (mevedel-request-cancel request)
+        (when (and child (process-live-p child)) (delete-process child))
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-hooks-run-event/invalid-matcher
   (:doc "an unusable matcher is reported and the event still runs")
   (let* ((root (make-temp-file "mevedel-hooks-bad-matcher" t))

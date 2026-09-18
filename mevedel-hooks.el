@@ -1790,7 +1790,7 @@ record only that context was added, without duplicating the body."
   "Return the shell argv for hook COMMAND, accounting for REMOTE transport."
   (if remote
       (list "bash" "-c"
-            (concat "IFS= read -r mevedel_hook_input; "
+            (concat "printf '\\000'; IFS= read -r mevedel_hook_input; "
                     "printf '%s\\n' \"$mevedel_hook_input\" | "
                     "bash -c \"$1\"")
             "mevedel-hook" command)
@@ -1814,7 +1814,8 @@ record only that context was added, without duplicating the body."
          (completion-requested nil)
          (stdout-truncated nil)
          (stderr-truncated nil)
-         process stderr-cap-timer stderr-process timer)
+         (stdin-ready (not remote))
+         input process stderr-cap-timer stderr-process timer)
     (cl-labels
         ((truncation-marker ()
            (format "\n... Hook output truncated at %d character limit."
@@ -1956,6 +1957,36 @@ record only that context was added, without duplicating the body."
                (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
                (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
                (funcall callback decision))))
+         (send-input ()
+           ;; Readiness can arrive before make-process returns.  Do not send
+           ;; until the returned handle and its deadline belong to this runner.
+           (when (and stdin-ready input process (or (null timeout) timer)
+                      (not settled) (not completion-requested))
+             (let ((payload input))
+               ;; Claim the write before yielding to a filter or cancellation.
+               (setq input nil)
+               (condition-case err
+                   (progn
+                     (process-send-string process payload)
+                     (unless (or remote settled completion-requested)
+                       (process-send-eof process)))
+                 (error (finish 'error (error-message-string err)))))))
+         (receive-output (_proc chunk)
+           (unless (or settled completion-requested (string-empty-p chunk))
+             (if stdin-ready
+                 (append-buffer-output stdout-buffer chunk 'stdout)
+               ;; The exec'd wrapper acknowledges with one NUL byte.  Sending
+               ;; earlier lets TRAMP's preceding shell read ahead into JSON
+               ;; and discard it on exec, leaving the wrapper waiting forever.
+               ;; A one-byte prefix cannot split across filter deliveries.
+               (if (= (aref chunk 0) 0)
+                   (progn
+                     (setq stdin-ready t)
+                     (append-buffer-output stdout-buffer (substring chunk 1)
+                                           'stdout)
+                     (send-input))
+                 (append-buffer-output stdout-buffer chunk 'stdout)
+                 (finish 'error "Remote hook did not acknowledge stdin")))))
          (continue-startup ()
            (when (or settled completion-requested)
              (throw 'hook-startup-done nil)))
@@ -1983,7 +2014,7 @@ record only that context was added, without duplicating the body."
                 (let ((process-environment
                        (mevedel-hooks--command-process-environment
                         handler session))
-                      input process-command)
+                      process-command)
                   (continue-startup)
                   (setq input (concat (mevedel-hooks--event-json
                                        (mevedel-hooks--command-event-plist
@@ -2008,8 +2039,7 @@ record only that context was added, without duplicating the body."
                         (make-process
                          :name "mevedel-hook"
                          :buffer stdout-buffer
-                         :filter (lambda (_proc chunk)
-                                   (append-buffer-output stdout-buffer chunk 'stdout))
+                         :filter #'receive-output
                          :stderr (or stderr-process stderr-buffer)
                          :command process-command
                          :connection-type 'pipe
@@ -2033,10 +2063,14 @@ record only that context was added, without duplicating the body."
                            timeout nil
                            (lambda () (finish 'timeout nil)))))
                   (continue-startup)
-                  (process-send-string process input)
-                  (continue-startup)
-                  (unless remote
-                    (process-send-eof process)))
+                  ;; TRAMP sends exec before installing our filter.  A yielding
+                  ;; send can leave the acknowledgment in the default buffer.
+                  (when (and remote (not stdin-ready))
+                    (let ((pending (buffer-string-safe stdout-buffer)))
+                      (unless (string-empty-p pending)
+                        (with-current-buffer stdout-buffer (erase-buffer))
+                        (receive-output process pending))))
+                  (send-input))
               (error
                (finish 'error (error-message-string err)))))
         ;; Acquisition can yield before assigning the returned handle.  Teardown
