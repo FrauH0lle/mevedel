@@ -111,12 +111,6 @@ def risky_skill_context() -> None:
         )
 
 
-def stop_validation_context() -> None:
-    additional_context(
-        "If source files were changed this turn and validation was not run, mention the missing focused test/compile/check explicitly instead of implying the change is fully green."
-    )
-
-
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: policy.py <hook-name>")
@@ -126,7 +120,6 @@ def main() -> None:
         "precompact-context": precompact_context,
         "subagent-context": subagent_context,
         "risky-skill-context": risky_skill_context,
-        "stop-validation-context": stop_validation_context,
     }
     handlers[sys.argv[1]]()
 

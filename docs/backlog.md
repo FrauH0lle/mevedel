@@ -1,8 +1,8 @@
 # Project backlog
 
 Canonical home for concise future-work requests and unresolved defects.
-Detailed plans, investigations, and review reports belong under `.scratch/`. Read this before planning work in any listed
-area.
+Detailed plans, investigations, and review reports belong under `.scratch/`.
+Read this before planning work in any listed area.
 
 Use the inbox for ideas that have not been investigated yet. Promote an
 item to a detailed entry when its scope and current status are understood.
@@ -33,15 +33,32 @@ prevent suspend after work ends.
 Consider an opt-in second-model review of successful root turns, with bounded
 feedback delivered to the next request. Reuse the Stop hook, reviewer runtime,
 and reminder delivery. Keep findings distinct from Buddy's advisory notes, and
-specify deduplication, cooldown, cancellation, and cost before implementation.
+specify evidence scope, deduplication, cooldown, cancellation, and cost before
+implementation. Pursue when recurring review failures justify the extra model
+call; keep it advisory, without restarting completed turns. Implement this
+bounded feature before considering generic prompt or agent hook handlers.
 There is no automatic root-turn reviewer/instruction-injection path today.
 The original request came from the 2026-08-20 watchdog/advisor discussion.
 
 ## Hook extensions
 
-- Evaluate HTTP, prompt, MCP-tool, and agent handlers, with explicit permission
-  and cancellation contracts before adding a handler type.
-- Add handler-level conditional predicates only when event/matcher selection
-  cannot express a concrete workflow.
-- Evaluate additional lifecycle events (configuration, cwd/files, tool batches,
-  tasks, shell environment) against actual caller needs.
+### Task transition events
+
+Consider a task transition event when notifications or tracker synchronization
+need to observe every completion. A hook matching `TaskUpdate` misses automatic
+completion by `mevedel-tool-task-finalize-owner` in `mevedel-tool-task.el`.
+Observe actual state transitions across both paths rather than tool calls alone.
+Defer until a concrete integration needs that coverage.
+
+### Deferred extensions
+
+- HTTP, prompt, MCP-tool, and agent handlers: revisit when a named workflow
+  cannot be served adequately by command/Elisp handlers. Define permission,
+  cancellation, and recursive-hook behavior before adding a handler type.
+- Handler-level predicates: keep conditions inside handlers unless repeated
+  workflows or measured launch cost justify declarative filtering. Prefer an
+  event-specific matcher where sufficient, such as skill-name matching for
+  `UserPromptExpansion`, rather than a general predicate language.
+- Configuration, cwd/files, tool-batch, and shell-environment events: add
+  individually when a caller needs a boundary existing events cannot express;
+  define the event's scope and control effects before implementation.

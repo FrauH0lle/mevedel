@@ -64,19 +64,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .mevedel/hooks/policy.py stop-validation-context",
-            "timeout": 5,
-            "description": "Surface missing validation before completion"
-          }
-        ]
-      }
     ]
   }
 }

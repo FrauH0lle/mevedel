@@ -1,13 +1,13 @@
 ---
 name: review-improve
-description: "Run a bounded corrective review of cumulative changes since a fixed point using independent Standards/Spec, thermo-nuclear maintainability, and ponytail complexity reviews. Use for a rigorous review, fix, and re-review workflow that must preserve unrelated work and finish with verified, disciplined corrections; do not use for report-only reviews."
+description: "Run a bounded corrective review of cumulative changes since a fixed point using independent Standards/Spec, thermo-nuclear maintainability, ponytail complexity, and correctness reviews, followed by adversarial verification. Use for a rigorous review, fix, and re-review workflow that must preserve unrelated work and finish with verified, disciplined corrections; do not use for report-only reviews."
 ---
 
 # Review and Improve
 
 Review the full cumulative change since the user-supplied fixed point, correct
 confirmed issues, and repeat until clean or three rounds have completed. Keep
-implementation in the owning request; review agents are read-only.
+implementation in the owning request; review and verification agents are read-only.
 
 Do not fundamentally change the implementation without the user's permission.
 
@@ -37,8 +37,11 @@ the committed three-dot diff; never let a review silently omit them.
 
 ## Review loop
 
-Run at most three complete rounds. In every round apply all three attached
-review contracts:
+Run at most three complete rounds. Each complete round uses six independent
+agent invocations: five reviewers, then one adversarial verifier on the
+post-correction state. This is not a requirement to run six agents at once.
+Run focused validation before the first review batch so reviewers have actual
+check results. In every round apply all three attached review contracts:
 
 !$code-review
 !$thermo-nuclear-code-quality-review
@@ -55,10 +58,19 @@ review contracts:
 - Ponytail review: independently identify code that can be deleted,
   replaced by existing/stdlib facilities, or shortened without weakening the
   contract.
+- Correctness review: use the dedicated `reviewer` agent with its existing
+  `/review` contract in `agents/reviewer.md`, not another specialized skill
+  review. Supply the full current cumulative change and intended behavior.
+  Preserve its scope: concrete regressions in correctness, performance,
+  security, and maintainability, with triggering inputs/environments and
+  affected callers. Keep its prioritized JSON findings and overall correctness
+  verdict intact. Spec compliance is not a substitute for this review.
 
-Run the Standards, Spec, thermo-nuclear, and ponytail reviewers independently
-and in parallel when capacity permits. Preserve their four outputs as distinct
-reports. Consolidate only actionable, high-confidence findings after checking
+Run the Standards, Spec, thermo-nuclear, ponytail, and correctness reviewers
+independently and in parallel when capacity permits; batch them when capacity
+is lower than five. Do not impose the dedicated reviewer's JSON contract on
+the four specialized reviews. Preserve all five outputs as distinct reports.
+Consolidate only actionable, high-confidence findings after checking
 each one against surrounding code, callers, tests, maintained docs, and
 required upstream source. Reject conflicting, speculative, compatibility-only,
 or out-of-scope advice.
@@ -71,21 +83,45 @@ For every confirmed finding:
 3. Update focused tests and maintained docs or ADRs when behavior or design
    changes.
 4. Avoid unrelated cleanup, new dependencies, speculative abstractions, and
-   implementation by review sub-agents.
+   implementation by review or verification sub-agents.
 
-After each correction batch:
+Validate every round, even when no correction was needed, and re-run relevant
+checks after each correction batch:
 
 1. Run `git diff --check`.
 2. Run `npx @emacs-eask/cli clean elc` before tests.
 3. Run focused tests for every touched behavior.
 4. Run proportionate broader tests and `npx @emacs-eask/cli compile`.
-5. Re-review the resulting cumulative change under all three attached contracts
-   unless this was the third round.
+5. Resolve diagnostics in touched files; do not hide failing checks.
 
-Stop early only when Standards, Spec, thermo-nuclear, and ponytail reviews have
-no actionable findings and verification passes. Never exceed three rounds. If
-the third round still has findings, report them unresolved instead of starting
-a fourth round.
+After fixes and validation, run the dedicated `verifier` agent with its existing
+contract in `agents/verifier.md`. Supply the intended behavior, full resulting
+cumulative change, review findings and their disposition, and exact validation
+commands and results. Require independent checks of changed behavior, edge
+cases, error paths, and concurrency where relevant, including a suitable
+adversarial probe before PASS. The verifier must not merely endorse the prior
+reviews or test summary.
+
+Require exactly one final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`
+line. Check that the cited observations support the verdict; report shape alone
+does not establish correctness. Reproduce uncertain or consequential claims.
+FAIL blocks completion. PARTIAL means verification is incomplete due to an
+environmental limitation, not success or permission to leave feasible checks
+unfinished. Report blockers and ask when resolution requires unavailable
+access, a scope expansion, or a change to the user's requested direction.
+
+Fix confirmed in-scope verifier findings in the main request and re-run relevant
+checks. Any correction after a review or verifier report makes that report
+stale for the changed behavior: start the next round with all five reviews and
+finish with a new verifier report, within the three-round cap.
+
+Stop early only when all five reviews have no unresolved actionable findings,
+validation passes, no unresolved diagnostics remain in touched files, and the
+verifier returns an evidence-supported PASS for the final state. Corrections
+require the next round; do not claim a clean result from pre-correction reports.
+Never exceed three rounds. At the cap, report remaining findings, blockers, and
+any corrections still awaiting re-review or verification instead of starting a
+fourth round or declaring them clean.
 
 ## Commit discipline
 
@@ -103,9 +139,11 @@ a fourth round.
 Report:
 
 - findings and fixes for each round, keeping Standards, Spec,
-  thermo-nuclear, and ponytail results distinguishable;
+  thermo-nuclear, ponytail, and correctness results distinguishable;
 - exact validation commands and results;
-- final status for each review skill;
+- final status and coverage limitations for each of the five reviews;
+- adversarial checks, the verifier's final verdict, and whether it covers the
+  final state;
 - final commit hash and whether it amended the reviewed commit, created the
   single correction commit, or made no commit;
 - unresolved findings with a concise reason;
