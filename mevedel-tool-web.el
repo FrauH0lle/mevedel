@@ -395,7 +395,7 @@ why)."
     :groups (web)
     :read-only-p t
     :render-transform #'mevedel-tool-web--render-transform
-    :renderer #'mevedel-tool-web--render-search)
+    :renderer '((success . mevedel-tool-web--render-search)))
 
   (mevedel-define-tool
     :name "WebFetch"
@@ -412,7 +412,7 @@ why)."
     :get-domain (lambda (args)
                   (mevedel-tool-web--url-host (plist-get args :url)))
     :render-transform #'mevedel-tool-web--render-transform
-    :renderer #'mevedel-tool-web--render-fetch))
+    :renderer '((success . mevedel-tool-web--render-fetch))))
 
 (provide 'mevedel-tool-web)
 ;;; mevedel-tool-web.el ends here

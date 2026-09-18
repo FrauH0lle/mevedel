@@ -84,7 +84,7 @@
       (should (equal "a.el" (plist-get (aref children 0) :detail)))
       (should (equal "0" (plist-get (aref children 0) :batch)))
       (should (equal "failed" (plist-get (aref children 1) :status)))
-      (should (eq :json-false (plist-get (aref children 1) :collapsed)))))
+      (should (eq t (plist-get (aref children 1) :collapsed)))))
 
   :doc "budgets the whole display and falls back for malformed metadata"
   (let* ((mevedel-collaboration--max-tool-result-bytes 2048)

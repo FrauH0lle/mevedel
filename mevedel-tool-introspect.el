@@ -223,7 +223,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size nil
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "load_paths"
@@ -237,7 +237,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "features"
@@ -256,7 +256,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "manual_names"
@@ -273,7 +273,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "manual_nodes"
@@ -292,7 +292,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "manual_node_contents"
@@ -312,7 +312,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 50000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "symbol_manual_section"
@@ -330,7 +330,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 50000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "function_completions"
@@ -349,7 +349,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "command_completions"
@@ -368,7 +368,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "variable_completions"
@@ -386,7 +386,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "function_source"
@@ -404,7 +404,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 30000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "variable_source"
@@ -422,7 +422,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 30000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "function_documentation"
@@ -440,7 +440,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "variable_documentation"
@@ -459,7 +459,7 @@ TYPE is nil for functions or defvar for variables."
    :read-only-p t
    :max-result-size 20000
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "library_source"
@@ -477,7 +477,7 @@ TYPE is nil for functions or defvar for variables."
    :max-result-size 50000
    :check-permission #'mevedel-tool-introspect--library-source-check
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render)
+   :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
    :name "variable_value"
@@ -497,7 +497,7 @@ TYPE is nil for functions or defvar for variables."
    :max-result-size 20000
    :check-permission #'mevedel-tool-introspect--variable-value-check
    :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer #'mevedel-tool-introspect--render))
+   :renderer '((success . mevedel-tool-introspect--render))))
 
 (provide 'mevedel-tool-introspect)
 ;;; mevedel-tool-introspect.el ends here

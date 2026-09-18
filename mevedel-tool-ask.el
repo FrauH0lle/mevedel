@@ -90,7 +90,7 @@ CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
     :max-result-size 30000
     :read-only-p t
     :groups (util)
-    :renderer #'mevedel-tool-ask--render))
+    :renderer '((success . mevedel-tool-ask--render))))
 
 (provide 'mevedel-tool-ask)
 ;;; mevedel-tool-ask.el ends here

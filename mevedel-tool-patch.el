@@ -1859,7 +1859,7 @@ diff."
                        (let ((count (length (plist-get proposal :operations))))
                          (format "%d %s" count
                                  (if (= count 1) "file" "files"))))))
-    :renderer #'mevedel-tool-patch--render))
+    :renderer '((success . mevedel-tool-patch--render))))
 
 (provide 'mevedel-tool-patch)
 ;;; mevedel-tool-patch.el ends here

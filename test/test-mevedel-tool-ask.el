@@ -87,8 +87,8 @@
       (should tool)
       (should (eq #'mevedel-tool-ask--ask
                   (mevedel-tool-handler tool)))
-      (should (eq #'mevedel-tool-ask--render
-                  (mevedel-tool-renderer tool))))))
+      (should (equal '((success . mevedel-tool-ask--render))
+                     (mevedel-tool-renderer tool))))))
 
 (provide 'test-mevedel-tool-ask)
 ;;; test-mevedel-tool-ask.el ends here

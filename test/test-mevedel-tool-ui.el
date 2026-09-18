@@ -78,9 +78,9 @@
     (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
                     "InterruptAgent" "ToolSearch" "SendMessage" "WaitAgent"))
       (should (mevedel-tool-get name)))
-    (should (eq #'mevedel-tool-ui--render-list-agents
-                (mevedel-tool-renderer
-                 (mevedel-tool-get "ListAgents"))))
+    (should (equal '((success . mevedel-tool-ui--render-list-agents))
+                   (mevedel-tool-renderer
+                    (mevedel-tool-get "ListAgents"))))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should (string-match-p
              "interim"

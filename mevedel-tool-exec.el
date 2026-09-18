@@ -296,7 +296,14 @@ operation rather than a successful or semantic non-error result."
    (delq nil
          (list
           (when-let* ((state (plist-get facts :state)))
-            (symbol-name state))
+            (symbol-name (if (eq state 'completed)
+                             (or (plist-get facts :outcome) state)
+                           state)))
+          (when (integerp (plist-get facts :exit-code))
+            (format "exit %d" (plist-get facts :exit-code)))
+          (when-let* ((termination (plist-get facts :termination))
+                      ((not (eq termination 'exited))))
+            (symbol-name termination))
           (when (plist-member facts :wall-time-seconds)
             (format "%.1fs" (or (plist-get facts :wall-time-seconds) 0)))
           (when (plist-member facts :output-lines)
@@ -976,7 +983,7 @@ Header shows a truncated first line of the command; body fontifies as
    :max-result-size 30000
    :groups (eval)
    :check-permission-async #'mevedel-tool-exec-permission-check-eval-async
-   :renderer #'mevedel-tool-exec--render-eval))
+   :renderer '((success . mevedel-tool-exec--render-eval))))
 
 (provide 'mevedel-tool-exec)
 ;;; mevedel-tool-exec.el ends here

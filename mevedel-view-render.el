@@ -513,12 +513,12 @@ argument, and RESULT-LINES is the number of output lines.  BLOCKED is
 the hook-block plist returned by `mevedel-view--tool-hook-blocked-info'.
 ERROR-P means the result itself looks like a tool-level failure."
   (let* ((blocked-p (and blocked t))
-         (warning-p (or blocked-p error-p))
+         (failed-p (or blocked-p error-p))
          (summary
           (mevedel-view--tool-call-line
-           (if warning-p "!" "✓")
-           (if warning-p
-               'mevedel-view-tool-warning
+           (if failed-p "×" "✓")
+           (if failed-p
+               'error
              'mevedel-view-tool-marker)
            name
            primary-arg
@@ -533,7 +533,7 @@ ERROR-P means the result itself looks like a tool-level failure."
           (format "%s: %s"
                   (plist-get blocked :event)
                   (plist-get blocked :reason))
-          'font-lock-face 'mevedel-view-tool-warning))
+          'font-lock-face 'mevedel-view-tool-metadata))
       summary)))
 
 (defun mevedel-view--tool-header-fallback-info (raw)
@@ -1692,8 +1692,9 @@ insert a non-string or `funcall' a non-symbol."
 
 (defun mevedel-view--tool-render-status (result &optional render-data)
   "Return the renderer dispatch status for RESULT and RENDER-DATA."
-  (or (and (memq (plist-get render-data :status) '(success error))
-           (plist-get render-data :status))
+  (or (pcase (plist-get render-data :status)
+        ('success 'success)
+        ((or 'error 'failed 'denied 'blocked) 'error))
       (and (mevedel-view--tool-result-error-p result) 'error)
       'success))
 
@@ -1764,7 +1765,10 @@ straight off ARGS and RESULT without needing render-data."
                   (cond
                    ((null plist) nil)
                    ((mevedel-view--rendering-plist-p plist)
-                    (if (or explicit-status (eq status 'error))
+                    (if (or (eq status 'error)
+                            (and explicit-status
+                                 (not (memq (plist-get plist :status)
+                                            '(warning running cancelled)))))
 			(plist-put (copy-sequence plist)
                                    :status status)
                       plist))
@@ -1935,31 +1939,49 @@ Return nil when HEADER is not a `Tool: argument' style line."
         (setq arg (match-string 1 arg)))
       (list name arg metadata))))
 
+(defun mevedel-view--rendering-status (rendering &optional render-data)
+  "Return RENDERING's visual status, with errors preceding warnings.
+RENDER-DATA supplies child status and sandbox facts before attachment.
+Execution outcome remains independent of lifecycle and disclosure state."
+  (let ((status (plist-get rendering :status)))
+    (cond
+     ((or (memq status '(error failed denied blocked))
+          (memq (plist-get render-data :status) '(error failed denied blocked)))
+      'error)
+     ((memq status '(running cancelled)) status)
+     ((memq (plist-get render-data :status) '(warning running cancelled))
+      (plist-get render-data :status))
+     ((or (eq status 'warning)
+          (eq (mevedel-execution-telemetry-sandbox-summary-class
+               (or (plist-get rendering :sandbox-summary)
+                   (plist-get render-data :sandbox-summary)))
+              'warning))
+      'warning)
+     (t status))))
+
 (defun mevedel-view--rendering-header-line (rendering)
   "Return the propertized collapsed header line for RENDERING."
   (let* ((header (or (plist-get rendering :header) "Tool"))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (status (plist-get rendering :agent-status))
-         (tool-status
-          (if (eq (mevedel-execution-telemetry-sandbox-summary-class
-                   (plist-get rendering :sandbox-summary))
-                  'warning)
-              'warning
-            (plist-get rendering :status)))
+         (tool-status (mevedel-view--rendering-status rendering))
          (agent-p (eq vtype 'agent-handle))
          (prompt-p (eq vtype 'prompt-summary))
          (marker (cond
                   ((eq vtype 'request-failure) "✗")
                   (prompt-p "◆")
+                  ((eq tool-status 'error) "×")
                   ((and agent-p (eq status 'running)) "●")
                   ((and agent-p (memq status '(blocked waiting))) "!")
-                  ((and agent-p (memq status '(aborted error failed))) "✗")
+                  ((and agent-p (memq status '(error failed))) "×")
+                  ((and agent-p (eq status 'aborted)) "✗")
                   ((and agent-p (memq status '(incomplete nil))) "…")
                   ((and agent-p (eq status 'completed)) "✓")
                   (agent-p "›")
-                  ((memq tool-status '(error failed blocked warning)) "!")
+                  ((eq tool-status 'warning) "!")
                   (t "✓")))
          (marker-face (cond
+                       ((equal marker "×") 'error)
                        ((member marker '("!" "✗"))
                         'mevedel-view-tool-warning)
                        ((string= marker "●")
@@ -2219,8 +2241,12 @@ folding a run into a group does not lose the boundary it ran with."
   (let* ((name (plist-get child :tool))
          (args (plist-get child :args))
          (result (plist-get child :result))
-         (render-data (plist-get child :render-data))
-         (failed (not (eq (plist-get child :status) 'success)))
+         (child-status (plist-get child :status))
+         (render-data
+          (if (memq child-status '(success error failed denied blocked))
+              (plist-put (copy-sequence (plist-get child :render-data)) :status
+                         (if (eq child-status 'success) 'success 'error))
+            (plist-get child :render-data)))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
           (if (memq (plist-get child :kind) '(reasoning mailbox))
@@ -2239,8 +2265,9 @@ folding a run into a group does not lose the boundary it ran with."
                           (cons :force-expanded-p nil)
                           (cons :initially-collapsed-p t)))
         (setq rendering (plist-put rendering (car cell) (cdr cell))))
-      (when failed
-        (setq rendering (plist-put rendering :status 'error)))
+      (when (and (memq child-status '(warning running cancelled))
+                 (not (eq (mevedel-view--rendering-status rendering) 'error)))
+        (setq rendering (plist-put rendering :status child-status)))
       (when-let* ((summary (plist-get render-data :sandbox-summary)))
         (setq rendering
               (plist-put rendering :sandbox-summary (copy-tree summary))))
@@ -5503,6 +5530,13 @@ state.  A newly formed group keeps an already open child visible."
             :vtype 'tool-group
             :expandable-p t
             :child-calls children
+            :status (and (cl-some
+                          (lambda (entry)
+                            (eq (mevedel-view--rendering-status
+                                 (plist-get entry :rendering))
+                                'warning))
+                          entries)
+                         'warning)
             ;; A new group must not hide a row the reader already opened.
             ;; An explicit fold of the group itself still takes precedence.
             :initially-collapsed-p
@@ -5535,20 +5569,15 @@ reasoning occurrence."
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
-Rows that demand individual presentation stay out: failed calls,
-warning-class sandbox disclosures, agent handles and
-other non-tool vtypes, compound tools with their own nested rows, rows
-carrying hook audits, rows their renderer wants expanded or compact,
-coalesced rows, and renderer fallbacks.  Note-class sandbox disclosures
+Rows that demand individual presentation stay out: failed calls, agent
+handles and other non-tool vtypes, compound tools with their own nested
+rows, rows carrying hook audits, rows their renderer wants expanded or compact,
+coalesced rows, and renderer fallbacks.  Warning and note disclosures
 stay with their nested row inside the group."
   (let ((rendering (plist-get entry :rendering)))
     (and rendering
          (= (plist-get entry :count) 1)
-         (not (memq (plist-get rendering :status)
-                    '(error failed blocked warning)))
-         (not (eq (mevedel-execution-telemetry-sandbox-summary-class
-                   (plist-get rendering :sandbox-summary))
-                  'warning))
+         (not (eq (mevedel-view--rendering-status rendering) 'error))
          (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
          (null (plist-get rendering :child-calls))
          (null (plist-get rendering :hook-audits))

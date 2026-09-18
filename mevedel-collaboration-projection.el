@@ -38,6 +38,8 @@
                   "mevedel-view-render" (name args result &optional collapsed-only render-data))
 (declare-function mevedel-view--invoke-renderer
                   "mevedel-view-render" (tool render-data args result))
+(declare-function mevedel-view--rendering-status
+                  "mevedel-view-render" (rendering &optional render-data))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
 (declare-function mevedel-view--user-turn-text
@@ -234,15 +236,14 @@ are exported, with one shared text/structure budget across the entire tree."
                     (status
                      (pcase (or (and (memq (plist-get data :status) '(denied cancelled))
                                      (plist-get data :status))
-                                (plist-get rendering :status))
+                                (mevedel-view--rendering-status rendering data))
                        ('error "failed") ('denied "denied") ('cancelled "cancelled")
                        ('running "running") ('warning "warning") (_ "completed")))
                     (row (list :id (text id 200) :name (text name 200)
                                :detail (text (mevedel-collaboration--tool-detail args) 200)
                                :header (text (plist-get rendering :header) 1000)
                                :status status
-                               :collapsed (if (and (not (member status '("failed" "denied")))
-                                                   (plist-get rendering :initially-collapsed-p))
+                               :collapsed (if (plist-get rendering :initially-collapsed-p)
                                               t :json-false)
                                :format (pcase (plist-get rendering :body-mode)
                                          ((or 'markdown-mode 'gfm-mode 'org-mode) "markdown")

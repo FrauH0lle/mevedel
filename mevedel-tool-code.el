@@ -654,7 +654,7 @@ than silently answered for somewhere else."
     :max-result-size 20000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-code--render-xref)
+    :renderer '((success . mevedel-tool-code--render-xref)))
 
   (mevedel-define-tool
     :name "XrefDefinitions"
@@ -671,7 +671,7 @@ than silently answered for somewhere else."
     :max-result-size 20000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-code--render-xref)
+    :renderer '((success . mevedel-tool-code--render-xref)))
 
   (mevedel-define-tool
     :name "Imenu"
@@ -686,7 +686,7 @@ than silently answered for somewhere else."
     :max-result-size 20000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-code--render-imenu)
+    :renderer '((success . mevedel-tool-code--render-imenu)))
 
   (mevedel-define-tool
     :name "Treesitter"
@@ -710,7 +710,7 @@ than silently answered for somewhere else."
     :max-result-size 30000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-code--render-treesitter))
+    :renderer '((success . mevedel-tool-code--render-treesitter))))
 
 (provide 'mevedel-tool-code)
 ;;; mevedel-tool-code.el ends here
