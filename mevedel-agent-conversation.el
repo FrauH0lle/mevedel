@@ -96,14 +96,11 @@
 (autoload 'mevedel-tool-repair-pre-tool-call "mevedel-tool-repair")
 
 ;; `mevedel-transcript'
-(declare-function mevedel-transcript-normalize-properties
-                  "mevedel-transcript" ())
 (declare-function mevedel-transcript-project-segments
                   "mevedel-transcript"
                   (segments &rest keys))
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
-(autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-restore'
@@ -337,7 +334,6 @@ Return the hydrated conversation buffer."
             (with-current-buffer buffer
               (let ((inhibit-read-only t))
                 (mevedel-transcript-restore-gptel-state)
-                (mevedel-transcript-normalize-properties)
                 (mevedel-agent-conversation-configure invocation)
                 (mevedel-session-artifacts-strip-gptel-config-properties)
                 (mevedel-session-artifacts-stabilize-gptel-bounds)

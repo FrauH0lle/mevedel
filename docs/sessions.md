@@ -148,7 +148,8 @@ sidecar schema and validation; `mevedel-session-artifacts.el` owns paths,
 artifacts, snapshots, and segment writes; `mevedel-session-rewind.el` owns
 restore plans and the Rewind transaction; and `mevedel-session-fork.el` owns
 Fork/Worktree projection and publication. `mevedel-session-naming.el` owns
-display names and background title requests.
+display names and background title requests. `mevedel-session-collection.el`
+owns idle publication scans and their session lifetime.
 `mevedel-session-persistence.el` remains the lifecycle, resume, listing,
 locking, and cleanup facade used by callers.
 
@@ -161,6 +162,9 @@ permission state, ends the request, and schedules queued follow-up delivery.
 Error and abort settlement also save before request teardown, preserving partial
 responses and request-local file checkpoints. `mevedel-abort` additionally saves
 from cleanup that runs even if cancellation signals an error or quit.
+Opening, auto-saving, aborting, or closing a fresh zero-byte conversation does
+not materialize it. Partial first-turn text and already materialized sessions
+remain eligible for saving, including a previously saved session rewound empty.
 
 When remote work defers final-patch generation or settlement, the data buffer
 remains busy until that terminal continuation completes or is cancelled. Abort
@@ -482,6 +486,12 @@ the transaction's commit point rather than a payload.  `mevedel-save-session`
 publishes regardless, for a user who wants a snapshot rather than a record of a
 change.
 
+Repeated captures within a turn reuse that file's checkpoint version and
+logical backup names. New bytes still receive immutable publication storage;
+previous heads keep their original bytes. Portable saves remove logical
+`file-history/` entries no longer named by the checkpoint index, including
+files changed and then restored to their pre-turn contents.
+
 The free-form `artifacts/` subtree is included recursively as literal regular
 files in every portable save candidate. Its absent committed entries are
 explicit `:delete t` tombstones: ordinary omission still means unchanged, while
@@ -786,10 +796,14 @@ such as target-side copy, restore, and rename.  It suppresses timer target I/O
 and checks final ownership but does not itself publish, commit, or drain queued
 artifacts.
 
-Publication collection runs best-effort at turn settlement and lease-acquiring
-restore. It deletes all collectible generation directories in one batched
-control program under the owner's lease. Failure warns without breaking
-settlement or restore.
+Turn settlement and lease-acquiring restore schedule publication collection
+without scanning history on the foreground path. The coalesced job reads at
+most eight generations per idle slice, yielding after 50 ms between reads.
+A single target read can exceed that budget. Input, active root requests,
+busy transport and pending publications defer work; closing the root or losing
+its lease cancels it. A changed head restarts the scan before deletion.
+After a complete scan, at most eight obsolete directories are deleted under
+a reserved lease. Failure warns without breaking settlement or restore.
 
 Collection follows references rather than age: manifests can retain unchanged
 bytes in older generations. It reads every published sidecar, using cached

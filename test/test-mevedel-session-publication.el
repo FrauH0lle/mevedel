@@ -109,6 +109,26 @@ and its segment path."
                          (plist-get summary :references)))
                   summaries)))))))
 
+(mevedel-deftest mevedel-session-publication-generation-summary ()
+  ,test
+  (test)
+  :doc "one generation exposes references and optional turn facts"
+  (test-mevedel-session-publication--with-published
+   "one-summary" "mevedel-one-summary-" ?c
+   (lambda (session directory segment)
+     (let* ((head (test-mevedel-session-persistence--publish-generation
+                   session directory segment "Turn one\n" 1))
+            (generation (seq-find
+                         (lambda (item) (equal head (plist-get item :head)))
+                         (mevedel-session-publication--generation-names directory)))
+            (summary (mevedel-session-publication-generation-summary directory generation)))
+       (should (equal head (plist-get summary :head)))
+       (should (plist-get summary :manifest-readable-p))
+       (should (plist-get summary :references))
+       (should-not (plist-member summary :turn-count))
+       (should (= 1 (plist-get (mevedel-session-publication-generation-summary
+                               directory generation t) :turn-count)))))))
+
 (mevedel-deftest mevedel-session-publication-head-facts ()
   ,test
   (test)

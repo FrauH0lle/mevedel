@@ -52,13 +52,19 @@ pre-commit failure rolls files back. The picker groups heads by settled turn
 count and fork-point identity, offering the newest generation of each state and
 excluding the current state and incomplete turns.
 
-Publication collection runs at turn settlement and lease-acquiring restore.
+Publication collection is scheduled at turn settlement and lease-acquiring restore.
 It keeps the current head, journal capture pins, settled-turn representatives,
 a recent-generation grace window, and
 the generations containing their referenced artifacts. Deletions are batched
-into one target control program and a pass removes all collectible generations.
+into one target control program per slice.
 Ordinary transcript readers have no read-pin protocol: an old non-boundary reader outside the grace
 window can receive an absence or hash failure.
+
+Resume and settlement schedule collection in bounded idle slices. A scan must
+cover all generations before deletion, and a changed head restarts it. Retention
+criteria remain unchanged; deletion reserves ownership and is capped per batch.
+Repeated saves within a turn reuse checkpoint logical names, while immutable
+published heads retain their own file bytes.
 
 ## Rationale and consequences
 
@@ -116,3 +122,13 @@ its shared chronology and workspace-owned identity constraints remain.
   Collection still scans every sidecar: coarse target timestamps can put a
   referenced generation outside an arbitrary newest-N window. The original
   manual supplied no date for this measurement.
+
+- **Startup latency, 2026-09-19:** the confirmed resume's cold scan read 279
+  manifests and sidecars (346 MB) in 22.1 seconds. A warm cache does not help
+  first resume, so synchronous restore collection was replaced by coalesced
+  idle slices, cancelled on close or lease loss. Each slice checks ownership
+  and publication stability before advancing. Eight-directory deletion batches
+  bound cleanup work without imposing a total backlog cap. The same session
+  contained 6,680 file-history entries for 51 files: repeated autosaves minted
+  new logical backups for one turn. Checkpoint names now remain stable within
+  that turn, and obsolete current-manifest names are removed during saving.

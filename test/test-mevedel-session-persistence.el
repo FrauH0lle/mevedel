@@ -1566,7 +1566,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
-  :doc "an acquiring restore collects real generations; a live reopen does not"
+  :doc "an acquiring restore defers collection; a live reopen does not schedule it"
   (let* ((host "restore-collect-host")
          (local-root
           (file-name-as-directory
@@ -1617,6 +1617,15 @@
                       (setq restored
                             (mevedel-session-persistence-restore
                              session-dir nil nil workspace))
+                      (should (= before (length
+                                         (mevedel-session-publication--generation-names
+                                          session-dir))))
+                      (let ((live-session (buffer-local-value 'mevedel--session restored)))
+                        (should (gethash live-session mevedel-session-collection--jobs))
+                        (dotimes (_ (1+ before))
+                          (when-let* ((job (gethash live-session mevedel-session-collection--jobs)))
+                            (mevedel-session-collection--step live-session job)))
+                        (should-not (gethash live-session mevedel-session-collection--jobs)))
                       (let ((after
                              (length
                               (mevedel-session-publication--generation-names
@@ -1635,6 +1644,9 @@
                           (should (eq restored
                                       (mevedel-session-persistence-restore
                                        session-dir nil nil workspace)))
+                          (should-not
+                           (gethash (buffer-local-value 'mevedel--session restored)
+                                    mevedel-session-collection--jobs))
                           (should
                            (= live-before
                               (length

@@ -1634,7 +1634,7 @@
             (let (diagnostics)
               (mevedel-test--with-captured-diagnostics diagnostics
                 (mevedel-abort buffer))
-              (should (string-search "Could not save session" diagnostics)))
+              (should (string-search "Could not auto-save" diagnostics)))
             (should mevedel-session--save-failed)
             (delete-directory sidecar)
             (should (mevedel-session-persistence-autosave-buffer buffer))
@@ -1698,6 +1698,7 @@
                                   saved)
                              (setf (mevedel-session-goal session) goal)
                              (setq-local mevedel--session session)
+                             (insert "Ship the requested change\n")
                              (mevedel-request-begin session)
                              (cl-letf (((symbol-function
                                          'mevedel-session-artifacts-save)
@@ -1770,7 +1771,7 @@
 			     (setq-local mevedel--session session)
 			     (mevedel-request-begin session)
                              (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
-			                #'ignore))
+                                        (lambda (&rest _) "saved")))
 			       (mevedel-abort (current-buffer)))
 			     (should (eq 'paused (mevedel-goal-status goal)))
 			     (should (equal "Waiting for review"

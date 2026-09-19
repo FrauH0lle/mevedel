@@ -24,6 +24,10 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
+;; `mevedel-session-collection'
+(declare-function mevedel-session-collection-cancel
+                  "mevedel-session-collection" (session))
+
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-create-file
                   "mevedel-session-control-fs"
@@ -613,6 +617,8 @@ failed."
 
 (defun mevedel-session-durability--cancel-renewal (session)
   "Cancel SESSION's lease-renewal timer, if any."
+  (when (fboundp 'mevedel-session-collection-cancel)
+    (mevedel-session-collection-cancel session))
   (when-let* ((timer (mevedel-session-lease-renewal-timer session))
               ((timerp timer)))
     (cancel-timer timer))

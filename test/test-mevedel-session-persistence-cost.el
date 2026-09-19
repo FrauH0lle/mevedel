@@ -227,10 +227,10 @@ directories -- the existence probes and the lease listings."
               ;; Halving the sessions does not change that constant, which is
               ;; what a per-entry probe or listing would break.
               (should (= 2 (car two)))
-              ;; The rest is the record and manifest each session owns, so
-              ;; the total falls but only by the per-session remainder.
-              (should (< (cdr two) (cdr four)))
-              (should (<= (/ (float (- (cdr four) (cdr two))) 2) 4.0)))))
+              ;; Lease records, manifests and sidecars share read batches,
+              ;; so these rows cost no additional per-session programs.
+              (should (= (cdr two) (cdr four)))
+              (should (<= (cdr four) 6)))))
       (dolist (session sessions)
         (ignore-errors (mevedel-session-durability--cancel-renewal session)))
       (dolist (buffer buffers)

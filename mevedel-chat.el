@@ -102,22 +102,6 @@
 		  (event event-plist callback &optional session
 			 workspace request invocation))
 
-;; `mevedel-journal-cleanup'
-(declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace &optional force))
-(autoload 'mevedel-journal-cleanup-schedule "mevedel-journal-cleanup")
-
-;; `mevedel-journal-process'
-(declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
-(autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
-
-;; `mevedel-memory-decision'
-(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
-(autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
-
-;; `mevedel-memory-pass'
-(declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
-(autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
-
 ;; `mevedel-models'
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
@@ -183,9 +167,6 @@
 (declare-function
  mevedel-session-artifacts-install-gptel-save-state-advice
  "mevedel-session-artifacts" nil)
-(declare-function mevedel-session-artifacts-save
-                  "mevedel-session-artifacts"
-                  (session buffer &optional settled force))
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
 (autoload 'mevedel-session-artifacts-inhibit-so-long
@@ -197,10 +178,13 @@
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
+(declare-function mevedel-session-persistence-autosave-buffer
+                  "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-release-on-kill
                   "mevedel-session-persistence" nil)
 (defvar mevedel-session--save-failed)
 (autoload 'mevedel-session-persistence-allocate-session-id "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-autosave-buffer "mevedel-session-persistence")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
@@ -729,10 +713,6 @@ M-x mevedel-retry-plan-implementation resumes it")))
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
     (when (fboundp 'mevedel-directive-plan-restore-pending)
       (mevedel-directive-plan-restore-pending mevedel--session buf))
-    (mevedel-journal-cleanup-schedule workspace)
-    (mevedel-journal-process-schedule workspace t)
-    (mevedel-memory-pass-schedule workspace)
-    (mevedel-memory-decision-schedule-recovery workspace)
     (unless inspection-p
       (mevedel--run-session-start-hooks source))))
 
@@ -1135,22 +1115,7 @@ BUF defaults to the current buffer if not specified."
 		(when (bound-and-true-p mevedel--session)
 		  (setf (mevedel-session-agent-root-activity mevedel--session)
 			'idle)))))
-        (when (buffer-live-p chat-buffer)
-          (with-current-buffer chat-buffer
-            (when (and (bound-and-true-p mevedel--session)
-                       (mevedel-session-workspace mevedel--session)
-                       (not (bound-and-true-p
-                             mevedel-session--read-only-mode)))
-              (condition-case err
-                  (let ((inhibit-quit t))
-                    (mevedel-session-artifacts-save mevedel--session chat-buffer)
-                    (setq-local mevedel-session--save-failed nil))
-		(error
-		 (setq-local mevedel-session--save-failed t)
-		 (display-warning
-		  'mevedel
-		  (format "Could not save session after abort: %S" err)
-		  :warning))))))))))
+        (mevedel-session-persistence-autosave-buffer chat-buffer)))))
 
 
 ;;

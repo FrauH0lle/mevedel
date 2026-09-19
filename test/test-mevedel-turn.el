@@ -528,7 +528,7 @@
          (session (mevedel-session-create "main" ws))
          (chat-buf (generate-new-buffer " *mevedel-turn-save*"))
          (fsm (gptel-make-fsm :info (list :buffer chat-buf)))
-         saved offered)
+         saved offered cleanup recovered)
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
@@ -539,6 +539,10 @@
                      (lambda (saved-session saved-buffer &optional settled)
                        (push (list saved-session saved-buffer settled)
                              saved)))
+                    ((symbol-function 'mevedel-journal-cleanup-schedule)
+                     (lambda (workspace) (push workspace cleanup)))
+                    ((symbol-function 'mevedel-memory-decision-schedule-recovery)
+                     (lambda (workspace) (push workspace recovered)))
                     ((symbol-function 'mevedel-memory-pass-schedule)
                      (lambda (workspace) (push workspace offered))))
             (mevedel--turn-autosave fsm)
@@ -546,7 +550,9 @@
               (setq-local mevedel-session--read-only-mode t))
             (mevedel--turn-autosave fsm))
           (should (equal (list (list session chat-buf t)) saved))
-          (should (equal (list ws) offered)))
+          (should (equal (list ws) offered))
+          (should (equal (list ws) cleanup))
+          (should (equal (list ws) recovered)))
       (kill-buffer chat-buf)))
   :doc "restores settled ToolCall checkpoints when the co-commit fails"
   (let* ((session

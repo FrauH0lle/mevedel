@@ -188,7 +188,7 @@ completed-review and proposal-decision records, and
 `mevedel-journal-claim` provides bounded work ownership and recoverable
 outcomes. Completed-turn capture and sealing are connected to session
 lifecycle. Background generation and accepted-result recovery run from
-lifecycle opportunities and workspace activation recovers abandoned checkpoints.
+lifecycle opportunities; completed, saved root turns recover abandoned checkpoints.
 Public entries live in `.mevedel/journal/`; private bookkeeping and recovery
 evidence live in `.mevedel/state/journal/`.
 `memory://journal/` supports ordinary Read, Glob, and Grep over validated published
@@ -431,7 +431,7 @@ coverage counts, and remaining backlog without private content.
 
 `mevedel-memory-consolidation-mode` supports `manual`, `propose` (the default),
 and `auto`. Manual runs only on request. Propose schedules a read-only review at
-eligible completed, durably saved root turns, workspace activation and digest
+eligible completed, durably saved root turns and digest
 publication, and leaves its proposals for approval. Auto uses the same review and applies fresh memory proposals through
 the ordinary checked decision path. Instruction proposals always wait for
 approval, including changes to `AGENTS.md`. The mode is frozen at pass admission.
@@ -570,10 +570,11 @@ reconciles their independently marked attempts without inference or file
 reapplication. It first recovers settled publications under successor workspace
 ownership. Unmarked intents are not classified as applications, even if an
 external edit happens to match their proposed bytes. Unreadable or unavailable
-records stay inspectable. Session selection and conversation setup schedule
-this recovery independently of journaling being enabled. Repeated activations
+records stay inspectable. Completed, durably saved root turns schedule this
+recovery independently of journaling being enabled. Repeated opportunities
 coalesce and wait for idle transport. A live workspace owner leaves recovery
-for a later activation. New workspaces create no memory state just by activating;
+for a later opportunity. Session selection and conversation setup do not start
+workspace maintenance;
 exit cancels queued recovery. Recovery neither requests a model nor repeats or
 rolls back memory writes.
 
@@ -761,8 +762,7 @@ inference, and does not wait for a model.
 
 ### Abandoned checkpoint recovery
 
-Opening the session chooser or setting up a conversation schedules recovery
-before processing. Recovery inspects inactive captures as well as ready jobs,
+Completed, durably saved root turns schedule recovery before processing. Recovery inspects inactive captures as well as ready jobs,
 repairs interrupted pin/ready publication, and seals abandoned completed work.
 It verifies the original source session and frozen evidence under temporary
 source authority. PID locks use the existing dead-holder check and a checked
@@ -849,8 +849,8 @@ defaulting to 14 days after the latest terminal decision, or completion of a
 review with no proposals. Reversal restarts that window. Expired history is
 removed as a complete public/private dependency group. Curated memories remain.
 Expiry runs independently of session expiry and new capture, for local and TRAMP
-workspaces, during workspace activation and existing cleanup opportunities.
-Workspace activation is throttled to once an hour. Review/decision publication
+workspaces, after completed, saved root turns and existing cleanup opportunities.
+These turn opportunities are throttled to once an hour. Review/decision publication
 also schedules idle cleanup. Each batch selects at most 50 content groups and
 prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
 no progress stops the drain. Redraw does not run cleanup. Selection currently scans validated

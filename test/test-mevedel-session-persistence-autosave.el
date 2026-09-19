@@ -15,6 +15,37 @@
 		 (:quiet t)
 		 ,test
 		 (test)
+  :doc "opening, auto-saving and closing an untouched session leaves no saved state"
+  (dolist (type '(file project))
+    (let* ((root (make-temp-file "mevedel-empty-session-" t))
+           (workspace
+            (if (eq type 'file)
+                (test-mevedel-session-persistence--make-file-workspace root)
+              (test-mevedel-session-persistence--make-workspace root)))
+           buffer session)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'mevedel-journal-cleanup-schedule)
+                       (lambda (&rest _) (ert-fail "Startup scheduled journal cleanup")))
+                      ((symbol-function 'mevedel-journal-process-schedule)
+                       (lambda (&rest _) (ert-fail "Startup scheduled journal processing")))
+                      ((symbol-function 'mevedel-memory-pass-schedule)
+                       (lambda (&rest _) (ert-fail "Startup scheduled memory review")))
+                      ((symbol-function 'mevedel-memory-decision-schedule-recovery)
+                       (lambda (&rest _) (ert-fail "Startup scheduled memory recovery"))))
+              (setq buffer (mevedel--chat-buffer "empty" t workspace root)
+                    session (buffer-local-value 'mevedel--session buffer)))
+            (should (zerop (buffer-size buffer)))
+            (should-not (mevedel-session-save-path session))
+            (mevedel-session-persistence-autosave-buffer buffer)
+            (should-not (mevedel-session-save-path session))
+            (kill-buffer buffer)
+            (should-not (mevedel-session-save-path session))
+            (should-not (file-directory-p
+                         (mevedel-session-artifacts-sessions-dir workspace))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (mevedel-workspace-clear-registry)
+        (delete-directory root t))))
 		 :doc "checkpoints partial responses through both persistence profiles"
 		 (dolist (type '(file project))
 		   (let* ((root (make-temp-file "mevedel-autosave-" t))
