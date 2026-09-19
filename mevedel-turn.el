@@ -72,9 +72,17 @@
 (declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
 (autoload 'mevedel-journal-capture-checkpoint "mevedel-journal-capture")
 
+;; `mevedel-journal-cleanup'
+(declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace &optional force))
+(autoload 'mevedel-journal-cleanup-schedule "mevedel-journal-cleanup")
+
 ;; `mevedel-journal-process'
 (declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
 (autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
+
+;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
+(autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
 
 ;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
@@ -129,15 +137,14 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
+;; `mevedel-session-collection'
+(declare-function mevedel-session-collection-schedule
+                  "mevedel-session-collection" (session))
+(autoload 'mevedel-session-collection-schedule "mevedel-session-collection")
+
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
-
-;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-collect-generations
-                  "mevedel-session-publication" (session))
-(autoload 'mevedel-session-publication-collect-generations
-  "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
@@ -542,6 +549,8 @@ Signal when the request is missing or its reservation is not the next turn."
                  (not (bound-and-true-p mevedel-session--read-only-mode)))
         (let ((ptc-checkpoints (mevedel-session-ptc-checkpoints
                                 mevedel--session))
+              (root-p (and (eq chat-buffer (mevedel-session-root-buffer mevedel--session))
+                           (not (bound-and-true-p mevedel--agent-invocation))))
               saved)
           (condition-case err
               (progn
@@ -564,20 +573,20 @@ Signal when the request is missing or its reservation is not the next turn."
             (condition-case err
                 (progn
                   (mevedel-journal-capture-checkpoint mevedel--session chat-buffer)
-                  (mevedel-journal-process-schedule (mevedel-session-workspace mevedel--session)))
+                  (mevedel-journal-process-schedule
+                   (mevedel-session-workspace mevedel--session) root-p))
               (error
                (mevedel--warn-once
                 'journal-capture "Journal capture checkpoint failed: %s"
                 (error-message-string err))))
-            (when (and (eq chat-buffer (mevedel-session-root-buffer mevedel--session))
-                       (not (bound-and-true-p mevedel--agent-invocation)))
-              (mevedel-memory-pass-schedule (mevedel-session-workspace mevedel--session)))
-            ;; A settled turn is where the generations this turn
-            ;; published mid-stream stop being anyone's recovery state:
-            ;; until settlement they are what a crashed owner resumes
-            ;; from, and afterwards nothing resolves through them.
-            ;; The collector owns its best-effort warning contract.
-            (mevedel-session-publication-collect-generations
+            (when root-p
+              (let ((workspace (mevedel-session-workspace mevedel--session)))
+                (mevedel-journal-cleanup-schedule workspace)
+                (mevedel-memory-decision-schedule-recovery workspace)
+                (mevedel-memory-pass-schedule workspace)))
+            ;; Reclaim superseded recovery states after the view is ready.
+            ;; The idle job owns scanning, retention and failure handling.
+            (mevedel-session-collection-schedule
              mevedel--session))
           (when (and saved (buffer-live-p mevedel--view-buffer))
             (mevedel-view-rerender mevedel--view-buffer)))))))

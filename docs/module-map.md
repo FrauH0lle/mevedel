@@ -154,7 +154,8 @@ Chat / view
   mevedel-session-durability.el lease and storage primitives
   mevedel-session-recovery.el  specialized recovery protocol and markers
   mevedel-session-transfer.el  durable cooperative control transfer protocol
-  mevedel-session-publication.el immutable publication, generation collection, diagnostics
+  mevedel-session-publication.el immutable publication, retention/deletion, diagnostics
+  mevedel-session-collection.el  coalesced idle generation scans and cleanup lifecycle
   mevedel-session-save-as.el portable Save As transaction and adoption
   mevedel-session-persistence.el  lifecycle/resume/listing/locking/cleanup facade
   mevedel-session-rewind.el   restore plans, transactional Rewind, published-head redo

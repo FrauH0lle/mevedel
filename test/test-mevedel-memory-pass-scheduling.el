@@ -10,6 +10,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-pass)
+(require 'mevedel-journal-capture)
 (require 'mevedel)
 (require 'mevedel-system)
 (require 'gptel-openai)
@@ -275,7 +276,7 @@
                      (should (= 1 (hash-table-count mevedel-memory-pass--pending)))
                      (mevedel-transport-cancel-pending key)
                      (should (= 0 (hash-table-count mevedel-memory-pass--pending)))))
-                 :doc "workspace activation preserves an overdue backlog in manual mode and offers it in propose mode"
+                 :doc "opening preserves an overdue backlog; saved turns offer it only in propose mode"
                  (mevedel-test--with-captured-diagnostics nil
                    (digest 1 30)
                    (setf (mevedel-workspace-type workspace) 'file
@@ -289,6 +290,16 @@
                              (setq buffer (mevedel--chat-buffer
                                            (symbol-name mode) t workspace root))
                              (setq view (buffer-local-value 'mevedel--view-buffer buffer))
+                             (drain)
+                             (should (= 0 calls))
+                             (should (= 1 (length (mevedel-journal-index-unreviewed
+                                                  (mevedel-journal-store-entries root)))))
+                             (with-current-buffer buffer
+                               (insert "Completed turn\n")
+                               (setf (mevedel-session-turn-count mevedel--session) 1))
+                             (let ((mevedel-journal-enabled nil))
+                               (mevedel--turn-autosave
+                                (gptel-make-fsm :info (list :buffer buffer))))
                              (drain)
                              (if (eq mode 'manual)
                                  (progn (should (= 0 calls))

@@ -73,20 +73,12 @@
 (autoload 'mevedel-journal-pins-present-p "mevedel-journal-pins")
 
 ;; `mevedel-journal-process'
-(declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
 (declare-function mevedel-journal-process-stop-all "mevedel-journal-process" ())
 (defvar mevedel-journal-process--inhibit-scheduling)
-(autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
 
 ;; `mevedel-memory-decision'
-(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
 (declare-function mevedel-memory-decision-stop-recovery "mevedel-memory-decision" ())
 (defvar mevedel-memory-decision--inhibit-recovery)
-(autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
-
-;; `mevedel-memory-pass'
-(declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
-(autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
 
 ;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass-stop-all "mevedel-memory-pass" ())
@@ -138,6 +130,10 @@
 (declare-function mevedel-session-codec-validate-current-sidecar "mevedel-session-codec" (plist))
 (declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
 (defvar mevedel-session-codec-format-version)
+
+;; `mevedel-session-collection'
+(declare-function mevedel-session-collection-schedule "mevedel-session-collection" (session))
+(autoload 'mevedel-session-collection-schedule "mevedel-session-collection")
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
@@ -200,15 +196,15 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-call-with-diagnostic-batch
                   "mevedel-session-publication" (session function))
-(autoload 'mevedel-session-publication-call-with-diagnostic-batch
-  "mevedel-session-publication")
-(declare-function mevedel-session-publication-collect-generations "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
-(autoload 'mevedel-session-publication-collect-generations
+(declare-function mevedel-session-publication-read-batch
+                  "mevedel-session-publication" (directories listings))
+(autoload 'mevedel-session-publication-call-with-diagnostic-batch
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-publish "mevedel-session-publication")
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
+(autoload 'mevedel-session-publication-read-batch "mevedel-session-publication")
 
 ;; `mevedel-session-recovery'
 (defvar mevedel-session-recovery--mutation-cache)
@@ -1121,6 +1117,11 @@ publication.  Views and read-only inspection buffers never write."
     (with-current-buffer buffer
       (when (and (bound-and-true-p mevedel--session)
                  (mevedel-session-workspace mevedel--session)
+                 ;; Opening a conversation is not durable work.  Already
+                 ;; saved sessions still checkpoint an intentionally empty
+                 ;; transcript, and first-turn partial text is worth saving.
+                 (or (mevedel-session-save-path mevedel--session)
+                     (save-restriction (widen) (> (buffer-size) 0)))
                  (not (bound-and-true-p mevedel-session--read-only-mode))
                  (not (bound-and-true-p mevedel-session--inspection-buffer-p))
                  (or (bound-and-true-p mevedel--agent-invocation)
@@ -1733,15 +1734,10 @@ mentions-shown reset to empty hash tables on load."
                                (and sidecar-current-n
                                     (not (= sidecar-current-n segment-n)))))))
                  (nreverse repair-artifacts))
-                ;; A turn that never settled -- crash, suspend, lost
-                ;; provider callback -- orphans the generations it
-                ;; published mid-stream, and settlement-time collection
-                ;; never sees them again.  Opening under a freshly
-                ;; acquired lease is where that debt drains; a restore
-                ;; must not fail because storage could not be reclaimed,
-                ;; which the collector's best-effort contract guarantees.
+                ;; A crash may leave generations no settled turn reclaimed.
+                ;; Schedule their scan without delaying the restored view.
                 (when (and acquired (not live))
-                  (mevedel-session-publication-collect-generations session))
+                  (mevedel-session-collection-schedule session))
                 (setq setup-done t)
                 buf))
           ;; Any failure after acquisition releases the session lease and
@@ -2040,14 +2036,22 @@ reuse the last live enumeration when one exists."
                      (listings
                       (and entries portable-p
                            (mevedel-session-persistence--lease-listings
-                            entries))))
+                            entries)))
+                     (observations
+                      (when portable-p
+                        ;; Keep each read batch within the native archive
+                        ;; carrier's bound; all proofs belong to this listing.
+                        (cl-loop for batch on entries by (lambda (rest) (nthcdr 32 rest))
+                                 append (mevedel-session-publication-read-batch
+                                         (seq-take batch 32) listings)))))
                 (dolist (entry entries)
                   (let ((record
                          (condition-case err
                              (mevedel-session-persistence--discover-entry
                               entry authority-mode
                               (cdr (assoc entry controls))
-                              (cdr (assoc entry listings)))
+                              (cdr (assoc entry listings))
+                              (cdr (assoc entry observations)))
                            ;; Discovery itself failed, so not even the
                            ;; transcript can be trusted for inspection.
                            (error
@@ -2293,9 +2297,6 @@ expired lease is taken over."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
-  (mevedel-journal-process-schedule workspace t)
-  (mevedel-memory-pass-schedule workspace)
-  (mevedel-memory-decision-schedule-recovery workspace)
   (mevedel-session-persistence-cleanup-expired workspace)
   (mevedel-session-persistence--sweep-stale-locks workspace)
   (let* ((enumeration

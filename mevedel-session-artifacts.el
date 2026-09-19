@@ -292,6 +292,9 @@
 (autoload 'org-entry-delete "org")
 (autoload 'org-entry-get "org")
 (autoload 'org-entry-put "org")
+(defvar org-agenda-file-menu-enabled)
+(defvar org-element-cache-persistent)
+(defvar org-element-use-cache)
 
 ;; `so-long'
 (declare-function so-long-inhibit "so-long" (&optional mode))
@@ -575,7 +578,12 @@ for saving."
       (unless existing
         (setq buffer-file-name path
               buffer-file-truename path)
-        (delay-mode-hooks (set-auto-mode)))
+        (if (string-suffix-p ".org" logical)
+            (let ((org-element-use-cache nil)
+                  (org-element-cache-persistent nil)
+                  (org-agenda-file-menu-enabled nil))
+              (mevedel--transcript-org-mode))
+          (delay-mode-hooks (set-auto-mode))))
       (mevedel--forget-place)
       (setq-local mevedel-session--inspection-buffer-p inspection)
       (setq-local buffer-offer-save (not inspection))
@@ -1438,9 +1446,11 @@ bounds no longer change."
         (let ((last nil)
               (done nil)
               (attempts 0))
+          ;; Drawer edits shift existing properties along with the text.
+          ;; Structural classification is needed once, not once per offset.
+          (mevedel-transcript-normalize-properties)
           (while (and (not done) (< attempts 8))
             (setq attempts (1+ attempts))
-            (mevedel-transcript-normalize-properties)
             (let ((serialized
                    (when-let* ((bounds (gptel--get-buffer-bounds)))
                      (prin1-to-string bounds))))
@@ -1906,6 +1916,25 @@ The sidecar is the commit marker, so callers place it last in a batch."
          (mevedel-session-artifacts-build-sidecar session buffer))
         :commit-marker t))
 
+(defun mevedel-session-artifacts--obsolete-snapshot-artifacts (session)
+  "Return tombstones for backups absent from SESSION's checkpoint index.
+Older published heads keep their own references to their immutable bytes."
+  (let ((retained (make-hash-table :test #'equal))
+        artifacts)
+    (dolist (turn (mevedel-session-file-snapshots session))
+      (dolist (entry (cdr turn))
+        (dolist (key '(:backup-name :pre-backup-name))
+          (when-let* ((name (plist-get (cdr entry) key)))
+            (puthash (file-name-concat "file-history" name) t retained)))))
+    (dolist (entry (plist-get (mevedel-session-publication session) :artifacts))
+      (when (and (string-prefix-p "file-history/" (car entry))
+                 (not (gethash (car entry) retained)))
+        (push (list :path (file-name-concat (mevedel-session-save-path session)
+                                          (car entry))
+                    :delete t)
+              artifacts)))
+    (nreverse artifacts)))
+
 (defun mevedel-session-artifacts--remote-save
     (session buffer settled &optional force)
   "Publish portable project SESSION's durability-critical state from BUFFER.
@@ -1943,6 +1972,7 @@ calling this serializer."
             (append
              (and segment-artifact (list segment-artifact))
              (nreverse mevedel-session-artifacts--critical-artifacts)
+             (mevedel-session-artifacts--obsolete-snapshot-artifacts session)
              (mevedel-session-artifacts--instruction-artifacts
               session buffer)
              (mevedel-session-artifacts--published-artifact-files session)))
@@ -2205,7 +2235,8 @@ materialized or has no committed sidecar."
       ;; default modes an ordinary artifact gets.
       (mevedel--write-file-atomically dest content 'no-conversion #o600))))
 
-(defun mevedel-session-artifacts--file-history-maybe-snapshot (session path pre-content)
+(defun mevedel-session-artifacts--file-history-maybe-snapshot
+    (session path pre-content &optional checkpoint)
   "Return SESSION's pre-turn checkpoint entry for changed PATH.
 
 PATH is an absolute filesystem path that was touched by the just-completed
@@ -2213,11 +2244,15 @@ turn's tools.  PRE-CONTENT is PATH's content at the start of the turn,
 or nil if it did not exist.
 
 Returns nil when PATH did not change.  PRE-CONTENT is a string, nil for a
-previously absent path, or `(:gap REASON)' when pre-turn capture failed."
+previously absent path, or `(:gap REASON)' when pre-turn capture failed.
+CHECKPOINT is this turn's previous capture for PATH.  Reuse its version and
+timestamp: another save updates this checkpoint, not the file's turn history."
   (let* ((current-exists (file-exists-p path))
-         (version (1+ (mevedel-session-artifacts--file-history-latest-version session path)))
+         (version (or (plist-get checkpoint :version)
+                      (1+ (mevedel-session-artifacts--file-history-latest-version session path))))
          (base (list :version version
-                     :backup-time (format-time-string "%FT%H-%M-%S")))
+                     :backup-time (or (plist-get checkpoint :backup-time)
+                                      (format-time-string "%FT%H-%M-%S"))))
          (gap
           (lambda (reason)
             (display-warning
@@ -2279,11 +2314,12 @@ is recorded even when no tracked file changed.  Returns the list of backup
 names written."
   (when (and (mevedel-session-save-path session)
              (hash-table-p pre-snapshots))
-    (let (entries written)
+    (let ((previous (cdr (assoc turn-n (mevedel-session-file-snapshots session))))
+          entries written)
       (maphash
        (lambda (path pre-content)
          (when-let* ((entry (mevedel-session-artifacts--file-history-maybe-snapshot
-                            session path pre-content)))
+                            session path pre-content (cdr (assoc path previous)))))
            (push entry entries)
            (when-let* ((name (plist-get (cdr entry) :backup-name)))
              (push name written))

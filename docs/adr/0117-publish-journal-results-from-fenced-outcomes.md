@@ -37,6 +37,11 @@ not. Proposals retain exact before-state and evidence until their decisions and
 recovery dependencies are resolved. Propose is the default; auto uses the same
 checked application, while instruction changes always await approval.
 
+Completed, durably saved root turns provide automatic opportunities for journal
+recovery/cleanup and memory review/reconciliation. Publication and explicit
+memory operations retain their existing opportunities. Opening a conversation
+or the session chooser does not launch workspace-wide maintenance.
+
 Application holds both workspace and original target-root claims. It persists
 complete private intent and a hash-only target marker before mutations. Curated
 writes, rollback, claim settlement, and marker retirement share a target-side
@@ -217,7 +222,7 @@ contains the corresponding operational details.
   at metadata admission and separators excluded from the body budget. Oversized
   descriptors are refused before pinning rather than dropping coverage IDs.
 - **Interrupted write recovery initially depended on opening the proposal table.**
-  Workspace activation now schedules the same checked reconciliation independently
+  Workspace activation then scheduled the same checked reconciliation independently
   of capture settings. It coalesces, respects transport/live ownership, creates no
   state in an unused workspace, and cancels queued work on exit. `/remember` uses
   that sessionless review owner and cockpit, replacing the report-only remember
@@ -299,3 +304,13 @@ search; foreign session owners and uncertain reads postpone it. Workspace
 diagnostics use size-based rotation with one archive. These policies do not
 expire recovery evidence or plugin-owned data. See the current
 [storage and retention contract](../architecture.md#generated-workspace-state).
+
+### 2026-09-19: keep workspace maintenance out of session startup
+
+The startup profile attributed 12.2% of CPU samples to journal cleanup and 4.2%
+to memory decision recovery. Previously, the chooser and conversation setup
+scheduled workspace-wide maintenance on immediate timers; those callbacks still
+blocked the Emacs UI. These opportunities now run after completed, durably saved
+root turns. Explicit memory operations retain checked recovery, and publication
+still schedules its existing processing and cleanup. Merely opening a session
+no longer launches consolidation or workspace recovery scans.

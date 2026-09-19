@@ -12,6 +12,20 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
+(mevedel-deftest mevedel-session-artifacts--obsolete-snapshot-artifacts ()
+  ,test
+  (test)
+  :doc "drops only unindexed file history and retains both sides of every turn"
+  (let ((session (mevedel-session--create
+                  :save-path "/session/"
+                  :file-snapshots
+                  '((1 ("file" :backup-name "post" :pre-backup-name "pre")))
+                  :publication
+                  '(:artifacts (("file-history/post") ("file-history/pre")
+                                ("file-history/stale") ("artifacts/keep"))))))
+    (should (equal '((:path "/session/file-history/stale" :delete t))
+                   (mevedel-session-artifacts--obsolete-snapshot-artifacts session)))))
+
 (mevedel-deftest mevedel-session-artifacts--finalize-segment-file ()
   ,test
   (test)
@@ -825,6 +839,55 @@
 (mevedel-deftest mevedel-session-artifacts-save (:quiet t)
   ,test
   (test)
+  :doc "unchanged request checkpoints reuse names and preserve prior publication bytes"
+  (let* ((root (make-temp-file "mevedel-checkpoint-save-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *checkpoint-save*"))
+         (path (file-name-concat root "source.txt"))
+         (pre (make-hash-table :test #'equal)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (mevedel-chat-prepare-transcript-buffer)
+          (setq-local mevedel--session session)
+          (setq-local mevedel--workspace workspace)
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :file-snapshots pre))
+          (insert "Edit the file\n")
+          (puthash path "before\n" pre)
+          (write-region "after\n" nil path nil 'silent)
+          (mevedel-session-artifacts-save session buffer)
+          (let* ((first (mevedel-session-publication session))
+                 (entry (cdr (assoc path (cdr (assoc 0 (mevedel-session-file-snapshots session))))))
+                 (logical (file-name-concat "file-history" (plist-get entry :backup-name)))
+                 (old-bytes (plist-get (cdr (assoc logical (plist-get first :artifacts))) :published)))
+            (mevedel-session-artifacts-save session buffer)
+            (should (equal (plist-get first :head)
+                           (plist-get (mevedel-session-publication session) :head)))
+            (should (= 2 (length (directory-files
+                                 (file-name-concat (mevedel-session-save-path session) "file-history")
+                                 nil "^[^.]"))))
+            (write-region "changed again\n" nil path nil 'silent)
+            (mevedel-session-artifacts-save session buffer)
+            (should (equal "changed again\n"
+                           (mevedel-session-artifacts-read-artifact session logical t)))
+            (should (equal "after\n"
+                           (mevedel-session-control-fs-read-file old-bytes)))
+            (should (= 2 (cl-count-if
+                          (lambda (artifact) (string-prefix-p "file-history/" (car artifact)))
+                          (plist-get (mevedel-session-publication session) :artifacts))))
+            ;; Reverting the file removes its current checkpoint references,
+            ;; while the prior publication remains independently readable.
+            (write-region "before\n" nil path nil 'silent)
+            (mevedel-session-artifacts-save session buffer)
+            (should-not (seq-some
+                         (lambda (artifact) (string-prefix-p "file-history/" (car artifact)))
+                         (plist-get (mevedel-session-publication session) :artifacts)))
+            (should (equal "after\n" (mevedel-session-control-fs-read-file old-bytes)))))
+      (with-current-buffer buffer (setq-local mevedel--current-request nil))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t)))
   :doc "assigns stable fork-point identity only to settled responses"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

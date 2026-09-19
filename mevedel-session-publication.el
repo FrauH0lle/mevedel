@@ -632,28 +632,31 @@ listing does not need to pay."
     (dolist (generation (mevedel-session-publication--generation-names
                          session-dir)
                         (nreverse summaries))
-      (let* ((head (plist-get generation :head))
-             (manifest
-              (mevedel-session-publication--cached-manifest session-dir head))
-             (facts (when (< index limit)
-                      (and manifest
-                           (mevedel-session-publication--cached-sidecar-facts
-                            session-dir head manifest)))))
-        (setq index (1+ index))
-        (push (append (list :head head
-                            :name (plist-get generation :name)
-                            :time (plist-get generation :time)
-                            :manifest-readable-p (and manifest t)
-                            :transcript-bytes
-                            (and manifest
-                                 (mevedel-session-publication--transcript-bytes
-                                  session-dir manifest))
-                            :references
-                            (and manifest
-                                 (mevedel-session-publication--manifest-references
-                                  manifest)))
-                      facts)
-              summaries)))))
+      (push (mevedel-session-publication-generation-summary
+             session-dir generation (< index limit))
+            summaries)
+      (setq index (1+ index)))))
+
+(defun mevedel-session-publication-generation-summary
+    (session-dir generation &optional with-facts)
+  "Read one GENERATION's immutable summary below SESSION-DIR.
+WITH-FACTS includes the sidecar's turn boundary; otherwise read only
+its manifest."
+  (let* ((head (plist-get generation :head))
+         (manifest (mevedel-session-publication--cached-manifest session-dir head)))
+    (append (list :head head
+                  :name (plist-get generation :name)
+                  :time (plist-get generation :time)
+                  :manifest-readable-p (and manifest t)
+                  :transcript-bytes
+                  (and manifest
+                       (mevedel-session-publication--transcript-bytes session-dir manifest))
+                  :references
+                  (and manifest
+                       (mevedel-session-publication--manifest-references manifest)))
+            (and with-facts manifest
+                 (mevedel-session-publication--cached-sidecar-facts
+                  session-dir head manifest)))))
 
 (defun mevedel-session-publication--transcript-bytes (session-dir manifest)
   "Return the byte size of MANIFEST's segment transcript, or nil."
@@ -709,23 +712,25 @@ their bytes."
         (setq names
               (append names (plist-get summary :references)))))))
 
-(defun mevedel-session-publication-collect-generations (session)
+(defun mevedel-session-publication-collect-generations
+    (session &optional summaries limit)
   "Delete SESSION's published generations no retained head needs.
 
 Retention is `mevedel-session-publication--retained-generations' plus
 the session's current head, journal capture pins, and everything those heads
 resolve through.  Only a
 portable session owning its lease may collect: the deletion is a target
-mutation, and the current head must not move underneath it.  Every
-collectible generation is deleted in one batched target program, so one
-pass reclaims everything regardless of backlog size.  Collection is
+mutation, and the current head must not move underneath it.  Collectible
+generations are deleted in one batched target program.  Collection is
 best-effort: failures warn and return nil rather than breaking turn
 settlement or session restore.  Returns the number of generations
-deleted."
+deleted.  SUMMARIES may supply a completed scan of the current head.
+LIMIT bounds the number of generation directories deleted in this pass."
   (condition-case error
       (when (and (mevedel-session-codec-portable-authority-p session)
                  (mevedel-session-durability-lease-owned-p session)
                  (not (mevedel-session-pending-publication session))
+                 (null (mevedel-session-publication-uncommitted-batches session))
                  (null (mevedel-session-publication-queue session))
                  (not (mevedel-session-publication-active-p session)))
         (let* ((session-dir (mevedel-session-save-path session))
@@ -740,8 +745,9 @@ deleted."
                     ;; second, so an unscanned generation the current head still
                     ;; needs could fall outside a window.  The immutable facts
                     ;; cache is what keeps scanning every sidecar affordable.
-                    (mevedel-session-publication-generation-summaries
-                     session-dir most-positive-fixnum))
+                    (or summaries
+                        (mevedel-session-publication-generation-summaries
+                         session-dir most-positive-fixnum)))
                    (current-name
                     (file-name-nondirectory
                      (directory-file-name (file-name-directory current))))
@@ -774,18 +780,21 @@ deleted."
                         (seq-remove
                          (lambda (generation)
                            (member (plist-get generation :name) retained))
-                         (mevedel-session-publication--generation-names
-                          session-dir)))
+                         summaries))
+                       (collectible (if limit (seq-take collectible limit) collectible))
                        (results
-                        (mevedel-session-control-fs-delete-directories
-                         (mapcar
-                          (lambda (generation)
-                            (mevedel-session-publication--publication-path
-                             session-dir
-                             (file-name-concat
-                              ".publications"
-                              (plist-get generation :name))))
-                          collectible))))
+                        (mevedel-session-durability-call-with-reserved-lease
+                         session
+                         (lambda ()
+                           (mevedel-session-control-fs-delete-directories
+                            (mapcar
+                             (lambda (generation)
+                               (mevedel-session-publication--publication-path
+                                session-dir
+                                (file-name-concat
+                                 ".publications"
+                                 (plist-get generation :name))))
+                             collectible))))))
                   (cl-loop for generation in collectible
                            for result in results
                            do
