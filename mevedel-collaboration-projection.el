@@ -17,6 +17,9 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-direct-call
                   "mevedel-tool-render-data" (name data))
+(declare-function mevedel-tool-render-data-extract
+                  "mevedel-tool-render-data"
+                  (result-string &optional session expected-tool-use-id allow-payload-tool-use-id))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments
@@ -167,7 +170,7 @@ an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :detail :diff
-                       :artifact :size :missing :presentation))
+                       :artifact :size :missing :presentation :shared))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -396,7 +399,9 @@ the turn always begins before its own attribution block."
         (when (<= (car entry) (car attribution))
           (setq owner (cdr entry))))
       (when owner
-        (plist-put owner :guest (cdr attribution))))))
+        (plist-put owner :guest (plist-get (cdr attribution) :name))
+        (when-let* ((shared (plist-get (cdr attribution) :shared)))
+          (plist-put owner :shared shared))))))
 
 (defun mevedel-collaboration--canonical-records (data-buffer)
   "Return allowlisted records reconstructed from DATA-BUFFER.
@@ -438,6 +443,24 @@ attributed to a collaboration guest carry that guest's name."
                     (when userp
                       (push (cons (cadr segment) (car records))
                             user-starts))))))
+             ((memq (car segment) '(ignored render-data))
+              (let ((summary (cdr (mevedel-tool-render-data-extract
+                                   (buffer-substring
+                                    (cadr segment) (caddr segment))))))
+                (when (and (eq (plist-get summary :kind) 'request-summary)
+                           (eq (plist-get summary :outcome) 'error))
+                  (let* ((text (concat "Assistant request failed. "
+                                       (or (plist-get summary :message)
+                                           "Retry from the host or send a follow-up.")))
+                         (key (list "failure" text))
+                         (occurrence (gethash key occurrences 0)))
+                    (puthash key (1+ occurrence) occurrences)
+                    (push (mevedel-collaboration--record
+                           (mevedel-collaboration--stable-record-id
+                            "failure" text occurrence)
+                           "assistant" :revision 0 :status "failed"
+                           :text (mevedel-collaboration--truncate-bytes text 2000))
+                          records)))))
              ((eq (car segment) 'tool)
               (let* ((start (cadr segment))
                      (end (caddr segment))

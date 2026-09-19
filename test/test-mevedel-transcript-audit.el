@@ -241,7 +241,7 @@
           (insert (mevedel--format-hook-audit-record
                    (list :type 'guest-prompt :name "laptop")))
           (let ((prompts (mevedel-transcript-audit-guest-prompts)))
-            (should (equal '("phone" "laptop") (mapcar #'cdr prompts)))
+            (should (equal '("phone" "laptop") (mapcar (lambda (entry) (plist-get (cdr entry) :name)) prompts)))
             (should (apply #'< (mapcar #'car prompts)))
             ;; The block sits after its prompt and never reaches model
             ;; context.

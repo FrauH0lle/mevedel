@@ -527,7 +527,8 @@ Only its own: another guest's unsent text never travels to it."
           (when (equal guest-id (plist-get entry :guest-id))
             (push (list :id (plist-get entry :id)
                         :position position
-                        :text (or (plist-get entry :input) ""))
+                        :text (or (plist-get entry :input) "")
+                        :shared (plist-get entry :shared-question))
                   own))))
       (append state (when own (list :own (nreverse own)))))))
 
@@ -549,7 +550,8 @@ GUEST caches the last state sent so an unchanged queue costs nothing."
                          (lambda (entry)
                            `(("id" . ,(plist-get entry :id))
                              ("position" . ,(plist-get entry :position))
-                             ("text" . ,(plist-get entry :text))))
+                             ("text" . ,(plist-get entry :text))
+                             ("shared" . ,(plist-get entry :shared))))
                          own)))))))))
 
 (defun mevedel-collaboration--publish-queue (room)

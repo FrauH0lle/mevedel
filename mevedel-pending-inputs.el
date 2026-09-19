@@ -244,8 +244,8 @@
 (defvar-local mevedel-view--pending-input-edit nil
   "Queue edit state active in this composer, or nil.")
 
-(defvar mevedel-view--pending-guest-attribution nil
-  "Guest name owning the follow-up currently being submitted, or nil.
+(defvar-local mevedel-view--pending-guest-attribution nil
+  "Guest attribution audit record for the follow-up being submitted, or nil.
 
 Set by the follow-up drain when it dispatches a collaboration guest's
 entry and consumed exactly once where the prompt and its hook audits are
@@ -390,7 +390,7 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
 
 (cl-defun mevedel-view-enqueue-external-follow-up
     (data-buffer text &key guest-name guest-id paths directive-id invoke
-                 guest-role)
+                 guest-role shared-question)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
@@ -408,7 +408,8 @@ validated against its own allowlist for the guest's link tier
 GUEST-ROLE: TEXT is then that invocation's arguments, dispatched
 through `mevedel-view-run-invocation' at delivery and rechecked
 against the same allowlist and tier first.  Return the queued entry,
-or nil without a live session view."
+or nil without a live session view.  SHARED-QUESTION is host-validated
+shared-item attribution retained with the delivered prompt."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -430,6 +431,7 @@ or nil without a live session view."
                             :guest-paths paths
                             :guest-invoke invoke
                             :guest-role guest-role
+                            :shared-question shared-question
                             ;; An invocation is dispatched by name at
                             ;; delivery; its arguments stay inert text.
                             :inert-skills t
@@ -782,7 +784,9 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                            (unless delivered
                              (mevedel-session--set-active-dropped-file-grants
                               session active-grants-before))
-                           (setq mevedel-view--pending-guest-attribution nil)
+                           (when (buffer-live-p data-buffer)
+                             (with-current-buffer data-buffer
+                               (setq mevedel-view--pending-guest-attribution nil)))
                            (mevedel-view--interaction-rebuild)))
                         (after-insert
                          (lambda ()
@@ -814,8 +818,12 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                            (mevedel-view--interaction-rebuild))))
                    ;; Consumed where the prompt and its hook audits are
                    ;; inserted; cleared on every blocked or failed path.
-                   (setq mevedel-view--pending-guest-attribution
-                         (plist-get entry :guest-name))
+                   (with-current-buffer data-buffer
+                     (setq mevedel-view--pending-guest-attribution
+                           (when-let* ((name (plist-get entry :guest-name)))
+                             (append (list :type 'guest-prompt :name name)
+                                     (when-let* ((shared (plist-get entry :shared-question)))
+                                       (list :shared shared))))))
                    ;; Delivery is asynchronous and the entry stays queued
                    ;; until the transcript commit; the flag keeps a guest
                    ;; retraction from deleting attachment files an
@@ -1096,6 +1104,17 @@ an unrelated remote operation started by redisplay or another package included
          (grants
           (mevedel-view--pop-dropped-file-grants-for-input input session))
          (replacement (plist-put original :input input)))
+    (when-let* ((shared (plist-get original :shared-question))
+                ((not (equal input (plist-get (plist-get state :entry) :input)))))
+      ;; Keep receipt identity, but stop presenting the original frozen context
+      ;; as the input after the host has edited the queued prompt.
+      (setq shared (copy-sequence shared))
+      (setq shared (plist-put shared :edited t)
+            shared (plist-put shared :text input)
+            shared (plist-put shared :quote nil)
+            shared (plist-put shared :revision nil)
+            shared (plist-put shared :scope nil))
+      (setq replacement (plist-put replacement :shared-question shared)))
     (setq replacement
           (plist-put replacement :dropped-file-grants grants)
           replacement (plist-put replacement :submission nil))

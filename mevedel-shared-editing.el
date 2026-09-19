@@ -41,7 +41,9 @@ Observers cannot change whether the preceding commit succeeded.")
 
 (defun mevedel-shared-editing--json (value)
   "Encode VALUE with the editor's JSON null and false conventions."
-  (json-serialize value :null-object nil :false-object :json-false))
+  (decode-coding-string
+   (json-serialize value :null-object nil :false-object :json-false)
+   'utf-8-unix))
 
 (defun mevedel-shared-editing--parse (text)
   "Parse bounded editor JSON TEXT."

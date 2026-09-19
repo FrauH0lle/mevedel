@@ -89,5 +89,14 @@
     (should (hash-table-p (plist-get (aref (plist-get value :marks) 0) :attrs)))
     (should (equal json (mevedel-shared-editing--json value)))))
 
+(mevedel-deftest mevedel-shared-editing--json
+  (:doc "Unicode JSON remains text when nested in model or browser messages")
+  (let* ((value (list :title (string #x2014 #x03bb #x1f331) :empty nil :flag :json-false))
+         (text (mevedel-shared-editing--json value))
+         (envelope (json-serialize (list :text text))))
+    (should (multibyte-string-p text))
+    (should (equal (plist-get (json-parse-string envelope :object-type 'plist) :text) text))
+    (should (equal value (mevedel-shared-editing--parse text)))))
+
 (provide 'test-mevedel-shared-editing)
 ;;; test-mevedel-shared-editing.el ends here

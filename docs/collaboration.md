@@ -422,3 +422,9 @@ a fresh welcome and snapshot within a bounded give-up window.
 
 Starting a room confirms that visible text, paths, and tool results may
 contain credentials or secrets and that the links are bearer credentials.
+
+Shared-item questions retain item and comment correlation in the canonical
+transcript's guest attribution. The editor panel reuses those records and the
+existing pending-input queue; it does not maintain a separate conversation.
+Canonical provider-failure summaries also appear in browser conversations.
+See [shared editing](shared-editing.md#questions-and-document-comments).

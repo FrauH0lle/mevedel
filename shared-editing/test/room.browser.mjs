@@ -218,14 +218,11 @@ test(
       await frame(pages[0]).locator('[data-tool="laser"]').click();
       const canvas = await frame(pages[0]).locator('#canvas').boundingBox();
       await pages[0].mouse.move(canvas.x + 200, canvas.y + 200);
-      await pages[0].mouse.down();
       await pages[0].mouse.move(canvas.x + 240, canvas.y + 220, { steps: 8 });
-      await pages[0].mouse.up();
-      await until(async () => (await frame(pages[1]).locator('#presence circle').count()) > 0);
+      await until(async () => (await frame(pages[1]).locator('[data-mode="laser"] .pointer-tip').count()) > 0);
       await delay(70);
       await pages[0].mouse.move(canvas.x + 260, canvas.y + 230);
-      await pages[0].mouse.down();
-      // Frame-local coordinates include the canvas's offset below its toolbar.
+      // Both viewports must identify the same world position, despite different zoom.
       const finalPoint = await frame(pages[0])
         .locator('#canvas')
         .evaluate((svg) => {
@@ -234,21 +231,45 @@ test(
           return [p.x, p.y];
         });
       await until(async () => {
-        const circles = await frame(pages[1])
-          .locator('#presence circle')
-          .evaluateAll((nodes) => nodes.map((n) => [+n.getAttribute('cx'), +n.getAttribute('cy')]));
-        return circles.some(
+        const points = await frame(pages[1])
+          .locator('[data-mode="laser"] .pointer-tip')
+          .evaluateAll((nodes) => nodes.map(n => {
+            const m = n.transform.baseVal.consolidate().matrix;
+            return [m.e, m.f];
+          }));
+        return points.some(
           (p) => Math.abs(p[0] - finalPoint[0]) < 1 && Math.abs(p[1] - finalPoint[1]) < 1,
         );
       });
       assert.ok((await frame(pages[1]).locator('#presence text').first().textContent()).length > 0);
-      await pages[0].mouse.up();
-      await delay(1800);
-      assert.equal(await frame(pages[1]).locator('#presence circle').count(), 0);
+      await delay(700);
+      assert.equal(await frame(pages[1]).locator('.pointer-trail path').count(), 0);
+      await pages[0].mouse.move(5, 5);
+      await until(async () => (await frame(pages[1]).locator('[data-mode="laser"]').count()) === 0);
       assert.equal(
         JSON.parse((await agent('SharedRead', { id: boardId })).result).revision,
         savedBefore,
       );
+      // Presence stays disposable while another browser commits durable content.
+      await Promise.all([
+        (async () => {
+          for (let i = 0; i < 30; i++) {
+            await pages[0].mouse.move(canvas.x + 240 + i * 3, canvas.y + 230);
+            await delay(20);
+          }
+        })(),
+        (async () => {
+          await frame(pages[1]).locator('#title').fill('Live collaboration');
+          await frame(pages[1]).locator('#title').press('Tab');
+          await until(async () => (await frame(pages[0]).locator('#title').inputValue()) === 'Live collaboration');
+        })(),
+      ]);
+      await pages[0].mouse.move(5, 5);
+      await until(async () => (await frame(pages[1]).locator('[data-mode="laser"]').count()) === 0);
+      assert.equal(JSON.parse((await agent('SharedRead', {id:boardId})).result).revision, savedBefore + 1);
+      await frame(pages[1]).locator('#title').fill('Whiteboard');
+      await frame(pages[1]).locator('#title').press('Tab');
+      await until(async () => (await frame(pages[0]).locator('#title').inputValue()) === 'Whiteboard');
       await agent('RestartHelper');
       assert.equal(
         JSON.parse((await agent('SharedRead', { id: boardId })).result).content.length,
@@ -361,6 +382,7 @@ test(
       );
       await until(async () => (await documentText(pages[1])).includes('An agent added this.'));
       const captured = JSON.parse((await agent('SharedRead', { id: documentId })).result);
+      await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#question').fill('Review the current notes');
       await frame(pages[0]).locator('#ask button').click();
       const queued = await until(async () => {
@@ -410,14 +432,17 @@ test(
           .evaluate(() => window.getSelection().toString()),
         'An',
       );
-      await frame(pages[1]).locator('#scope').selectOption('selection');
+      await frame(pages[1]).locator('#comment-selection').click();
       await frame(pages[1]).locator('#question').fill('Explain the selected opening');
       await frame(pages[1]).locator('#ask button').click();
+      await until(async () => (await frame(pages[1]).locator('#question-send').textContent()) === 'Send to assistant');
+      assert.equal((await agent('InspectTest')).queue.length, 1, 'posting a comment does not queue a model turn');
+      await frame(pages[1]).locator('#question-send').click();
       const rangeAsk = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 2 ? info.queue[1] : null;
       });
-      assert.match(rangeAsk, /"anchors":/);
+      assert.doesNotMatch(rangeAsk, /"anchors":/);
       assert.match(rangeAsk, /"text":"An"/);
       assert.match(rangeAsk, /Human revision/);
       await frame(pages[0]).locator('.tiptap p').last().click();
@@ -506,6 +531,18 @@ test(
         JSON.parse((await agent('SharedRead', { id: imported[0].id })).result).content,
         JSON.parse(exported).content,
       );
+      await frame(pages[0]).locator('#ask-toggle').click();
+      await frame(pages[0]).locator('#question').fill('Private recovered question');
+      const capturedContext = await frame(pages[0]).locator('#context-detail').innerText();
+      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.text === 'Private recovered question'));
+      for (let reload = 0; reload < 2; reload++) {
+        await pages[0].reload();
+        await frame(pages[0]).locator('[data-tool="rect"]').waitFor({state:'visible'});
+        await frame(pages[0]).locator('#ask-toggle').click();
+        assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
+        assert.equal(await frame(pages[0]).locator('#context-detail').innerText(),capturedContext);
+      }
+      await frame(pages[0]).locator('#assistant-close').click();
       await pages[0].reload();
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
       await frame(pages[0]).locator('[data-tool="rect"]').waitFor({ state: 'visible', timeout: 2000 });
@@ -827,7 +864,15 @@ test(
       await until(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
-      await frame(ownerPage).locator('#scope').selectOption('selection');
+      await frame(ownerPage).locator('#comment-selection').click();
+      await frame(ownerPage).locator('body').evaluate(() => {
+        const post = MessagePort.prototype.postMessage;
+        MessagePort.prototype.postMessage = function(data, ...rest) {
+          if (data?.type === 'request' && data.args?.action === 'ask')
+            window.retryQuestion = () => post.call(this, {...data, reqId:crypto.randomUUID()});
+          return post.call(this, data, ...rest);
+        };
+      });
       await frame(ownerPage).locator('#question').fill('Explain this stroke');
       await frame(ownerPage).locator('#ask button').click();
       const asked = await until(async () => {
@@ -837,9 +882,8 @@ test(
       assert.deepEqual(asked.attachments, [0, 1]);
       assert.match(asked.queue[1], /"type":"pen"/);
       assert.doesNotMatch(asked.queue[1], /"type":"cylinder"/);
-      await frame(ownerPage).locator('#question').fill('Explain this stroke');
-      await frame(ownerPage).locator('#ask button').click();
-      await until(async () => (await frame(ownerPage).locator('#question').inputValue()) === '');
+      await frame(ownerPage).locator('body').evaluate(() => window.retryQuestion());
+      await delay(300);
       assert.equal((await agent('InspectTest')).queue.length, 2);
       await ownerPage.locator('#editing-close').click();
       await ownerPage.getByRole('button', { name: 'Retract', exact: true }).click();

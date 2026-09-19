@@ -11,8 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Consider making mevedel's data buffers hidden
-- shared editing
-  - use comments for sending selections to llm
 
 
 ## Request lifecycle
