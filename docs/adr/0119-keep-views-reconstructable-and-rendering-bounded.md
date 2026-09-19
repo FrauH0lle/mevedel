@@ -31,6 +31,10 @@ detailed rendering and recovery contracts.
 Projection ownership also inhibits redisplay through queued work. Disclosure
 expansion rolls back failed replacement. Reader preservation includes both
 selection endpoints, neighboring managed zones, and table cells across wrapping.
+Views defer table formatting until visible and idle, processing one complete
+table per callback. Semantic marker relocation replaces whole-table text diffing.
+A full projection shares disposable boundary indexes and pure audit-decoding
+results; callers still establish trust independently.
 
 ## Rationale and alternatives
 
@@ -50,6 +54,32 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: faster opening and visible idle tables
+
+Profiling an agent transcript and replaying its frozen source identified
+whole-table replacement and repeated structural/audit decoding as opening costs.
+The integrated renderer reduced batch projection from a median 1.93 s to
+0.42 s on that capture (four runs each, 32 MiB GC threshold), with identical
+fully formatted text. The real-table reflow matrix retained all 11,184 tested
+markers. These measurements support integrating the validated prototype's
+marker-aware replacement, projection-scoped caches, and visible idle rendering
+into ordinary root and agent views.
+
+The earlier native text-diff replacement preserved many positions but became
+expensive on wrapped tables. Simply bounding that diff could fall back to
+wholesale replacement and lose internal markers. Replacement now uses Emacs's
+temporary deletion undo records to recover displaced markers, including those
+held by callers, then maps them by cell and unwrapped offset or row geometry.
+Overlay objects and window anchors are restored explicitly. Rollback and both
+marker insertion types are covered by tests. This supersedes the native
+non-destructive replacement decision below.
+
+The first projection retains raw table source; a 250 ms idle callback formats
+one visible table, then yields before scheduling the next. Scrolling discovers
+new work through source properties, so source deletion needs no separate queue
+cleanup. A table remains an indivisible unit; this is not a strict callback
+time budget or partial-table renderer.
 
 ### September 2026: preserve readers through replacement and reflow
 

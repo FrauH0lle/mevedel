@@ -98,12 +98,17 @@
             (search-forward "anchor")
             (set-window-start other (line-beginning-position))
             (mevedel-view--realign-markdown buffer other)
+            (should-not (get-text-property (point-min) 'mevedel-view-table-width))
+            (save-excursion
+              (goto-char (window-start other))
+              (should (looking-at-p "anchor")))
+            ;; The table only becomes work when the changed window shows it.
+            (set-window-start other (point-min))
+            (mevedel-view--realign-markdown buffer other)
             (should (eql (window-body-width other t)
                          (get-text-property (point-min)
                                             'mevedel-view-table-width)))
-            (save-excursion
-              (goto-char (window-start other))
-              (should (looking-at-p "anchor"))))
+            (should (= (point-min) (window-start other))))
         (when (window-live-p other)
           (delete-window other))))))
 
@@ -126,24 +131,36 @@
 (mevedel-deftest mevedel-view--enable-markdown-realign ()
   ,test
   (test)
-  :doc "installs local window hooks and cancels the pending timer on kill"
+  :doc "installs local hooks and cancels pending work on mode change and kill"
   (let ((buffer (generate-new-buffer " *mevedel-realign-hooks*"))
-        timer)
+        (configuration (current-window-configuration)) timer)
     (unwind-protect
         (progn
+          (set-window-buffer (selected-window) buffer)
           (with-current-buffer buffer
             (mevedel-view--enable-markdown-realign)
             (should (member #'mevedel-view--realign-on-window-change
                             window-size-change-functions))
             (should (member #'mevedel-view--realign-on-window-change
                             window-buffer-change-functions))
+            (should (member #'mevedel-view--realign-on-window-change
+                            window-scroll-functions))
+            (should (member #'mevedel-view--realign-on-window-change
+                            post-command-hook))
+            (mevedel-view--realign-on-window-change (selected-window))
+            (let ((old-timer mevedel-view--realign-timer))
+              (fundamental-mode)
+              (should-not (memq old-timer timer-idle-list))
+              (should-not mevedel-view--realign-timer))
+            (mevedel-view--enable-markdown-realign)
             (mevedel-view--realign-on-window-change (selected-window))
             (setq timer mevedel-view--realign-timer)
             (should (memq timer timer-idle-list)))
           (kill-buffer buffer)
           (should-not (memq timer timer-idle-list)))
       (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
+        (kill-buffer buffer))
+      (set-window-configuration configuration))))
 
 (provide 'test-mevedel-view-markdown-realignment)
 

@@ -677,16 +677,18 @@ table's position."
                  (cells (cdr entry))
                  (is-separator (plist-get row :separator))
                  (row-face (plist-get row :face)))
-            (push (if is-separator
-                      (mevedel-view-table--render-separator-row col-widths)
-                    ;; Ragged rows can have fewer cells than columns;
-                    ;; pad with empty cells so borders stay aligned.
-                    (mevedel-view-table--render-data-row
-                     (append cells
-                             (make-list (max 0 (- (length col-widths)
-                                                  (length cells)))
-                                        ""))
-                     col-widths row-face window))
+            (push (propertize
+                   (if is-separator
+                       (mevedel-view-table--render-separator-row col-widths)
+                     ;; Ragged rows can have fewer cells than columns;
+                     ;; pad with empty cells so borders stay aligned.
+                     (mevedel-view-table--render-data-row
+                      (append cells
+                              (make-list (max 0 (- (length col-widths)
+                                                   (length cells)))
+                                         ""))
+                      col-widths row-face window))
+                   'mevedel-view-table-row (cons (plist-get row :num) is-separator))
                   rendered-rows)))
         (string-join (nreverse rendered-rows) "\n")))))
 
@@ -730,39 +732,181 @@ surrounding transcript properties."
           (setq pos next))))
     (setq carried (cddr carried))))
 
-(defun mevedel-view-table--relocated-position (position start end rendered)
-  "Map POSITION in START..END to its cell location in RENDERED.
-Return nil outside cell text.  Cell identity and unwrapped character offset
-distinguish repeated words and survive changes in line wrapping."
-  (when (and position (<= start position) (<= position end))
-    (let* ((pos (if (and (< position end)
-                        (get-text-property position 'mevedel-view-table-cell))
-                   position
-                 (max start (1- position))))
-           (cell (get-text-property pos 'mevedel-view-table-cell))
-           (offset (get-text-property pos 'mevedel-view-table-cell-offset)))
-      (when (and cell offset)
-        (let ((run-start (max
-                          (previous-single-property-change
-                           (1+ pos) 'mevedel-view-table-cell nil start)
-                          (previous-single-property-change
-                           (1+ pos) 'mevedel-view-table-cell-offset nil start)))
-              (scan 0)
-              found boundary)
-          (setq offset (+ offset (- position run-start)))
-          (while (and (< scan (length rendered)) (not found))
-            (let* ((next (min (next-single-property-change
-                              scan 'mevedel-view-table-cell rendered (length rendered))
-                             (next-single-property-change
-                              scan 'mevedel-view-table-cell-offset rendered (length rendered))))
-                   (base (get-text-property scan 'mevedel-view-table-cell-offset rendered)))
-              (when (and (equal cell (get-text-property scan 'mevedel-view-table-cell rendered))
-                         base (<= base offset) (<= offset (+ base (- next scan))))
-                (if (< offset (+ base (- next scan)))
-                    (setq found (+ start scan (- offset base)))
-                  (setq boundary (+ start next))))
-              (setq scan next)))
-          (or found boundary))))))
+(defun mevedel-view-table--positions (text)
+  "Index TEXT's cell character and end positions by (CELL . OFFSET)."
+  (let ((index (make-hash-table :test #'equal)) (pos 0) (len (length text)))
+    (while (< pos len)
+      (let* ((cell (get-text-property pos 'mevedel-view-table-cell text))
+             (offset (get-text-property pos 'mevedel-view-table-cell-offset text))
+             (end (min
+                   (next-single-property-change pos 'mevedel-view-table-cell text len)
+                   (next-single-property-change pos 'mevedel-view-table-cell-offset text len))))
+        (when (and cell offset)
+          (cl-loop for i from pos to end do
+                   (puthash (cons cell (+ offset (- i pos))) i index)))
+        (setq pos end)))
+    index))
+
+(defun mevedel-view-table--grid (text)
+  "Index physical lines in TEXT by logical row, retaining column borders."
+  (let ((grid (make-hash-table :test #'eql)))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (let ((row-number 0))
+        (while (not (eobp))
+          (let* ((beg (point)) (end (line-end-position))
+                 (tag (get-text-property beg 'mevedel-view-table-row))
+                 (row (if tag (car tag) row-number))
+                 (raw (looking-at-p "[ \t]*|"))
+                 (sep (or (cdr tag)
+                          (looking-at-p "[ \t]*[├┼─]" )
+                          (looking-at-p mevedel-view-table--separator-regexp)))
+                 borders)
+            (while (< (point) end)
+              (cond
+               ((and raw (eq (char-after) ?\\)) (forward-char (min 2 (- end (point)))))
+               ((and raw (eq (char-after) ?`)) (mevedel-view-table--skip-code-span end))
+               (t
+                (when (and (if raw (eq (char-after) ?|)
+                             (memq (char-after) '(?│ ?├ ?┼ ?┤)))
+                           (not (get-text-property (point) 'mevedel-view-table-cell)))
+                  (push (1- (point)) borders))
+                (forward-char 1))))
+            (puthash row (cons (list (1- beg) (1- end) (vconcat (nreverse borders)) sep)
+                               (gethash row grid)) grid))
+          (forward-line 1)
+          (cl-incf row-number))))
+    (maphash (lambda (row lines) (puthash row (vconcat (nreverse lines)) grid)) grid)
+    grid))
+
+(defun mevedel-view-table--decoration-map (old new map)
+  "Fill missing positions in MAP using OLD and NEW logical table geometry."
+  (let ((old-grid (mevedel-view-table--grid old)) (new-grid (mevedel-view-table--grid new)))
+    (maphash
+     (lambda (row lines)
+       (when-let* ((targets (gethash row new-grid)))
+         (cl-loop for line across lines for number from 0 do
+                  (let* ((target (aref targets (min number (1- (length targets)))))
+                         (borders (nth 2 line)) (new-borders (nth 2 target)))
+                    (cl-loop for pos from (car line) to (cadr line) do
+                             (unless (aref map pos)
+                               (aset map pos
+                                     (cond
+                                      ((= pos (cadr line)) (cadr target))
+                                      ((or (< (length borders) 2) (< (length new-borders) 2)) (car target))
+                                      (t
+                                       (let* ((col (max 0 (1- (seq-count (lambda (b) (<= b pos)) borders))))
+                                              (new-col (min col (1- (length new-borders))))
+                                              (left (aref new-borders new-col)))
+                                         (cond
+                                          ((= pos (aref borders col)) left)
+                                          ((= new-col (1- (length new-borders))) left)
+                                          ((nth 3 line)
+                                           (min (+ left (- pos (aref borders col)))
+                                                (1- (aref new-borders (1+ new-col)))))
+                                          (t
+                                           (let* ((right (aref new-borders (1+ new-col)))
+                                                  (old-right (aref borders (min (1+ col) (1- (length borders)))))
+                                                  (after (cl-loop for i from pos below old-right
+                                                                  thereis (aref map i)))
+                                                  (content (cl-loop for i from (1+ left) below right
+                                                                    when (get-text-property i 'mevedel-view-table-cell new)
+                                                                    collect i)))
+                                             (if content
+                                                 (if after (car content) (1+ (car (last content))))
+                                               (min (1+ left) right)))))))))))))))
+     old-grid))
+  map)
+
+(defun mevedel-view-table--position-map (old new)
+  "Map every OLD boundary into NEW using cell identity and row geometry."
+  (if (equal old new)
+      (vconcat (number-sequence 0 (length old)))
+    (let ((map (make-vector (1+ (length old)) nil))
+          (cells (make-hash-table :test #'eql)))
+      ;; Sparse surviving offsets become dense per-cell vectors.  Missing offsets
+      ;; attach to the following survivor; trailing gaps attach to the cell end.
+      (maphash (lambda (key pos)
+                 (push (cons (cdr key) pos) (gethash (car key) cells)))
+               (mevedel-view-table--positions new))
+      (maphash
+       (lambda (cell entries)
+         (let* ((last (apply #'max (mapcar #'car entries)))
+                (values (make-vector (1+ last) nil)) next)
+           (dolist (entry entries) (aset values (car entry) (cdr entry)))
+           (cl-loop for i downfrom last to 0 do
+                    (if (aref values i) (setq next (aref values i)) (aset values i next)))
+           (puthash cell values cells))) cells)
+      (cl-labels ((target (cell offset)
+                    (when-let* ((values (gethash cell cells)))
+                      (aref values (min offset (1- (length values)))))))
+        (if (text-property-not-all 0 (length old) 'mevedel-view-table-cell nil old)
+            (maphash (lambda (key pos)
+                       (when-let* ((dest (target (car key) (cdr key)))) (aset map pos dest)))
+                     (mevedel-view-table--positions old))
+          (with-temp-buffer
+            (insert old)
+            (cl-loop for pos from (point-min) below (point-max) do
+                     (put-text-property pos (1+ pos) 'mevedel-view-table-origin (1- pos)))
+            (mevedel-view--render-markdown-url-links-in-range (point-min) (point-max))
+            (dolist (row (mevedel-view-table--collect-rows))
+              (unless (plist-get row :separator)
+                (dolist (cell (mevedel-view-table--parse-row (plist-get row :start) (plist-get row :end)))
+                  (dotimes (i (length cell))
+                    (when-let* ((origin (get-text-property i 'mevedel-view-table-origin cell))
+                                (dest (target (get-text-property i 'mevedel-view-table-cell cell) i)))
+                      (aset map origin dest)
+                      (aset map (1+ origin) (1+ dest))))))))))
+      (mevedel-view-table--decoration-map old new map)
+      (dotimes (i (length map)) (unless (aref map i) (aset map i 0)))
+      (aset map 0 0)
+      (aset map (length old) (length new))
+      map)))
+
+(defun mevedel-view-table--splice (beg end new)
+  "Replace BEG..END with NEW and recover displaced markers from undo."
+  (let* ((old (buffer-substring beg end))
+         (mapping (mevedel-view-table--position-map old new))
+         (buffer-undo-list nil)
+         (inhibit-read-only t)
+         (overlays (mapcar (lambda (ov)
+                             (list ov (overlay-start ov) (overlay-end ov)))
+                           (overlays-in beg end)))
+         (target-buffer (current-buffer))
+         (old-point (point))
+         (windows (mapcar (lambda (win) (list win (window-point win) (window-start win)))
+                          (get-buffer-window-list (current-buffer) nil t)))
+         (delta (- (length new) (- end beg)))
+         records success)
+    (cl-labels ((relocate (pos)
+                  (cond ((< pos beg) pos)
+                        ((> pos end) (+ pos delta))
+                        (t (+ beg (aref mapping (- pos beg)))))))
+      (unwind-protect
+          (atomic-change-group
+            (delete-region beg end)
+            (dolist (entry buffer-undo-list)
+              (when (and (consp entry) (markerp (car entry)))
+                (push (cons (car entry)
+                            (- (if (marker-insertion-type (car entry)) end beg)
+                               (cdr entry))) records)))
+            (goto-char beg)
+            (insert (substring-no-properties new))
+            (dolist (entry records)
+              (set-marker (car entry) (relocate (cdr entry))))
+            (goto-char (relocate old-point))
+            (setq success t))
+        (dolist (entry overlays)
+          (move-overlay (car entry)
+                        (if success (relocate (cadr entry)) (cadr entry))
+                        (if success (relocate (caddr entry)) (caddr entry))
+                        target-buffer))
+        (dolist (entry windows)
+          (pcase-let ((`(,win ,wp ,ws) entry))
+            (when (and (window-live-p win) (eq (window-buffer win) target-buffer))
+              (set-window-point win (if success (relocate wp) wp))
+              (set-window-start win (if success (relocate ws) ws) t))))))))
 
 (defun mevedel-view-table--render-region (start end source &optional window)
   "Replace START..END with SOURCE rendered as an aligned table.
@@ -778,95 +922,94 @@ layout targets; otherwise a window showing the buffer is used."
          (rendered (mevedel-view-table--render-source source window inset))
          (carried (mevedel-view--selected-text-properties
                    start mevedel-view-table--carried-properties))
-         (saved-point (mevedel-view-table--relocated-position (point) start end rendered))
-         (saved-mark (mevedel-view-table--relocated-position (mark t) start end rendered))
-         (windows
-          (mapcar (lambda (win)
-                    (list win
-                          (mevedel-view-table--relocated-position
-                           (window-point win) start end rendered)
-                          (mevedel-view-table--relocated-position
-                           (window-start win) start end rendered)))
-                  (get-buffer-window-list (current-buffer) nil t)))
-         (inhibit-read-only t))
-    (progn
-      ;; Preserve markers inside unchanged cell text as the layout changes.
-      ;; Native string replacement reuses the coding-conversion buffer.  Keep
-      ;; read-only properties out of it; all properties are restored below.
-      (replace-region-contents start end (substring-no-properties rendered))
-      ;; Native replacement retains old properties on equal text, but padding
-      ;; and cell display properties belong to the newly computed layout.
-      (let ((pos 0))
-        (while (< pos (length rendered))
-          (let ((next (next-property-change pos rendered (length rendered))))
-            (set-text-properties (+ start pos) (+ start next)
-                                 (text-properties-at pos rendered))
-            (setq pos next))))
-      (let ((rend (+ start (length rendered))))
-        (when carried
-          (mevedel-view-table--fill-carried-properties start rend carried))
-        (add-text-properties
-         start rend
-         (list 'mevedel-view-table-source source
-               'mevedel-view-table-width width
-               'mevedel-view-no-linkify t
-               'rear-nonsticky (mevedel-view-table--rear-nonsticky
-                                carried)))
-        ;; The newline after the raw table kept its pipe-table
-        ;; fontification; a background face there paints a stray band
-        ;; to the window edge.
-        (when (eq (char-after rend) ?\n)
-          (mevedel-view-table--strip-table-faces rend (1+ rend)))))
-    (when saved-point (goto-char saved-point))
-    (when saved-mark (set-marker (mark-marker) saved-mark))
-    (dolist (entry windows)
-      (pcase-let ((`(,win ,wp ,ws) entry))
-        (when (and (window-live-p win)
-                   (eq (window-buffer win) (current-buffer)))
-          (when wp (set-window-point win wp))
-          (when ws (set-window-start win ws t)))))))
+         (inhibit-read-only t)
+         (inhibit-modification-hooks t)
+         (inhibit-quit t))
+    ;; Cell/offset relocation avoids an expensive whole-table text diff.
+    ;; Identical text only needs its display properties refreshed.
+    (unless (equal (buffer-substring-no-properties start end) rendered)
+      (mevedel-view-table--splice start end rendered))
+    (let ((pos 0))
+      (while (< pos (length rendered))
+        (let ((next (next-property-change pos rendered (length rendered))))
+          (set-text-properties (+ start pos) (+ start next)
+                               (text-properties-at pos rendered))
+          (setq pos next))))
+    (let ((rend (+ start (length rendered))))
+      (when carried
+        (mevedel-view-table--fill-carried-properties start rend carried))
+      (add-text-properties
+       start rend
+       (list 'mevedel-view-table-source source
+             'mevedel-view-table-width width
+             'mevedel-view-no-linkify t
+             'rear-nonsticky (mevedel-view-table--rear-nonsticky
+                              carried)))
+      ;; The newline after the raw table kept its pipe-table
+      ;; fontification; a background face there paints a stray band
+      ;; to the window edge.
+      (when (eq (char-after rend) ?\n)
+        (mevedel-view-table--strip-table-faces rend (1+ rend))))))
 
 (defun mevedel-view-table-decorate (start end avoid-ranges)
-  "Render Markdown pipe tables between START and END.
-Tables overlapping AVOID-RANGES or linkify-exempt text stay raw;
-already rendered regions are ignored."
-  ;; Render back to front so earlier bounds stay valid as each
-  ;; replacement shifts everything after it.
+  "Discover Markdown pipe tables between START and END.
+Views retain source and defer formatting until idle.  Other buffers render
+immediately.  Tables overlapping AVOID-RANGES or exempt text stay raw."
   (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
-    (mevedel-view-table--render-region
-     (car table)
-     (cdr table)
-     (mevedel-view--markdown-source
-      (car table) (cdr table)))))
+    (let* ((beg (car table)) (end (cdr table))
+           (source (mevedel-view--markdown-source beg end)))
+      (if (not (derived-mode-p 'mevedel-view-mode))
+          (mevedel-view-table--render-region beg end source)
+        (add-text-properties
+         beg end
+         (list 'mevedel-view-table-source source
+               'mevedel-view-table-width nil
+               'mevedel-view-no-linkify t
+               'rear-nonsticky
+               (mevedel-view-table--rear-nonsticky
+                (list 'rear-nonsticky (get-text-property beg 'rear-nonsticky)))))))))
+
+(defun mevedel-view-table--visible-stale (window)
+  "Return (START END SOURCE) for one visible table needing WINDOW's layout.
+Include the complete table even when only its middle is visible.  Retained
+source with a nil width is a table awaiting its first prettification."
+  (let* ((width (window-body-width window t))
+         (pos (window-start window))
+         (end (save-excursion
+                (goto-char pos)
+                (vertical-motion (window-body-height window) window)
+                (point)))
+         found)
+    (while (and (< pos end) (not found))
+      (let ((source (get-text-property pos 'mevedel-view-table-source))
+            (next (next-single-property-change pos 'mevedel-view-table-source nil end)))
+        (cond
+         ((and source (invisible-p pos))
+          ;; A fold may end inside a table: continue at its next display
+          ;; property boundary instead of skipping the entire source span.
+          (setq next (min next (next-char-property-change pos end))))
+         ((and source (not (eql width (get-text-property pos 'mevedel-view-table-width))))
+          (setq found
+                (list (previous-single-property-change
+                       (1+ pos) 'mevedel-view-table-source nil (point-min))
+                      (next-single-property-change
+                       pos 'mevedel-view-table-source nil (point-max))
+                      source))))
+        (setq pos next)))
+    found))
 
 (defun mevedel-view-table-rerender (&optional window)
-  "Re-render tables whose stored width no longer matches WINDOW.
-WINDOW defaults to a window showing the buffer.  Each rendered table
-is rebuilt from its retained Markdown source at the window's width,
-only when the width it was laid out for differs.  A no-op when the
-buffer is undisplayed or nothing is stale.  Callers own undo and
-modified-flag discipline."
-  ;; ponytail: every stale table in the buffer re-renders, on-screen or
-  ;; not; restrict to window-start..window-end first if long transcripts
-  ;; make a resize visibly stall.
-  (when-let* ((window (if (and window (window-live-p window))
+  "Format at most one visible pending or stale table for WINDOW.
+Return non-nil after rendering, so the idle caller can schedule another pass.
+WINDOW defaults to a window showing the buffer.  Callers own undo and
+modified-flag discipline.  Off-screen tables wait until scrolled into view."
+  (when-let* ((window (if (and (window-live-p window)
+                               (eq (window-buffer window) (current-buffer)))
                           window
                         (get-buffer-window (current-buffer) t)))
-              (width (window-body-width window t)))
-    (let (tables)
-      (save-excursion
-        (goto-char (point-min))
-        (let (match)
-          (while (setq match (text-property-search-forward
-                              'mevedel-view-table-source))
-            (push match tables))))
-      ;; Replace from the bottom without leaving point at the search cursor:
-      ;; each replacement preserves the reader's actual cell position.
-      (dolist (match tables)
-        (let ((beg (prop-match-beginning match)))
-          (unless (eql width (get-text-property beg 'mevedel-view-table-width))
-            (mevedel-view-table--render-region
-             beg (prop-match-end match) (prop-match-value match) window)))))))
+              (table (mevedel-view-table--visible-stale window)))
+    (apply #'mevedel-view-table--render-region (append table (list window)))
+    t))
 
 (provide 'mevedel-view-table)
 

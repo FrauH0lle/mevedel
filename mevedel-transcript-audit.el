@@ -59,7 +59,21 @@ OBJECT is a string or buffer and defaults to the current buffer."
     'utf-8 t)
    t))
 
+(defvar mevedel-transcript-audit--decode-cache nil
+  "Pure decoded records shared within one projection, or nil outside it.")
+
 (defun mevedel--read-hook-audit-record (text)
+  "Read one encoded hook audit record from TEXT, or nil.
+Reuse pure decoding within a projection.  Trust checks belong to callers."
+  (if (not mevedel-transcript-audit--decode-cache)
+      (mevedel-transcript-audit--decode text)
+    (if-let* ((entry (gethash text mevedel-transcript-audit--decode-cache)))
+        (cdr entry)
+      (let ((record (mevedel-transcript-audit--decode text)))
+        (puthash text (cons t record) mevedel-transcript-audit--decode-cache)
+        record))))
+
+(defun mevedel-transcript-audit--decode (text)
   "Read one encoded hook audit record from TEXT, or nil."
   (condition-case nil
       (let ((read-eval nil))

@@ -194,6 +194,7 @@
 		  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript-segments "mevedel-transcript"
 		  (start end))
+(defvar mevedel-transcript--tool-block-index)
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-guest-prompts
@@ -214,6 +215,7 @@
                   "mevedel-utilities" (key format &rest args))
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
+(defvar mevedel-transcript-audit--decode-cache)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--header-string
@@ -319,6 +321,7 @@
                   "mevedel-view-segments" ())
 (declare-function mevedel-view-segments-initialize
                   "mevedel-view-segments" ())
+(autoload 'mevedel-view-segments-display-buffer "mevedel-view-segments")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--delete-pending-tool-live-lines
@@ -7151,7 +7154,9 @@ view chrome."
     (mevedel-view-render--preserving-window-state
      (mevedel-view--call-preserving-input-text
       (lambda ()
-      (let* ((start-time (float-time))
+      (let* ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+             (mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal))
+             (start-time (float-time))
              (data-buf
               (or transcript-buffer
                   (mevedel-view-segments-display-buffer)))

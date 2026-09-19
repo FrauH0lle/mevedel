@@ -186,24 +186,6 @@
        (should mark-active)
        (should (equal "target" (buffer-substring-no-properties (region-beginning) (region-end))))))))
 
-(mevedel-deftest mevedel-view-table--relocated-position ()
-  ,test
-  (test)
-  :doc "a wrap boundary prefers the following character over the previous padding"
-  (with-temp-buffer
-    (insert (propertize "abcdef" 'mevedel-view-table-cell 4
-                        'mevedel-view-table-cell-offset 0))
-    (let ((rendered (concat
-                     (propertize "abc" 'mevedel-view-table-cell 4
-                                 'mevedel-view-table-cell-offset 0)
-                     " |\n| "
-                     (propertize "def" 'mevedel-view-table-cell 4
-                                 'mevedel-view-table-cell-offset 3))))
-      (should (= 9 (mevedel-view-table--relocated-position 4 1 7 rendered)))
-      (should (= 12 (mevedel-view-table--relocated-position 7 1 7 rendered)))
-      (should-not (mevedel-view-table--relocated-position nil 1 7 rendered))
-      (should-not (mevedel-view-table--relocated-position 8 1 7 rendered)))))
-
 (mevedel-deftest mevedel-view--full-rerender/cross-view-isolation ()
   ,test
   (test)

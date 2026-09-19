@@ -412,7 +412,7 @@
           (mevedel-view-table-rerender)
           (should (equal before (buffer-string)))))))
 
-  :doc "re-renders multiple stale tables in one backward pass"
+  :doc "re-renders multiple visible tables in separate passes"
   (mevedel-test--with-displayed-buffer
     (insert "| a | b |\n|---|---|\n| 1 | 2 |\n\n"
             "| x | y |\n|---|---|\n| 9 | 8 |\n")
@@ -420,6 +420,8 @@
     (put-text-property (point-min) (point-max)
                        'mevedel-view-table-width nil)
     (mevedel-view-table-rerender)
+    (should (mevedel-view-table-rerender))
+    (should-not (mevedel-view-table-rerender))
     (goto-char (point-min))
     (let ((count 0)
           match)
