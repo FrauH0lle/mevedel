@@ -137,7 +137,7 @@
                      (list (list :start last-user-start :end (point-max)
                                  :directive-id "thread"))))
                   ((symbol-function 'mevedel-transcript-audit-guest-prompts)
-                   (lambda () (list (cons last-user-start "phone")))))
+                   (lambda () (list (cons last-user-start (list :name "phone"))))))
           (let* ((records (mevedel-collaboration--canonical-records
                            (current-buffer)))
                  (ids (mapcar (lambda (record) (plist-get record :id)) records)))
@@ -537,6 +537,19 @@
                        (current-buffer))))
         (should-not (plist-member (nth 0 records) :guest))
         (should (equal "phone" (plist-get (nth 2 records) :guest)))))))
+
+(mevedel-deftest mevedel-collaboration--canonical-records-failure
+  (:doc "Persisted provider failures remain visible in canonical shared conversations")
+  (with-temp-buffer
+    (insert (mevedel-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1 :outcome error
+               :message "Provider unavailable" :error-data (:secret "not projected"))))
+    (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+      (should (= (length records) 1))
+      (should (equal (plist-get (car records) :status) "failed"))
+      (should (equal (plist-get (car records) :text)
+                     "Assistant request failed. Provider unavailable"))
+      (should-not (string-match-p "not projected" (prin1-to-string records))))))
 
 (mevedel-deftest mevedel-collaboration--safe-accepted-prompt
   (:doc "publishes accepted prompt insertion and isolates observer failure")

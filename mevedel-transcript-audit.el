@@ -99,7 +99,8 @@ Reuse pure decoding within a projection.  Trust checks belong to callers."
 
 (defun mevedel-transcript-audit-guest-prompts ()
   "Return guest attribution positions in the current buffer.
-Each element is (POSITION . NAME) where POSITION is the buffer position
+Each element is (POSITION . RECORD) where RECORD is the attribution plist
+and POSITION is the buffer position
 of the record's audit block, in ascending order.  The prompt a record
 attributes is the nearest user turn ending at or before POSITION."
   (save-excursion
@@ -118,8 +119,8 @@ attributes is the nearest user turn ending at or before POSITION."
                                    (buffer-substring-no-properties
                                     record-start (match-beginning 0))))
                           ((eq (plist-get record :type) 'guest-prompt))
-                          (name (plist-get record :name)))
-                (push (cons start name) result)))))
+                          ((stringp (plist-get record :name))))
+                (push (cons start record) result)))))
         (nreverse result)))))
 
 (defun mevedel-transcript-audit-spans (text &optional type)

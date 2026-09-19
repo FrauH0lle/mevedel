@@ -16,6 +16,7 @@ window.mevedelEditingView = {
       connected = false,
       room = window.mevedelViewerTransport.parseFragment(window.location.hash)?.roomId || '',
       frame = null,
+      recovering = false,
       sequence = 0,
       outbound = Promise.resolve();
     function reserveTab() {
@@ -127,6 +128,18 @@ window.mevedelEditingView = {
         });
       });
     }
+    function conversation() {
+      if (!port || !current) return;
+      const records = [];
+      let shared;
+      for (const record of state.records.values()) {
+        if (record.kind === 'user') shared = record.shared;
+        if (shared?.itemId === current) records.push(record);
+      }
+      port.postMessage({type:'conversation', records,
+        own:(state.ownQueue || []).filter(entry => entry.shared?.itemId === current),
+        busy:state.busy, paused:state.paused, connected, model:state.model});
+    }
     function render() {
       box.hidden = false;
       list.replaceChildren();
@@ -163,7 +176,7 @@ window.mevedelEditingView = {
         port?.postMessage({
           type: 'storage-error',
           message:
-            'Browser recovery storage is unavailable. Download a recovery copy before closing.',
+            'Browser recovery storage is unavailable. Download a recovery copy and copy your question draft before closing.',
         });
         return false;
       }
@@ -179,13 +192,13 @@ window.mevedelEditingView = {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
-    async function open(id) {
+    async function open(id, committed) {
       if (editorTab) {
         const url = new URL(window.location.href);
         url.searchParams.set('shared', id);
         window.history.replaceState(null, '', url);
       }
-      if (current === id && frame) {
+      if (current === id && frame && !committed) {
         panel.hidden = false;
         document.title =
           state.editorTitle = `${document.getElementById('editing-title').textContent} · mevedel`;
@@ -195,13 +208,14 @@ window.mevedelEditingView = {
       let result,
         recoveryOnly = false;
       try {
-        result = await request({ action: 'read', id });
+        result = committed || await request({ action: 'read', id });
       } catch (error) {
         if (!draft) throw error;
         result = { ...draft, transactions: [] };
         recoveryOnly = true;
       }
       port?.close();
+      recovering = recoveryOnly;
       current = id;
       panel.hidden = false;
       document.getElementById('editing-title').textContent = result.title;
@@ -242,7 +256,7 @@ window.mevedelEditingView = {
         const args = data.args;
         if (
           !args ||
-          !['read', 'update', 'rename', 'revert', 'export', 'ask'].includes(args.action) ||
+          !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'resolve-comment'].includes(args.action) ||
           (state.readOnly && !['read', 'export'].includes(args.action))
         ) {
           channel.port1.postMessage({
@@ -266,6 +280,7 @@ window.mevedelEditingView = {
             });
         }
       };
+      conversation();
       frame.onload = () => {
         if (current !== id || frame !== editorFrame) return;
         frame.contentWindow.postMessage(
@@ -299,7 +314,8 @@ window.mevedelEditingView = {
         }
         if (current) {
           const result = await request({ action: 'read', id: current });
-          port?.postMessage({
+          if (recovering) await open(current, result);
+          else port?.postMessage({
             type: 'sync',
             item: result,
             readOnly: state.readOnly,
@@ -316,6 +332,7 @@ window.mevedelEditingView = {
       connected = false;
       transfers.clear();
       port?.postMessage({ type: 'offline' });
+      conversation();
       for (const entry of pending.values()) {
         clearTimeout(entry.timer);
         entry.reject(new Error('Disconnected; changes remain pending'));
@@ -487,6 +504,6 @@ window.mevedelEditingView = {
           point: null,
         });
     };
-    return { welcome, connection, receive, open };
+    return { welcome, connection, receive, open, conversation };
   },
 };

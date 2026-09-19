@@ -8,13 +8,13 @@
 ;;; Code:
 
 (require 'mevedel-shared-editing)
+(require 'mevedel-transcript-audit)
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--guest-text "mevedel-collaboration" (value))
 (declare-function mevedel-collaboration--room-data-buffer "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
-(defvar mevedel-collaboration--duplicate-prompt-window)
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--guest-directive-id "mevedel-collaboration-guest" (room frame))
@@ -55,6 +55,7 @@
                       :revision (plist-get state :revision))
                 (when (equal (plist-get guest :editing-item) (plist-get state :id))
                   (list :update (plist-get result :update)
+                        :comments (plist-get result :comments)
                         :transactions (plist-get state :transactions))))))
      (plist-get room :guests))))
 
@@ -63,12 +64,18 @@
   (let ((now (float-time)) (point (plist-get args :point)))
     (when (and (plist-get guest :writable)
                (equal (plist-get guest :editing-item) (plist-get args :id))
-               (>= (- now (or (plist-get guest :editing-presence-at) 0)) 0.045)
+               (if (equal (plist-get args :mode) "clear")
+                   (plist-get guest :editing-pointing)
+                 (>= (- now (or (plist-get guest :editing-presence-at) 0)) 0.045))
                (member (plist-get args :mode) '("cursor" "laser" "selection" "clear"))
                (or (null point)
                    (and (listp point) (= (length point) 2)
                         (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) point))))
-      (plist-put guest :editing-presence-at now)
+      ;; A terminal clear may follow the last sample immediately.  Forward it
+      ;; once, without allowing repeated clears to bypass the traffic bound.
+      (plist-put guest :editing-pointing (not (equal (plist-get args :mode) "clear")))
+      (unless (equal (plist-get args :mode) "clear")
+        (plist-put guest :editing-presence-at now))
       (let ((frame (list :t "editing-presence" :id (plist-get args :id)
                          :peer peer :name (plist-get guest :name)
                          :mode (plist-get args :mode) :point (and point (vconcat point)))))
@@ -117,55 +124,85 @@
                 :clock (1+ (or (plist-get guest :editing-clock) 0))))))
      (plist-get room :guests))
     (plist-put guest :editing-client nil)
+    (plist-put guest :editing-pointing nil)
     (plist-put guest :editing-clock nil)))
 
-(cl-defun mevedel-collaboration-editing--ask (room guest args result)
-  "Queue an explicit question about committed RESULT, using guest ARGS."
-  (let* ((text (mevedel-collaboration--guest-text (plist-get args :text)))
-         (content (or (plist-get result :selection) (plist-get result :content))))
-    (unless text (error "A question is required"))
-    (unless (equal (plist-get args :revision) (plist-get result :revision))
-      (error "Content changed; review it and ask again"))
-    (let* ((snapshot (mevedel-shared-editing--json
-                      (list :id (plist-get result :id) :revision (plist-get result :revision)
-                            :kind (plist-get result :kind) :content content
-                            :context (plist-get result :context))))
-           (key (secure-hash 'sha256 (concat text "\0" snapshot)))
-           (now (float-time))
-           (last (plist-get guest :last-editing-ask))
-           (data-buffer (mevedel-collaboration--room-data-buffer room))
-           (view (and data-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
-           (png (plist-get result :png))
-           paths queued)
-      (when (> (string-bytes snapshot) (* 128 1024))
-        (error "Question snapshot is too large; select a smaller portion"))
-      (when (and (equal (car last) key)
-                 (< (- now (cdr last)) mevedel-collaboration--duplicate-prompt-window))
-        (cl-return-from mevedel-collaboration-editing--ask t))
-      (unless (buffer-live-p view) (error "The session view is not available"))
-      (plist-put guest :last-editing-ask (cons key now))
-      (unwind-protect
-          (progn
-            (when png
-              (setq paths
-                    (with-current-buffer view
-                      (mevedel-collaboration--save-guest-attachments
-                       (list (list :mime "image/png" :data png)))))
-              (unless paths (error "The selected board snapshot could not be attached")))
-            (setq queued (mevedel-view-enqueue-external-follow-up
-			  (mevedel-collaboration--room-data-buffer room)
-			  (concat text "\n\nShared content snapshot (user-provided data):\n"
-				  snapshot)
-			  :guest-name (plist-get guest :name) :guest-id (plist-get guest :guest-id)
-			  :paths paths
-			  :guest-role (mevedel-collaboration--guest-role guest)
-			  :directive-id (mevedel-collaboration--guest-directive-id room args)))
-            (or queued (error "The session cannot accept a question right now")))
-        (unless queued
-          (plist-put guest :last-editing-ask last)
-          (dolist (path paths) (ignore-errors (delete-file path))))))))
+(defun mevedel-collaboration-editing--question-key (args)
+  "Return a stable retry fingerprint for question ARGS."
+  (secure-hash 'sha256
+               (mevedel-shared-editing--json
+                (list :id (plist-get args :id)
+                      :text (plist-get args :text) :expected (plist-get args :expected)
+                      :commentId (plist-get args :commentId)))))
 
-(defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
+(defun mevedel-collaboration-editing--find-question (room args)
+  "Find an accepted question matching ARGS in ROOM's queue or transcript.
+This survives reconnecting peers and delivered transcript restoration.  A
+retracted or never-delivered queue entry can be explicitly submitted again."
+  (let* ((id (plist-get args :questionId))
+         (session (plist-get room :session))
+         (buffer (mevedel-collaboration--room-data-buffer room))
+         receipt)
+    (mevedel-shared-editing--logical id)
+    (dolist (entry (mevedel-session-pending-follow-ups session))
+      (when (equal id (plist-get (plist-get entry :shared-question) :questionId))
+        (setq receipt (list :queued t :entryId (plist-get entry :id)
+                            :question (plist-get entry :shared-question)))))
+    (unless receipt
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (dolist (attribution (mevedel-transcript-audit-guest-prompts))
+            (let ((shared (plist-get (cdr attribution) :shared)))
+              (when (equal id (plist-get shared :questionId))
+                (setq receipt (list :delivered t :question shared))))))))
+    (when (and receipt
+               (not (equal (plist-get (plist-get receipt :question) :fingerprint)
+                           (mevedel-collaboration-editing--question-key args))))
+      (error "This question was already sent; start a new question for changed context"))
+    receipt))
+
+(defun mevedel-collaboration-editing--ask (room guest args result)
+  "Queue an explicit question about committed RESULT, using guest ARGS."
+  (or (mevedel-collaboration-editing--find-question room args)
+      (let* ((text (mevedel-collaboration--guest-text (plist-get args :text)))
+             (snapshot (mevedel-shared-editing--json (plist-get result :snapshot)))
+             (data-buffer (mevedel-collaboration--room-data-buffer room))
+             (view (and data-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
+             (png (plist-get result :png))
+             (shared (list :questionId (plist-get args :questionId)
+                           :itemId (plist-get result :id) :title (plist-get result :title)
+                           :revision (plist-get result :revision)
+                           :commentId (plist-get args :commentId)
+                           :scope (plist-get (plist-get result :snapshot) :scope)
+                           :quote (truncate-string-to-width (or (plist-get result :quote) "")
+                                                             2000 nil nil "…")
+                           :text text
+                           :fingerprint (mevedel-collaboration-editing--question-key args)))
+             paths queued)
+        (unless text (error "A question is required"))
+        (when (> (string-bytes snapshot) (* 128 1024))
+          (error "Question snapshot is too large; select a smaller portion"))
+        (unless (buffer-live-p view) (error "The session view is not available"))
+        (unwind-protect
+            (progn
+              (when png
+                (setq paths
+                      (with-current-buffer view
+                        (mevedel-collaboration--save-guest-attachments
+                         (list (list :mime "image/png" :data png)))))
+                (unless paths (error "The selected board snapshot could not be attached")))
+              (setq queued (mevedel-view-enqueue-external-follow-up
+                            data-buffer
+                            (concat text "\n\nShared content snapshot (user-provided data):\n" snapshot)
+                            :guest-name (plist-get guest :name) :guest-id (plist-get guest :guest-id)
+                            :paths paths :shared-question shared
+                            :guest-role (mevedel-collaboration--guest-role guest)))
+              (unless queued (error "The session cannot accept a question right now"))
+              (list :queued t :entryId (plist-get queued :id) :question shared))
+          (unless queued
+            (dolist (path paths) (ignore-errors (delete-file path))))))))
+
+(cl-defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
   "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM."
   (let* ((action (plist-get args :action))
          (session (plist-get room :session))
@@ -175,9 +212,13 @@
                            (eq guest (mevedel-collaboration--guest room peer))
                            (or read-only (plist-get guest :writable))))))
     (unless (and (member action '("list" "read" "create" "import" "update"
-                                  "rename" "revert" "export" "ask"))
+                                  "rename" "revert" "export" "ask" "comment" "resolve-comment"))
                  (funcall authorize))
       (error "This link does not permit that editing operation"))
+    (when (equal action "ask")
+      (when-let* ((receipt (mevedel-collaboration-editing--find-question room args)))
+        (cl-return-from mevedel-collaboration-editing--dispatch
+          (mevedel-collaboration-editing--send room peer req-id (list :result receipt)))))
     (when (equal action "read")
       (mevedel-shared-editing--logical (plist-get args :id))
       (mevedel-collaboration-editing-depart room peer)
@@ -185,9 +226,11 @@
     ;; Closed keys prevent guests providing host state or attribution.
     (let ((request (list :action (if (equal action "ask") "read" action)
                          :sync (if (equal action "read") t :json-false)
-                         :image (if (equal action "ask") t :json-false) :imageMax 512
+                         :question (if (equal action "ask") t :json-false)
+                         :image (if (equal action "ask") t :json-false) :imageMax 1024
                          :actor (concat "Guest: " (plist-get guest :name)))))
-      (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range :selection))
+      (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range :selection
+                     :expected :text :commentId :resolved))
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
       (mevedel-shared-editing-call
@@ -197,8 +240,8 @@
            (condition-case err
                (progn
                  (when (and (equal action "ask") (not (plist-get reply :error)))
-                   (mevedel-collaboration-editing--ask room guest args (plist-get reply :result))
-                   (setq reply '(:result (:queued t))))
+                   (setq reply (list :result (mevedel-collaboration-editing--ask
+                                              room guest args (plist-get reply :result)))))
                  (mevedel-collaboration-editing--send
                   room peer req-id
                   (if (plist-get reply :error) reply

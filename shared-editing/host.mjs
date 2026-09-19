@@ -1,5 +1,6 @@
 /* Private JSON request handler. Emacs alone owns files, authority, and commits. */
 import * as Y from 'yjs';
+import { checkContext, readComments } from './context.mjs';
 import { readFile } from 'node:fs/promises';
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
 import {
@@ -78,7 +79,7 @@ function differences(before, after) {
 export async function handle(request) {
   const { action } = request;
   check(
-    ['create', 'import', 'read', 'update', 'patch', 'rename', 'revert', 'export'].includes(action),
+    ['create', 'import', 'read', 'update', 'patch', 'rename', 'revert', 'export', 'comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -189,8 +190,18 @@ export async function handle(request) {
         revision: state.revision,
         ...before,
         transactions: state.transactions,
+        comments: readComments(doc, state.comments),
       };
       if (request.range) result.selection = selectedText(doc, request.range);
+      if (request.question) {
+        if (request.commentId) {
+          const comment = (state.comments || []).find(c => c.id === request.commentId);
+          check(comment && same(request.range, comment.range), 'Comment selection is no longer available');
+        }
+        const captured = checkContext(doc, request);
+        result.snapshot = { id: state.id, revision: state.revision, ...captured.snapshot };
+        result.quote = captured.quote;
+      }
       if (request.since !== undefined) {
         check(
           Number.isSafeInteger(request.since) && request.since >= 0,
@@ -236,14 +247,26 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, update: b64(encode(doc)) },
+        result: { id: state.id, revision: state.revision, ...before, comments: readComments(doc, state.comments), update: b64(encode(doc)) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
     check(
       Object.keys(state.receipts).length < 65536,
       'Editing history limit reached; export and import into a new item',
     );
-    if (action === 'update') applyUpdate(doc, bytes(request.update));
+    let comments = state.comments || [];
+    if (action === 'comment') {
+      check(before.kind === 'document' && request.range, 'Select a document passage first');
+      check(comments.length < 200, 'This document has reached its 200 comment limit');
+      check(typeof request.text === 'string' && request.text.trim() && request.text.length <= 10000, 'A comment is required (at most 10000 characters)');
+      const captured = checkContext(doc, request);
+      comments = [...comments, { id: request.opId, actor: request.actor, text: request.text,
+        range: request.range, quote: captured.quote, created: Date.now(), resolved: false }];
+    } else if (action === 'resolve-comment') {
+      check(comments.some(c => c.id === request.commentId), 'Comment is no longer available');
+      check(typeof request.resolved === 'boolean', 'Invalid comment status');
+      comments = comments.map(c => c.id === request.commentId ? {...c, resolved: request.resolved} : c);
+    } else if (action === 'update') applyUpdate(doc, bytes(request.update));
     else if (action === 'rename') {
       check(
         typeof request.title === 'string' && request.title.trim() && request.title.length <= 200,
@@ -293,6 +316,7 @@ export async function handle(request) {
       title: after.title,
       revision,
       crdt: b64(encode(doc)),
+      comments,
       receipts: { ...state.receipts, [request.opId]: revision },
       transactions: changed
         ? [transaction, ...state.transactions].slice(0, 32)
@@ -305,6 +329,7 @@ export async function handle(request) {
         id: next.id,
         revision,
         ...after,
+        comments: readComments(doc, comments),
         update: b64(Y.encodeStateAsUpdate(doc, vector)),
         transaction: changed ? transaction : null,
       },

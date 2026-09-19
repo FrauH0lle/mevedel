@@ -11,6 +11,7 @@
       <input id="title" aria-label="Item title" maxlength="200" /><span id="saved" role="status"
         >Opening…</span
       >
+      <button id="ask-toggle" type="button" aria-expanded="false" aria-controls="assistant">Assistant</button>
       <button id="undo" title="Undo your last edit (Ctrl+Z)">Undo</button
       ><button id="redo">Redo</button>
       <details id="menu" class="popover">
@@ -42,21 +43,33 @@
     </main>
     <main id="document" hidden aria-label="Shared document"></main>
     <footer>
-      <button id="ask-toggle" type="button" aria-expanded="false">Ask assistant</button>
-      <span id="hint">Select content to ask about it, or ask about the whole item.</span>
-      <form id="ask">
-        <select id="scope" aria-label="Question scope">
-          <option value="whole">Whole item</option>
-          <option value="selection">Selection</option></select
-        ><input
-          id="question"
-          aria-label="Question for the assistant"
-          placeholder="Ask the assistant about this…"
-          maxlength="10000"
-          required
-        /><button>Ask assistant</button>
-      </form>
+      <button id="comment-selection" type="button" disabled>Comment on selection</button>
+      <span id="hint">Select text to add an anchored comment.</span>
     </footer>
+    <aside id="assistant" aria-label="Assistant conversation" hidden>
+      <div class="assistant-head"><strong>Assistant</strong><button id="assistant-close" type="button" aria-label="Close assistant">×</button></div>
+      <div id="conversation-state" role="status">Ready</div>
+      <div id="assistant-scroll">
+        <details id="comments-section" open hidden><summary id="comments-count">Comments</summary><div id="comments"></div></details>
+        <div id="conversation" role="log" aria-label="Conversation about this item"></div>
+        <div id="queued-questions"></div>
+      </div>
+      <div class="assistant-compose">
+        <button id="whole-question" type="button">Ask about whole item</button>
+        <details id="attached-context" open>
+          <summary id="context-title">Choose content to discuss</summary>
+          <blockquote id="context-quote"></blockquote>
+          <details><summary>Full attached context</summary><pre id="context-detail"></pre></details>
+          <button id="refresh-context" type="button">Refresh context</button>
+        </details>
+        <form id="ask">
+          <label id="compose-label" for="question">Ask the assistant</label>
+          <textarea id="question" aria-label="Question for the assistant" placeholder="Ask a question or give an instruction…" maxlength="10000" rows="3" required></textarea>
+          <button id="question-send" type="submit">Send to assistant</button>
+        </form>
+        <div id="assistant-notice" role="status"></div>
+      </div>
+    </aside>
     <textarea id="shape-text" aria-label="Shape text" maxlength="10000" hidden></textarea>
     <dialog id="link-dialog">
       <form method="dialog">
@@ -64,6 +77,7 @@
         ><button value="cancel">Cancel</button><button value="save">Save</button>
       </form>
     </dialog>
+    <script src="/renderer.js" defer></script>
     <script src="/shared-editor.js" defer></script>
   </body>
 </html>

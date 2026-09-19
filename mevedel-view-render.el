@@ -4679,10 +4679,10 @@ the contiguous run of audit blocks that follows it."
                           (throw 'done nil))
                       (throw 'done nil))))
                 (point))))
-        (cl-loop for (position . name)
+        (cl-loop for (position . record)
                  in (mevedel-transcript-audit-guest-prompts)
                  when (and (>= position start) (< position strip-end))
-                 return name)))))
+                 return (plist-get record :name))))))
 
 (defun mevedel-view--user-input-line-count (text)
   "Return the number of lines in user input TEXT."

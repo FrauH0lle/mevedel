@@ -370,6 +370,7 @@
       if (turn) turn.hidden = !recordVisible(record);
     });
     artifacts.render(state.records);
+    editing.conversation();
     // The composer follows the filter, so say where a prompt will land.
     if (composerInput && !state.armed) {
       composerInput.placeholder = placeholderForFilter();
@@ -845,6 +846,8 @@
   // a persistent card with live position and a retract control, so a
   // queued prompt never reads as swallowed.
   function showOwnQueue(entries) {
+    state.ownQueue = entries;
+    editing.conversation();
     if (!ownQueue) return;
     ownQueue.replaceChildren();
     ownQueue.hidden = entries.length === 0;
@@ -856,7 +859,8 @@
                      ? `Your queued prompt · #${entry.position} in line`
                      : 'Your queued prompt'));
       card.append(el('p', 'own-text',
-                     typeof entry.text === 'string' ? entry.text : ''));
+                     typeof entry.shared?.text === 'string' ? entry.shared.text
+                       : typeof entry.text === 'string' ? entry.text : ''));
       const controls = el('div', 'request-controls');
       const retract = el('button', 'btn quiet', 'Retract');
       retract.type = 'button';
@@ -875,6 +879,7 @@
   function showQueueState(frame) {
     state.pending = typeof frame.pending === 'number' ? frame.pending : 0;
     state.paused = frame.paused === true;
+    editing.conversation();
     renderModeline();
     if (!queueState) return;
     const pending = state.pending;
@@ -998,6 +1003,7 @@
       if (typeof frame.mode === 'string') state.mode = frame.mode;
       state.plan = frame.plan === true;
       renderModeline();
+      editing.conversation();
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,

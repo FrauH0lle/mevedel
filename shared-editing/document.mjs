@@ -32,10 +32,10 @@ export const extensions = [
 export const schema = getSchema(extensions);
 export const markdown = new MarkdownManager({ extensions });
 export const documentJSON = (doc) => yXmlFragmentToProsemirrorJSON(doc.getXmlFragment('document'));
-export function selectedText(doc, range) {
+export function selectionPositions(doc, range, parsed) {
   if (!range || JSON.stringify(range).length > 2000) throw new Error('Invalid document selection');
-  const root = doc.getXmlFragment('document'),
-    parsed = initProseMirrorDoc(root, schema);
+  const root = doc.getXmlFragment('document');
+  parsed ||= initProseMirrorDoc(root, schema);
   const positions = [range.anchor, range.head].map((p) =>
     relativePositionToAbsolutePosition(
       doc,
@@ -46,7 +46,11 @@ export function selectedText(doc, range) {
   );
   if (positions.some((p) => p === null) || positions[0] === positions[1])
     throw new Error('Selection is no longer available');
-  const [from, to] = positions.sort((a, b) => a - b);
+  return positions.sort((a, b) => a - b);
+}
+export function selectedText(doc, range) {
+  const parsed = initProseMirrorDoc(doc.getXmlFragment('document'), schema);
+  const [from, to] = selectionPositions(doc, range, parsed);
   const context = [];
   parsed.doc.forEach((node, offset) => {
     if (offset <= to && offset + node.nodeSize >= from)

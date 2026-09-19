@@ -257,6 +257,29 @@
                           entries))))
         (should (eq cockpit (window-buffer (selected-window)))))))
 
+  :doc "editing a shared question retains retry identity without claiming the old context"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((entry (mevedel-session-enqueue-pending-input
+                   session 'follow-up
+                   '(:input "original snapshot" :shared-question
+                     (:questionId "q" :itemId "doc" :fingerprint "receipt"
+                      :text "original" :quote "old passage" :revision 4 :scope "selection"))))
+           cockpit)
+      (save-window-excursion
+        (setq cockpit (with-current-buffer view-buf (mevedel-pending-inputs-open)))
+        (with-current-buffer cockpit
+          (mevedel-cockpit-goto-id (plist-get entry :id))
+          (mevedel-pending-inputs-edit))
+        (mevedel-pending-inputs-test--replace-composer view-buf "Revised on host")
+        (with-current-buffer view-buf (mevedel-pending-inputs-save-edit))
+        (let ((shared (plist-get (car (mevedel-session-pending-follow-ups session)) :shared-question)))
+          (should (plist-get shared :edited))
+          (should (equal (plist-get shared :text) "Revised on host"))
+          (should (equal (plist-get shared :questionId) "q"))
+          (should (equal (plist-get shared :fingerprint) "receipt"))
+          (should-not (plist-get shared :quote))
+          (should-not (plist-get shared :revision))))))
+
   :doc "invalid follow-up text leaves the original and edit available"
   (mevedel-pending-inputs-test--with-session
     (let* ((entry

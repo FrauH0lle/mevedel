@@ -1,5 +1,8 @@
 /* Packaged editor in an opaque iframe. All host access uses the bound port. */
 import * as Y from 'yjs';
+import { BoardPresence } from './presence.mjs';
+import { AssistantPanel } from './assistant.mjs';
+import { captureContext, readComments } from './context.mjs';
 import { Editor, Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -13,7 +16,7 @@ import {
   defaultDeleteFilter,
   ySyncPluginKey,
 } from '@tiptap/y-tiptap';
-import { extensions, schema, seedEmptyText } from './document.mjs';
+import { extensions, schema, seedEmptyText, selectionPositions } from './document.mjs';
 import { restore, encode, inspect, putShape, validateShape, validateImage } from './model.mjs';
 import { shapeSVG, definitions, escape, bounds, styleOf, FILLABLE, LINEAR } from './render.mjs';
 const $ = (id) => document.getElementById(id),
@@ -46,6 +49,9 @@ let tool = 'select',
   view = [-40, -40, 1000, 650],
   drag = null,
   lastPresence = 0,
+  pointing = null,
+  presenceTimer = null,
+  boardPresence,
   refresh = () => {};
 /* Style of the next drawn shape; the panel edits it alongside the selection. */
 const current = {
@@ -69,9 +75,11 @@ function applies(key, type) {
   if (key === 'stroke') return type !== 'image';
   return true;
 }
-const replies = new Map(),
-  people = new Map();
-let documentSelection = null;
+const replies = new Map();
+let documentSelection = null,
+  captureDocumentSelection = () => {},
+  assistant,
+  comments = [];
 let recoveryWarning = '';
 let participant = 'You',
   textEditing = null,
@@ -116,6 +124,7 @@ function draft() {
         ? [...pending, { opId: bufferedId, update: b64(Y.mergeUpdates(updates)) }]
         : pending,
       revision,
+      assistant: assistant?.draft,
     },
   });
 }
@@ -256,6 +265,8 @@ function draw() {
       return `<rect x="${x - 4}" y="${y - 4}" width="${w + 8}" height="${h + 8}" fill="none" stroke="#6965db" stroke-dasharray="5 3"/><rect data-resize="${escape(s.id)}" x="${x + w - 5}" y="${y + h - 5}" width="10" height="10" fill="white" stroke="#6965db"/>`;
     })
     .join('');
+  boardPresence?.animate();
+  $('comment-selection').disabled = readOnly || !selected.size;
   refresh();
 }
 function world(event) {
@@ -265,25 +276,29 @@ function world(event) {
   return [Math.max(-999000, Math.min(999000, p.x)), Math.max(-999000, Math.min(999000, p.y))];
 }
 function presence(point, mode = 'cursor') {
-  if (mode === 'laser' && !readOnly) showPresence({ peer: 'self', name: participant, point, mode });
-  if (readOnly || !online || performance.now() - lastPresence < 50) return;
-  lastPresence = performance.now();
-  port.postMessage({ type: 'presence', point, mode });
+  if (readOnly || !online) return;
+  pointing = { point, mode };
+  if (mode === 'laser') showPresence({ peer: 'self', name: participant, point, mode });
+  // Coalesce a burst, but always deliver its final position even if motion stops.
+  if (presenceTimer) return;
+  presenceTimer = setTimeout(() => {
+    presenceTimer = null;
+    lastPresence = performance.now();
+    if (pointing && online) port.postMessage({ type: 'presence', ...pointing });
+  }, Math.max(0, 50 - (performance.now() - lastPresence)));
+}
+function stopPointing() {
+  clearTimeout(presenceTimer);
+  presenceTimer = null;
+  if (pointing && online) port.postMessage({ type: 'presence', mode: 'clear', point: null });
+  pointing = null;
+  boardPresence?.clear('self');
 }
 function clearPresence() {
-  for (const person of people.values()) clearTimeout(person.timer);
-  people.clear();
-  $('presence').replaceChildren();
+  stopPointing();
+  boardPresence?.clear();
 }
 function showPresence(data) {
-  if (data.mode === 'clear') {
-    const person = people.get(data.peer);
-    if (person) {
-      person.group.remove();
-      clearTimeout(person.timer);
-    }
-    people.delete(data.peer);
-  }
   if (awareness && Number.isSafeInteger(data.clientId) && data.clientId !== doc.clientID) {
     try {
       const update = encoding.createEncoder();
@@ -306,45 +321,11 @@ function showPresence(data) {
       /* Malformed presence cannot affect shared content. */
     }
   }
-  if (item.kind !== 'whiteboard' || !Array.isArray(data.point)) return;
-  let person = people.get(data.peer);
-  if (!person) {
-    person = {
-      group: document.createElementNS('http://www.w3.org/2000/svg', 'g'),
-      points: [],
-    };
-    people.set(data.peer, person);
-    $('presence').append(person.group);
-  }
-  const { group } = person;
-  const [x, y] = data.point;
-  const scale = 1 / ($('canvas').getScreenCTM()?.a || 1);
-  const laser = data.mode === 'laser',
-    now = performance.now();
-  person.points = laser
-    ? [...person.points.filter((p) => now - p.time < 600), { point: data.point, time: now }].slice(
-        -32,
-      )
-    : [];
-  group.innerHTML = laser
-    ? `<polyline points="${person.points.map((p) => p.point.join(',')).join(' ')}" fill="none" stroke="#e33164" stroke-width="${3 * scale}" stroke-linecap="round" stroke-linejoin="round"/><circle cx="${x}" cy="${y}" r="${5 * scale}" fill="#e33164"/>`
-    : `<path d="M0 0 4 17 8 11 15 10Z" transform="translate(${x} ${y}) scale(${scale})" fill="#a22458" stroke="white" stroke-width="1.5"/>`;
-  group.innerHTML += `<text x="${x + 14 * scale}" y="${y - 8 * scale}" font-size="${12 * scale}" fill="#a22458">${escape(data.name)}</text>`;
-  group.classList.toggle('laser', laser);
-  // Restart the fade on a new sample; ordinary cursors move, never leave trails.
-  group.getAnimations().forEach((animation) => {
-    animation.currentTime = 0;
-  });
-  clearTimeout(person.timer);
-  person.timer = setTimeout(
-    () => {
-      group.remove();
-      people.delete(data.peer);
-    },
-    laser ? 1500 : 10000,
-  );
+  boardPresence?.receive(data);
 }
+
 function selectTool(value) {
+  stopPointing();
   $('menu').open = false;
   tool = value;
   document
@@ -688,6 +669,8 @@ function board() {
     draw();
   }).setAttribute('aria-label', 'Zoom in');
   const canvas = $('canvas');
+  boardPresence = new BoardPresence(canvas, $('presence'));
+  new ResizeObserver(() => boardPresence.animate()).observe(canvas);
   const hitAt = (event) =>
     document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
   canvas.onpointerdown = (event) => {
@@ -751,8 +734,8 @@ function board() {
   };
   canvas.onpointermove = (event) => {
     const point = world(event);
-    if (tool !== 'laser' || drag?.mode === 'laser')
-      presence(point, drag?.mode === 'laser' ? 'laser' : 'cursor');
+    if (event.pointerType !== 'touch' || drag)
+      presence(point, tool === 'laser' ? 'laser' : 'cursor');
     if (!drag) return;
     if (drag.mode === 'pan') {
       const rect = canvas.getBoundingClientRect();
@@ -792,6 +775,7 @@ function board() {
     if (!drag) return;
     const d = drag;
     drag = null;
+    if (event.pointerType === 'touch') stopPointing();
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
     if (d.mode === 'draw') {
       const s = d.shape;
@@ -846,17 +830,16 @@ function board() {
     }
   };
   canvas.onpointerleave = () => {
-    if (!drag) port.postMessage({ type: 'presence', mode: 'clear', point: null });
+    if (!drag) stopPointing();
   };
   canvas.onpointercancel = () => {
-    showPresence({ peer: 'self', mode: 'clear' });
+    stopPointing();
     drag = null;
-    port.postMessage({ type: 'presence', mode: 'clear', point: null });
     draw();
   };
   canvas.ondblclick = (event) => {
     const id = hitAt(event);
-    if (id) editText(id);
+    if (id && tool === 'select') editText(id);
   };
   canvas.onwheel = (event) => {
     event.preventDefault();
@@ -989,6 +972,17 @@ function documentEditor() {
                           }),
                         );
                     });
+                  for (const comment of comments) {
+                    if (comment.resolved) continue;
+                    try {
+                      const [from, to] = selectionPositions(doc, comment.range,
+                        ySyncPluginKey.getState(state)?.binding);
+                      decorations.push(Decoration.inline(from, to, {
+                        class: 'comment-anchor', 'data-comment-id': comment.id,
+                        title: comment.text,
+                      }));
+                    } catch { /* A deleted anchor remains visible in the comments list. */ }
+                  }
                   return DecorationSet.create(state.doc, decorations);
                 },
               },
@@ -1071,7 +1065,7 @@ function documentEditor() {
   });
   link.title = 'Link';
   link.setAttribute('aria-label', 'Link');
-  function captureSelection() {
+  captureDocumentSelection = () => {
     // Capture before focus leaves the editor. DOM selection changes can precede
     // ProseMirror's selection transaction by one browser event-loop turn.
     const selection = document.getSelection();
@@ -1095,6 +1089,7 @@ function documentEditor() {
         head: relative(head),
       };
     }
+    $('comment-selection').disabled = readOnly || !documentSelection;
     selected.clear();
     const from = Math.min(anchor, head),
       to = Math.max(anchor, head);
@@ -1102,10 +1097,35 @@ function documentEditor() {
       if (node.attrs.id && offset <= to && offset + node.nodeSize >= from)
         selected.add(node.attrs.id);
     });
-  }
-  document.addEventListener('selectionchange', captureSelection);
-  $('ask').addEventListener('pointerdown', captureSelection);
-  editor.on('blur', captureSelection);
+  };
+  document.addEventListener('selectionchange', captureDocumentSelection);
+  $('comment-selection').addEventListener('pointerdown', captureDocumentSelection);
+  editor.on('blur', captureDocumentSelection);
+}
+function captureAttachment(scope, previous) {
+  const range = scope === 'selection' && editor ? previous?.range || documentSelection : undefined;
+  const selection = scope === 'selection' && !editor ? previous?.selection || [...selected] : [];
+  if (scope === 'selection' && !range && !selection.length) throw new Error('Select content first');
+  const captured = captureContext(doc, { range, selection });
+  return { ...captured, range, selection, revision };
+}
+async function saveBeforeQuestion() {
+  if (!online) throw new Error('Disconnected. Your question draft is kept; reconnect before sending.');
+  flush();
+  const deadline = performance.now() + 10000;
+  while (online && !failed && (pending.length || inflight) && performance.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 50));
+  if (!online || failed || pending.length || inflight || updates.length)
+    throw new Error('Edits are not saved. Your question draft is kept; retry the save first.');
+}
+function setComments(value) {
+  comments = value;
+  assistant?.setComments(editor ? readComments(doc, comments) : []);
+  if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+}
+function revealPassage(range) {
+  const [from, to] = selectionPositions(doc, range);
+  editor.chain().focus().setTextSelection({from, to}).scrollIntoView().run();
 }
 async function start(event) {
   if (
@@ -1147,6 +1167,7 @@ async function start(event) {
       revision = Math.max(revision, data.revision);
       if (document.activeElement !== $('title')) $('title').value = doc.getMap('meta').get('title');
       if (data.transactions) history(data.transactions);
+      if (data.comments) setComments(data.comments);
       return;
     }
     if (data.type === 'sync') {
@@ -1157,6 +1178,7 @@ async function start(event) {
       online = true;
       failed = false;
       history(data.item.transactions);
+      setComments(data.item.comments || []);
       flush();
       return;
     }
@@ -1190,6 +1212,7 @@ async function start(event) {
       return;
     }
     if (data.type === 'presence') showPresence(data);
+    if (data.type === 'conversation') assistant?.updateConversation(data);
   };
   doc.on('update', (update, origin) => {
     if (origin === remote) return;
@@ -1226,12 +1249,6 @@ async function start(event) {
   $('show-agent').onchange = () => {
     if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
     else draw();
-  };
-  $('ask-toggle').hidden = readOnly;
-  $('ask-toggle').onclick = () => {
-    const shown = document.querySelector('footer').classList.toggle('asking');
-    $('ask-toggle').setAttribute('aria-expanded', String(shown));
-    if (shown) $('question').focus();
   };
   $('undo').disabled = readOnly;
   $('redo').disabled = readOnly;
@@ -1294,37 +1311,39 @@ async function start(event) {
       },
     });
   };
-  $('ask').hidden = readOnly;
-  $('ask').onsubmit = async (event) => {
-    event.preventDefault();
-    const submit = $('ask').querySelector('button');
-    if (submit.disabled) return;
-    submit.disabled = true;
-    try {
-      flush();
-      if (pending.length || inflight) throw new Error('Wait for edits to save before asking');
-      let range;
-      const selection = $('scope').value === 'selection';
-      if (selection && editor) range = documentSelection;
-      if (selection && !range && !selected.size)
-        throw new Error('Select content first, or choose Whole item');
-      await request({
-        action: 'ask',
-        revision,
-        selection: selection && !range ? [...selected] : [],
-        range,
-        text: $('question').value,
-      });
-      $('question').value = '';
-      status('Question queued');
-    } catch (e) {
-      status(e.message, true);
-    } finally {
-      submit.disabled = false;
+  assistant = new AssistantPanel({
+    capture: captureAttachment, request, save: saveBeforeQuestion, changed: draft,
+    reveal: revealPassage, state: () => ({ readOnly, online }), restored: recovery?.assistant,
+  });
+  assistant.renderDraft();
+  setComments(item.comments || []);
+  $('comment-selection').hidden = readOnly;
+  $('comment-selection').textContent = editor ? 'Comment on selection' : 'Ask about selection';
+  $('hint').textContent = editor ? 'Select text to add an anchored comment.' : 'Select objects to attach them to a question.';
+  $('comment-selection').onclick = () => assistant.begin('selection');
+  $('document').addEventListener('click', event => {
+    const id = event.target.closest('[data-comment-id]')?.dataset.commentId;
+    if (!id) return;
+    assistant.toggle(true);
+    $('comments-section').open = true;
+    [...$('comments').children].find(node => node.dataset.commentId === id)?.scrollIntoView({block:'nearest'});
+  });
+  document.addEventListener('keydown', event => {
+    if (editor && (event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'm') {
+      event.preventDefault(); captureDocumentSelection(); assistant.begin('selection');
     }
-  };
+  });
   history(item.transactions);
   setInterval(flush, 300);
+  setInterval(() => {
+    if (pointing && online && performance.now() - lastPresence > 1500)
+      presence(pointing.point, pointing.mode);
+  }, 1500);
+  window.addEventListener('pagehide', clearPresence);
+  window.addEventListener('blur', stopPointing);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) clearPresence();
+  });
   saved();
   pump();
 }

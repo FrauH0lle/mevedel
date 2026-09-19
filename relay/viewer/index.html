@@ -82,14 +82,16 @@
             <summary id="artifacts-summary">Artifacts</summary>
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
           </details>
-          <div class="dock-actions">
-            <details id="editing-box" hidden><summary>Shared</summary>
-              <nav id="editing-items" class="dock-strip" aria-label="Shared whiteboards and documents"></nav>
-              <button class="btn quiet" data-create-editor="whiteboard" type="button">New whiteboard</button>
-              <button class="btn quiet" data-create-editor="document" type="button">New document</button>
+          <details id="editing-box" class="dock-submenu" hidden><summary>Shared</summary>
+            <div class="editing-create" aria-label="Create shared content">
+              <button class="btn" data-create-editor="whiteboard" type="button">＋ Whiteboard</button>
+              <button class="btn" data-create-editor="document" type="button">＋ Document</button>
               <button id="editing-import" class="btn quiet" type="button">Import</button>
               <input id="editing-file" type="file" accept=".json,.md,.txt,image/png,image/jpeg,image/webp" hidden>
-            </details>
+            </div>
+            <nav id="editing-items" aria-label="Shared whiteboards and documents"></nav>
+          </details>
+          <div class="dock-actions">
             <button id="new-session-button" class="btn quiet" type="button" hidden
                     title="Start a separate session — this room stays open"
                     aria-label="New session">＋ Session</button>

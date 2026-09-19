@@ -2637,10 +2637,10 @@ asynchronous preparation ran is left alone instead of cleared."
          ;; later insertion at the turn boundary is claimed by the
          ;; response span and would reach model context.
          (when mevedel-view--pending-guest-attribution
-           (setq guest-name mevedel-view--pending-guest-attribution
-                 mevedel-view--pending-guest-attribution nil)
+           (setq guest-name (plist-get mevedel-view--pending-guest-attribution :name))
            (insert (mevedel--format-hook-audit-record
-                    (list :type 'guest-prompt :name guest-name))))
+                    mevedel-view--pending-guest-attribution))
+           (setq mevedel-view--pending-guest-attribution nil))
          ;; Anchor the data-side marker after the forwarded prompt so
          ;; incremental renders extract only the in-flight assistant
          ;; segments from here forward.  Pushed onto the view buffer's

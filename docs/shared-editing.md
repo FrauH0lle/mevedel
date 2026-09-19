@@ -1,6 +1,7 @@
 # Shared whiteboard and document editing
 
-The room's **Shared** menu lists named whiteboards and documents. Full and
+The room's **Shared** menu separates creation and import controls from its list
+of named whiteboards and documents. Full and
 owner links can create, rename, import, and edit them concurrently. View
 links can observe and download. Opening an item affects that browser only;
 other participants get a followable entry. Each editor opens in its own
@@ -10,8 +11,10 @@ The editor tab reconnects independently and reopens its item on reload.
 a browser share link. Browser popup permission is needed to open a new tab.
 
 Documents use a continuous paper surface and a compact, horizontally scrolling
-formatting bar. On phones, **Ask assistant** expands the question form only
-when needed; the editor follows the visible viewport above the keyboard.
+formatting bar. **Assistant** opens a conversation sidebar on desktop and a
+full-width overlay on phones. Closing it preserves the private draft, captured
+context, and editor position. The editor follows the visible viewport above the
+keyboard; Escape closes the panel, and Ctrl/Command+Enter submits its composer.
 Downloads, recovery, retry, contribution history, and assistant highlighting
 are in the editor's **☰** menu.
 
@@ -83,13 +86,24 @@ Same-property writes resolve using Yjs's deterministic ordering. Deletion
 wins over an in-flight property edit to the deleted record. This guarantees
 convergence, not reconciliation of competing human intentions.
 
-Ordinary board cursors move one named pointer per participant. Laser gestures
-show locally as well as to other participants, with a continuous short trail
-and one name at its tip. They transmit board coordinates; each receiver renders
-through its own viewport. Trails fade within 1.5 seconds;
-item changes, disconnects, and cancellation clear presence. Presence is
-rate-limited and discarded behind queued content/control traffic. It creates
-no revision, undo history, export marks, queued question, or model context.
+Ordinary board cursors move one named arrow per participant. Selecting **Laser
+pointer** makes mouse or pen hover visible locally and to collaborators; on a
+touchscreen, press and drag to point, then lift to stop. A bright tip, a compact
+name tag, and a short curved trail distinguish deliberate pointing from an
+ordinary cursor. Older trail segments fade independently within about half a
+second; a stationary tip stays visible while the participant points.
+
+Coordinates travel in board space and render through each receiver's viewport.
+Remote movement uses a short transition from the displayed position to each
+received sample, without predicting past it. A stale gap starts a new pointer
+instead of drawing a bridge across the board. Reduced-motion preferences remove
+trails and interpolation. Leaving the canvas, switching tools, cancellation,
+hiding the page, and disconnect clear the local pointing state; item changes
+and peer departure clear remote state. Idle presence expires if its occasional
+refresh is lost. Motion coalesces to at most 20 updates per second and retains
+the final position. Presence is discarded behind queued content/control traffic;
+it creates no revision, undo history, export marks, queued question, or model
+context.
 
 ## Working with the assistant
 
@@ -115,12 +129,51 @@ invalidate an otherwise valid patch. Tools use normal permissions, Plan and
 read-only ceilings, cancellation, and result/media persistence. They work
 with every browser closed and never silently start a share.
 
-The editor's explicit question control captures a committed whole item or
-selection, including collaboration-aware text anchors. Pending edits must
-save first; refusal preserves the question. Questions enter the existing
-pending-input queue with guest attribution and board images as normal
-attachments. Duplicate questions use the room's duplicate window. Drawing,
-typing, and synchronization never start model turns automatically.
+### Questions and document comments
+
+**Assistant** shows questions about the current item and their canonical replies,
+with the session's queued, paused, working, disconnected, or provider-failure
+state. Follow-ups use the same session conversation. Other item conversations
+remain in the room transcript. View participants can read comments and replies.
+
+For a document selection, choose **Comment on selection** (Ctrl+Alt+M), enter a
+question or instruction, and **Post comment**. The draft is private to this
+browser's recovery storage until posted. Posted comments are shared with everyone
+in the session and persist with the item. Posting never submits a model turn.
+Choose **Send to assistant** explicitly to send the comment's passage; **View
+conversation** finds its question and answer in the panel. Clicking a passage
+scrolls to its live anchor. Participants with edit authority can resolve or reopen
+comments. Resolved comments remain readable but no longer highlight the document.
+There are at most 200 comments per document.
+
+Comments keep their original quote and collaboration-aware text anchors. The
+panel marks a passage changed or removed after later edits. Changed passages
+require reviewing current context before sending; removed passages cannot be
+sent. The immutable snapshot of an already sent question remains unchanged.
+Comments are session annotations: native and document exports contain the content,
+not the comments or conversation. A fresh import starts without those annotations.
+
+For a whiteboard, select one or more objects and choose **Ask about selection**.
+**Ask about whole item** keeps whole-document and whole-board questions available.
+The attached quote and expandable full context show the chosen scope before
+submission. Opening controls, typing, and toggling the panel retain that capture.
+Pending edits must save first. The host compares the captured content with its
+committed content; a concurrent change rejects the request with an explicit
+**Refresh context** recovery. It never substitutes a whole item for a missing
+selection. Large contexts must be narrowed to fit the 128 KiB snapshot limit.
+
+Accepted questions include item identity, title, committed revision, exact selected
+text or shapes, bounded surrounding document blocks or connector endpoints, and
+a matching board PNG as a normal attachment. Questions use the ordinary queue
+with guest attribution; correlation metadata is persisted as model-invisible
+transcript audit data. Provider failures appear in the conversation. If the host edits a queued question,
+the panel explicitly marks it **Edited on host** and shows the revised input; it
+no longer claims that the original attachment is what the model received.
+Disconnected or rejected submissions retain the draft and request identity.
+Retrying an accepted question finds its queued or delivered record across browser
+reconnects, preventing a second turn. Editing the question or refreshing context
+creates a new identity; an intentional follow-up is a new question. Drawing,
+typing, posting comments, and synchronization never start model turns automatically.
 
 ## Durability and recovery
 
@@ -192,7 +245,9 @@ MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 
 The focused editor checks reproduce interior selection, inline text, cursor
 replacement, local/remote laser trails, grouped contributions, export-neutral
-assistant highlights, and a small keyboard-sized viewport. Set
+assistant highlights, frozen context, stale/offline refusal, explicit comments,
+reply rendering, disclosure continuity, and a small keyboard-sized viewport.
+The room scenario also checks question-draft recovery across repeated reloads. Set
 `MEVEDEL_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
 preview screenshots under `.scratch/shared-collaborative-editing/`.
 

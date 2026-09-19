@@ -28,7 +28,7 @@ committed edit cannot be reported as rolled back. Existing artifact
 materialization carries editable state and embedded assets through session
 lifecycle operations.
 
-Full and owner bearers may create, import, rename, edit, ask, and point through
+Full and owner bearers may create, import, rename, edit, comment, ask, and point through
 typed room actions. View bearers may read and export. Model tools use the
 ordinary permission pipeline, including Plan and read-only restrictions.
 Neither adapter receives arbitrary paths or execution authority. The packaged
@@ -61,7 +61,7 @@ The first trial on an iPhone 13 mini left the document almost entirely hidden
 behind wrapping toolbars and the keyboard. Editors now open in their own tabs,
 with independent room connections and a full-size opaque iframe. The original
 room retains its composer. The parent sizes the editor to the visual viewport;
-formatting stays on one scrolling row and phone question controls collapse.
+formatting stays on one scrolling row and the assistant panel overlays phone workspaces.
 A tab URL identifies the item, while credentials continue through the existing
 fragment-to-tab-storage lifecycle and never reach the iframe.
 
@@ -70,3 +70,57 @@ Keep those commits and their exact inverse records; group their presentation
 by participant name and five-second idle gaps. Agent transactions remain
 separate. Local view decorations distinguish the latest retained agent changes
 without modifying CRDT content or exported formatting.
+
+
+## Pointing and menu refinement
+
+A later browser trial reproduced the Shared menu compressing inside the room
+activation row, while that row stretched adjacent pill buttons to the menu's
+height. Shared now occupies its own disclosure section, with wrapping creation
+controls and a separate item list. This preserves the room composer and avoids
+coupling menu height to button proportions.
+
+Laser pointing now follows mouse/pen hover, or a touch drag, rather than requiring
+a mouse-button gesture. Screen-sized luminous tips, compact labels, and independently
+fading curved trails make it distinguishable from ordinary cursor presence.
+Remote pointers transition from their displayed position to received samples.
+A fixed playback-delay experiment reduced normal stepping but still jumped on
+jittered delivery; transitioning from the displayed position absorbs that gap
+without extrapolating after a stop. Presence remains transient and bounded, and
+reduced-motion preferences disable the extra movement and trails.
+
+
+## Anchored discussion beside the work
+
+Selection trials exposed two weaknesses in the original footer: focus changes
+could obscure which text a question referred to, and a queue acknowledgement gave
+no way to find the answer while editing. The assistant sidebar now renders the
+existing canonical conversation for that item; phones use an overlay so the work
+is not compressed into a narrow strip. The composer freezes and displays context
+before submission. Browser and host share the capture implementation; the host
+checks exact content after pending edits commit, then adds item identity and the
+committed revision. Stale captures fail visibly and require explicit refresh.
+
+Document comments are a bounded, host-authored annotation list with Yjs relative
+anchors, original quote, author, and resolution state. This keeps guest authorship
+out of browser-controlled CRDT fields while ordinary concurrent edits move the
+anchors. Comments persist with the item but are excluded from content exports.
+Posting a comment and sending it to the assistant are distinct explicit actions.
+Live anchors describe the current passage; sent snapshots describe the prior
+question and never track later edits.
+
+Questions use existing external follow-ups and transcript audit attribution.
+A stable request identity and content fingerprint find accepted questions in that
+queue or transcript after reconnect. Attribution belongs to the data buffer so
+asynchronous submissions in different sessions cannot exchange metadata. No
+second conversation store or model-request controller is needed. Canonical
+provider failure summaries are projected without their private error payloads.
+
+### Decision history
+
+Originally questions used a whole/selection dropdown in a footer, and a short
+per-peer duplicate window. Browser trials showed that the dropdown concealed a
+lost selection, the footer lacked replies, and reconnecting lost retry identity.
+The frozen context panel, explicit document comments, and queue/transcript retry
+lookup replace those choices. Native export remains content-only because session
+annotations refer to the original CRDT lineage and conversation.
