@@ -1043,7 +1043,33 @@ properties, which can be stale after restoring `GPTEL_BOUNDS'."
     (skip-chars-forward " \t\n")
     (looking-at-p "(\\s-*:name\\_>")))
 
-(defun mevedel-transcript--tool-block-bounds-for-run (seg-start seg-end
+(defvar mevedel-transcript--tool-block-index nil
+  "Buffer-keyed canonical boundary indexes scoped to one projection.")
+
+(defun mevedel-transcript--tool-block-bounds-for-run (beg end &optional limit)
+  "Return canonical tool bounds overlapping BEG..END, respecting LIMIT.
+Within a projection use a lazily built index, invalidated by text or property
+changes and narrowing.  Incomplete structural ranges use anchored recovery."
+  (or
+   (when mevedel-transcript--tool-block-index
+     (let* ((key (list (buffer-modified-tick) (point-min) (point-max)))
+            (cached (gethash (current-buffer) mevedel-transcript--tool-block-index)))
+       (unless (equal key (car cached))
+         (setq cached
+               (cons key (vconcat (mevedel-transcript--org-tool-blocks-overlapping
+                                  (mevedel-transcript--property-segments (point-min) (point-max))
+                                  (point-min) (point-max)))))
+         (puthash (current-buffer) cached mevedel-transcript--tool-block-index))
+       (let* ((blocks (cdr cached)) (lo 0) (hi (length blocks)))
+         (while (< lo hi)
+           (let ((mid (/ (+ lo hi) 2)))
+             (if (<= (cdr (aref blocks mid)) beg) (setq lo (1+ mid)) (setq hi mid))))
+         (let ((block (and (< lo (length blocks)) (aref blocks lo))))
+           (when (and block (< (car block) end) (or (not limit) (<= (cdr block) limit)))
+             block)))))
+   (mevedel-transcript--recover-tool-block-bounds beg end limit)))
+
+(defun mevedel-transcript--recover-tool-block-bounds (seg-start seg-end
                                                           &optional limit)
   "Return recovered org tool block bounds for a tool run.
 SEG-START and SEG-END are the bounds of an actual `gptel' tool

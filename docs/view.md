@@ -1030,29 +1030,40 @@ isolated in `mevedel-view-markdown.el`, deferred target path verification in
 `mevedel-view-table.el`, adapted from agent-shell's renderer with
 attribution.
 
-Rendered tables and ratio-sized images stay aligned to their window:
-`mevedel-view-mode` installs buffer-local handlers on
-`window-size-change-functions` and `window-buffer-change-functions`
-that debounce onto one 0.15 s idle timer per buffer, cancelled when the
-buffer is killed. The deferred job — never the redisplay hooks
-themselves — rebuilds only the tables and images whose retained width
-no longer matches the displaying window, off the undo list, preserving
-point, the modified flag, the data buffer, and any composer draft. The
-table renderer preserves cell positions by cell identity and unwrapped
-character offset, including both selection endpoints and other displayed
-windows. This distinguishes repeated words when wrapping changes. Native
-non-destructive text replacement retains positions outside cell content;
-display properties are refreshed from the new layout. The
-changed window rides along to the deferred job, so its width is the
-one laid out for. A buffer shown simultaneously in windows of
-different widths holds one layout: the most recently realigned window
-wins. Staleness is keyed on window pixel width, so a glyph-width-only
-change such as `text-scale-adjust` does not trigger reflow until the
-next window change.
+Normal views first show pipe tables with their canonical source retained as
+text properties. The existing Markdown realignment timer formats one visible
+pending or width-stale table after 250 ms idle. Off-screen and folded tables wait until
+scrolling or unfolding makes them visible. A partially visible table is still rendered
+as a whole; one very large table can exceed the idle delay. There is no
+background queue sorted by cursor distance.
+
+`mevedel-view-mode` schedules that job from decoration, window size/buffer
+changes, scrolling, and commands. Each buffer owns one cancellable timer;
+killing the buffer or changing its major mode cancels pending work. Pending
+input postpones the callback. Consecutive tables receive separate idle passes,
+with another 250 ms between them. The callback also realigns ratio-sized images.
+
+The callback enters normal projection mutation ownership before locating work,
+so queued work discovers current positions and the changed window's width when
+it actually runs. Updates stay off the undo list and preserve the modified flag,
+data buffer, composer draft, point, mark, other markers, overlays, and displayed
+window anchors. Table replacement uses cell identity and unwrapped character
+offsets instead of whole-table text diffing. This distinguishes repeated words
+when wrapping changes, including markers held by callers' `save-excursion`.
+Removed whitespace attaches to the next surviving character, or the cell end;
+padding attaches to its cell edge. Separator interiors clamp before their next
+junction. Row boundaries retain their logical row, clamping physical
+continuation lines that disappear during reflow. Identical text only refreshes
+display properties.
+
+A buffer shown simultaneously in windows of different widths holds one layout:
+the most recently realigned window wins. Staleness is keyed on window pixel
+width, so a glyph-width-only change such as `text-scale-adjust` does not trigger
+reflow until the window width changes.
 
 Copying from a view is contract-bound to canonical Markdown:
 `mevedel-view-mode` sets `filter-buffer-substring-function` so any
-copied or killed region overlapping a rendered table yields the table's
+copied or killed region overlapping a pending or rendered table yields the table's
 complete pipe-table source spliced into the surrounding text, never
 box-drawing glyphs. The fenced code-block copy button still copies the
 raw code body.
@@ -1081,6 +1092,14 @@ restored transcripts stamp gptel properties without character
 changes). Agent-source presence checks reuse the invocation-owned
 render-data markers maintained by the live update path and never scan
 the transcript.
+
+Each full projection also shares a lazy canonical tool-boundary index and pure
+audit-decoding results. Boundary lookup uses binary search and retains the
+existing structural-recovery fallback; the index is keyed by buffer, text or
+property modification tick, and accessible range. Audit decoding caches valid
+and invalid results by encoded text, while provenance and trust checks remain
+in their callers. Both caches expire when the projection returns or fails;
+nested projections receive their own caches.
 
 `mevedel-view-disclosure.el` keys source-backed disclosure state from
 data-buffer coordinates and stable source anchors, not view-buffer positions.

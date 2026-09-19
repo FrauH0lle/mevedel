@@ -58,6 +58,11 @@
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))
 
+;; `mevedel-view-render'
+(declare-function mevedel-view-render-mutate "mevedel-view-render"
+                  (key function &optional replacement cleanup))
+(autoload 'mevedel-view-render-mutate "mevedel-view-render")
+
 ;; `mevedel-view-table'
 (declare-function mevedel-view-table-decorate "mevedel-view-table"
                   (start end avoid-ranges))
@@ -713,7 +718,9 @@ file.el#L12."
           ;; rendered cells.
           (mevedel-view-table-decorate
            start end-marker
-           (mevedel-view--src-block-body-ranges start end-marker)))
+           (mevedel-view--src-block-body-ranges start end-marker))
+          (when (derived-mode-p 'mevedel-view-mode)
+            (mevedel-view--realign-on-window-change)))
       (set-marker end-marker nil))))
 
 (defun mevedel-view--copy-code-block-button-action (button)
@@ -882,44 +889,49 @@ file.el#L12."
 (put 'mevedel-view--realign-timer 'permanent-local t)
 
 (defun mevedel-view--realign-markdown (&optional buffer window)
-  "Re-lay out stale rendered tables and ratio images in BUFFER.
-WINDOW, when live and still showing BUFFER, is the window the layout
-targets -- the one whose change scheduled this job.  A pure re-layout:
-it stays off the undo list and leaves the modified flag, point, and
-the data buffer unchanged.  A no-op when BUFFER is not displayed in
-any window or nothing is stale."
+  "Format one visible table and re-lay out stale ratio images in BUFFER.
+Resolve positions inside the view's mutation owner, including queued work.
+WINDOW supplies the target width if it still displays BUFFER.  Preserve
+undo state, the modified flag, selections and the authoritative transcript."
   (let ((buffer (or buffer (current-buffer))))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (setq mevedel-view--realign-timer nil)
-        (let ((window (and window
-                           (window-live-p window)
-                           (eq (window-buffer window) buffer)
-                           window))
-              (inhibit-read-only t)
-              (inhibit-redisplay t)
-              (deactivate-mark deactivate-mark)
-              (buffer-undo-list t)
-              (modified (buffer-modified-p)))
-          (unwind-protect
-              (progn
-                (mevedel-view-table-rerender window)
-                (mevedel-view--rerender-images window))
-            (restore-buffer-modified-p modified)))))))
+        (mevedel-view--cancel-realign-timer)
+        (if (input-pending-p)
+            (mevedel-view--realign-on-window-change window)
+          (mevedel-view-render-mutate
+           'markdown-realign
+           (lambda ()
+             (let ((window (if (and (window-live-p window)
+                                    (eq (window-buffer window) (current-buffer)))
+                               window
+                             (get-buffer-window (current-buffer) t)))
+                   (inhibit-read-only t)
+                   (deactivate-mark deactivate-mark)
+                   (buffer-undo-list t)
+                   (modified (buffer-modified-p))
+                   rendered)
+               (unwind-protect
+                   (when window
+                     (setq rendered (mevedel-view-table-rerender window))
+                     (mevedel-view--rerender-images window))
+                 (restore-buffer-modified-p modified))
+               (when rendered
+                 (mevedel-view--realign-on-window-change window))))))))))
 
-(defun mevedel-view--realign-on-window-change (window)
-  "Schedule a deferred re-layout for the buffer shown in WINDOW.
-Installed buffer-locally on `window-size-change-functions' and
-`window-buffer-change-functions'.  Mutating a buffer inside those
-redisplay hooks is unsafe, so the work is debounced onto one idle
-timer; the buffer-change hook also catches first display and content
-rendered while off-screen.  WINDOW rides along so the deferred job
-lays out for the window that actually changed, not an arbitrary one."
-  (when (window-live-p window)
-    (mevedel-view--cancel-realign-timer)
+(defun mevedel-view--realign-on-window-change (&optional window &rest _)
+  "Schedule idle formatting after display, scrolling, commands or resize.
+Coalesce work into one timer.  Each table yields for another 250 ms of idle
+before the next pass; an idle timer deadline is absolute within its idle period."
+  (mevedel-view--cancel-realign-timer)
+  (when-let* ((window (if (and (window-live-p window)
+                              (eq (window-buffer window) (current-buffer)))
+                         window
+                       (get-buffer-window (current-buffer) t))))
     (setq mevedel-view--realign-timer
-          (run-with-idle-timer 0.15 nil #'mevedel-view--realign-markdown
-                               (current-buffer) window))))
+          (run-with-idle-timer
+           (+ 0.25 (if-let* ((idle (current-idle-time))) (float-time idle) 0))
+           nil #'mevedel-view--realign-markdown (current-buffer) window))))
 
 (defun mevedel-view--cancel-realign-timer ()
   "Cancel any pending re-layout timer for the current buffer."
@@ -936,6 +948,9 @@ on kill so no timer outlives its view."
             #'mevedel-view--realign-on-window-change nil t)
   (add-hook 'window-buffer-change-functions
             #'mevedel-view--realign-on-window-change nil t)
+  (add-hook 'window-scroll-functions #'mevedel-view--realign-on-window-change nil t)
+  (add-hook 'post-command-hook #'mevedel-view--realign-on-window-change nil t)
+  (add-hook 'change-major-mode-hook #'mevedel-view--cancel-realign-timer nil t)
   (add-hook 'kill-buffer-hook #'mevedel-view--cancel-realign-timer nil t))
 
 
