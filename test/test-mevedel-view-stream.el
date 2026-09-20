@@ -550,7 +550,7 @@
         (with-current-buffer view-buf
           (should-not (gethash "ptc-live" mevedel-view--execution-events))))))
 
-  :doc "an unattended view caches progress and defers to one full render"
+  :doc "an unattended view coalesces tool progress without rebuilding history"
   (mevedel-view-stream-test--with-buffers
     (let ((refreshed 0)
           (unattended t)
@@ -569,18 +569,36 @@
             (with-current-buffer view-buf
               (should (= 0 refreshed))
               (should (gethash "bash-live" mevedel-view--execution-events))
-              (should (eq 'full mevedel-view--pending-render-kind))
+              (should (eq 'tools mevedel-view--pending-render-kind))
               (should (eq data-buf mevedel-view--pending-render-data-buffer))
               (should (equal draft
                              (buffer-substring-no-properties
                               (mevedel-view--input-start) (point-max))))
-              (mevedel-view--schedule-render 'full data-buf 0)
+              (mevedel-view--schedule-render 'tools data-buf 0)
               (should-not mevedel-view--render-timer))
+            (dotimes (_ 3)
+              (mevedel-view-stream-handle-tool-progress
+               (list :type 'progress :data-buffer data-buf
+                     :tool-use-id "bash-live"
+                     :facts '(:kind bash) :output-tail "latest line")))
+            (with-current-buffer view-buf
+              (should (equal '("bash-live") mevedel-view--pending-tool-rows))
+              (should (equal "latest line"
+                             (plist-get (gethash "bash-live"
+                                                 mevedel-view--execution-events)
+                                        :output-tail))))
+            (mevedel-view-stream-handle-tool-progress
+             (list :type 'terminal :data-buffer data-buf
+                   :tool-use-id "bash-live"))
+            (with-current-buffer view-buf
+              (should-not (gethash "bash-live" mevedel-view--execution-events))
+              (should (equal '("bash-live") mevedel-view--pending-tool-rows)))
             (setq unattended nil)
             (mevedel-view--resume-attended-views)
             (with-current-buffer view-buf
               (should (mevedel--timer-pending-p mevedel-view--render-timer))
-              (mevedel-view--schedule-render 'full data-buf 0)
+              (mevedel-view--schedule-render 'tools data-buf 0)
+              (should (= 1 refreshed))
               (should-not mevedel-view--pending-render-kind)
               (should (equal draft (mevedel-view--input-text)))
               (should (= 3 (- (point) (mevedel-view--input-start))))))

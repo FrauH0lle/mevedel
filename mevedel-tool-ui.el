@@ -341,7 +341,7 @@
     :groups (agents)
     :get-name (lambda (args) (plist-get args :task_name))
     :read-only-p t
-    :renderer '((success . mevedel-tool-ui--render-agent)))
+    :renderer #'mevedel-tool-ui--render-agent)
   (mevedel-define-tool
     :name "FollowupAgent"
     :description "Continue or steer one retained non-root agent."

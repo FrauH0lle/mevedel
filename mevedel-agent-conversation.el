@@ -646,7 +646,11 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
             (when-let* ((view (and (boundp 'mevedel--view-buffer)
                                     mevedel--view-buffer))
                         ((buffer-live-p view)))
-              (if (or patched-summary-p patched-render-data-p)
+              ;; A retained handle has marker-backed source coordinates, so
+              ;; replacing its metadata need not rebuild unrelated history.
+              ;; A summary without retained metadata can still be a generic
+              ;; tool row and needs the full-render fallback.
+              (if (and patched-summary-p (not patched-render-data-p))
                   (mevedel-view-rerender view)
                 (mevedel-view-refresh-agent-rendering
                  view (mevedel-agent-invocation-path invocation)))))

@@ -242,9 +242,12 @@ Spinner ticks, scheduled transcript flushes, and live tool-row refreshes
 are attention-gated (`mevedel-view--unattended-p`).  When every window
 showing the view sits on an invisible or iconified frame, or on an unfocused
 graphical frame, the tick and the row refresh do nothing and a scheduled
-render keeps its pending kind without running; a skipped row refresh
-escalates the pending kind to a full render, whose projection re-derives
-every row from the progress cache.  Focus returning to a frame
+render keeps its pending kind without running. Skipped tool-row refreshes
+retain each changed tool-use ID once; focus return reads the latest progress
+or terminal state and refreshes those rows. An incremental render also drains
+these row updates, including executions before its live tail. A full render
+subsumes them. Source replacement or cancellation discards the pending IDs.
+Focus returning to a frame
 (`after-focus-change-function`) or a window redisplaying the buffer
 (`window-buffer-change-functions`) reschedules the pending render.  A view
 with no window, or one on a terminal frame, is always attended, which keeps
@@ -915,8 +918,12 @@ that skips the post-response observers that follow.
 
 `mevedel-view-rerender` is the correctness fallback and is debounced for
 bursty updates. Prefer narrower refresh paths when a stable source exists:
-retained-agent metadata replacements use a full rerender, while activity-only
-status rows can refresh narrowly. Managed Bash progress and terminal events
+retained-agent metadata replacements refresh their source-backed handles and
+status rows. Tool-use IDs and enclosing tool blocks recover current source
+bounds when replacement moved an endpoint into deleted metadata or restored
+properties split the metadata from its call. Missing or stale handles fall back to full
+projection; a sandbox summary patched into a generic tool row without retained-agent metadata also
+uses that fallback. Managed Bash progress and terminal events
 identify their row by durable tool-use ID and replace only that row. If the row
 is not visible yet, the stream scheduler coalesces one incremental recovery
 render.
@@ -1083,8 +1090,11 @@ reaches a rendering only through render-data blocks patched into the
 transcript text, which the content term already invalidates, while
 registry activity changes on every agent tick and would defeat the
 cache exactly during agent runs. A new live-state dependency must
-either ride a text patch or clear the tool-rendering cache at its
-mutation point. Cache keys normalize marker positions to integers so
+either ride a text patch or invalidate the affected tool-rendering entries at
+its mutation point. Progress row refreshes invalidate overlapping source spans
+only, preserving cached renderings of unrelated completed calls.
+Content keys digest the whole text: sampled string hashes can miss same-length
+edits inside metadata. Cache keys normalize marker positions to integers so
 targeted agent refreshes and full renders share entries, and tool
 block bounds are memoized per segment in a data-buffer-local table
 keyed on `buffer-modified-tick` (property-only changes included, since
@@ -1093,9 +1103,9 @@ changes). Agent-source presence checks reuse the invocation-owned
 render-data markers maintained by the live update path and never scan
 the transcript.
 
-Each full projection also shares a lazy canonical tool-boundary index and pure
-audit-decoding results. Boundary lookup uses binary search and retains the
-existing structural-recovery fallback; the index is keyed by buffer, text or
+Each full or live-turn projection also shares a lazy canonical tool-boundary
+index and pure audit-decoding results. Boundary lookup uses binary search and
+retains the existing structural-recovery fallback; the index is keyed by buffer, text or
 property modification tick, and accessible range. Audit decoding caches valid
 and invalid results by encoded text, while provenance and trust checks remain
 in their callers. Both caches expire when the projection returns or fails;

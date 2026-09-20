@@ -90,6 +90,23 @@
              (mevedel-tool-description (mevedel-tool-get "WaitAgent"))))
     (should-not (mevedel-tool-get "RequestAccess")))
 
+  :doc "blocked and failed retained agents keep their transcript handles"
+  (progn
+    (mevedel-tool-ui--register)
+    (let ((tool (mevedel-tool-get "Agent")))
+      (dolist (status '(blocked error))
+        (let ((rendering
+               (mevedel-view--invoke-renderer
+                tool
+                (list :kind 'collaboration-event :event 'started
+                      :path "/root/worker" :status status)
+                '(:task_name "worker") "Child started.")))
+          (should (eq 'agent-handle (plist-get rendering :vtype)))
+          (should (eq status (plist-get rendering :agent-status)))
+          (should (eq 'error (plist-get rendering :status)))))
+      (should-not (mevedel-view--invoke-renderer
+                   tool nil '(:task_name "worker") "Error: launch refused"))))
+
   :doc "Agent exposes every optional context and configuration control"
   (progn
     (mevedel-tool-ui--register)

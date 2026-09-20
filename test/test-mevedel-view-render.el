@@ -3821,7 +3821,7 @@
   (mevedel-view-test--with-buffers
     (mevedel-tool-ui--register)
     (let* ((draft "> quoted\nsecond line")
-           rerendered-p
+           (mevedel-view-agent-refresh-delay 0)
            (invocation
             (mevedel-agent-invocation--create
              :agent-id "timer_patch_review--1"
@@ -3880,18 +3880,13 @@
       (cl-letf (((symbol-function 'mevedel-transcript-restore-properties)
                 #'ignore)
                 ((symbol-function 'mevedel-view-rerender)
-                 (lambda (buffer)
-                   (setq rerendered-p t)
-                   (with-current-buffer buffer
-                     (mevedel-view--full-rerender)))))
+                 (lambda (&rest _)
+                   (ert-fail "Unnecessary full redraw"))))
         (mevedel-agent-conversation-refresh invocation)
-        (should rerendered-p)
         (let ((size (with-current-buffer data-buf (buffer-size))))
           (setf (mevedel-agent-invocation-transcript-status invocation)
                 'blocked)
-          (setq rerendered-p nil)
           (mevedel-agent-conversation-refresh invocation)
-          (should rerendered-p)
           (should (= size (with-current-buffer data-buf (buffer-size))))))
       (with-current-buffer data-buf
         (should
@@ -3905,6 +3900,11 @@
       (with-current-buffer view-buf
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (let ((pos (car (car (mevedel-view--agent-handle-refresh-points
+                             "/root/timer_patch_review")))))
+          (should pos)
+          (should (eq 'blocked
+                      (get-text-property pos 'mevedel-view-agent-status))))
         (goto-char (point-min))
         (search-forward "ListAgents: session (1 agent)")
         (goto-char (match-beginning 0))
@@ -4385,6 +4385,34 @@
           "Custom: y"
           (buffer-substring-no-properties
            (point-min) (mevedel-view--input-start))))))))
+
+(mevedel-deftest mevedel-view-render--refresh-tool-row-now
+  (:doc "progress refresh retains unrelated completed tool renderings")
+  (mevedel-view-test--with-buffers
+    (let ((stable-position nil)
+          (stable-computations 0)
+          (compute (symbol-function 'mevedel-view--compute-segment-rendering)))
+      (with-current-buffer data-buf
+        (dolist (id '("changing" "stable"))
+          (insert "#+begin_tool Custom\n")
+          (let ((start (point)))
+            (when (equal id "stable") (setq stable-position start))
+            (insert (format "(:name \"Custom\" :args (:value %S))\n\nresult" id))
+            (put-text-property start (point) 'gptel (cons 'tool id)))
+          (insert "\n#+end_tool\n")))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+        (cl-letf (((symbol-function 'mevedel-view--compute-segment-rendering)
+                   (lambda (buffer start end &rest options)
+                     (when (and (<= start stable-position) (< stable-position end))
+                       (cl-incf stable-computations))
+                     (apply compute buffer start end options))))
+          (should (mevedel-view--refresh-tool-row data-buf "changing"))
+          (mevedel-view--full-rerender)
+          (should (= 0 stable-computations)))
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= 4 (- (point) (mevedel-view--input-start))))))))
 
 (mevedel-deftest mevedel-view--segment-rendering/generic-fallback
   (:before-each (mevedel-tool-clear-registry)
@@ -6770,6 +6798,45 @@
           (should-not (mevedel-view--tool-block-bounds
                        (point-min) (point-max)))
           (should (= (1+ before) computations)))))))
+
+(mevedel-deftest mevedel-view--render-cache-key
+  (:doc "distinguishes same-length edits deep inside cached text")
+  (let* ((text (make-string 1024 ?a))
+         (changed (copy-sequence text)))
+    (aset changed 512 ?b)
+    (should-not (equal (mevedel-view--render-cache-key text)
+                       (mevedel-view--render-cache-key changed)))
+    (should (equal (mevedel-view--render-cache-key text)
+                   (mevedel-view--render-cache-key
+                    (propertize text 'face 'bold))))))
+
+(mevedel-deftest mevedel-view--render-live-region
+  (:doc "decodes repeated trusted audits once per live projection")
+  (mevedel-view-test--with-buffers
+    (let ((decode (symbol-function 'mevedel-transcript-audit--decode))
+          (decodes 0)
+          (audit (mevedel--format-hook-audit-record
+                  '(:type prompt-rewrite :event "test"
+                    :original "before" :submitted "after"))))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
+        (mevedel-view-stream-begin-turn
+         (mevedel-view--history-insertion-marker)
+         (with-current-buffer data-buf (copy-marker (point-max)))))
+      (with-current-buffer data-buf
+        (insert (propertize "First answer.\n" 'gptel 'response))
+        (insert audit)
+        (insert (propertize "More answer.\n" 'gptel 'response))
+        (insert audit))
+      (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
+                 (lambda (text)
+                   (cl-incf decodes)
+                   (funcall decode text))))
+        (with-current-buffer view-buf
+          (mevedel-view--render-live-region data-buf nil)
+          (should (= decodes 1))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 3))))))))
 
 (mevedel-deftest mevedel-view--user-input-fold-p ()
   ,test

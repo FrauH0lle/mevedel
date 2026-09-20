@@ -218,6 +218,8 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view--non-history-view-position-p
                   "mevedel-view-render" (pos))
+(declare-function mevedel-view--refresh-tool-row
+                  "mevedel-view-render" (data-buffer tool-use-id))
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-initialize
@@ -237,6 +239,8 @@
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--render-stream-update
                   "mevedel-view-stream" (data-buf))
+(declare-function mevedel-view-stream--schedule-execution-row-recovery
+                  "mevedel-view-stream" (data-buffer))
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-collapse-state
@@ -1118,7 +1122,10 @@ Kills the associated view buffer."
   "Timer for the next coalesced transcript render.")
 
 (defvar-local mevedel-view--pending-render-kind nil
-  "Pending transcript render kind, either `incremental' or `full'.")
+  "Pending render kind: `tools', `incremental', or `full'.")
+
+(defvar-local mevedel-view--pending-tool-rows nil
+  "Tool-use IDs whose unattended progress has not reached the view.")
 
 (defvar-local mevedel-view--pending-render-data-buffer nil
   "Authoritative data buffer for the pending transcript render.")
@@ -1136,6 +1143,7 @@ refresh; a full request upgrades a pending incremental refresh."
     (cancel-timer mevedel-view--render-timer))
   (setq mevedel-view--render-timer nil
         mevedel-view--pending-render-kind nil
+        mevedel-view--pending-tool-rows nil
         mevedel-view--pending-render-data-buffer nil))
 
 (defun mevedel-view--unattended-p (&optional buffer)
@@ -1168,6 +1176,7 @@ redisplay hooks reschedule it once someone can see the result."
   (when (buffer-live-p view-buffer)
     (with-current-buffer view-buffer
       (let ((kind mevedel-view--pending-render-kind)
+            (tool-rows mevedel-view--pending-tool-rows)
             (data-buffer mevedel-view--pending-render-data-buffer))
         (cond
          ((mevedel-view--unattended-p)
@@ -1187,6 +1196,7 @@ redisplay hooks reschedule it once someone can see the result."
          (t
           (setq mevedel-view--render-timer nil
                 mevedel-view--pending-render-kind nil
+                mevedel-view--pending-tool-rows nil
                 mevedel-view--pending-render-data-buffer nil)
           (condition-case err
               (mevedel--with-gc-batched
@@ -1199,7 +1209,16 @@ redisplay hooks reschedule it once someone can see the result."
                     ('full (mevedel-view--full-rerender))
                     ('incremental
                      (when (buffer-live-p data-buffer)
-                       (mevedel-view--render-stream-update data-buffer))))))
+                       (mevedel-view--render-stream-update data-buffer))))
+                  ;; A full projection already consumes every progress
+                  ;; entry.  Otherwise refresh only the rows that changed,
+                  ;; including background executions before the live tail.
+                  (when (and (not (eq kind 'full))
+                             (buffer-live-p data-buffer))
+                    (dolist (id tool-rows)
+                      (unless (mevedel-view--refresh-tool-row data-buffer id)
+                        (mevedel-view-stream--schedule-execution-row-recovery
+                         data-buffer))))))
             (error
              (message "mevedel: view refresh failed: %s"
                       (error-message-string err))))))))))
@@ -1233,15 +1252,18 @@ Runs after every frame focus change; the predicate filters focus-out."
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
   "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.
-`full' supersedes `incremental'.  Once scheduled, later requests join
+`full' supersedes `incremental', which supersedes `tools' row updates.
+Once scheduled, later requests join
 the same refresh instead of creating independent stream, tool, and full
 render timers.  A non-positive DELAY flushes at once, which still defers
 while the view is unattended."
-  (unless (memq kind '(incremental full))
+  (unless (memq kind '(tools incremental full))
     (error "Unknown render kind: %S" kind))
   (when (buffer-live-p data-buffer)
     (setq mevedel-view--pending-render-data-buffer data-buffer)
     (when (or (eq kind 'full)
+              (and (eq kind 'incremental)
+                   (eq mevedel-view--pending-render-kind 'tools))
               (null mevedel-view--pending-render-kind))
       (setq mevedel-view--pending-render-kind kind))
     (if (and (numberp delay) (> delay 0))

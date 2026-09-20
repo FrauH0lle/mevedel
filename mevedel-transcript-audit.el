@@ -286,11 +286,19 @@ ALLOW-OPEN is forwarded to `mevedel-transcript-directive-ranges'."
 
 (defun mevedel-transcript-audit-only-p (text)
   "Return non-nil when non-whitespace TEXT consists only of audit blocks."
-  (and (stringp text)
-       (not (string-empty-p (string-trim text)))
-       (mevedel-transcript-audit-spans text)
-       (string-empty-p
-        (string-trim (mevedel--strip-hook-audit-blocks text)))))
+  (when (stringp text)
+    (let ((spans (mevedel-transcript-audit-spans text))
+          (cursor 0))
+      (and spans
+           (catch 'visible
+             ;; Inspect the gaps without copying TEXT or decoding the same
+             ;; audit bodies a second time merely to remove them.
+             (dolist (span spans)
+               (when-let* ((nonblank (string-match-p "[^ \t\r\n]" text cursor))
+                           ((< nonblank (plist-get span :start))))
+                 (throw 'visible nil))
+               (setq cursor (plist-get span :end)))
+             (not (string-match-p "[^ \t\r\n]" text cursor)))))))
 
 (provide 'mevedel-transcript-audit)
 

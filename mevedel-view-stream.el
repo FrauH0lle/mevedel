@@ -58,6 +58,7 @@
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--pending-render-kind)
+(defvar mevedel-view--pending-tool-rows)
 (defvar mevedel-view-pending-tools-visible-max)
 (defvar mevedel-view-rerender-debounce)
 (defvar mevedel-view-spinner-animate)
@@ -772,12 +773,15 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
           ('terminal
            (mevedel-view-stream--remove-execution-progress tool-use-id)))
         (cond
-         ;; Nobody sees the row.  The cache above is what a render reads,
-         ;; so fold the change into the next attended full render instead
-         ;; of rewriting the row four times a second.
+         ;; Keep only the row's identity while unattended.  Its latest
+         ;; cached progress is enough to refresh it when focus returns;
+         ;; rebuilding unrelated history would turn that return into a stall.
          ((mevedel-view--unattended-p)
+          (when tool-use-id
+            (cl-pushnew tool-use-id mevedel-view--pending-tool-rows :test #'equal))
           (mevedel-view--schedule-render
-           'full data-buffer mevedel-view-rerender-debounce))
+           (if tool-use-id 'tools 'full)
+           data-buffer mevedel-view-rerender-debounce))
          ((and tool-use-id
                (mevedel-view--refresh-tool-row data-buffer tool-use-id)))
          (t

@@ -1108,11 +1108,9 @@ Run `M-x markdown-ts-mode-install-parsers' to build them")))
 
 (defun mevedel-view--render-cache-key (text)
   "Return a compact cache key for TEXT content."
-  (list (length text)
-        (sxhash-equal text)
-        (and (> (length text) 32) (substring text 0 16))
-        (and (> (length text) 32)
-             (substring text (- (length text) 16)))))
+  ;; `sxhash-equal' samples long strings: equal-length metadata edits can
+  ;; collide even with matching length, prefix, and suffix checks.
+  (secure-hash 'sha1 text))
 
 (defun mevedel-view--source-position (pos)
   "Return POS as an integer so markers and integers key identically.
@@ -2647,7 +2645,17 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
             (get-text-property start 'mevedel-view-force-expanded))
            (turn-id (get-text-property start 'mevedel-view-turn-id)))
       (when (hash-table-p mevedel-view--tool-rendering-cache)
-        (clrhash mevedel-view--tool-rendering-cache))
+        ;; Progress changes this call's rendering without changing its text.
+        ;; Keep completed calls cached across frequent Bash output updates.
+        (maphash
+         (lambda (key _rendering)
+           (when (and (eq (car-safe key) data-buffer)
+                      (< (nth 1 key) (cdr source))
+                      (> (nth 2 key) (car source)))
+             (remhash key mevedel-view--tool-rendering-cache)))
+         mevedel-view--tool-rendering-cache)
+        (setq mevedel-view--render-cache-entries
+              (hash-table-count mevedel-view--tool-rendering-cache)))
       (when-let* ((rendering
                   (mevedel-view--segment-rendering
                    data-buffer (car source) (cdr source))))
@@ -3350,7 +3358,9 @@ In that case the user turn must be rendered from the data buffer.
 Section-level collapse state (expanded thinking block, collapsed
 tool summary, …) is captured before the delete and re-applied after
 the render so user toggles survive streaming ticks."
-  (let* ((retained-p (and (not settle-p)
+  (let* ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+         (mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal))
+         (retained-p (and (not settle-p)
                           (mevedel-view--live-tail-valid-p data-buf)))
          (turn-from (and (markerp mevedel-view--data-turn-start)
                          (marker-position mevedel-view--data-turn-start)))
