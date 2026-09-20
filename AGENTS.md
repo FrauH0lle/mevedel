@@ -92,6 +92,11 @@ retrieval triggers.
 
 Each `.el` file also describes its purpose in its `;;; Commentary:` block.
 
+Before working in `relay/` or `shared-editing/`, read
+[relay/AGENTS.md](relay/AGENTS.md) or
+[shared-editing/AGENTS.md](shared-editing/AGENTS.md), respectively, for
+scoped contracts and checks.
+
 ## Module reference
 
 Read [`docs/module-map.md`](docs/module-map.md) when locating a module or
