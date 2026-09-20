@@ -79,7 +79,7 @@ function differences(before, after) {
 export async function handle(request) {
   const { action } = request;
   check(
-    ['create', 'import', 'read', 'update', 'patch', 'rename', 'revert', 'export', 'comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'update', 'patch', 'rename', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -197,9 +197,15 @@ export async function handle(request) {
         if (request.commentId) {
           const comment = (state.comments || []).find(c => c.id === request.commentId);
           check(comment && same(request.range, comment.range), 'Comment selection is no longer available');
+          check(!comment.resolved, 'Reopen this discussion before asking the assistant');
+          check(request.commentVersion === (comment.replies?.at(-1)?.id || comment.id),
+            'Discussion changed. Review the thread before sending again.');
+          result.discussion = [comment, ...(comment.replies || [])].map(({actor, text}) => ({actor, text}));
         }
         const captured = checkContext(doc, request);
-        result.snapshot = { id: state.id, revision: state.revision, ...captured.snapshot };
+        result.snapshot = { id: state.id, revision: state.revision, ...captured.snapshot,
+          ...(result.discussion ? {discussion: result.discussion} : {}) };
+        check(Buffer.byteLength(JSON.stringify(result.snapshot)) <= 128 * 1024, 'Question snapshot is too large; start a smaller discussion');
         result.quote = captured.quote;
       }
       if (request.since !== undefined) {
@@ -247,7 +253,7 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, comments: readComments(doc, state.comments), update: b64(encode(doc)) },
+        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
     check(
@@ -262,6 +268,16 @@ export async function handle(request) {
       const captured = checkContext(doc, request);
       comments = [...comments, { id: request.opId, actor: request.actor, text: request.text,
         range: request.range, quote: captured.quote, created: Date.now(), resolved: false }];
+    } else if (action === 'reply-comment') {
+      const comment = comments.find(c => c.id === request.commentId);
+      check(comment, 'Comment is no longer available');
+      check(!comment.resolved, 'Reopen this discussion before replying');
+      check(typeof request.text === 'string' && request.text.trim() && request.text.length <= 10000,
+        'A reply is required (at most 10000 characters)');
+      const replies = comment.replies || [];
+      check(replies.length < 200, 'This discussion has reached its 200 reply limit');
+      const reply = {id: request.opId, actor: request.actor, text: request.text, created: Date.now()};
+      comments = comments.map(c => c.id === comment.id ? {...c, replies: [...replies, reply]} : c);
     } else if (action === 'resolve-comment') {
       check(comments.some(c => c.id === request.commentId), 'Comment is no longer available');
       check(typeof request.resolved === 'boolean', 'Invalid comment status');
@@ -329,6 +345,7 @@ export async function handle(request) {
         id: next.id,
         revision,
         ...after,
+        ...(request.image && after.kind === 'whiteboard' ? {png: await png(boardSVG(after.content))} : {}),
         comments: readComments(doc, comments),
         update: b64(Y.encodeStateAsUpdate(doc, vector)),
         transaction: changed ? transaction : null,

@@ -242,6 +242,16 @@ test(
         );
       });
       assert.ok((await frame(pages[1]).locator('#presence text').first().textContent()).length > 0);
+      // Carry the intermediate circle samples through iframe, relay and host.
+      await frame(pages[0]).locator('#canvas').evaluate(async svg => {
+        const r = svg.getBoundingClientRect();
+        for (let i=0; i<24; i++) {
+          svg.dispatchEvent(new PointerEvent('pointermove', {bubbles:true,pointerType:'mouse',
+            clientX:r.x+300+70*Math.cos(i/23*Math.PI*2),clientY:r.y+260+70*Math.sin(i/23*Math.PI*2)}));
+          await new Promise(resolve=>setTimeout(resolve,10));
+        }
+      });
+      await until(async () => (await frame(pages[1]).locator('.pointer-trail > g').first().locator('path').count()) >= 18);
       await delay(700);
       assert.equal(await frame(pages[1]).locator('.pointer-trail path').count(), 0);
       await pages[0].mouse.move(5, 5);
@@ -433,11 +443,29 @@ test(
         'An',
       );
       await frame(pages[1]).locator('#comment-selection').click();
-      await frame(pages[1]).locator('#question').fill('Explain the selected opening');
-      await frame(pages[1]).locator('#ask button').click();
-      await until(async () => (await frame(pages[1]).locator('#question-send').textContent()) === 'Send to assistant');
+      await frame(pages[1]).locator('#comment-text').fill('Explain the selected opening');
+      await frame(pages[1]).locator('#comment-post').click();
+      await frame(pages[1]).locator('#comments .comment').waitFor();
       assert.equal((await agent('InspectTest')).queue.length, 1, 'posting a comment does not queue a model turn');
-      await frame(pages[1]).locator('#question-send').click();
+      await frame(pages[0]).locator('#comments-tab').click();
+      await frame(pages[0]).locator('#comments .comment > summary').click();
+      await frame(pages[0]).locator('.reply-form textarea').fill('Include a concrete example.');
+      await frame(pages[0]).getByText('Post reply', {exact:true}).click();
+      await frame(pages[1]).locator('.thread-message').getByText('Include a concrete example.', {exact:true}).waitFor();
+      assert.equal((await agent('InspectTest')).queue.length, 1, 'human replies do not queue a model turn');
+      await frame(pages[0]).locator('.reply-form textarea').fill('> Private reply draft\nsecond line');
+      await frame(pages[0]).locator('#assistant-tab').click();
+      await frame(pages[0]).locator('#question').fill('Separate private AI question');
+      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Separate private AI question'));
+      await pages[0].reload();
+      await frame(pages[0]).locator('.tiptap[contenteditable="true"]').waitFor();
+      await frame(pages[0]).locator('#ask-toggle').click();
+      assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Separate private AI question');
+      await frame(pages[0]).locator('#comments-tab').click();
+      await frame(pages[0]).locator('#comments .comment > summary').click();
+      assert.equal(await frame(pages[0]).locator('.reply-form textarea').inputValue(),'> Private reply draft\nsecond line');
+      await frame(pages[0]).locator('#assistant-close').click();
+      await frame(pages[1]).locator('.thread-send').click();
       const rangeAsk = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 2 ? info.queue[1] : null;
@@ -445,6 +473,8 @@ test(
       assert.doesNotMatch(rangeAsk, /"anchors":/);
       assert.match(rangeAsk, /"text":"An"/);
       assert.match(rangeAsk, /Human revision/);
+      assert.match(rangeAsk, /Include a concrete example/);
+      assert.match(rangeAsk, /"discussion":/);
       await frame(pages[0]).locator('.tiptap p').last().click();
       await pages[0].keyboard.press('End');
       await pages[0].keyboard.type(' Later edit.');
@@ -508,6 +538,24 @@ test(
         '> Browser draft\nsecond line',
       );
       assert.equal((await agent('InspectTest')).queue.length, 1);
+      // An embedded document image reaches another writer and survives reload.
+      const imageData = await pages[0].evaluate(() => {
+        const canvas = document.createElement('canvas'); canvas.width = 80; canvas.height = 40;
+        canvas.getContext('2d').fillRect(0, 0, 80, 40);
+        return canvas.toDataURL();
+      });
+      await frame(pages[0]).locator('.tiptap').click();
+      await pages[0].keyboard.press('Control+End');
+      await frame(pages[0]).locator('#image-upload').setInputFiles({
+        name:'diagram.png', mimeType:'image/png', buffer:Buffer.from(imageData.split(',')[1],'base64'),
+      });
+      await frame(pages[1]).locator('.tiptap img').waitFor();
+      assert.equal(await frame(pages[1]).locator('.tiptap img').getAttribute('src'),imageData);
+      await pages[1].reload();
+      await frame(pages[1]).locator('.tiptap img').waitFor();
+      assert.equal(await frame(pages[1]).locator('.tiptap img').getAttribute('src'),imageData);
+      const illustrated = JSON.parse((await agent('SharedRead', {id:documentId})).result);
+      assert.equal(illustrated.content.content.find(n=>n.type==='image').attrs.src,imageData);
       const downloadPromise = pages[2].waitForEvent('download');
       await frame(pages[2])
         .locator('#menu')
@@ -534,7 +582,7 @@ test(
       await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#question').fill('Private recovered question');
       const capturedContext = await frame(pages[0]).locator('#context-detail').innerText();
-      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.text === 'Private recovered question'));
+      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Private recovered question'));
       for (let reload = 0; reload < 2; reload++) {
         await pages[0].reload();
         await frame(pages[0]).locator('[data-tool="rect"]').waitFor({state:'visible'});
@@ -864,7 +912,7 @@ test(
       await until(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
-      await frame(ownerPage).locator('#comment-selection').click();
+      await frame(ownerPage).locator('#selection-question').click();
       await frame(ownerPage).locator('body').evaluate(() => {
         const post = MessagePort.prototype.postMessage;
         MessagePort.prototype.postMessage = function(data, ...rest) {

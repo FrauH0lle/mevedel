@@ -194,6 +194,11 @@ The shared browser renderer owns disclosure continuity when rebuilding a record.
 Main transcript updates, reconnect snapshots, and polled agent transcripts pass
 the previous record element to it, so explicit expansion and collapse survive
 while new nested disclosures use the host's defaults.
+Shared questions use this same renderer in the room and editor sidebar: the
+question stays visible above a closed **Shared context** disclosure containing
+the sent snapshot and attachment links. Its summary identifies the item, scope,
+and revision. Host-edited or mismatched prompts stay fully visible; attribution
+alone does not hide arbitrary text.
 
 The browser is an observer of the canonical data buffer plus, for full
 links, a remote input source. It receives visible user and assistant text

@@ -29,10 +29,14 @@
 Tool-call arguments arrive decoded from gptel responses, which mark JSON null
 as the keyword `:null' so it is not confused with an empty object.  When such
 arguments are re-encoded for the editor host the marker must become nil again,
-because the host codec serializes nil as JSON null."
+because the host codec serializes nil as JSON null.
+ToolCall also permits list arrays, including coordinates nested in objects;
+encode these as vectors so the host does not mistake them for objects."
   (cond
-   ((eq value :null) nil)
+   ((and (symbolp value) (equal (symbol-name value) ":null")) nil)
    ((vectorp value)
+    (vconcat (mapcar #'mevedel-tool-editing--restore-nulls value)))
+   ((and (consp value) (not (symbolp (car value))))
     (vconcat (mapcar #'mevedel-tool-editing--restore-nulls value)))
    ((listp value)
     (let (result)
@@ -94,7 +98,7 @@ because the host codec serializes nil as JSON null."
   "Apply a targeted mutation using CALLBACK and ARGS."
   (unless (member (plist-get args :action) '("patch" "rename" "revert"))
     (error "Unknown editing action"))
-  (mevedel-tool-editing--call callback args))
+  (mevedel-tool-editing--call callback (plist-put (copy-sequence args) :image t)))
 
 (defun mevedel-tool-editing--register ()
   "Register shared content tools."
@@ -113,7 +117,7 @@ because the host codec serializes nil as JSON null."
    :async-p t :groups (edit))
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit
-   :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Shape after uses {id,type,box:[x,y,w,h],text?,stroke?,fill?,width?,points?,from?,to?,src?,dash?,rough?,pattern?,edges?,opacity?,fontSize?,layer?}; types rect/ellipse/diamond/cylinder/sticky/text/arrow/line/pen/image. from/to bind connectors to shape IDs. Style: stroke/fill are #rrggbb or none; width 1-20; dash solid/dashed/dotted; rough 0-2 is hand-drawn sloppiness; pattern solid/hachure/cross fills; edges sharp/round on rect; opacity 0-100; fontSize 4-400; higher layer draws on top. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host."
+   :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Shape after uses {id,type,box:[x,y,w,h],text?,stroke?,fill?,width?,points?,from?,to?,src?,dash?,rough?,pattern?,edges?,opacity?,fontSize?,layer?}; types rect/ellipse/diamond/cylinder/sticky/text/arrow/line/pen/image. from/to bind connectors to shape IDs. Style: stroke/fill are #rrggbb or none; width 1-20; dash solid/dashed/dotted; rough 0-2 is hand-drawn sloppiness; pattern solid/hachure/cross fills; edges sharp/round on rect; opacity 0-100; fontSize 4-400; higher layer draws on top. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host. Whiteboard edits return the resulting PNG for visual inspection."
    :args ((id string :required "Item ID.")
           (action string :required "Operation." :enum ["patch" "rename" "revert"])
           (changes array :optional "Targeted changes." :items (:type object))

@@ -93,7 +93,12 @@
   function setConnection(text, className) {
     connection.textContent = text;
     connection.className = `conn ${className || ''}`;
-    if (className !== 'connected') editing.connection(false);
+    if (className !== 'connected') {
+      state.connected = false;
+      state.busy = null;
+      editing.connection(false);
+    }
+    renderModeline();
   }
 
   function showNotice(text) {
@@ -179,6 +184,7 @@
       if (text) modeline.append(el('span', className || 'ml', text));
     };
     add(state.model);
+    if (state.connected && state.busy) add('Assistant working…', 'ml assistant-working');
     if (state.owner && state.mode) modeline.append(sessions.modePicker());
     else add(state.mode);
     // Plan is a mode a guest can enter from a chip, so it has to be
@@ -926,6 +932,7 @@
       state.readOnly = frame.readOnly !== false;
       state.staging = {records: [], live: []};
       state.connected = true;
+      state.busy = null;
       notifications.render();
       setComposerVisible(!state.readOnly);
       showSkillChips(state.readOnly ? [] : frame.commands);

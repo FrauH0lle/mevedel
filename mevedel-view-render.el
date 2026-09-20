@@ -203,6 +203,8 @@
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-audit-only-p
                   "mevedel-transcript-audit" (text))
+(declare-function mevedel-transcript-audit-shared-context
+                  "mevedel-transcript-audit" (text shared))
 (declare-function mevedel-transcript-buffer-directive-ranges
                   "mevedel-transcript-audit" (&optional allow-open))
 (autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
@@ -4657,8 +4659,8 @@ dialogue, because the following Agent Task is the authoritative one."
            :initially-collapsed-p t)
      turn-source)))
 
-(defun mevedel-view--user-turn-guest-name (segments data-buf)
-  "Return the collaboration guest name owning this user turn, or nil.
+(defun mevedel-view--user-turn-attribution (segments data-buf)
+  "Return the collaboration attribution owning this user turn, or nil.
 SEGMENTS are the turn's data-buffer spans.  The attribution block sits
 in the turn's trailing audit strip, or inside the turn's own span when
 segment repair absorbed it, so the lookup covers the turn extent plus
@@ -4682,7 +4684,7 @@ the contiguous run of audit blocks that follows it."
         (cl-loop for (position . record)
                  in (mevedel-transcript-audit-guest-prompts)
                  when (and (>= position start) (< position strip-end))
-                 return (plist-get record :name))))))
+                 return record)))))
 
 (defun mevedel-view--user-input-line-count (text)
   "Return the number of lines in user input TEXT."
@@ -4781,6 +4783,26 @@ coordinates yet -- folds and expands the same way as a rendered turn."
           (mevedel-view-render-add-display-properties
            ins-start (point) 'user-input-summary))))))
 
+(defun mevedel-view--insert-shared-context (display &optional source)
+  "Insert the attributed question and folded context from DISPLAY.
+SOURCE bounds the original user input.  Anchor the disclosure to the exact
+context suffix so live echoes and later full renders share its fold state.
+Return the start of the inserted disclosure."
+  (insert (plist-get display :text) "\n")
+  (let ((body (plist-get display :context))
+        (start (point)))
+    (when (and source (markerp (car source)))
+      (setq source
+            (with-current-buffer (marker-buffer (car source))
+              (save-excursion
+                (goto-char (car source))
+                (when (search-forward body (cdr source) t)
+                  (mevedel-view-disclosure-source-range
+                   (current-buffer) (- (point) (length body)) (point)))))))
+    (mevedel-view--insert-user-input-fold
+     (concat (plist-get display :label) "\n" body) source)
+    start))
+
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
@@ -4799,6 +4821,10 @@ coordinates yet -- folds and expands the same way as a rendered turn."
                     (mevedel-view--directive-turn-display-text raw-text))
                  (or (plist-get inline-skill :display-text)
                      raw-text)))
+         (attribution (unless directive
+                        (mevedel-view--user-turn-attribution segments data-buf)))
+         (shared-display (mevedel-transcript-audit-shared-context
+                          text (plist-get attribution :shared)))
          (text-start nil))
     (cond
      ((and (string-empty-p text)
@@ -4813,9 +4839,7 @@ coordinates yet -- folds and expands the same way as a rendered turn."
       (mevedel-view--decorate-agent-message-blocks text-start (point)))
      (t
       (let* ((header-start (point))
-             (guest (unless directive
-                      (mevedel-view--user-turn-guest-name
-                       segments data-buf))))
+             (guest (plist-get attribution :name)))
         (insert (propertize
                  (cond
                   (directive
@@ -4845,22 +4869,29 @@ coordinates yet -- folds and expands the same way as a rendered turn."
                  'help-echo "RET: directive actions"))))
       (setq text-start (point))
       (unless (string-empty-p text)
-        (if (and (null prompt-drawers)
-                 (not directive)
-                 (mevedel-view--user-input-fold-p text))
-            (mevedel-view--insert-user-input-fold
-             text
-             (when-let* ((user-segs
-                          (cl-remove-if-not
-                           (lambda (seg) (eq (car seg) 'user))
-                           segments)))
-               (mevedel-view-disclosure-source-range
-                data-buf
-                (cadr (car user-segs))
-                (caddr (car (last user-segs))))))
+        (cond
+         (shared-display
+          (mevedel-view--insert-shared-context
+           shared-display
+           (mevedel-view-disclosure-source-range
+            data-buf (cadr (car segments)) (apply #'max (mapcar #'caddr segments)))))
+         ((and (null prompt-drawers)
+               (not directive)
+               (mevedel-view--user-input-fold-p text))
+          (mevedel-view--insert-user-input-fold
+           text
+           (when-let* ((user-segs
+                       (cl-remove-if-not
+                        (lambda (seg) (eq (car seg) 'user))
+                        segments)))
+             (mevedel-view-disclosure-source-range
+              data-buf
+              (cadr (car user-segs))
+              (caddr (car (last user-segs)))))))
+         (t
           (insert text)
           (unless (eq (char-before) ?\n)
-            (insert "\n"))))
+            (insert "\n")))))
       ;; Decorate mailbox blocks that appear inside mixed user text.
       (mevedel-view--decorate-agent-result-blocks text-start (point))
       (mevedel-view--decorate-agent-message-blocks text-start (point))
@@ -7651,7 +7682,7 @@ view chrome."
 
 (defun mevedel-view--insert-user-message
     (text &optional kind hook-context prompt-summary-body
-          prompt-summary-source hook-audits guest-name)
+          prompt-summary-source hook-audits attribution user-source)
   "Render TEXT as a user message in the history region.
 Inserts at the history boundary with read-only protection.
 KIND may be `directive' to fontify directive-specific display text.
@@ -7659,8 +7690,8 @@ HOOK-CONTEXT is model-visible hook context to summarize in the view.
 PROMPT-SUMMARY-BODY, when non-nil, is shown as a collapsed Prompt
 section backed by PROMPT-SUMMARY-SOURCE when available.  HOOK-AUDITS
 is a list of hook audit records to render under the user turn.
-GUEST-NAME, when non-nil, names the collaboration guest whose queued
-prompt this is; the turn heading carries it instead of \"You\".
+ATTRIBUTION identifies the collaboration guest and any attached shared context.
+USER-SOURCE bounds the submitted prompt in the data buffer.
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
@@ -7673,6 +7704,9 @@ marker at the end of the inserted block."
       (let ((inhibit-read-only t)
             (start (point))
             (fold-start nil)
+            (guest-name (plist-get attribution :name))
+            (shared-display (mevedel-transcript-audit-shared-context
+                             text (plist-get attribution :shared)))
             user-end)
         (insert (propertize (if guest-name
                                 (format "%s (guest)\n" guest-name)
@@ -7681,16 +7715,20 @@ marker at the end of the inserted block."
                             (if guest-name
                                 'mevedel-view-guest-header
                               'mevedel-view-user-header)))
-        (if (and (not (eq kind 'directive))
-                 (mevedel-view--user-input-fold-p text))
-            (progn
-              (setq fold-start (point))
-              (mevedel-view--insert-user-input-fold text))
+        (cond
+         (shared-display
+          (setq fold-start
+                (mevedel-view--insert-shared-context shared-display user-source)))
+         ((and (not (eq kind 'directive))
+               (mevedel-view--user-input-fold-p text))
+          (setq fold-start (point))
+          (mevedel-view--insert-user-input-fold text))
+         (t
           (insert (if (eq kind 'directive)
                       (mevedel-view--fontify-directive-display-text text)
                     text))
           (unless (eq (char-before) ?\n)
-            (insert "\n")))
+            (insert "\n"))))
         (setq user-end (point))
         (when-let* ((events (mevedel-view--hook-context-events-from-text
                              hook-context)))

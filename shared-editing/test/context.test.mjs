@@ -90,3 +90,33 @@ test('board context keeps selection identities, rejects deleted targets and boun
     assert.equal(captureContext(largeDoc, {range:rangeFor(text,0,text,3)}).quote, 'xxx');
   } finally { largeDoc.destroy(); }
 });
+
+test('thread replies are attributed, retry-safe and included in explicit questions at the reviewed version', async () => {
+  let {state} = await handle({action:'create',id:'doc',opId:'create',actor:'Alice',kind:'document',
+    content:{type:'doc',content:[{type:'paragraph',attrs:{id:'a'},content:[{type:'text',text:'A data model.'}]}]}});
+  const doc = load(state);
+  try {
+    const text = doc.getXmlFragment('document').get(0).get(0);
+    const range = rangeFor(text,2,text,12), expected = captureContext(doc,{range}).snapshot;
+    ({state} = await handle({action:'comment',state,opId:'thread',actor:'Guest: Alice',range,expected,text:'What does this mean?'}));
+    const reply = {action:'reply-comment',opId:'reply',actor:'Guest: Bob',commentId:'thread',text:'Please include an example.'};
+    ({state} = await handle({...reply,state}));
+    assert.equal(state.comments[0].replies[0].actor,'Guest: Bob');
+    assert.equal((await handle({...reply,state})).state.comments[0].replies.length,1);
+    const ask = {action:'read',state,question:true,commentId:'thread',commentVersion:'reply',range,expected};
+    const {result} = await handle(ask);
+    assert.deepEqual(result.snapshot.discussion,[{actor:'Guest: Alice',text:'What does this mean?'},
+      {actor:'Guest: Bob',text:'Please include an example.'}]);
+    await assert.rejects(handle({...ask,commentVersion:'thread'}),/Discussion changed/);
+    await assert.rejects(handle({...reply,state,opId:'empty',text:' '}),/reply is required/);
+    await assert.rejects(handle({...reply,state,opId:'unknown',commentId:'missing'}),/no longer available/);
+    ({state} = await handle({action:'resolve-comment',state,opId:'resolve',actor:'Bob',commentId:'thread',resolved:true}));
+    await assert.rejects(handle({...reply,state,opId:'closed'}),/Reopen/);
+    ({state} = await handle({action:'resolve-comment',state,opId:'reopen',actor:'Bob',commentId:'thread',resolved:false}));
+    ({state} = await handle({...reply,state,opId:'reply-two',text:'And a diagram?'}));
+    assert.equal(state.comments[0].replies.length,2);
+    assert.deepEqual(result.snapshot.discussion.map(m=>m.text),['What does this mean?','Please include an example.']);
+    const exported = await handle({action:'export',format:'native',state});
+    assert.doesNotMatch(exported.result.text,/Please include|And a diagram/);
+  } finally { doc.destroy(); }
+});

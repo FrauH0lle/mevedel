@@ -29,12 +29,50 @@ export function pathPoints(shape, context) {
   ];
   if (shape.type === 'pen') return points;
   // ponytail: linear lookup, at most 2,000 shapes; index if measured render cost warrants it.
-  const center = (id) => {
-    const target = context.find((s) => s.id === id);
-    return target ? [target.box[0] + target.box[2] / 2, target.box[1] + target.box[3] / 2] : null;
-  };
-  return [center(shape.from) || points[0], center(shape.to) || points.at(-1)];
+  const targets = [shape.from, shape.to].map(id => context.find(s => s.id === id));
+  const centers = targets.map((target, i) => target
+    ? [target.box[0] + target.box[2] / 2, target.box[1] + target.box[3] / 2]
+    : i ? points.at(-1) : points[0]);
+  return targets.map((target, i) => target
+    ? borderPoint(target, centers[1 - i]) : centers[i]);
 }
+
+// Intersect a center-to-center ray with the nominal silhouette. Hand-drawn
+// wobble is decorative; it must not make a connector's attachment wander.
+function borderPoint(shape, toward) {
+  const [x, y, w, h] = shape.box, rx = w / 2, ry = h / 2;
+  const center = [x + rx, y + ry], dx = toward[0] - center[0], dy = toward[1] - center[1];
+  if (!w || !h || (!dx && !dy)) return center;
+  const scale = Math.min(rx / Math.abs(dx), ry / Math.abs(dy));
+  const vx = dx * scale, vy = dy * scale;
+  const radius = shape.type === 'rect' && styleOf(shape).edges === 'round' && Math.min(w,h) > 6
+    ? Math.min(32, Math.min(w,h) * .25) : 0;
+  const vertices = shape.type === 'sticky' ? sticky(shape.box) : null;
+  const inside = t => {
+    const px = Math.abs(vx * t), py = Math.abs(vy * t);
+    if (shape.type === 'ellipse') return (px / rx) ** 2 + (py / ry) ** 2 <= 1;
+    if (shape.type === 'diamond') return px / rx + py / ry <= 1;
+    if (shape.type === 'cylinder') {
+      const rim = rimRy(h);
+      return (px / rx) ** 2 + (Math.max(0, py - ry + rim) / rim) ** 2 <= 1;
+    }
+    if (vertices) return vertices.every((a, i) => {
+      const b = vertices[(i + 1) % vertices.length];
+      return (b[0]-a[0]) * (center[1]+vy*t-a[1]) - (b[1]-a[1]) * (center[0]+vx*t-a[0]) >= 0;
+    });
+    return !radius || Math.max(0, px-rx+radius) ** 2 + Math.max(0, py-ry+radius) ** 2 <= radius ** 2;
+  };
+  let low = 0, high = 1;
+  // Most rays meet a straight side. Curved corners need a bounded search.
+  if (inside(high)) low = high;
+  else for (let i = 0; i < 32; i++) {
+    const mid = (low + high) / 2;
+    if (inside(mid)) low = mid;
+    else high = mid;
+  }
+  return [center[0] + vx * low, center[1] + vy * low];
+}
+
 export function bounds(shapes, context = shapes) {
   if (!shapes.length) return [-40, -40, 800, 500];
   let left = Infinity,
@@ -274,7 +312,7 @@ export function shapeSVG(s, shapes) {
   return `<g data-shape="${escape(s.id)}"${style.opacity < 100 ? ` opacity="${style.opacity / 100}"` : ''}>${body}</g>`;
 }
 export const definitions =
-  '<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>';
+  '<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>';
 export function boardSVG(shapes, maxEdge = 2048, context = shapes) {
   const box = bounds(shapes, context),
     scale = Math.min(1, maxEdge / Math.max(box[2], box[3]));
@@ -298,6 +336,10 @@ export function documentHTML(json) {
     if (node.type === 'doc') return inner;
     if (node.type === 'hardBreak') return '<br>';
     if (node.type === 'horizontalRule') return '<hr>';
+    if (node.type === 'image') {
+      const a = node.attrs;
+      return `<img src="${escape(a.src)}" alt="${escape(a.alt || '')}"${a.title ? ` title="${escape(a.title)}"` : ''}${a.width ? ` width="${a.width}"` : ''}${a.height ? ` height="${a.height}"` : ''}>`;
+    }
     if (node.type === 'codeBlock') return `<pre><code>${inner}</code></pre>`;
     const tag =
       node.type === 'heading'
@@ -315,5 +357,5 @@ export function documentHTML(json) {
           }[node.type];
     return `<${tag}>${inner}</${tag}>`;
   };
-  return `<!doctype html><meta charset="utf-8"><style>body{max-width:55em;margin:3em auto;font:18px/1.6 system-ui}table{border-collapse:collapse}td,th{border:1px solid #888;padding:.4em}pre{white-space:pre-wrap}</style><article>${render(json)}</article>`;
+  return `<!doctype html><meta charset="utf-8"><style>body{max-width:55em;margin:3em auto;font:18px/1.6 system-ui}table{border-collapse:collapse}td,th{border:1px solid #888;padding:.4em}pre{white-space:pre-wrap}img{max-width:100%;height:auto}</style><article>${render(json)}</article>`;
 }

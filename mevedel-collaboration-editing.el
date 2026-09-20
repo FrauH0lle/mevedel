@@ -61,13 +61,23 @@
 
 (defun mevedel-collaboration-editing--presence (room peer guest args)
   "Forward PEER's ephemeral ARGS to others viewing the same item in ROOM."
-  (let ((now (float-time)) (point (plist-get args :point)))
+  (let ((now (float-time)) (point (plist-get args :point))
+        (trail (plist-get args :trail)))
     (when (and (plist-get guest :writable)
                (equal (plist-get guest :editing-item) (plist-get args :id))
                (if (equal (plist-get args :mode) "clear")
                    (plist-get guest :editing-pointing)
                  (>= (- now (or (plist-get guest :editing-presence-at) 0)) 0.045))
                (member (plist-get args :mode) '("cursor" "laser" "selection" "clear"))
+               (or (null trail)
+                   (and (equal (plist-get args :mode) "laser")
+                        (listp trail) (<= (length trail) 64)
+                        (cl-every
+                         (lambda (sample)
+                           (and (listp sample) (= (length sample) 3)
+                                (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) sample)
+                                (<= 0 (nth 2 sample) 550)))
+                         trail)))
                (or (null point)
                    (and (listp point) (= (length point) 2)
                         (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) point))))
@@ -78,7 +88,8 @@
         (plist-put guest :editing-presence-at now))
       (let ((frame (list :t "editing-presence" :id (plist-get args :id)
                          :peer peer :name (plist-get guest :name)
-                         :mode (plist-get args :mode) :point (and point (vconcat point)))))
+                         :mode (plist-get args :mode) :point (and point (vconcat point))
+                         :trail (and trail (vconcat (mapcar #'vconcat trail))))))
         (when (equal (plist-get args :mode) "clear")
           (setq frame (append frame (list :clientId (plist-get guest :editing-client)
                                           :clock (1+ (or (plist-get guest :editing-clock) 0))))))
@@ -133,7 +144,8 @@
                (mevedel-shared-editing--json
                 (list :id (plist-get args :id)
                       :text (plist-get args :text) :expected (plist-get args :expected)
-                      :commentId (plist-get args :commentId)))))
+                      :commentId (plist-get args :commentId)
+                      :commentVersion (plist-get args :commentVersion)))))
 
 (defun mevedel-collaboration-editing--find-question (room args)
   "Find an accepted question matching ARGS in ROOM's queue or transcript.
@@ -173,6 +185,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                            :itemId (plist-get result :id) :title (plist-get result :title)
                            :revision (plist-get result :revision)
                            :commentId (plist-get args :commentId)
+                           :commentVersion (plist-get args :commentVersion)
                            :scope (plist-get (plist-get result :snapshot) :scope)
                            :quote (truncate-string-to-width (or (plist-get result :quote) "")
                                                              2000 nil nil "…")
@@ -212,7 +225,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                            (eq guest (mevedel-collaboration--guest room peer))
                            (or read-only (plist-get guest :writable))))))
     (unless (and (member action '("list" "read" "create" "import" "update"
-                                  "rename" "revert" "export" "ask" "comment" "resolve-comment"))
+                                  "rename" "revert" "export" "ask" "comment" "reply-comment" "resolve-comment"))
                  (funcall authorize))
       (error "This link does not permit that editing operation"))
     (when (equal action "ask")
@@ -230,7 +243,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                          :image (if (equal action "ask") t :json-false) :imageMax 1024
                          :actor (concat "Guest: " (plist-get guest :name)))))
       (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range :selection
-                     :expected :text :commentId :resolved))
+                     :expected :text :commentId :commentVersion :resolved))
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
       (mevedel-shared-editing-call

@@ -126,6 +126,10 @@
     (should (equal (mevedel-tool-editing--restore-nulls "null") "null"))
     (should (equal (mevedel-tool-editing--restore-nulls (list :a 1 :b [1 2] :c :json-false))
                    (list :a 1 :b [1 2] :c :json-false)))
+    (should (equal (mevedel-tool-editing--restore-nulls
+                    '(:box (710 143 85 1) :points ((1 2) (3 4))))
+                   '(:box [710 143 85 1] :points [[1 2] [3 4]])))
+    (should (eq (mevedel-tool-editing--restore-nulls (make-symbol ":null")) nil))
     (should (eq (mevedel-tool-editing--restore-nulls :null) nil))))
 
 (provide 'test-mevedel-tool-editing)

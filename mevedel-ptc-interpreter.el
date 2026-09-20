@@ -232,6 +232,10 @@ that exceeds the node or depth budget.  Return the canonical FORM."
               mevedel-ptc-max-depth))
            (cond
             ((or (symbolp x) (stringp x) (numberp x)) nil)
+            ((vectorp x)
+             (dotimes (index (length x))
+               (aset x index (mevedel-ptc--canonicalize-atom (aref x index)))
+               (walk (aref x index) (1+ depth))))
             ((consp x)
              (let ((cur x))
                (while (consp cur)

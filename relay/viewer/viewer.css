@@ -986,3 +986,11 @@ code, pre {
 }
 .st.warning { color: #a66b00; }
 .st.denied, .st.cancelled { color: var(--failed); }
+
+.shared-context { margin-top: 10px; font: 13px system-ui; }
+.shared-context > summary { cursor: pointer; color: var(--muted); }
+.shared-context-body { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; font: 12px ui-monospace, monospace; }
+
+.assistant-working::before { content: ''; display: inline-block; width: .75em; height: .75em; margin-right: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; animation: assistant-spin 1s linear infinite; }
+@keyframes assistant-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .assistant-working::before { animation: none; } }

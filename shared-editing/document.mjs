@@ -4,6 +4,8 @@ import { equalityDeep } from 'lib0/function';
 import { getSchema } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TableKit } from '@tiptap/extension-table';
+import Image from '@tiptap/extension-image';
+import { validateImage } from './image.mjs';
 import UniqueID, { generateUniqueIds } from '@tiptap/extension-unique-id';
 import { MarkdownManager } from '@tiptap/markdown';
 import {
@@ -16,6 +18,21 @@ import {
 export const extensions = [
   StarterKit.configure({ undoRedo: false, link: { openOnClick: false } }),
   TableKit,
+  Image.extend({
+    addAttributes() {
+      return {...this.parent(), ...Object.fromEntries(['width', 'height'].map(key => [key, {
+        default: null,
+        parseHTML: element => element.hasAttribute(key) ? Number(element.getAttribute(key)) : null,
+      }]))};
+    },
+    parseHTML() {
+      return [{ tag: 'img[src]', getAttrs: element => {
+        try { validateImage(element.getAttribute('src')); return null; }
+        catch { return false; }
+      } }];
+    },
+    addInputRules() { return []; },
+  }).configure({ allowBase64: true }),
   UniqueID.configure({
     types: [
       'paragraph',
@@ -26,6 +43,7 @@ export const extensions = [
       'orderedList',
       'table',
       'horizontalRule',
+      'image',
     ],
   }),
 ];
@@ -64,12 +82,22 @@ export function selectedText(doc, range) {
   };
 }
 export function validateDocument(json) {
-  let count = 0;
+  let count = 0, imageBytes = 0, pixels = 0;
   const visit = (node, depth) => {
     if (!node || depth > 48 || ++count > 10000) throw new Error('Document is too complex');
     if (!schema.nodes[node.type]) throw new Error('Unknown document node');
     if (Object.keys(node).some((k) => !['type', 'attrs', 'content', 'marks', 'text'].includes(k)))
       throw new Error('Unknown document property');
+    if (node.type === 'image') {
+      pixels += validateImage(node.attrs?.src);
+      imageBytes += node.attrs.src.length;
+      for (const key of ['alt', 'title'])
+        if (node.attrs[key] != null && (typeof node.attrs[key] !== 'string' || node.attrs[key].length > 10000))
+          throw new Error('Invalid image description');
+      for (const key of ['width', 'height'])
+        if (node.attrs[key] != null && (!Number.isFinite(node.attrs[key]) || node.attrs[key] < 1 || node.attrs[key] > 8192))
+          throw new Error('Invalid image size');
+    }
     if (node.attrs) {
       const attrs = schema.nodes[node.type].spec.attrs || {};
       for (const key of Object.keys(node.attrs))
@@ -115,7 +143,9 @@ export function validateDocument(json) {
   visit(json, 0);
   const node = schema.nodeFromJSON(json);
   node.check();
-  if (new TextEncoder().encode(JSON.stringify(json)).length > 1024 * 1024)
+  if (pixels > 32000000 || imageBytes > 12 * 1024 * 1024)
+    throw new Error('Document images exceed 32 megapixels or 12 MB of embedded data');
+  if (new TextEncoder().encode(JSON.stringify(json)).length - imageBytes > 1024 * 1024)
     throw new Error('Document is too large');
   const ids = (json.content || []).map((n) => n.attrs?.id);
   if (ids.some((id) => !id)) throw new Error('Missing block identity');

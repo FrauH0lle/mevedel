@@ -39,6 +39,10 @@ support local editor dialogs; CSP forbids network form submission and fetches.
 Geometry is one atomic shape property; independent text/style properties
 remain separate. Same-property concurrent writes follow Yjs's deterministic
 ordering, and deletion wins over an in-flight property edit to that record.
+The first drag implementation only redrew after release. Move and resize now
+render temporary geometry through the same scene and connector renderer, then
+commit that geometry on release. Cancellation drops the preview without a CRDT
+write; pointer motion does not create a stream of saved revisions.
 New empty documents share an initial text object: real browser testing found
 that two separately created empty text objects could normalize into one while
 losing a writer's undo history. Agent edits and inverses compare their exact
@@ -48,6 +52,15 @@ Presence is bounded, disposable traffic. Explicit questions capture committed
 content and enter the ordinary pending-input queue; synchronization starts no
 model turns. Native imports validate completely and begin a fresh lineage.
 There is one current schema, no executable import and no compatibility layer.
+
+Embedded images use the same byte and dimension validator in both item kinds.
+The document schema includes Tiptap's image node with embedded sources only;
+the host enforces the same limits as browser insertion. Upload, file drop, and
+clipboard images share one insertion path per editor, while relative document
+positions keep asynchronous file reads anchored through concurrent edits.
+Native, HTML, and Markdown document exports retain image data without a separate
+asset service or remote fetch. Existing session activity drives visible working
+indicators in the room and editor chats; no second request lifecycle is tracked.
 
 The cost is a local Node runtime and packaged browser/helper bundles. End
 users do not install npm dependencies. Large content and operation histories
@@ -83,10 +96,10 @@ coupling menu height to button proportions.
 Laser pointing now follows mouse/pen hover, or a touch drag, rather than requiring
 a mouse-button gesture. Screen-sized luminous tips, compact labels, and independently
 fading curved trails make it distinguishable from ordinary cursor presence.
-Remote pointers transition from their displayed position to received samples.
-A fixed playback-delay experiment reduced normal stepping but still jumped on
-jittered delivery; transitioning from the displayed position absorbs that gap
-without extrapolating after a stop. Presence remains transient and bounded, and
+Remote cursors transition from their displayed position to received samples.
+Laser packets carry a bounded recent input trail, played with a short delay,
+so the observer retains the curve between packets. The sender still emits at
+most 20 packets per second; this adds samples rather than more packets. Presence remains transient and bounded, and
 reduced-motion preferences disable the extra movement and trails.
 
 
@@ -102,12 +115,26 @@ checks exact content after pending edits commit, then adds item identity and the
 committed revision. Stale captures fail visibly and require explicit refresh.
 
 Document comments are a bounded, host-authored annotation list with Yjs relative
-anchors, original quote, author, and resolution state. This keeps guest authorship
+anchors, original quote, attributed human replies, and resolution state. This keeps guest authorship
 out of browser-controlled CRDT fields while ordinary concurrent edits move the
 anchors. Comments persist with the item but are excluded from content exports.
-Posting a comment and sending it to the assistant are distinct explicit actions.
+Posting comments and replies never starts a model turn. A selection toolbar
+provides separate comment and assistant entry points. The sidebar has distinct
+Comments and Assistant views and independently persisted drafts. Sending a
+thread submits its posted human messages and passage through the existing
+question queue; the host verifies both captured content and the last reviewed
+reply identity. Canonical AI answers render inside that thread, correlated with
+the message version sent, rather than being copied into comment storage.
+Resolution remains an explicit participant action.
 Live anchors describe the current passage; sent snapshots describe the prior
 question and never track later edits.
+Large snapshots overwhelmed the Emacs and room transcripts while the sidebar
+showed only a quote. All three now keep the question visible and put the actual
+sent context in a disclosure collapsed by default, identified by item, scope,
+and revision. The browser views share one renderer; Emacs reuses its source-backed
+input fold. Trusted attribution and an exact authored-question prefix identify
+the generated suffix. Host edits and mismatches stay visible. The canonical
+prompt and model delivery are unchanged.
 
 Questions use existing external follow-ups and transcript audit attribution.
 A stable request identity and content fingerprint find accepted questions in that
@@ -118,9 +145,56 @@ provider failure summaries are projected without their private error payloads.
 
 ### Decision history
 
+A document trial exposed ambiguity when selection always opened comment mode,
+posting immediately repurposed the draft as an AI question, and a button named
+Send to assistant merely copied text into the composer. Explicit selection
+actions, independent drafts, human reply threads, and a send button that submits
+replace that workflow. Discussion answers stay at their comment; asking directly
+about a passage does not require publishing a comment first.
+
+
+The first laser refinement interpolated only packet endpoints. It reduced
+stepping in timing traces, but a two-browser circle trial exposed visibly
+polygonal observer trails: coalescing had discarded the actual curve. Retaining
+up to 64 recent input samples per packet replaces that endpoint-only laser
+playback. Cursor interpolation remains unchanged. The earlier fixed-delay
+experiment had used only sparse endpoints and did not address this data loss.
+
+
 Originally questions used a whole/selection dropdown in a footer, and a short
 per-peer duplicate window. Browser trials showed that the dropdown concealed a
 lost selection, the footer lacked replies, and reconnecting lost retry identity.
 The frozen context panel, explicit document comments, and queue/transcript retry
 lookup replace those choices. Native export remains content-only because session
 annotations refer to the original CRDT lineage and conversation.
+
+## Visual feedback after model edits
+
+The first model-assisted board trial required a workaround because nested
+ToolCall coordinate lists were encoded as objects, and vector literals were
+rejected despite being documented. The interpreter now accepts bounded vector
+data, and the editing adapter preserves nested arrays and explicit nulls.
+
+SharedEdit returns the canonical post-edit board PNG through the existing tool
+media channel. SharedRead and browser questions already used this renderer;
+reusing it gives the model immediate visual evidence from the committed revision,
+even with all browsers closed. Rendering happens before publication so a render
+failure cannot be reported as a failed edit after content was already committed.
+A subsequent provider audit found that the old media adapter allowed only
+Read/SharedRead names: it dropped images returned by SharedEdit and by the outer
+ToolCall identity. Delivery now follows the captured media record and owning
+tool-use ID, independent of the tool name. Native continuation tests cover the
+actual image blocks in addition to the handler result.
+
+This supplies evidence without adding a second model turn or an automatic
+review controller. Documents continue to return structured content.
+
+## Connector borders
+
+A real board exposed bound arrows running through component labels because the
+renderer used target centers as visible endpoints. Bindings still store target
+IDs, but the shared renderer now intersects the center-to-center direction with
+each target's nominal silhouette. Both endpoints follow target movement and
+resizing in the browser and in host snapshots. Hand-drawn wobble remains a
+visual decoration rather than changing attachment geometry. Existing boards
+benefit without content rewrites; unbound endpoints keep their explicit points.

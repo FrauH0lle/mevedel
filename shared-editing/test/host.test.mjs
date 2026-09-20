@@ -16,6 +16,7 @@ test('host creates, exports, imports independently, and renders without a browse
     state: made.state,
     actor: 'Agent',
     opId: 'edit1',
+    image: true,
     changes: [
       {
         id: 'one',
@@ -29,6 +30,7 @@ test('host creates, exports, imports independently, and renders without a browse
     state: edited.state,
     actor: 'Agent',
     opId: 'edit1',
+    image: true,
     changes: [],
   });
   assert.equal(retried.state.revision, edited.state.revision);
@@ -37,6 +39,8 @@ test('host creates, exports, imports independently, and renders without a browse
     Buffer.from(png.result.data, 'base64').subarray(0, 8).toString('hex'),
     '89504e470d0a1a0a',
   );
+  assert.equal(edited.result.png, png.result.data, 'edit returns the committed board image');
+  assert.equal(retried.result.png, png.result.data, 'retry returns the same image');
   const native = await handle({ action: 'export', state: edited.state, format: 'native' });
   const copy = await handle({
     action: 'import',
@@ -65,7 +69,7 @@ test('selected connector PNG uses the current bound endpoint and includes its re
     ],
     to: 'target',
   };
-  const target = { id: 'target', type: 'rect', box: [500, 500, 100, 100] };
+  const target = { id: 'target', type: 'rect', edges: 'sharp', box: [500, 500, 100, 100] };
   const board = await handle({
     action: 'create',
     id: 'bound',
@@ -86,10 +90,10 @@ test('selected connector PNG uses the current bound endpoint and includes its re
   assert.deepEqual(selected.result.context, [target]);
   const resolved = {
     ...arrow,
-    box: [0, 0, 550, 550],
+    box: [0, 0, 500, 500],
     points: [
       [0, 0],
-      [550, 550],
+      [500, 500],
     ],
   };
   delete resolved.to;
@@ -266,4 +270,28 @@ test('native assets and viewable exports round trip; malformed imports stay unpu
     /Unsupported import/,
   );
   assert.equal(board.state.revision, 1);
+});
+
+test('document images survive saves and native, HTML, and Markdown exports', async () => {
+  const board = await handle({action:'create',id:'image-source',kind:'whiteboard',actor:'Guest',opId:'source'});
+  const src = 'data:image/png;base64,' + (await handle({action:'export',state:board.state,format:'png'})).result.data;
+  const image = {type:'image',attrs:{id:'picture',src,alt:'Diagram',width:320,height:160}};
+  const made = await handle({action:'create',id:'illustrated',kind:'document',actor:'Guest',opId:'create',
+    content:{type:'doc',content:[image]}});
+  const read = await handle({action:'read',state:made.state});
+  assert.equal(read.result.content.content[0].attrs.src,src);
+  for (const format of ['native','markdown']) {
+    const exported = await handle({action:'export',state:made.state,format});
+    const imported = await handle({action:'import',id:'copy-'+format,format,data:exported.result.text,actor:'Guest',opId:'copy'});
+    assert.equal(imported.result.content.content.find(n=>n.type==='image').attrs.src,src);
+  }
+  const html = await handle({action:'export',state:made.state,format:'html'});
+  assert.ok(html.result.text.includes(`<img src="${src}" alt="Diagram" width="320" height="160">`));
+  for (const attrs of [{src:'https://example.com/image.png'}, {src:'data:image/svg+xml;base64,PHN2Zz4='},
+                        {src:'data:image/png;base64,YmFk'}, {width:-1}, {alt:{bad:true}}]) {
+    await assert.rejects(handle({action:'patch',state:made.state,actor:'Guest',opId:'bad',changes:[
+      {id:'picture',before:read.result.content.content[0],after:{type:'image',attrs:{...image.attrs,...attrs}}},
+    ]}));
+  }
+  assert.equal((await handle({action:'read',state:made.state})).result.content.content[0].attrs.src,src);
 });

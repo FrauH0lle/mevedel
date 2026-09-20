@@ -13,11 +13,13 @@ import * as encoding from 'lib0/encoding';
 import { ObservableV2 } from 'lib0/observable';
 import {
   absolutePositionToRelativePosition,
+  relativePositionToAbsolutePosition,
   defaultDeleteFilter,
   ySyncPluginKey,
 } from '@tiptap/y-tiptap';
-import { extensions, schema, seedEmptyText, selectionPositions } from './document.mjs';
-import { restore, encode, inspect, putShape, validateShape, validateImage } from './model.mjs';
+import { extensions, schema, seedEmptyText, selectionPositions, validateDocument } from './document.mjs';
+import { restore, encode, inspect, putShape, validateShape } from './model.mjs';
+import { validateImage } from './image.mjs';
 import { shapeSVG, definitions, escape, bounds, styleOf, FILLABLE, LINEAR } from './render.mjs';
 const $ = (id) => document.getElementById(id),
   remote = Symbol('remote'),
@@ -51,6 +53,7 @@ let tool = 'select',
   lastPresence = 0,
   pointing = null,
   presenceTimer = null,
+  laserSamples = [],
   boardPresence,
   refresh = () => {};
 /* Style of the next drawn shape; the panel edits it alongside the selection. */
@@ -124,7 +127,7 @@ function draft() {
         ? [...pending, { opId: bufferedId, update: b64(Y.mergeUpdates(updates)) }]
         : pending,
       revision,
-      assistant: assistant?.draft,
+      assistant: assistant?.drafts,
     },
   });
 }
@@ -225,8 +228,17 @@ function transformGeometry(geometry, box) {
       : {}),
   };
 }
+function dragGeometry(d) {
+  if (!d?.end || !['move', 'resize'].includes(d.mode)) return [];
+  return (d.mode === 'move' ? d.boxes : [[d.id, d.before]]).map(([id, g]) => [
+    id, transformGeometry(g, d.mode === 'move'
+      ? [g.box[0] + d.end[0] - d.start[0], g.box[1] + d.end[1] - d.start[1], ...g.box.slice(2)]
+      : [...g.box.slice(0, 2), Math.max(10, d.end[0] - g.box[0]), Math.max(10, d.end[1] - g.box[1])]),
+  ]);
+}
 function draw() {
-  const shapes = shapeList();
+  const preview = new Map(dragGeometry(drag));
+  const shapes = shapeList().map(s => preview.has(s.id) ? {...s, ...preview.get(s.id)} : s);
   $('canvas').setAttribute('viewBox', view.join(' '));
   const scale = $('canvas').getScreenCTM()?.a || 1;
   const signature = JSON.stringify([shapes, scale, [...agentTargets], $('show-agent').checked]);
@@ -257,6 +269,9 @@ function draw() {
       }
     }
   }
+  for (const group of $('scene').querySelectorAll('[data-shape]'))
+    group.dataset.editing = String(group.dataset.shape === textEditing);
+  layoutShapeText();
   for (const id of selected) if (!doc.getMap('shapes').has(id)) selected.delete(id);
   $('selection').innerHTML = shapes
     .filter((s) => selected.has(s.id))
@@ -266,7 +281,7 @@ function draw() {
     })
     .join('');
   boardPresence?.animate();
-  $('comment-selection').disabled = readOnly || !selected.size;
+  $('selection-question').disabled = readOnly || !selected.size;
   refresh();
 }
 function world(event) {
@@ -277,14 +292,22 @@ function world(event) {
 }
 function presence(point, mode = 'cursor') {
   if (readOnly || !online) return;
+  const now = performance.now();
+  laserSamples = mode === 'laser' ? laserSamples.filter(s => now - s[2] < 550).slice(-63) : [];
+  if (mode === 'laser' && (!laserSamples.length || Math.floor(now / 8) !== Math.floor(laserSamples.at(-1)[2] / 8)))
+    laserSamples.push([...point, now]);
+  else if (mode === 'laser') laserSamples[laserSamples.length - 1] = [...point, now];
   pointing = { point, mode };
-  if (mode === 'laser') showPresence({ peer: 'self', name: participant, point, mode });
+  if (mode === 'laser') showPresence({ peer: 'self', name: participant, point, mode,
+    trail: laserSamples.map(([x,y,time]) => [x,y,now-time]) });
   // Coalesce a burst, but always deliver its final position even if motion stops.
   if (presenceTimer) return;
   presenceTimer = setTimeout(() => {
     presenceTimer = null;
     lastPresence = performance.now();
-    if (pointing && online) port.postMessage({ type: 'presence', ...pointing });
+    if (pointing && online) port.postMessage({ type: 'presence', ...pointing,
+      trail: pointing.mode === 'laser' ? laserSamples.filter(s => lastPresence - s[2] < 550)
+        .map(([x,y,time]) => [x,y,lastPresence-time]) : undefined });
   }, Math.max(0, 50 - (performance.now() - lastPresence)));
 }
 function stopPointing() {
@@ -292,6 +315,7 @@ function stopPointing() {
   presenceTimer = null;
   if (pointing && online) port.postMessage({ type: 'presence', mode: 'clear', point: null });
   pointing = null;
+  laserSamples = [];
   boardPresence?.clear('self');
 }
 function clearPresence() {
@@ -344,25 +368,32 @@ function button(parent, label, action) {
   parent.append(b);
   return b;
 }
+function layoutShapeText() {
+  if (!textEditing) return;
+  const shape = shapeList().find(s => s.id === textEditing);
+  if (!shape) { $('shape-text').blur(); return; }
+  const input = $('shape-text'), [x, y, w, h] = shape.box;
+  const matrix = $('canvas').getScreenCTM(), size = styleOf(shape).fontSize;
+  const centered = !['text', ...LINEAR].includes(shape.type);
+  const height = Math.max(1, input.value.split('\n').length) * size * 1.375;
+  const point = new DOMPoint(centered ? x : x + 10,
+    centered ? y + (h - height) / 2 : y + size * .4375).matrixTransform(matrix);
+  Object.assign(input.style, {
+    left: `${point.x}px`, top: `${point.y}px`, width: `${w * matrix.a}px`,
+    height: `${height * matrix.a}px`, fontSize: `${size * matrix.a}px`,
+    textAlign: centered ? 'center' : 'left', color: styleOf(shape).stroke,
+  });
+}
 function editText(id) {
   if (readOnly) return;
   const shape = doc.getMap('shapes').get(id);
   if (!shape) return;
-  const input = $('shape-text'),
-    [x, y, w, h] = shape.get('geometry').box;
-  const matrix = $('canvas').getScreenCTM(),
-    point = new DOMPoint(x, y).matrixTransform(matrix);
+  const input = $('shape-text');
   textEditing = id;
   undo?.stopCapturing();
   const before = shape.get('text') || '';
   input.value = before;
-  Object.assign(input.style, {
-    left: `${Math.max(0, point.x)}px`,
-    top: `${Math.max(0, point.y)}px`,
-    width: `${Math.max(100, Math.min(w * matrix.a, innerWidth - Math.max(0, point.x)))}px`,
-    height: `${Math.max(60, h * matrix.a)}px`,
-    fontSize: `${Math.max(16, (shape.get('fontSize') || 16) * matrix.a)}px`,
-  });
+  draw();
   input.hidden = false;
   input.focus();
   input.select();
@@ -374,6 +405,7 @@ function editText(id) {
     if (!save && current?.get('text') === input.value)
       doc.transact(() => current.set('text', before), local);
     undo?.stopCapturing();
+    draw();
   };
   input.oninput = () => {
     const current = doc.getMap('shapes').get(id);
@@ -388,34 +420,97 @@ function editText(id) {
     }
   };
 }
-async function insertImage(file) {
-  if (readOnly || !file) return;
+async function insertImages(files, position) {
+  if (readOnly || !files.length) return;
   try {
-    if (file.size > 4 * 1024 * 1024 || !/^image\/(png|jpeg|webp)$/.test(file.type))
-      throw new Error('Use a PNG, JPEG, or WebP image up to 4 MB');
-    const src = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-    validateImage(src);
-    const image = await createImageBitmap(file),
-      scale = Math.min(1, 640 / image.width);
-    doc.transact(
-      () =>
-        putShape(doc, {
-          id: crypto.randomUUID(),
-          type: 'image',
-          box: [view[0] + 50, view[1] + 50, image.width * scale, image.height * scale],
-          src,
-        }),
-      local,
-    );
-    image.close();
-  } catch (e) {
-    status(e.message, true);
+    const binding = editor && ySyncPluginKey.getState(editor.state).binding;
+    const anchor = binding && absolutePositionToRelativePosition(
+      position ?? editor.state.selection.from, binding.type, binding.mapping);
+    const origin = editor ? null : position || [view[0] + 50, view[1] + 50];
+    const images = [];
+    for (const file of files) {
+      if (file.size > 4 * 1024 * 1024 || !/^image\/(png|jpeg|webp)$/.test(file.type))
+        throw new Error('Use a PNG, JPEG, or WebP image up to 4 MB');
+      const src = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Could not read image'));
+        reader.readAsDataURL(file);
+      });
+      validateImage(src);
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, 640 / bitmap.width);
+      images.push({src, alt: file.name, width: bitmap.width * scale, height: bitmap.height * scale});
+      bitmap.close();
+    }
+    if (readOnly) return;
+    undo.stopCapturing();
+    if (editor) {
+      const current = ySyncPluginKey.getState(editor.state).binding;
+      const at = relativePositionToAbsolutePosition(doc, current.type, anchor, current.mapping);
+      if (at === null) throw new Error('The image insertion point was removed; try again');
+      const content = images.map(attrs => ({type:'image', attrs:{...attrs, id:crypto.randomUUID()}}));
+      validateDocument({...editor.getJSON(), content:[...editor.getJSON().content, ...content]});
+      editor.chain().focus().insertContentAt(at, content).run();
+    } else {
+      const shapes = images.map((image, index) => ({
+        id: crypto.randomUUID(), type: 'image', src: image.src,
+        box: [origin[0] + index * 24, origin[1] + index * 24, image.width, image.height],
+      }));
+      doc.transact(() => shapes.forEach(shape => putShape(doc, shape)), local);
+      selected = new Set(shapes.map(shape => shape.id));
+      selectTool('select');
+    }
+    undo.stopCapturing();
+  } catch (error) {
+    status(error.message, true);
   }
+}
+function imageControls() {
+  const surface = editor ? $('document') : $('board');
+  if (!readOnly) {
+    const input = document.createElement('input');
+    input.id = 'image-upload';
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.multiple = true;
+    input.hidden = true;
+    $('menu').append(input);
+    const choose = () => { $('menu').open = false; input.click(); };
+    button($('menu').querySelector('.menu-body'), 'Insert image…', choose);
+    if (editor) {
+      const insert = button($('formatting'), '▧', choose);
+      insert.title = 'Insert image';
+      insert.setAttribute('aria-label', 'Insert image');
+    }
+    input.onchange = () => { const files = [...input.files]; input.value = ''; insertImages(files); };
+  }
+  surface.addEventListener('dragover', event => {
+    if (!event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = readOnly ? 'none' : 'copy';
+    surface.classList.toggle('image-drop-target', !readOnly);
+  });
+  surface.addEventListener('dragleave', event => {
+    if (!surface.contains(event.relatedTarget)) surface.classList.remove('image-drop-target');
+  });
+  surface.addEventListener('drop', event => {
+    const files = [...(event.dataTransfer?.files || [])];
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    surface.classList.remove('image-drop-target');
+    const at = editor ? editor.view.posAtCoords({left:event.clientX, top:event.clientY})?.pos : world(event);
+    if (editor && at == null) return;
+    insertImages(files, at);
+  }, true);
+  surface.addEventListener('paste', event => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    insertImages(files);
+  }, true);
 }
 function board() {
   $('board').hidden = false;
@@ -633,24 +728,6 @@ function board() {
       range.value = value('opacity');
       range.nextElementSibling.value = value('opacity');
     };
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/png,image/jpeg,image/webp';
-    input.hidden = true;
-    $('tools').append(input);
-    button($('menu').querySelector('.menu-body'), 'Insert image…', () => input.click());
-    input.onchange = () => {
-      const file = input.files[0];
-      input.value = '';
-      insertImage(file);
-    };
-    document.addEventListener('paste', (event) => {
-      const file = [...(event.clipboardData?.files || [])][0];
-      if (file) {
-        event.preventDefault();
-        insertImage(file);
-      }
-    });
   }
   properties.hidden = readOnly;
   const zoom = document.createElement('div');
@@ -670,7 +747,7 @@ function board() {
   }).setAttribute('aria-label', 'Zoom in');
   const canvas = $('canvas');
   boardPresence = new BoardPresence(canvas, $('presence'));
-  new ResizeObserver(() => boardPresence.animate()).observe(canvas);
+  new ResizeObserver(() => { boardPresence.animate(); layoutShapeText(); }).observe(canvas);
   const hitAt = (event) =>
     document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
   canvas.onpointerdown = (event) => {
@@ -769,6 +846,7 @@ function board() {
       $('selection').innerHTML = shapeSVG(s, shapeList());
     } else if (drag.mode === 'move' || drag.mode === 'resize') {
       drag.end = point;
+      draw();
     }
   };
   canvas.onpointerup = (event) => {
@@ -796,35 +874,13 @@ function board() {
       validateShape(s);
       doc.transact(() => putShape(doc, s), local);
       selected = new Set([s.id]);
-      draw();
+      selectTool('select');
       if (['text', 'sticky'].includes(s.type)) editText(s.id);
     } else if (d.end) {
       doc.transact(() => {
-        if (d.mode === 'move')
-          for (const [id, g] of d.boxes) {
-            const s = doc.getMap('shapes').get(id);
-            if (s)
-              s.set(
-                'geometry',
-                transformGeometry(g, [
-                  g.box[0] + d.end[0] - d.start[0],
-                  g.box[1] + d.end[1] - d.start[1],
-                  ...g.box.slice(2),
-                ]),
-              );
-          }
-        else {
-          const s = doc.getMap('shapes').get(d.id),
-            b = d.before.box;
-          if (s)
-            s.set(
-              'geometry',
-              transformGeometry(d.before, [
-                ...b.slice(0, 2),
-                Math.max(10, d.end[0] - b[0]),
-                Math.max(10, d.end[1] - b[1]),
-              ]),
-            );
+        for (const [id, geometry] of dragGeometry(d)) {
+          const shape = doc.getMap('shapes').get(id);
+          if (shape) shape.set('geometry', geometry);
         }
       }, local);
     }
@@ -1089,7 +1145,14 @@ function documentEditor() {
         head: relative(head),
       };
     }
-    $('comment-selection').disabled = readOnly || !documentSelection;
+    $('comment-selection').disabled = $('selection-question').disabled = readOnly || !documentSelection;
+    const toolbar = $('selection-actions');
+    toolbar.hidden = readOnly || !documentSelection;
+    if (documentSelection) {
+      const bounds = selection.getRangeAt(0).getBoundingClientRect();
+      toolbar.style.left = `${Math.max(8, Math.min(bounds.left, innerWidth - toolbar.offsetWidth - 8))}px`;
+      toolbar.style.top = `${Math.max(80, Math.min(bounds.bottom + 6, innerHeight - toolbar.offsetHeight - 8))}px`;
+    }
     selected.clear();
     const from = Math.min(anchor, head),
       to = Math.max(anchor, head);
@@ -1099,7 +1162,15 @@ function documentEditor() {
     });
   };
   document.addEventListener('selectionchange', captureDocumentSelection);
-  $('comment-selection').addEventListener('pointerdown', captureDocumentSelection);
+  $('selection-actions').addEventListener('pointerdown', event => {
+    captureDocumentSelection();
+    event.preventDefault();
+  });
+  document.addEventListener('focusin', event => {
+    if (!editor.view.dom.contains(event.target) && !$('selection-actions').contains(event.target))
+      $('selection-actions').hidden = true;
+  });
+  $('document').addEventListener('scroll', () => { $('selection-actions').hidden = true; });
   editor.on('blur', captureDocumentSelection);
 }
 function captureAttachment(scope, previous) {
@@ -1224,6 +1295,7 @@ async function start(event) {
   });
   if (item.kind === 'whiteboard') board();
   else documentEditor();
+  imageControls();
   document.addEventListener('pointerdown', (event) => {
     document.querySelectorAll('.popover[open]:not(#properties)').forEach((menu) => {
       if (!menu.contains(event.target)) menu.open = false;
@@ -1317,20 +1389,26 @@ async function start(event) {
   });
   assistant.renderDraft();
   setComments(item.comments || []);
-  $('comment-selection').hidden = readOnly;
-  $('comment-selection').textContent = editor ? 'Comment on selection' : 'Ask about selection';
-  $('hint').textContent = editor ? 'Select text to add an anchored comment.' : 'Select objects to attach them to a question.';
-  $('comment-selection').onclick = () => assistant.begin('selection');
+  $('comment-selection').hidden = readOnly || !editor;
+  $('selection-question').hidden = readOnly;
+  $('comments-tab').hidden = !editor;
+  $('ask-toggle').textContent = editor ? 'Discussion' : 'Assistant';
+  if (editor) {
+    $('document').after($('selection-actions'));
+    $('selection-actions').classList.add('document-selection-actions');
+    $('selection-actions').hidden = true;
+  }
+  $('hint').textContent = editor ? 'Select text to comment or ask the assistant.' : 'Select objects to attach them to a question.';
+  $('comment-selection').onclick = () => assistant.begin('selection', 'comment');
+  $('selection-question').onclick = () => assistant.begin('selection');
   $('document').addEventListener('click', event => {
     const id = event.target.closest('[data-comment-id]')?.dataset.commentId;
     if (!id) return;
-    assistant.toggle(true);
-    $('comments-section').open = true;
-    [...$('comments').children].find(node => node.dataset.commentId === id)?.scrollIntoView({block:'nearest'});
+    assistant.openComment(id);
   });
   document.addEventListener('keydown', event => {
     if (editor && (event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'm') {
-      event.preventDefault(); captureDocumentSelection(); assistant.begin('selection');
+      event.preventDefault(); captureDocumentSelection(); assistant.begin('selection', 'comment');
     }
   });
   history(item.transactions);

@@ -457,7 +457,7 @@
 (declare-function mevedel-view--insert-user-message
                   "mevedel-view-render"
                   (text &optional kind hook-context prompt-summary-body
-                        prompt-summary-source hook-audits guest-name))
+                        prompt-summary-source hook-audits attribution user-source))
 (declare-function mevedel-view-fork-point-at-point
                   "mevedel-view-render" ())
 (declare-function mevedel-view-reset-agent-ephemeral-state
@@ -2607,13 +2607,16 @@ asynchronous preparation ran is left alone instead of cleared."
      (let (data-turn-start
            hook-audits-with-source
            prompt-summary-source
-           guest-name)
+           guest-attribution user-source)
        ;; Forward to the data buffer first so immediate inline-skill
        ;; Prompt handles can expand through the same source-backed fold
        ;; path as a full rerender.
        (with-current-buffer mevedel--data-buffer
          (goto-char (point-max))
          (let ((body-start (mevedel--insert-user-turn input)))
+           (setq user-source
+                 (mevedel-view-disclosure-source-range
+                  data-buffer body-start (point)))
            (when-let* ((prompt-summary-body)
                        (block
 			(car (last
@@ -2637,7 +2640,7 @@ asynchronous preparation ran is left alone instead of cleared."
          ;; later insertion at the turn boundary is claimed by the
          ;; response span and would reach model context.
          (when mevedel-view--pending-guest-attribution
-           (setq guest-name (plist-get mevedel-view--pending-guest-attribution :name))
+           (setq guest-attribution mevedel-view--pending-guest-attribution)
            (insert (mevedel--format-hook-audit-record
                     mevedel-view--pending-guest-attribution))
            (setq mevedel-view--pending-guest-attribution nil))
@@ -2659,7 +2662,7 @@ asynchronous preparation ran is left alone instead of cleared."
               (mevedel-view--insert-user-message
                (or display-text input) nil hook-context
                prompt-summary-body prompt-summary-source
-               hook-audits-with-source guest-name)))
+               hook-audits-with-source guest-attribution user-source)))
          (mevedel-view-stream-begin-turn turn-start data-turn-start)
          (mevedel-view--clear-submitted-input submitted-draft))
        (with-current-buffer mevedel--data-buffer

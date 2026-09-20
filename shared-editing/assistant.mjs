@@ -6,16 +6,29 @@ const el = (tag, text, className) => {
   if (className) node.className = className;
   return node;
 };
+const newDraft = () => ({text:'', attachment:null, opId:crypto.randomUUID()});
 export class AssistantPanel {
   constructor({ capture, save, request, changed, reveal, state, restored }) {
     Object.assign(this, { capture, save, request, changed, reveal, state });
-    this.draft = restored || { text: '', mode: 'question', attachment: null, opId: crypto.randomUUID() };
+    const validDrafts = restored && typeof restored.question?.text === 'string'
+      && typeof restored.comment?.text === 'string' && restored.replies && restored.requests;
+    this.drafts = validDrafts ? restored : {question:newDraft(), comment:newDraft(), replies:{}, requests:{}, view:'assistant'};
+    if (restored && !validDrafts) this.recoveryNotice = 'The saved discussion draft has an unsupported format. Document recovery is unaffected.';
+    this.draft = this.drafts.question;
     this.comments = [];
+    this.sendingComments = new Set();
     this.conversation = { records: [], own: [], busy: false, connected: true };
     $('question').value = this.draft.text;
-    $('ask-toggle').onclick = () => this.toggle($('assistant').hidden);
+    $('comment-text').value = this.drafts.comment.text;
+    $('ask-toggle').onclick = () => {
+      if ($('assistant').hidden && this.drafts.view === 'assistant' && !this.draft.attachment) this.begin('whole');
+      else this.toggle($('assistant').hidden);
+    };
+    $('assistant-tab').onclick = () => this.draft.attachment ? this.toggle(true, 'assistant') : this.begin('whole');
+    $('comments-tab').onclick = () => this.toggle(true, 'comments');
     $('assistant-close').onclick = () => this.toggle(false);
     $('whole-question').onclick = () => this.begin('whole');
+    $('show-resolved').onchange = () => this.setComments(this.comments);
     $('refresh-context').onclick = () => {
       try {
         const a = this.draft.attachment;
@@ -25,29 +38,40 @@ export class AssistantPanel {
         this.renderDraft();
       } catch (error) { this.notice(error.message, true); }
     };
-    const keyboardLayout = () => {
+    $('comment-refresh').onclick = () => {
+      try {
+        this.drafts.comment.attachment = this.capture('selection', this.drafts.comment.attachment);
+        this.drafts.comment.opId = crypto.randomUUID();
+        this.renderDraft();
+      } catch (error) { this.notice(error.message, true); }
+    };
+    this.layout = () => {
+      const container = document.querySelector($('assistant').hidden ? 'footer' : '.assistant-compose');
+      if ($('context-actions').parentElement !== container) container.prepend($('context-actions'));
       if (innerHeight < 500 && document.activeElement === $('question')) $('attached-context').open = false;
       for (const node of document.body.children)
         if (node !== $('assistant')) node.inert = !$('assistant').hidden && innerWidth < 800;
     };
-    this.layout = keyboardLayout;
-    $('question').onfocus = keyboardLayout;
-    window.addEventListener('resize', keyboardLayout);
-    $('question').oninput = () => {
-      this.draft.text = $('question').value;
-      this.draft.opId = crypto.randomUUID();
-      this.changed();
-    };
+    $('question').onfocus = this.layout;
+    window.addEventListener('resize', this.layout);
+    for (const [id, draft] of [['question',this.draft], ['comment-text',this.drafts.comment]]) {
+      $(id).oninput = () => {
+        draft.text = $(id).value;
+        draft.opId = crypto.randomUUID();
+        this.changed();
+      };
+      $(id).onkeydown = event => {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          event.preventDefault(); $(id).form.requestSubmit();
+        }
+      };
+    }
     $('ask').onsubmit = event => { event.preventDefault(); this.submit(); };
-    $('question').onkeydown = event => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault(); $('ask').requestSubmit();
-      }
-    };
+    $('comment-form').onsubmit = event => { event.preventDefault(); this.postComment(); };
     $('assistant').addEventListener('keydown', event => {
       if (event.key === 'Escape') { event.preventDefault(); this.toggle(false); }
       if (event.key === 'Tab' && innerWidth < 800) {
-        const nodes = [...$('assistant').querySelectorAll('button, textarea, summary, a[href]')]
+        const nodes = [...$('assistant').querySelectorAll('button, textarea, input, summary, a[href]')]
           .filter(n => !n.disabled && n.getClientRects().length);
         const edge = event.shiftKey ? nodes[0] : nodes.at(-1);
         if (document.activeElement === edge) {
@@ -57,39 +81,35 @@ export class AssistantPanel {
     });
   }
   notice(text, error = false) {
-    $('assistant-notice').textContent = text;
+    $('assistant-notice').textContent = text || this.recoveryNotice || '';
     $('assistant-notice').dataset.error = String(error);
   }
-  toggle(shown) {
+  toggle(shown, view = this.drafts.view) {
+    this.drafts.view = view;
     $('assistant').hidden = !shown;
     document.body.classList.toggle('assistant-open', shown);
     $('ask-toggle').setAttribute('aria-expanded', String(shown));
+    $('assistant-tab').setAttribute('aria-pressed', String(view === 'assistant'));
+    $('comments-tab').setAttribute('aria-pressed', String(view === 'comments'));
+    $('comments-section').hidden = view !== 'comments';
+    $('conversation').hidden = $('queued-questions').hidden = $('question-compose').hidden = view !== 'assistant';
+    this.renderDraft();
     this.layout();
-    if (shown) {
-      if (!this.draft.attachment) this.begin('whole');
+    if (shown && view === 'assistant') {
       $('question').focus({preventScroll:true});
-    } else $('ask-toggle').focus({preventScroll:true});
+    } else if (!shown) $('ask-toggle').focus({preventScroll:true});
+    else $('comments-tab').focus({preventScroll:true});
   }
-  begin(scope, comment) {
+  begin(scope, mode = 'question') {
     try {
-      const attachment = this.capture(scope, comment);
-      this.draft.attachment = attachment;
-      this.draft.commentId = comment?.id;
-      this.draft.mode = scope === 'selection' && attachment.snapshot.kind === 'document' && !comment?.id
-        ? 'comment' : 'question';
-      this.draft.opId = comment?.id ? `comment-${comment.id}` : crypto.randomUUID();
-      if (comment?.id) this.draft.text = comment.text;
-      $('question').value = this.draft.text;
-      this.notice(comment?.anchorStatus === 'changed' ? 'This passage changed after the comment was posted. Review the current context.' : '');
-      this.renderDraft();
-      if ($('assistant').hidden) this.toggle(true);
-      $('question').focus({preventScroll:true});
+      const draft = this.drafts[mode];
+      draft.attachment = this.capture(scope);
+      draft.opId = crypto.randomUUID();
+      this.notice('');
+      this.toggle(true, mode === 'comment' ? 'comments' : 'assistant');
+      $(mode === 'comment' ? 'comment-text' : 'question').focus({preventScroll:true});
     } catch (error) {
-      // Show capture failures without recapturing or broadening a stale selection.
-      $('assistant').hidden = false;
-      document.body.classList.add('assistant-open');
-      $('ask-toggle').setAttribute('aria-expanded', 'true');
-      this.layout();
+      this.toggle(true, mode === 'comment' ? 'comments' : 'assistant');
       this.notice(error.message, true);
     }
   }
@@ -100,10 +120,11 @@ export class AssistantPanel {
       : 'Choose content to discuss';
     $('context-quote').textContent = a?.quote || '';
     $('context-detail').textContent = a ? JSON.stringify(a.snapshot, null, 2) : '';
-    $('compose-label').textContent = this.draft.mode === 'comment' ? 'New comment · private until posted' : 'Ask the assistant';
-    $('question-send').textContent = this.draft.mode === 'comment' ? 'Post comment' : 'Send to assistant';
-    $('ask').hidden = this.state().readOnly;
-    $('whole-question').hidden = this.state().readOnly;
+    $('whole-question').textContent = a?.snapshot.kind === 'document' ? 'Use whole document' : 'Ask about whole item';
+    $('ask').hidden = $('whole-question').hidden = this.state().readOnly;
+    $('comment-form').hidden = this.drafts.view !== 'comments' || !this.drafts.comment.attachment || this.state().readOnly;
+    $('comment-post').disabled = this.sendingComments.has('new');
+    $('comment-quote').textContent = this.drafts.comment.attachment?.quote || '';
     this.changed();
   }
   async submit() {
@@ -112,90 +133,196 @@ export class AssistantPanel {
     this.sending = true;
     $('question-send').disabled = true;
     $('question').readOnly = true;
-    // Keep one request identity and its complete draft across failed/uncertain delivery.
     const draft = structuredClone(this.draft), a = draft.attachment;
     try {
       this.notice('Saving edits and submitting…');
       await this.save();
-      const comment = draft.mode === 'comment';
-      const result = await this.request({
-        action: comment ? 'comment' : 'ask', opId: draft.opId, questionId: draft.opId,
-        commentId: draft.commentId, text: draft.text,
-        expected: a.snapshot, range: a.range, selection: a.selection,
-      });
-      if (comment) {
-        this.setComments(result.comments);
-        const posted = this.comments.find(c => c.id === draft.opId);
-        if (posted && this.draft.opId === draft.opId) this.begin('selection', posted);
-        this.notice('Comment posted for everyone. Send it to the assistant when ready.');
-      } else {
-        this.receipt = { ...result, questionId: draft.opId };
-        this.notice(result.delivered ? 'This question is already in the conversation.' : 'Question queued. Your answer will appear here.');
-        // Follow-ups retain the chosen scope but get a new delivery identity.
-        if (this.draft.opId === draft.opId) {
-          this.draft.text = '';
-          this.draft.opId = crypto.randomUUID();
-          $('question').value = '';
-        }
-        this.changed();
-        this.renderConversation();
+      const result = await this.request({action:'ask', opId:draft.opId, questionId:draft.opId,
+        text:draft.text, expected:a.snapshot, range:a.range, selection:a.selection});
+      this.receipt = { ...result, questionId: draft.opId };
+      this.notice(result.delivered ? 'This question is already in the conversation.' : 'Question queued. Your answer will appear here.');
+      if (this.draft.opId === draft.opId) {
+        this.draft.text = '';
+        this.draft.opId = crypto.randomUUID();
+        $('question').value = '';
       }
-    } catch (error) {
-      this.notice(error.message, true);
-    } finally {
+      this.changed();
+      this.renderConversation();
+    } catch (error) { this.notice(error.message, true); }
+    finally {
       this.sending = false;
       $('question-send').disabled = false;
       $('question').readOnly = false;
     }
   }
+  async postComment(commentId) {
+    const source = commentId ? this.drafts.replies[commentId] : this.drafts.comment;
+    if (!source?.text.trim() || this.state().readOnly || this.sendingComments.has(commentId || 'new')) return;
+    const draft = structuredClone(source);
+    this.sendingComments.add(commentId || 'new');
+    this.renderDraft();
+    this.setComments(this.comments);
+    this.notice('Posting for everyone…');
+    try {
+      await this.save();
+      const result = await this.request({action:commentId ? 'reply-comment' : 'comment',
+        opId:draft.opId, commentId, text:draft.text,
+        ...(commentId ? {} : {range:draft.attachment.range, expected:draft.attachment.snapshot})});
+      if (source.opId === draft.opId) {
+        Object.assign(source, newDraft());
+        if (!commentId) $('comment-text').value = '';
+      }
+      this.setComments(result.comments);
+      this.renderDraft();
+      this.openComment(commentId || draft.opId);
+      this.notice(commentId ? 'Reply posted for everyone.' : 'Comment posted for everyone.');
+    } catch (error) { this.notice(error.message, true); }
+    finally { this.sendingComments.delete(commentId || 'new'); this.renderDraft(); this.setComments(this.comments); }
+  }
+  openComment(id) {
+    this.toggle(true, 'comments');
+    const card = [...$('comments').children].find(n => n.dataset.commentId === id);
+    if (card) {
+      card.hidden = false;
+      card.open = true;
+      card.scrollIntoView({block:'nearest'});
+    }
+  }
+  async sendComment(id, refresh = false) {
+    if (this.state().readOnly || this.sendingComments.has(id)) return;
+    const comment = this.comments.find(c => c.id === id);
+    if (!comment || comment.resolved || comment.anchorStatus === 'deleted') return;
+    let pending = this.drafts.requests[id];
+    try {
+      if (refresh || !pending) {
+        const attachment = this.capture('selection', comment);
+        pending = this.drafts.requests[id] = {attachment, opId:crypto.randomUUID(),
+          version:comment.replies?.at(-1)?.id || id};
+        this.changed();
+        if (refresh || comment.anchorStatus === 'changed') {
+          pending.review = !refresh;
+          this.setComments(this.comments);
+          this.notice(refresh ? 'Current passage and discussion attached. Press Send to assistant when ready.'
+            : 'The passage has changed. Review its current text before sending.');
+          return;
+        }
+      }
+      if (pending.receipt || pending.review) return;
+      this.sendingComments.add(id);
+      this.setComments(this.comments);
+      this.notice('Saving edits and sending the discussion…');
+      await this.save();
+      const a = pending.attachment;
+      const result = await this.request({action:'ask', opId:pending.opId, questionId:pending.opId,
+        commentId:id, commentVersion:pending.version, text:'Please respond to this comment thread.',
+        expected:a.snapshot, range:a.range});
+      const delivered = this.conversation.records.some(r => r.shared?.questionId === pending.opId);
+      pending.receipt = !delivered;
+      this.notice(delivered || result.delivered ? 'Discussion sent. The assistant answers in this thread.' : 'Discussion queued. The assistant will answer in this thread.');
+    } catch (error) {
+      if (pending) pending.failed = true;
+      this.notice(error.message, true);
+    } finally {
+      this.sendingComments.delete(id);
+      this.changed();
+      this.setComments(this.comments);
+    }
+  }
   setComments(comments = []) {
     this.comments = comments;
     const list = $('comments');
-    list.replaceChildren();
-    $('comments-section').hidden = !comments.length;
-    $('comments-count').textContent = `Comments (${comments.filter(c => !c.resolved).length} open)`;
+    $('comments-tab').textContent = `Comments (${comments.filter(c => !c.resolved).length})`;
+    $('comments-empty').hidden = comments.some(c => !c.resolved || $('show-resolved').checked);
+    const previous = new Map([...list.children].map(n => [n.dataset.commentId,n]));
     for (const comment of comments) {
-      const card = el('article', undefined, 'comment');
-      card.dataset.commentId = comment.id;
+      let card = previous.get(comment.id);
+      if (!card) {
+        card = el('details', undefined, 'comment');
+        card.dataset.commentId = comment.id;
+        const summary = el('summary', comment.quote);
+        const passage = el('button', 'Show passage', 'comment-passage');
+        passage.type = 'button';
+        passage.onclick = () => {
+          try { this.reveal(this.comments.find(c => c.id === comment.id).range); if (innerWidth < 800) this.toggle(false); }
+          catch (error) { this.notice(error.message, true); }
+        };
+        const messages = el('div', undefined, 'thread-messages');
+        const status = el('p', undefined, 'thread-status'); status.setAttribute('role','status');
+        const preview = el('blockquote', undefined, 'thread-context');
+        const actions = el('div', undefined, 'comment-actions');
+        const ask = el('button', 'Send to assistant', 'thread-send'); ask.type = 'button';
+        ask.onclick = () => this.sendComment(comment.id);
+        const refresh = el('button', 'Review updated context', 'thread-refresh'); refresh.type = 'button';
+        refresh.onclick = () => this.sendComment(comment.id, true);
+        const resolve = el('button', 'Resolve', 'thread-resolve'); resolve.type = 'button';
+        resolve.onclick = async () => {
+          try {
+            const current = this.comments.find(c => c.id === comment.id);
+            const result = await this.request({action:'resolve-comment', commentId:comment.id,
+              resolved:!current.resolved, opId:crypto.randomUUID()});
+            this.setComments(result.comments);
+          } catch (error) { this.notice(error.message, true); }
+        };
+        actions.append(ask, refresh, resolve);
+        const form = el('form', undefined, 'reply-form');
+        const input = el('textarea'); input.rows = 2; input.maxLength = 10000; input.required = true;
+        input.placeholder = 'Reply to this discussion…'; input.setAttribute('aria-label','Reply to comment');
+        const draft = this.drafts.replies[comment.id] ||= newDraft();
+        input.value = draft.text;
+        input.oninput = () => { draft.text = input.value; draft.opId = crypto.randomUUID(); this.changed(); };
+        input.onkeydown = event => {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); form.requestSubmit(); }
+        };
+        const post = el('button','Post reply'); post.type = 'submit';
+        form.onsubmit = event => { event.preventDefault(); this.postComment(comment.id); };
+        form.append(input,post);
+        card.append(summary,passage,messages,status,preview,form,actions);
+        list.append(card);
+      }
+      previous.delete(comment.id);
       card.classList.toggle('resolved', comment.resolved);
-      card.append(el('small', `${comment.actor.replace(/^Guest: /, '')}${comment.resolved ? ' · Resolved' : ''}`));
-      const passage = el('button', comment.quote, 'comment-passage');
-      passage.type = 'button';
-      passage.title = 'Show referenced passage';
-      passage.onclick = () => {
-        try { this.reveal(comment.range); if (innerWidth < 800) this.toggle(false); }
-        catch (error) { this.notice(error.message, true); }
-      };
-      card.append(passage, el('p', comment.text));
-      if (comment.anchorStatus !== 'current')
-        card.append(el('small', comment.anchorStatus === 'deleted' ? 'Referenced passage was removed' : 'Referenced passage has changed'));
-      const actions = el('div', undefined, 'comment-actions');
-      const ask = el('button', 'Send to assistant');
-      ask.type = 'button'; ask.hidden = this.state().readOnly;
-      ask.disabled = comment.anchorStatus === 'deleted';
-      ask.onclick = () => this.begin('selection', comment);
-      const answer = el('button', 'View conversation');
-      answer.type = 'button';
-      answer.onclick = () => {
-        this.toggle(true);
-        const node = [...$('conversation').querySelectorAll('[data-comment-id]')].find(n => n.dataset.commentId === comment.id);
-        if (node) node.scrollIntoView({block:'start'});
-        else this.notice('No delivered question for this comment yet. Send it explicitly to start a conversation.');
-      };
-      const resolve = el('button', comment.resolved ? 'Reopen' : 'Resolve');
-      resolve.type = 'button'; resolve.hidden = this.state().readOnly;
-      resolve.onclick = async () => {
-        try {
-          const result = await this.request({action:'resolve-comment', commentId:comment.id, resolved:!comment.resolved, opId:crypto.randomUUID()});
-          this.setComments(result.comments);
-        } catch (error) { this.notice(error.message, true); }
-      };
-      actions.append(ask, answer, resolve); card.append(actions); list.append(card);
+      card.hidden = comment.resolved && !$('show-resolved').checked;
+      card.querySelector('summary').textContent = `${comment.resolved ? 'Resolved · ' : ''}${comment.quote}`;
+      const messages = card.querySelector('.thread-messages');
+      const oldMessages = new Map([...messages.children].map(n => [n.dataset.messageId,n]));
+      for (const message of [comment,...(comment.replies || [])]) {
+        if (oldMessages.has(message.id)) continue;
+        const node = el('div',undefined,'thread-message'); node.dataset.messageId = message.id;
+        const answers = el('div',undefined,'thread-conversation'); answers.dataset.version = message.id;
+        node.append(el('small',message.actor.replace(/^Guest: /,'')),el('p',message.text),answers);
+        messages.append(node);
+      }
+      const pending = this.drafts.requests[comment.id];
+      const input = card.querySelector('textarea');
+      if (input.value !== this.drafts.replies[comment.id].text) input.value = this.drafts.replies[comment.id].text;
+      card.querySelector('.reply-form').hidden = this.state().readOnly || comment.resolved;
+      card.querySelector('.reply-form button').disabled = this.sendingComments.has(comment.id);
+      card.querySelector('.comment-actions').hidden = this.state().readOnly;
+      card.querySelector('.thread-resolve').textContent = comment.resolved ? 'Reopen' : 'Resolve';
+      card.querySelector('.thread-send').disabled = comment.resolved || comment.anchorStatus === 'deleted'
+        || this.sendingComments.has(comment.id) || !!pending?.receipt || !!pending?.review;
+      card.querySelector('.thread-refresh').hidden = !pending?.failed && !pending?.review;
+      card.querySelector('.thread-context').hidden = !pending;
+      card.querySelector('.thread-context').textContent = pending?.attachment.quote || '';
+      card.querySelector('.thread-status').textContent = this.sendingComments.has(comment.id) ? 'Sending…'
+        : pending?.receipt ? 'Queued for the assistant'
+        : pending?.failed ? 'Not confirmed. Retry sends the same request.'
+        : comment.anchorStatus === 'deleted' ? 'Referenced passage was removed'
+        : comment.anchorStatus === 'changed' ? 'Referenced passage has changed' : '';
     }
+    for (const node of previous.values()) node.remove();
+    this.renderConversation();
   }
   updateConversation(data) {
     this.conversation = data;
-    this.renderConversation();
+    // A retracted queue entry can be explicitly retried with its original identity.
+    for (const pending of Object.values(this.drafts.requests)) {
+      if (pending.receipt && data.connected && !data.busy
+          && !data.own?.some(e => e.shared?.questionId === pending.opId)
+          && !data.records?.some(r => r.shared?.questionId === pending.opId)) pending.receipt = false;
+    }
+    this.changed();
+    this.setComments(this.comments);
   }
   renderConversation() {
     const { records = [], own = [], busy, paused, connected, model } = this.conversation;
@@ -203,36 +330,48 @@ export class AssistantPanel {
       this.receipt = null;
       this.notice('');
     }
+    for (const [id, pending] of Object.entries(this.drafts.requests)) {
+      if (records.some(r => r.shared?.questionId === pending.opId)) {
+        delete this.drafts.requests[id];
+        this.notice('');
+        const card = [...$('comments').children].find(n => n.dataset.commentId === id);
+        if (card) {
+          card.querySelector('.thread-send').disabled = this.state().readOnly
+            || this.comments.find(c=>c.id===id)?.resolved || this.comments.find(c=>c.id===id)?.anchorStatus === 'deleted';
+          card.querySelector('.thread-refresh').hidden = card.querySelector('.thread-context').hidden = true;
+          card.querySelector('.thread-status').textContent = 'Sent to assistant';
+        }
+        this.changed();
+      }
+    }
     const scroll = $('assistant-scroll');
     const follow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40;
-    const previous = new Map([...$('conversation').children].map(n => [n.dataset.recordId,n]));
-    $('conversation').replaceChildren();
+    const containers = [$('conversation'), ...$('comments').querySelectorAll('.thread-conversation')];
+    const previous = new Map(containers.flatMap(c => [...c.children]).map(n => [n.dataset.recordId,n]));
+    for (const container of containers) container.replaceChildren();
     let context;
     for (const record of records) {
       if (record.kind === 'user') context = record.shared;
       if (!['user','assistant'].includes(record.kind)) continue;
-      const display = record.shared ? {...record, text:record.shared.text} : record;
-      const node = window.mevedelTranscriptRenderer.renderRecord(display, () => '', undefined, previous.get(record.id));
+      const node = window.mevedelTranscriptRenderer.renderRecord(record, () => '', undefined, previous.get(record.id));
       if (context?.commentId) node.dataset.commentId = context.commentId;
-      if (record.shared) {
-        node.dataset.questionId = record.shared.questionId;
-        const details = el('details', undefined, 'sent-context');
-        details.open = previous.get(record.id)?.querySelector('.sent-context')?.open || false;
-        details.append(el('summary', record.shared.edited ? 'Edited on host · see delivered prompt'
-          : `${record.shared.scope === 'whole' ? 'Whole item' : 'Selection'} · revision ${record.shared.revision}`),
-          el('blockquote', record.shared.edited ? 'The host revised this queued question. Its delivered text above replaces the original attachment.' : record.shared.quote));
-        node.append(details);
-      }
-      $('conversation').append(node);
+      if (record.shared) node.dataset.questionId = record.shared.questionId;
+      const thread = context?.commentId && [...$('comments').children].find(n => n.dataset.commentId === context.commentId);
+      const target = thread && [...thread.querySelectorAll('.thread-conversation')].find(n => n.dataset.version === context.commentVersion);
+      (target || $('conversation')).append(node);
     }
-    if (!records.length) $('conversation').append(el('p', 'Ask about this item. Replies and follow-ups stay beside your work.', 'conversation-empty'));
-    $('conversation-state').textContent = !connected ? 'Disconnected · draft kept'
-      : paused ? `Queue paused on host${own.length ? ' · ' + own.length + ' waiting' : ''}`
+    if (!$('conversation').children.length) $('conversation').append(el('p', 'Ask about this item. Questions and answers are shared with the room.', 'conversation-empty'));
+    $('conversation-state').textContent = !connected ? 'Disconnected · drafts kept'
       : busy ? `Assistant working${model ? ' · ' + model : ''}`
+      : paused ? `Queue paused on host${own.length ? ' · ' + own.length + ' waiting' : ''}`
       : own.length ? `${own.length} question${own.length === 1 ? '' : 's'} queued`
       : records.at(-1)?.status === 'failed' ? 'Assistant request failed · see conversation' : 'Ready';
+    $('conversation-state').classList.toggle('assistant-working', Boolean(connected && busy));
+    $('ask-toggle').classList.toggle('assistant-working', Boolean(connected && busy));
     $('queued-questions').replaceChildren();
-    for (const entry of own) $('queued-questions').append(el('p', `Queued #${entry.position} · ${entry.shared?.text || entry.text}`));
+    for (const entry of own) {
+      if (!entry.shared?.commentId) $('queued-questions').append(el('p', `Queued #${entry.position} · ${entry.shared?.text || entry.text}`));
+    }
     if (follow) scroll.scrollTop = scroll.scrollHeight;
   }
 }

@@ -95,7 +95,10 @@
                     (mevedel-collaboration-editing--presence
                      room 1 guest (list :id (or id "board") :mode mode
                                         :point (unless (equal mode "clear") '(20 30))))))
-        (point "laser")
+        (mevedel-collaboration-editing--presence
+         room 1 guest '(:id "board" :mode "laser" :point (20 30)
+                        :trail ((10 20 40) (20 30 0))))
+        (should (equal (plist-get (cdar frames) :trail) [[10 20 40] [20 30 0]]))
         (point "laser")
         (should (= (length frames) 1))
         (point "clear" "other")
@@ -107,6 +110,11 @@
         (point "clear")
         (should (= (length frames) 2))
         (setq now 100.06)
+        (dolist (trail (list '((20 30 -1)) '((20 30 551)) '((20 30 "bad"))
+                             (make-list 65 '(20 30 0))))
+          (mevedel-collaboration-editing--presence
+           room 1 guest (list :id "board" :mode "laser" :point '(20 30) :trail trail)))
+        (should (= (length frames) 2))
         (point "cursor")
         (should (= (length frames) 3))
         (plist-put guest :writable nil)
@@ -122,7 +130,7 @@
   (let* ((args '(:id "one" :text "Why?" :commentId "c" :expected (:title "A")))
          (key (mevedel-collaboration-editing--question-key args)))
     (should (equal key (mevedel-collaboration-editing--question-key (copy-tree args))))
-    (dolist (change '((:id . "two") (:text . "How?") (:commentId . "d")
+    (dolist (change '((:id . "two") (:text . "How?") (:commentId . "d") (:commentVersion . "new-reply")
                       (:expected . (:title "B"))))
       (should-not (equal key (mevedel-collaboration-editing--question-key
                              (plist-put (copy-tree args) (car change) (cdr change))))))))
@@ -134,7 +142,7 @@
            (session (mevedel-session-create "main" workspace))
            (room (list :session session :data-buffer data-buf))
            (guest '(:name "Alice" :guest-id "alice" :role "full"))
-           (args '(:id "document" :questionId "question" :commentId "comment"
+           (args '(:id "document" :questionId "question" :commentId "comment" :commentVersion "reply"
                        :text "Why?" :expected (:kind "document" :scope "selection")))
            (result '(:id "document" :title "Notes" :revision 7 :quote "a passage"
                          :snapshot (:id "document" :title "Notes" :revision 7
@@ -147,6 +155,7 @@
              (shared (plist-get entry :shared-question)))
         (should (plist-get receipt :queued))
         (should (equal (plist-get shared :revision) 7))
+        (should (equal (plist-get shared :commentVersion) "reply"))
         (should (string-match-p "a passage" (plist-get entry :input)))
         (should (equal receipt (mevedel-collaboration-editing--ask room guest args result)))
         (should (= 1 (length (mevedel-session-pending-follow-ups session))))

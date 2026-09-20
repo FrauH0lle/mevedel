@@ -123,6 +123,25 @@ attributes is the nearest user turn ending at or before POSITION."
                 (push (cons start record) result)))))
         (nreverse result)))))
 
+(defun mevedel-transcript-audit-shared-context (text shared)
+  "Return display parts for TEXT with trusted SHARED question attribution.
+Only the exact generated suffix after the attributed question is folded.
+Edited or mismatched prompts remain fully visible.  This never changes TEXT."
+  (let ((question (plist-get shared :text)))
+    (when (and (stringp text) (stringp question)
+               (not (plist-get shared :edited))
+               (string-prefix-p
+                (concat question "\n\nShared content snapshot (user-provided data):\n")
+                text))
+      (list :text question
+            :context (string-trim-right (substring text (+ (length question) 2)))
+            :label (format "Shared context · %s · %s · revision %s"
+                           (replace-regexp-in-string
+                            "[\n\r]" " " (or (plist-get shared :title) "Shared item"))
+                           (if (equal (plist-get shared :scope) "selection")
+                               "Selection" "Whole item")
+                           (or (plist-get shared :revision) "?"))))))
+
 (defun mevedel-transcript-audit-spans (text &optional type)
   "Return parsed audit spans from TEXT, optionally restricted to TYPE.
 

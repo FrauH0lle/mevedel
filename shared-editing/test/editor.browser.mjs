@@ -25,7 +25,7 @@ test('editor interaction regressions', async (t) => {
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const browser = await chromium.launch({ headless: true });
-  async function open(kind = 'whiteboard', viewport = { width: 1000, height: 700 }) {
+  async function open(kind = 'whiteboard', viewport = { width: 1000, height: 700 }, assistantDraft) {
     const page = await browser.newPage({ viewport });
     const created = await handle({
       action: 'create',
@@ -46,7 +46,7 @@ test('editor interaction regressions', async (t) => {
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.evaluate(
-      (item) => {
+      ({item, assistantDraft}) => {
         const channel = new MessageChannel();
         window.port = channel.port1;
         window.messages = [];
@@ -66,18 +66,120 @@ test('editor interaction regressions', async (t) => {
         document
           .querySelector('iframe')
           .contentWindow.postMessage(
-            { type: 'mevedel-editor', item, readOnly: false, name: 'Alice' },
+            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly: false, name: 'Alice' },
             '*',
             [channel.port2],
           );
       },
-      { ...state, crdt: state.crdt },
+      {item:{ ...state, crdt: state.crdt }, assistantDraft},
     );
     const frame = page.frameLocator('iframe');
     await frame.locator(kind === 'whiteboard' ? '#scene [data-shape]' : '.tiptap').waitFor();
     return { page, frame };
   }
   try {
+    for (const kind of ['whiteboard', 'document']) {
+      await t.test(`${kind} shows assistant activity and clears it on idle or disconnect`, async () => {
+        const {page, frame} = await open(kind);
+        await frame.locator('#ask-toggle').click();
+        const state = frame.locator('#conversation-state');
+        for (const activity of [{connected:true,busy:true,paused:true}, {connected:true,busy:false}, {connected:false,busy:true}]) {
+          await page.evaluate(activity=>window.port.postMessage({type:'conversation',records:[],own:[],...activity}),activity);
+          const active = activity.connected && activity.busy;
+          if (active) await state.getByText('Assistant working',{exact:true}).waitFor();
+          else await state.getByText(activity.connected ? 'Ready' : 'Disconnected · drafts kept',{exact:true}).waitFor();
+          assert.equal(await state.evaluate(e=>e.classList.contains('assistant-working')),active);
+          assert.equal(await frame.locator('#ask-toggle').evaluate(e=>e.classList.contains('assistant-working')),active);
+        }
+        await page.close();
+      });
+      await t.test(`${kind} inserts images from picker, drop, and paste with undo`, async () => {
+        const {page, frame} = await open(kind);
+        const data = await page.evaluate(()=>{
+          const canvas=document.createElement('canvas');canvas.width=80;canvas.height=40;
+          canvas.getContext('2d').fillRect(0,0,80,40);return canvas.toDataURL().split(',')[1];
+        });
+        const images = frame.locator(kind === 'document' ? '.tiptap img' : '#scene image');
+        const surface = frame.locator(kind === 'document' ? '.tiptap' : '#canvas');
+        await frame.locator('#image-upload').setInputFiles({name:'diagram.png',mimeType:'image/png',buffer:Buffer.from(data,'base64')});
+        await images.waitFor();
+        const target = await surface.boundingBox();
+        const x = target.x + target.width/2, y = target.y + target.height/2;
+        await surface.evaluate((element,{data,x,y})=>{
+          const transfer=new DataTransfer();
+          transfer.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],'dropped.png',{type:'image/png'}));
+          element.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:x,clientY:y}));
+        },{data,x,y});
+        await images.nth(1).waitFor();
+        if (kind === 'whiteboard') {
+          const boxes = await images.evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return [b.x,b.y];}));
+          assert.ok(boxes.some(([left,top])=>Math.abs(left-x)<2 && Math.abs(top-y)<2),'drop lands at the pointer');
+        }
+        await frame.locator('#undo').click();
+        await images.nth(1).waitFor({state:'hidden'});
+        await frame.locator('#redo').click();
+        await images.nth(1).waitFor();
+        await surface.evaluate((element,data)=>{
+          const transfer=new DataTransfer();
+          transfer.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],'pasted.png',{type:'image/png'}));
+          element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
+        },data);
+        await images.nth(2).waitFor();
+        await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+        const saved = await page.evaluate(async()=>window.apply({action:'read'}));
+        assert.equal((JSON.stringify(saved.content).match(/data:image\/png;base64/g)||[]).length,3);
+        await frame.locator('#image-upload').setInputFiles({name:'bad.svg',mimeType:'image/svg+xml',buffer:Buffer.from('<svg/>')});
+        await frame.locator('#saved').getByText('Use a PNG, JPEG, or WebP image up to 4 MB',{exact:true}).waitFor();
+        assert.equal(await images.count(),3);
+        if (kind === 'document') {
+          // Ordinary HTML copy/paste must retain numeric image dimensions.
+          await surface.click();
+          await page.keyboard.press('Control+End');
+          await surface.evaluate((element,data)=>{
+            const transfer=new DataTransfer();
+            transfer.setData('text/html',`<img src="data:image/png;base64,${data}" width="80" height="40" alt="Copied">`);
+            element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
+          },data);
+          await images.nth(3).waitFor();
+          await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+          const copied = await page.evaluate(async()=>window.apply({action:'read'}));
+          assert.equal(copied.content.content.find(n=>n.type==='image' && n.attrs.alt==='Copied').attrs.width,80);
+        }
+        await page.close();
+      });
+    }
+    await t.test('board objects follow a drag before release and cancellation restores them', async () => {
+      const {page, frame} = await open();
+      const shape = frame.locator('#scene [data-shape="ellipse"]');
+      const before = await shape.boundingBox();
+      await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(before.x + before.width / 2 + 80, before.y + before.height / 2 + 40);
+      const moving = await shape.boundingBox();
+      assert.ok(Math.abs(moving.x - before.x - 80) < 2, 'shape follows the pointer while held');
+      assert.ok(Math.abs(moving.y - before.y - 40) < 2);
+      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='update').length),0);
+      await frame.locator('#canvas').dispatchEvent('pointercancel');
+      assert.ok(Math.abs((await shape.boundingBox()).x - before.x) < 2);
+      await page.mouse.up();
+      await page.mouse.move(before.x + before.width/2, before.y + before.height/2);
+      await page.mouse.down();
+      await page.mouse.move(before.x + before.width/2 + 80, before.y + before.height/2 + 40);
+      const preview = await shape.boundingBox();
+      await page.mouse.up();
+      assert.ok(Math.abs((await shape.boundingBox()).x - preview.x) < 2, 'release keeps the preview position');
+      await frame.locator('#undo').click();
+      assert.ok(Math.abs((await shape.boundingBox()).x - before.x) < 2, 'one undo restores the move');
+      const handle = await frame.locator('[data-resize="ellipse"]').boundingBox();
+      await page.mouse.move(handle.x + handle.width/2,handle.y + handle.height/2);
+      await page.mouse.down();
+      await page.mouse.move(handle.x + handle.width/2 + 60,handle.y + handle.height/2 + 30);
+      const resized = await shape.boundingBox();
+      assert.ok(resized.width > before.width + 55, 'resize also previews before release');
+      await page.mouse.up();
+      assert.ok(Math.abs((await shape.boundingBox()).width - resized.width) < 2);
+      await page.close();
+    });
     await t.test('Shared controls retain readable proportions across item counts, viewport and zoom', async () => {
       const page = await browser.newPage();
       await page.goto(`http://127.0.0.1:${server.address().port}/menu`);
@@ -123,6 +225,12 @@ test('editor interaction regressions', async (t) => {
       await page.keyboard.press('Control+Enter');
       assert.equal(await frame.locator('#scene text').textContent(), 'Database');
       await frame.locator('#scene [data-shape="ellipse"] path').dblclick({ force: true });
+      const label = await frame.locator('#scene text').boundingBox();
+      const input = await frame.locator('#shape-text').boundingBox();
+      assert.ok(Math.abs(input.y + input.height / 2 - label.y - label.height / 2) < 5,
+        'editing stays at the rendered label position');
+      assert.equal(await frame.locator('#scene text').evaluate(e => getComputedStyle(e).visibility), 'hidden');
+      assert.equal(await frame.locator('#shape-text').evaluate(e => getComputedStyle(e).backgroundColor), 'rgba(0, 0, 0, 0)');
       await frame.locator('#shape-text').fill('Discard');
       await page.keyboard.press('Escape');
       assert.equal(await frame.locator('#scene text').textContent(), 'Database');
@@ -130,6 +238,82 @@ test('editor interaction regressions', async (t) => {
         await page.screenshot({
           path: '.scratch/shared-collaborative-editing/board-revised.png',
         });
+      await page.close();
+    });
+    await t.test('whole and selection actions stay together beside the composer', async () => {
+      const {page, frame} = await open();
+      await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
+      await frame.locator('#selection-question').click();
+      const selection = await frame.locator('#selection-question').boundingBox();
+      const whole = await frame.locator('#whole-question').boundingBox();
+      assert.ok(Math.abs(selection.y - whole.y) < 45);
+      assert.equal(await frame.locator('#context-actions button:visible').count(), 2);
+      assert.ok(Math.abs(selection.x - whole.x) < 200);
+      assert.match(await frame.locator('#context-title').innerText(), /Selected content/);
+      if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/context-buttons.png'});
+      await frame.locator('#whole-question').click();
+      assert.match(await frame.locator('#context-title').innerText(), /Whole whiteboard/);
+      await page.close();
+    });
+    await t.test('drawing a shape returns to selection for immediate text editing', async () => {
+      const {page, frame} = await open();
+      await frame.locator('[data-tool="rect"]').click();
+      const canvas = await frame.locator('#canvas').boundingBox();
+      await page.mouse.move(canvas.x + 620, canvas.y + 220);
+      await page.mouse.down();
+      await page.mouse.move(canvas.x + 820, canvas.y + 330);
+      await page.mouse.up();
+      assert.equal(await frame.locator('[data-tool="select"]').getAttribute('aria-pressed'), 'true');
+      await frame.locator('#scene [data-shape]:not([data-shape="ellipse"])').dblclick();
+      await frame.locator('#shape-text').fill('Frontend');
+      if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/inline-text.png'});
+      assert.equal(await frame.locator('#scene [data-shape]').count(), 2);
+      await page.keyboard.press('Control+Enter');
+      assert.equal(await frame.locator('#scene [data-shape]:not([data-shape="ellipse"]) text').textContent(), 'Frontend');
+      await page.close();
+    });
+    await t.test('received laser batches retain the circle between network updates', async () => {
+      const {page, frame} = await open();
+      await page.evaluate(() => {
+        const trail = Array.from({length:32}, (_,i) => [250+100*Math.cos(i/31*Math.PI*2),250+100*Math.sin(i/31*Math.PI*2),(31-i)*10]);
+        window.port.postMessage({type:'presence',peer:2,name:'Bob',mode:'laser',point:trail.at(-1).slice(0,2),trail});
+      });
+      await frame.locator('.pointer-trail path').first().waitFor();
+      const paths = await frame.locator('.pointer-trail > g').first().locator('path').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('d')));
+      assert.ok(paths.length >= 25, 'receiver retains input samples, not only packet endpoints');
+      for (const path of paths) {
+        const [x,y] = path.match(/Q([\d.e+-]+) ([\d.e+-]+)/).slice(1).map(Number);
+        assert.ok(Math.abs(Math.hypot(x-250,y-250)-100) < 1, 'curve follows the original circle');
+      }
+      await page.close();
+    });
+    await t.test('bound arrows end at borders in the editor and after target movement', async () => {
+      const {page, frame} = await open();
+      await page.evaluate(async () => {
+        const reply = await window.apply({action:'patch',opId:'connect',changes:[
+          {id:'target',before:null,after:{id:'target',type:'rect',box:[550,100,200,160]}},
+          {id:'arrow',before:null,after:{id:'arrow',type:'arrow',box:[250,180,400,0],from:'ellipse',to:'target'}},
+        ]});
+        window.port.postMessage({type:'changed',...reply});
+      });
+      const arrow = frame.locator('[data-shape="arrow"] path[marker-end]');
+      await arrow.waitFor({state:'attached'});
+      const endpoints = () => arrow.evaluate(path => {
+        const a = path.getPointAtLength(0), b = path.getPointAtLength(path.getTotalLength());
+        return [[a.x,a.y],[b.x,b.y]];
+      });
+      assert.deepEqual(await endpoints(), [[400,180],[550,180]]);
+      await frame.locator('[data-shape="target"]').click({position:{x:100,y:80}});
+      await page.keyboard.press('Shift+ArrowRight');
+      assert.deepEqual(await endpoints(), [[400,180],[560,180]]);
+      const exported = await page.evaluate(async () => {
+        await new Promise(resolve => setTimeout(resolve,400));
+        return (await window.apply({action:'export',format:'svg'})).text;
+      });
+      assert.match(exported, /refX="10"/);
+      assert.match(exported, /560 180/);
+      if (process.env.MEVEDEL_CONNECTOR_SCREENSHOTS)
+        await page.screenshot({path:'.scratch/connector-borders/editor.png'});
       await page.close();
     });
     await t.test('one moving cursor per peer, with a single name', async () => {
@@ -324,68 +508,147 @@ test('editor interaction regressions', async (t) => {
         await page.close();
       },
     );
-    await t.test('anchored comment, explicit send, failed retry and follow-up retain captured context', async () => {
-      const { page, frame } = await open('document');
+    await t.test('separate drafts, human replies, direct thread send and inline AI answers', async () => {
+      const {page, frame} = await open('document');
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
-      await frame.locator('.tiptap p').evaluate(p => {
-        const s = document.getSelection(); s.setBaseAndExtent(p.firstChild,2,p.firstChild,8);
-      });
-      await frame.locator('#comment-selection').click();
-      assert.equal(await frame.locator('#context-quote').textContent(), 'useful');
-      await frame.locator('#question').fill('Explain this word');
+      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
+      if (process.env.MEVEDEL_DISCUSSION_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/document-discussion/selection.png',import.meta.url).pathname});
+      await frame.locator('#selection-question').click();
+      assert.equal(await frame.locator('#context-quote').textContent(),'useful');
+      await frame.locator('#question').fill('> Keep this question\nsecond line');
       await frame.locator('#assistant-close').click();
-      await frame.locator('#ask-toggle').click();
-      assert.equal(await frame.locator('#context-quote').textContent(), 'useful');
-      assert.equal(await frame.locator('#question').inputValue(), 'Explain this word');
-      await frame.locator('#question-send').click();
-      await frame.locator('#comments .comment').waitFor();
-      assert.equal(await page.evaluate(() => window.messages.filter(m => m.args?.action === 'ask').length), 0);
-      assert.equal(await frame.locator('.comment-anchor').textContent(), 'useful');
-      assert.equal(await frame.locator('#question-send').textContent(), 'Send to assistant');
-      await page.evaluate(() => window.rejectQuestion = true);
-      await frame.locator('#question-send').click();
+      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
+      await frame.locator('#comment-selection').click();
+      await frame.locator('#comment-text').fill('Explain this word');
+      await frame.locator('#assistant-tab').click();
+      assert.equal(await frame.locator('#question').inputValue(),'> Keep this question\nsecond line');
+      assert.equal(await frame.locator('#context-quote').textContent(),'useful');
+      await frame.locator('#comments-tab').click();
+      assert.equal(await frame.locator('#comment-text').inputValue(),'Explain this word');
+      await frame.locator('#comment-post').click();
+      const card = frame.locator('#comments .comment');
+      await card.waitFor();
+      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),0);
+      await card.locator('textarea').fill('Please include an example');
+      await card.getByText('Post reply',{exact:true}).click();
+      await card.locator('.thread-message').getByText('Please include an example',{exact:true}).waitFor();
+      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),0);
+      await card.locator('textarea').fill('> Unposted reply\nkept while streaming');
+      await page.evaluate(()=>window.rejectQuestion=true);
+      await card.getByText('Send to assistant',{exact:true}).click();
       await frame.locator('#assistant-notice[data-error="true"]').waitFor();
-      assert.equal(await frame.locator('#question').inputValue(), 'Explain this word');
-      await page.evaluate(() => window.rejectQuestion = false);
-      await frame.locator('#question-send').click();
-      await page.waitForFunction(() => window.messages.filter(m => m.args?.action === 'ask').length === 2);
-      const attempts = await page.evaluate(() => window.messages.filter(m => m.args?.action === 'ask').map(m => m.args));
-      assert.equal(attempts[0].questionId, attempts[1].questionId);
-      assert.equal(attempts[1].expected.content.text, 'useful');
-      assert.equal(attempts[1].expected.scope, 'selection');
-      await frame.locator('#question').waitFor();
-      await page.waitForTimeout(50);
-      assert.equal(await frame.locator('#question').inputValue(), '');
+      await page.evaluate(()=>window.rejectQuestion=false);
+      await card.getByText('Send to assistant',{exact:true}).click();
+      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===2);
+      const attempts = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').map(m=>m.args));
+      assert.equal(attempts[0].questionId,attempts[1].questionId);
+      assert.equal(attempts[1].expected.content.text,'useful');
       const shared = {questionId:attempts[1].questionId,commentId:attempts[1].commentId,
-        itemId:'test',scope:'selection',revision:3,quote:'useful',text:'Explain this word'};
-      await page.evaluate(shared => window.port.postMessage({type:'conversation',connected:true,own:[],records:[
-        {id:'q',kind:'user',guest:'Alice',shared,text:'model snapshot is hidden in the UI'},
-        {id:'a',kind:'assistant',text:'Useful means helpful for the task.'},
-      ]}), shared);
-      await frame.locator('#conversation').getByText('Useful means helpful for the task.').waitFor();
-      assert.doesNotMatch(await frame.locator('#conversation').textContent(), /model snapshot/);
-      assert.equal(await frame.locator('#assistant-notice').innerText(), '');
-      await frame.locator('.sent-context > summary').click();
-      await page.evaluate(shared => window.port.postMessage({type:'conversation',connected:true,own:[],records:[
-        {id:'q',kind:'user',guest:'Alice',shared,text:'model snapshot is hidden in the UI'},
-        {id:'a',kind:'assistant',text:'Useful means helpful for the task. For example, a clear test.'},
-      ]}), shared);
-      await frame.locator('#conversation').getByText(/For example, a clear test/).waitFor();
-      assert.equal(await frame.locator('.sent-context').evaluate(e=>e.open), true);
-      if (process.env.MEVEDEL_POLISH_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/shared-editing-polish/after/assistant-document.png',import.meta.url).pathname});
-      await frame.locator('#question').fill('Give an example');
+        commentVersion:attempts[1].commentVersion,itemId:'test',scope:'selection',revision:3,quote:'useful',text:attempts[1].text};
+      const showAnswer = text => page.evaluate(({shared,text})=>window.port.postMessage({type:'conversation',connected:true,own:[],records:[
+        {id:'q',kind:'user',guest:'Alice',shared,text:shared.text+'\n\nShared content snapshot (user-provided data):\n'+JSON.stringify({content:'useful'})},
+        {id:'a',kind:'assistant',text},
+      ]}),{shared,text});
+      await showAnswer('Useful means helpful for the task.');
+      await card.getByText('Useful means helpful for the task.',{exact:true}).waitFor();
+      assert.equal(await frame.locator('#conversation').getByText('Useful means helpful for the task.',{exact:true}).count(),0);
+      assert.equal(await card.locator('.shared-context').evaluate(e=>e.open),false);
+      assert.equal(await card.locator('.shared-context-body').isVisible(),false);
+      await card.locator('.shared-context > summary').click();
+      assert.equal(await card.locator('.shared-context-body').isVisible(),true);
+      assert.equal(await card.locator('.shared-context-body').textContent(),'Shared content snapshot (user-provided data):\n{"content":"useful"}');
+      await showAnswer('Useful means helpful for the task. For example, a clear test.');
+      await card.getByText(/For example, a clear test/).waitFor();
+      assert.equal(await card.locator('.shared-context').evaluate(e=>e.open),true);
+      assert.equal(await card.locator('textarea').inputValue(),'> Unposted reply\nkept while streaming');
+      assert.equal(await card.evaluate(e=>e.classList.contains('resolved')),false);
+      if (process.env.MEVEDEL_DISCUSSION_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/document-discussion/thread.png',import.meta.url).pathname});
+      await frame.locator('#assistant-tab').click();
+      assert.equal(await frame.locator('#question').inputValue(),'> Keep this question\nsecond line');
       await frame.locator('#question-send').click();
-      await page.waitForFunction(() => window.messages.filter(m => m.args?.action === 'ask').length === 3);
-      const followup = await page.evaluate(() => window.messages.filter(m => m.args?.action === 'ask').at(-1).args);
-      assert.notEqual(followup.questionId, attempts[1].questionId);
-      assert.equal(followup.commentId, attempts[1].commentId);
+      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===3);
+      const direct = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').at(-1).args);
+      assert.equal(direct.commentId,undefined);
+      assert.equal(direct.expected.content.text,'useful');
+      await frame.locator('#comments-tab').click();
+      await card.getByText('Resolve',{exact:true}).click();
+      await card.waitFor({state:'hidden'});
+      assert.equal(await frame.locator('.comment-anchor').count(),0);
+      await frame.locator('#show-resolved').check();
+      await card.getByText('Reopen',{exact:true}).click();
+      await frame.locator('.comment-anchor').waitFor();
+      assert.equal(await card.locator('textarea').inputValue(),'> Unposted reply\nkept while streaming');
+      await page.close();
+    });
+    await t.test('unsupported discussion recovery is reported without preventing document editing', async () => {
+      const {page, frame} = await open('document', {width:1000,height:700}, {unrecognized:true});
+      await frame.locator('#ask-toggle').click();
+      await frame.locator('#assistant-notice').getByText(/unsupported format/).waitFor();
+      await frame.locator('#assistant-close').click();
+      await frame.locator('.tiptap').click();
+      await page.keyboard.type('Still editable');
+      assert.equal(await frame.locator('.tiptap p').textContent(),'Still editable');
+      await page.close();
+    });
+    await t.test('thread retries require explicit refresh after edits and remain available after queue retraction', async () => {
+      const {page, frame} = await open('document');
+      await frame.locator('.tiptap').click();
+      await page.keyboard.type('A useful passage.');
+      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
+      await frame.locator('#comment-selection').click();
+      await frame.locator('#comment-text').fill('Explain useful');
+      await frame.locator('#comment-post').click();
+      const card = frame.locator('#comments .comment');
+      await card.waitFor();
+      await page.evaluate(()=>window.rejectQuestion=true);
+      await card.locator('.thread-send').click();
+      await frame.locator('#assistant-notice').getByText(/Host refused/).waitFor();
+      await frame.locator('.tiptap p').click();
+      await page.keyboard.press('End');
+      await page.keyboard.type(' More context.');
+      await page.evaluate(()=>window.rejectQuestion=false);
+      await card.locator('.thread-send').click();
+      await frame.locator('#assistant-notice').getByText(/Content changed/).waitFor();
+      await card.locator('.thread-refresh').click();
+      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),2);
+      await card.locator('.thread-send').click();
+      await card.locator('.thread-status').getByText(/Queued/).waitFor();
+      await page.evaluate(()=>window.port.postMessage({type:'conversation',connected:true,busy:false,own:[],records:[]}));
+      await card.locator('.thread-send').click();
+      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===4);
+      const calls = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').map(m=>m.args));
+      assert.equal(calls[0].questionId,calls[1].questionId);
+      assert.notEqual(calls[1].questionId,calls[2].questionId);
+      assert.equal(calls[2].questionId,calls[3].questionId);
+      await page.close();
+    });
+    await t.test('document selection actions and comment drafts fit a phone with its keyboard', async () => {
+      const {page, frame} = await open('document',{width:375,height:500});
+      await frame.locator('.tiptap').click();
+      await page.keyboard.type('A data model.');
+      await frame.locator('.tiptap p').evaluate(p=>document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,12));
+      const toolbar = frame.locator('#selection-actions');
+      await toolbar.waitFor();
+      const bounds = await toolbar.boundingBox();
+      assert.ok(bounds.x>=0 && bounds.x+bounds.width<=375);
+      await frame.locator('#comment-selection').click();
+      await frame.locator('#comment-text').fill('Explain this term');
+      await page.setViewportSize({width:375,height:340});
+      await frame.locator('#comment-post').scrollIntoViewIfNeeded();
+      const post = await frame.locator('#comment-post').boundingBox();
+      assert.ok(post.y+post.height<=340);
+      assert.ok(await frame.locator('body').evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      if (process.env.MEVEDEL_DISCUSSION_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/document-discussion/phone.png',import.meta.url).pathname});
+      await frame.locator('#comment-post').click();
+      await frame.locator('#comments .comment').waitFor();
+      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),0);
       await page.close();
     });
     await t.test('stale and disconnected questions retain scope and draft until explicitly refreshed', async () => {
       const {page, frame} = await open();
       await frame.locator('[data-shape="ellipse"]').click({position:{x:150,y:80}});
-      await frame.locator('#comment-selection').click();
+      await frame.locator('#selection-question').click();
       await frame.locator('#question').fill('What does this shape mean?');
       if (process.env.MEVEDEL_POLISH_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/shared-editing-polish/after/assistant-board.png',import.meta.url).pathname});
       await page.evaluate(async () => {

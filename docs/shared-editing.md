@@ -49,9 +49,15 @@ The drawing menu follows the selected `af756034` reference: hand, selection,
 rectangle, diamond, ellipse, database, sticky note, arrow, line, freehand,
 text, and eraser, followed by the laser tool. Buttons expose tool names and
 keyboard shortcuts. Selection supports Shift multi-selection, arrow-key
-movement, Delete, and resizing. Click inside an unfilled shape to select it;
-lines have a wider invisible hit area. Double-click a shape or press Enter
-to type directly in it. Text is shared while typing; blur or Ctrl/Command+Enter
+movement, Delete, and resizing.
+Moving and resizing show a local preview while the pointer is held, including
+selection handles and bound connectors. Releasing commits the geometry; pointer
+cancellation restores the committed scene without creating an edit.
+Click inside an unfilled shape to select it; lines have a wider invisible hit
+area. Double-click a shape or press Enter
+to edit its label in place, with the same alignment, size, and line spacing.
+Finishing a drawing returns to selection, so a double-click edits the new shape
+instead of creating more shapes. Text is shared while typing; blur or Ctrl/Command+Enter
 finishes, and Escape cancels if another writer has not changed that text.
 The **Style** panel follows the same reference: stroke and background
 colours, hachure/cross/solid fill, stroke width, solid/dashed/dotted strokes,
@@ -61,8 +67,16 @@ sections that apply to the selection or the active drawing tool, changes the
 selected objects, and remembers the choices for new ones. Sloppy outlines are
 seeded from the shape id, so every browser and the host's PNG draw the same
 wobble.
-Wheel zoom, zoom buttons, and Fit affect only the local viewport. Images accept PNG, JPEG, and WebP by
-upload or clipboard paste. Arrow endpoints can bind to shapes.
+Wheel zoom, zoom buttons, and Fit affect only the local viewport. Both whiteboards
+and documents accept PNG, JPEG, and WebP via **Insert image**, clipboard paste,
+or file drag-and-drop onto the work. Documents also have an image button in the
+formatting bar. Dropped images land at the board pointer or document insertion
+position; multiple files insert together and support Undo/Redo. Images are
+embedded in the item and retained in native exports; document HTML and Markdown
+exports also carry their image data. External image URLs are not fetched.
+Arrow endpoints can bind to shapes. Bound arrows meet the facing shape borders
+and follow moves and resizes; ellipses, diamonds, rounded corners, and database
+rims use their silhouettes. The editor and PNG/SVG exports share this geometry.
 
 Documents support paragraphs, headings, emphasis, lists, links, code blocks,
 and basic tables. Named carets show other writers. Each browser's Undo/Redo
@@ -94,8 +108,11 @@ ordinary cursor. Older trail segments fade independently within about half a
 second; a stationary tip stays visible while the participant points.
 
 Coordinates travel in board space and render through each receiver's viewport.
-Remote movement uses a short transition from the displayed position to each
-received sample, without predicting past it. A stale gap starts a new pointer
+Remote cursors use a short transition from the displayed position to each
+received sample, without predicting past it. Laser packets retain up to 64
+input samples from the last 550 ms, rather than only each packet's last position.
+The observer plays those samples with a short 55 ms delay, preserving curves
+between network updates. A stale gap starts a new pointer
 instead of drawing a bridge across the board. Reduced-motion preferences remove
 trails and interpolation. Leaving the canvas, switching tools, cancellation,
 hiding the page, and disconnect clear the local pointing state; item changes
@@ -121,7 +138,9 @@ Selected connectors retain their current bound geometry; endpoint objects
 accompany the selection as context.
 
 `SharedCreate` creates a named item. `SharedEdit` applies patches, renames,
-or targeted inverses. A patch carries exact `before` values from a read and
+or targeted inverses. Whiteboard edits also return a PNG of the resulting
+canonical revision through the normal tool-media path, so the model can inspect
+the visual result without a separate read or a connected browser. A patch carries exact `before` values from a read and
 new `after` values; null adds or deletes. Documents target top-level blocks
 and may specify an `afterId` insertion anchor. Any stale target rejects the
 whole transaction with current target data. Unrelated changes do not
@@ -131,30 +150,64 @@ with every browser closed and never silently start a share.
 
 ### Questions and document comments
 
-**Assistant** shows questions about the current item and their canonical replies,
-with the session's queued, paused, working, disconnected, or provider-failure
-state. Follow-ups use the same session conversation. Other item conversations
-remain in the room transcript. View participants can read comments and replies.
+The document's **Discussion** panel has **Comments** and **Assistant** views.
+Whiteboards keep their **Assistant** panel. The assistant shows questions about
+that item and their canonical replies, with the session's queued, paused,
+working, disconnected, or provider-failure state.
+While the session is working, a spinner accompanies the status and the panel's
+toolbar button. The room chat shows **Assistant working…** in its status strip.
+These indicators follow the host's session activity, including tool execution,
+and clear on completion or disconnection. Reduced-motion preferences disable
+the spinning animation. A paused follow-up queue does not conceal a running turn.
+All submitted questions, comments, replies, and assistant answers are shared with the room; drafts stay
+in the current browser's recovery storage. View participants can read them.
 
-For a document selection, choose **Comment on selection** (Ctrl+Alt+M), enter a
-question or instruction, and **Post comment**. The draft is private to this
-browser's recovery storage until posted. Posted comments are shared with everyone
-in the session and persist with the item. Posting never submits a model turn.
-Choose **Send to assistant** explicitly to send the comment's passage; **View
-conversation** finds its question and answer in the panel. Clicking a passage
-scrolls to its live anchor. Participants with edit authority can resolve or reopen
-comments. Resolved comments remain readable but no longer highlight the document.
-There are at most 200 comments per document.
+Selecting document text shows **Add comment** and **Ask about selection** beside
+the passage. **Add comment** (Ctrl+Alt+M) opens a separate draft; **Post comment**
+publishes an anchored discussion. **Post reply** adds an attributed human reply.
+Neither action submits a model turn. Questions and comment/reply drafts remain
+independent when switching views, receiving updates, or reopening the editor.
+An unrecognized saved discussion-draft format is reported and reset without
+blocking recovery of document content or posted discussions.
+
+**Ask about selection** opens the assistant composer directly with the passage
+attached. **Use whole document** explicitly changes its scope. The attached quote
+stays fixed when focus or the document selection moves elsewhere.
+
+**Send to assistant** inside a comment actually submits the posted human thread
+and its passage, without changing the assistant composer or including unposted
+reply text. Queue and delivery status appear alongside the discussion. Canonical
+AI replies render in that thread beneath the human message that prompted them;
+ordinary questions remain in the Assistant view. Another AI request requires
+another explicit send. The host checks the reviewed thread version as well as
+the passage; concurrent replies require reviewing the updated discussion before
+resubmission. Failed delivery retains its request identity for retry.
+
+Clicking a document highlight opens its discussion; **Show passage** scrolls back
+to the live anchor. Participants with edit authority can resolve or reopen a
+thread. Resolution hides its highlight and removes it from the open list;
+**Show resolved** reveals its retained discussion. AI responses never resolve
+threads automatically. Reopen a resolved thread before posting or asking again.
+There are at most 200 comments per document and 200 human replies per comment,
+with at most 10,000 characters per message and the normal snapshot size limit
+on submissions to the assistant.
 
 Comments keep their original quote and collaboration-aware text anchors. The
 panel marks a passage changed or removed after later edits. Changed passages
 require reviewing current context before sending; removed passages cannot be
 sent. The immutable snapshot of an already sent question remains unchanged.
+In the editor sidebar, room transcript, and Emacs view, sent questions keep their
+authored text visible and collapse the snapshot under **Shared context** by
+default. Expand it to inspect the full sent context and attachment links; the
+summary names the item, scope, and revision. This affects display only, not what
+the model receives. Prompts edited on the host remain fully visible.
 Comments are session annotations: native and document exports contain the content,
 not the comments or conversation. A fresh import starts without those annotations.
 
 For a whiteboard, select one or more objects and choose **Ask about selection**.
-**Ask about whole item** keeps whole-document and whole-board questions available.
+**Ask about whole item** sits beside the selection action. Both controls move
+together beside the composer while the assistant panel is open, and return to
+the editor footer when it closes.
 The attached quote and expandable full context show the chosen scope before
 submission. Opening controls, typing, and toggling the panel retain that capture.
 Pending edits must save first. The host compares the captured content with its
@@ -219,8 +272,9 @@ are no legacy readers or migrations.
 
 Bounds are explicit: 16 MiB canonical state/native input, 2,000 shapes,
 4,000 points per stroke, 200 targets per agent transaction, and 1 MiB document
-JSON with bounded depth and node count. Raster images are limited to 16
-megapixels each and 32 megapixels per board; browser image uploads are at
+JSON excluding embedded image data, with bounded depth and node count. Documents
+allow up to 12 MiB of embedded image data within the canonical state limit.
+Raster images are limited to 16 megapixels each and 32 megapixels per item; browser image uploads are at
 most 4 MiB. At most 32 recent transactions are offered for reversion, and the
 receipt ledger has a 65,536-operation ceiling. A native export/import begins
 a fresh history when that ceiling is reached. Question snapshots have a
