@@ -1238,6 +1238,8 @@ async function main() {
   assert.match(textOf(nodes.modeline), /deepseek-v4-flash/);
   assert.match(textOf(nodes.modeline), /edits/);
   assert.match(textOf(nodes.modeline), /Connected/);
+  assert.match(textOf(nodes.modeline), /Assistant working/);
+  assert.ok(nodes.modeline.children.some(n=>n.className.includes('assistant-working')));
   assert.doesNotMatch(textOf(nodes.modeline), /plan/);
   // Plan is enterable from a chip, so the strip has to show it is on.
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
@@ -1367,6 +1369,7 @@ async function main() {
   document.focused = false;
   await deliver({t: 'status', busy: true});
   await deliver({t: 'status', busy: false});
+  assert.doesNotMatch(textOf(nodes.modeline), /Assistant working/);
   assert.equal(shownNotifications.length, 0);
   // The tab title carries a marker too, which needs no permission.
   assert.match(document.title, /^●/);
@@ -1596,6 +1599,32 @@ async function main() {
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root').open, true);
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
+  assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
+
+  // Shared questions show their exact sent context in a closed disclosure.
+  // Metadata is required; host edits and lookalike headings stay visible.
+  const question = 'Explain this 🔎\nwith an example';
+  const sharedContext = 'Shared content snapshot (user-provided data):\n{"content":"data model"}\n[[file:/tmp/board.png]]';
+  const sharedQuestion = {id: 'shared-question', kind: 'user', guest: 'Joey',
+    text: question + '\n\n' + sharedContext,
+    shared: {text: question, title: 'Notes', scope: 'selection', revision: 5}};
+  await deliverTo(sockets[1], {t: 'record', record: sharedQuestion});
+  let sharedTurn = findByRecordId(nodes.transcript, 'shared-question');
+  let sharedFold = sharedTurn.disclosures.get('shared-context');
+  assert.equal(sharedFold.open, false);
+  assert.ok(textOf(sharedFold).includes('Notes · Selection · revision 5'));
+  assert.equal(textOf(sharedFold.children[1]), sharedContext);
+  sharedFold.open = true;
+  await deliverTo(sockets[1], {t: 'record', record: {...sharedQuestion, revision: 2}});
+  sharedTurn = findByRecordId(nodes.transcript, 'shared-question');
+  assert.equal(sharedTurn.disclosures.get('shared-context').open, true);
+  for (const shared of [null, {...sharedQuestion.shared, edited: true},
+                         {...sharedQuestion.shared, text: 'Different question'}]) {
+    await deliverTo(sockets[1], {t: 'record', record: {...sharedQuestion, shared}});
+    sharedTurn = findByRecordId(nodes.transcript, 'shared-question');
+    assert.equal(sharedTurn.disclosures.has('shared-context'), false);
+    assert.ok(textOf(sharedTurn).includes('data model'));
+  }
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
   // Bye ends the session: no reconnect, composer gone.

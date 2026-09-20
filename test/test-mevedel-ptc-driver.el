@@ -20,6 +20,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-turn)
 (require 'mevedel-tools)
+(require 'mevedel-tool-editing)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-agents)
 (require 'mevedel-structs)
@@ -256,6 +257,35 @@ With RAW-P, retain the full pipeline result including hidden render data."
      (when (file-directory-p save-path) (delete-directory save-path t))))
   ,test
   (test)
+
+  :doc "SharedEdit accepts nested list and vector arrays through the real ToolCall pipeline"
+  (unwind-protect
+      (progn
+        (mevedel-tool-editing--register)
+        (setf (mevedel-session-authority-mode session) 'pid-lock)
+        (with-current-buffer buffer
+          (setq-local gptel-tools
+                      (test-mevedel-ptc-driver--gptel-tools "SharedCreate" "SharedEdit")))
+        (let* ((created (test-mevedel-ptc-driver--run
+                         buffer "(SharedCreate :kind \"whiteboard\" :title \"Arrays\")"))
+               (id (plist-get (json-parse-string created :object-type 'plist) :id)))
+          (dolist (form '("[(:id \"v\" :before :null :after (:id \"v\" :type \"rect\" :box [710 143 85 10]))]"
+                          "'((:id \"l\" :before :null :after (:id \"l\" :type \"pen\" :box (0 0 10 10) :points ((0 0) (10 10)))))"))
+            (let (reply)
+              (with-current-buffer buffer
+                (mevedel-ptc-driver-run
+                 (lambda (value) (setq reply value))
+                 (format "(SharedEdit :id %S :action \"patch\" :changes %s)" id form)
+                 '("SharedEdit") '("SharedEdit")))
+              (let ((deadline (+ (float-time) 10)))
+                (while (and (not reply) (< (float-time) deadline))
+                  (accept-process-output nil 0.01)))
+              (should (eq (plist-get reply :status) 'success))
+              (should (plist-get reply :media))))
+          (let* ((state (mevedel-shared-editing--read session id))
+                 (revision (plist-get state :revision)))
+            (should (= revision 3)))))
+    (with-current-buffer buffer (mevedel-shared-editing-stop)))
 
   :doc "indirect argument calls finish before the outer call and retain both audits"
   (let (values)

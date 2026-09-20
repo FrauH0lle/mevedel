@@ -49,7 +49,7 @@ export class BoardPresence {
       this.frame = 0;
     }
   }
-  receive({ peer, mode, point, name }) {
+  receive({ peer, mode, point, name, trail }) {
     if (mode === 'clear') { this.clear(peer); return; }
     if (!['laser', 'cursor'].includes(mode) || !Array.isArray(point) ||
         point.length !== 2 || !point.every(Number.isFinite)) return;
@@ -71,9 +71,14 @@ export class BoardPresence {
       this.people.set(peer, person);
     }
     const from = positionAt(person.samples, now);
-    person.samples = person.local || this.motion.matches
+    const laser = mode === 'laser' && Array.isArray(trail) && trail.length;
+    person.samples = laser
+      ? trail.map(([x,y,age]) => ({point:[x,y], time:now + (person.local ? 0 : 55) - age}))
+      : person.local || this.motion.matches
       ? [{ point, time: now }]
       : [{ point: from, time: now }, { point, time: now + 55 }];
+    if (laser) person.trail = person.samples;
+    person.sampledTrail = Boolean(laser);
     person.last = now;
     const label = person.group.querySelector('text');
     label.textContent = String(name || 'Participant').slice(0, 48);
@@ -98,9 +103,12 @@ export class BoardPresence {
       const laser = mode === 'laser';
       person.trail = person.trail.filter(s => now - s.time < 550).slice(-63);
       const previous = person.trail.at(-1);
-      if (!previous || Math.hypot(...point.map((v, i) => v - previous.point[i])) > .25 * scale)
+      if (!person.sampledTrail && (!previous || Math.hypot(...point.map((v, i) => v - previous.point[i])) > .25 * scale))
         person.trail.push({ point, time: now });
-      const paths = this.motion.matches || !laser ? '' : trailSegments(person.trail, now)
+      const visible = person.trail.filter(s => s.time <= now);
+      if (visible.length && point.some((v, i) => v !== visible.at(-1).point[i]))
+        visible.push({point, time:now});
+      const paths = this.motion.matches || !laser ? '' : trailSegments(visible, now)
         .map(s => `<path d="${s.path}" opacity="${s.opacity.toFixed(3)}"/>`).join('');
       group.querySelector('.pointer-trail').innerHTML = paths
         ? `<g stroke="#ef3555" stroke-width="${7 * scale}" opacity=".16">${paths}</g><g stroke="#e93250" stroke-width="${3 * scale}">${paths}</g><g stroke="#fff0e9" stroke-width="${scale}" opacity=".85">${paths}</g>` : '';

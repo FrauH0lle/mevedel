@@ -513,7 +513,7 @@ SESSION control trusted side-channel lookup."
 (defun mevedel-tool-media--message-text (media)
   "Return a short model-facing description for attached MEDIA."
   (let ((paths (delq nil (mapcar (lambda (item) (plist-get item :path)) media))))
-    (concat "Media returned by Read is attached as native input."
+    (concat "Tool-result media is attached as native input."
             (when paths
               (concat " Source: " (mapconcat #'identity paths ", "))))))
 
@@ -588,23 +588,23 @@ SESSION control trusted side-channel lookup."
     (backend tool-call tool-results-dir &optional session)
   "Prepare TOOL-CALL text and media for BACKEND.
 TOOL-RESULTS-DIR selects persisted media.  SESSION resolves remote durable
-records.  Return
+records.  Trust the captured record and owning call ID, regardless of tool
+name: direct ToolCall dispatch retains the outer provider identity.  Return
 (MODEL-RESULT . NATIVE-MEDIA)."
   (let* ((original (plist-get tool-call :result))
-         (read-p (member (plist-get tool-call :name) '("Read" "SharedRead")))
          (tool-use-id (plist-get tool-call :id))
          (extracted
-          (and read-p tool-use-id (stringp original)
+          (and tool-use-id (stringp original)
                (mevedel-tool-media-extract
                 original tool-results-dir tool-use-id nil session)))
          (media
-          (and read-p tool-use-id
+          (and tool-use-id
                (or (mevedel-tool-media-normalize-items
                     (plist-get tool-call :media))
                    (cdr extracted))))
          (without-media
           (and (stringp original)
-               (if (and read-p tool-use-id)
+               (if (and tool-use-id)
                    ;; The extract already strips blocks it resolved.  A
                    ;; reference it could NOT resolve -- evicted store,
                    ;; cold process, missing durable record -- must still

@@ -126,6 +126,19 @@ dispatched), and `:pauses'."
   (should (string-match-p "Unsupported literal"
                           (test-mevedel-ptc--error "(list #s(hash-table))")))
 
+  :doc "accepts bounded vector data without evaluating its elements"
+  (progn
+    (should (equal [710 143 85 1] (test-mevedel-ptc--value "[710 143 85 1]")))
+    (should (equal [nil t] (test-mevedel-ptc--value "[nil t]")))
+    (should (equal "[(UnknownTool)]"
+                   (prin1-to-string (test-mevedel-ptc--value "[(UnknownTool)]"))))
+    (let ((mevedel-ptc-max-nodes 8))
+      (should (string-match-p "node limit"
+                              (test-mevedel-ptc--error "[1 2 3 4 5 6 7 8 9]"))))
+    (should (string-match-p "depth limit"
+                            (test-mevedel-ptc--error
+                             (concat (make-string 200 ?\[) "1" (make-string 200 ?\]))))))
+
   :doc "rejects improper lists"
   (should (string-match-p "Improper list"
                           (test-mevedel-ptc--error "(list (a . b))")))

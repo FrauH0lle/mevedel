@@ -263,7 +263,9 @@ and converts restored records into each provider's native payload shape.
 tool-results directory and calls that boundary from the attach, hook, render,
 and gptel parse steps; it does not construct provider-specific media blocks.
 The transcript reference contains only an opaque record id and its owning tool
-use id. Replay never rereads the original filesystem path. Remote records are
+use id. Native delivery follows that captured provenance, regardless of the
+provider-facing tool name, so direct ToolCall dispatch and editing tools retain
+their images. Replay never rereads the original filesystem path. Remote records are
 published and replayed through the session artifact manifest; a fixed-path
 cache is never an authority fallback. In-memory retention is bounded by
 `mevedel-tool-media-cache-max-bytes` (default 25 MiB): the oldest records are

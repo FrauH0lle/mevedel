@@ -32,9 +32,11 @@ upstream by that adapter.
 
 ## Values and evaluation
 
-The dialect supports numbers, strings, symbols, keywords, lists, lexical
+The dialect supports numbers, strings, symbols, keywords, lists, vectors, lexical
 bindings, and lambdas. `nil` is false; every other value is true. A script may
 contain multiple top-level forms, which are evaluated as an implicit `progn`.
+Vector literals are data: their elements are not evaluated. Nested vectors and
+lists still count against the input node and depth limits.
 Lambdas are internal callables: neither a tool argument nor the script's final
 value may contain one.
 

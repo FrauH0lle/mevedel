@@ -200,6 +200,13 @@ prose. What remains unguarded is markup that opens a run: a response or user
 prompt whose very first line is `<system-reminder>` still reads as structure.
 Hidden audit record grammar and attachment spans live in `mevedel-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
+Attributed shared questions keep the authored question visible and place the
+generated snapshot and attachment links in a **Shared context** disclosure,
+collapsed by default. Its title includes the item, scope, and revision. Expansion
+survives the transition from the immediate echo to a full render. Only the exact
+generated suffix of an attributed question is folded; edited or mismatched
+prompts remain fully visible. This is presentation only: the data buffer and
+model input retain the complete snapshot.
 Reasoning summaries and expanded bodies retain source trust properties until
 the audit parser removes hidden records, including provider tool-history
 records between nested tool calls. Removal precedes reasoning-cache lookup

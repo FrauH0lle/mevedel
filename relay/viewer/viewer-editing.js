@@ -246,6 +246,7 @@ window.mevedelEditingView = {
               id,
               mode: data.mode,
               point: data.point,
+              trail: data.trail,
               cursor: data.cursor,
               clientId: data.clientId,
               clock: data.clock,
@@ -256,7 +257,7 @@ window.mevedelEditingView = {
         const args = data.args;
         if (
           !args ||
-          !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'resolve-comment'].includes(args.action) ||
+          !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'reply-comment', 'resolve-comment'].includes(args.action) ||
           (state.readOnly && !['read', 'export'].includes(args.action))
         ) {
           channel.port1.postMessage({

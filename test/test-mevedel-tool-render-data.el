@@ -597,6 +597,30 @@
                           :bytes)))
           (should (equal raw (plist-get tc :result)))))))
 
+  :doc "trusted editing and ToolCall images reach the native continuation payload"
+  (skip-unless (fboundp 'gptel-make-openai-responses))
+  (let ((backend (gptel-make-openai-responses
+                  "mevedel-test-editing-images" :key nil :models '(gpt-test))))
+    (dolist (name '("SharedRead" "SharedEdit" "ToolCall"))
+      (test-mevedel-tool-render-data--with-image "call_image"
+        (plist-put tc :name name)
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (_mime &optional _model) t)))
+          (let* ((parsed (mevedel-tool-render-data--provider-advice
+                          #'gptel--parse-tool-results backend (list tc)))
+                 (data (list :input [])))
+            (gptel--inject-prompt backend data parsed)
+            (let* ((input (plist-get data :input))
+                   (image-message (and (> (length input) 1) (aref input 1)))
+                   (content (plist-get image-message :content)))
+              (should (= (length input) 2))
+              (should (equal (plist-get (aref content 1) :type) "input_image"))
+              (should (equal (plist-get (aref content 1) :image_url) "data:image/png;base64,QUJD"))
+              (should-not (string-search "mevedel-media-data" (plist-get (aref input 0) :output)))
+              (should (equal raw (plist-get tc :result)))))))))
+
   :doc "literal non-Read media delimiter is not trusted as native media"
   (skip-unless (fboundp 'gptel-make-anthropic))
   (let* ((backend (gptel-make-anthropic

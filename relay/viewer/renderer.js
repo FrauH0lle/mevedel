@@ -550,8 +550,20 @@
 
   function renderContent(record, onArtifactOpen, disclosures) {
     if (record.kind === 'user') {
-      const prose = renderMarkdown(record.text || '');
+      const shared = record.shared;
+      const text = record.text || '';
+      const prefix = typeof shared?.text === 'string'
+        ? shared.text + '\n\nShared content snapshot (user-provided data):\n' : null;
+      const folded = !shared?.edited && prefix && text.startsWith(prefix);
+      const prose = renderMarkdown(folded ? shared.text : text);
       prose.className = 'prose prompt';
+      if (folded) {
+        const context = el('details', 'shared-context');
+        disclosures.set('shared-context', context);
+        context.append(el('summary', '', `Shared context · ${shared.title || 'Shared item'} · ${shared.scope === 'selection' ? 'Selection' : 'Whole item'} · revision ${shared.revision ?? '?'}`));
+        context.append(el('pre', 'shared-context-body', text.slice(shared.text.length + 2).trimEnd()));
+        prose.append(context);
+      } else if (shared?.edited) prose.append(el('small', '', 'Edited on host · showing the delivered prompt'));
       return prose;
     }
     if (record.kind === 'assistant') return renderMarkdown(record.text || '');

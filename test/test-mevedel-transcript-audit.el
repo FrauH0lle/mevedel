@@ -268,4 +268,20 @@
 
 (provide 'test-mevedel-transcript-audit)
 
+
+(mevedel-deftest mevedel-transcript-audit-shared-context
+  (:doc "Only attributed generated suffixes fold; edited and ordinary quoted prompts stay visible")
+  (let* ((question "What does this mean?\nShared content snapshot (user-provided data):\nI quoted that heading.")
+         (context "Shared content snapshot (user-provided data):\n{\"content\":\"data model\"}\n[[file:/tmp/board.png]]")
+         (text (concat question "\n\n" context))
+         (shared (list :text question :title "Notes" :scope "selection" :revision 5))
+         (display (mevedel-transcript-audit-shared-context text shared)))
+    (should (equal (plist-get display :text) question))
+    (should (equal (plist-get display :context) context))
+    (should (string-match-p "Notes.*Selection.*revision 5" (plist-get display :label)))
+    (should-not (mevedel-transcript-audit-shared-context text nil))
+    (should-not (mevedel-transcript-audit-shared-context text (plist-put (copy-sequence shared) :edited t)))
+    (should-not (mevedel-transcript-audit-shared-context (concat "A host rewrite\n" text) shared))
+    (should-not (mevedel-transcript-audit-shared-context "An ordinary question" shared))))
+
 ;;; test-mevedel-transcript-audit.el ends here
