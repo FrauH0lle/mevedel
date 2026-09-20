@@ -19,6 +19,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-tools)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-workspace)
@@ -1026,6 +1027,55 @@
 (mevedel-deftest mevedel-agent-conversation-refresh ()
   ,test
   (test)
+  :doc "metadata growth refreshes agent handles without rebuilding history"
+  (mevedel-view-test--with-buffers
+    (mevedel-tools-register)
+    (let ((mevedel-view-agent-refresh-delay 0)
+          (mevedel-view-rerender-debounce 0)
+          invocations)
+      (with-current-buffer data-buf
+        (dolist (name '("first" "second"))
+          (insert (propertize "Requesting a child.\n" 'gptel 'response))
+          (insert "#+begin_tool Agent\n")
+          (let ((start (point)))
+            (insert "(:name \"Agent\" :args (:task_name \"worker\"))\n\nChild started.\n")
+            (insert (mevedel-tool-render-data-format
+                     (list :kind 'collaboration-event :event 'started
+                           :path (concat "/root/" name) :agent-id name
+                           :status 'running) name))
+            (put-text-property start (point) 'gptel (cons 'tool name)))
+          (insert "#+end_tool\n")
+          (insert (mevedel--format-hook-audit-record
+                   '(:type prompt-rewrite :event "test"
+                     :original "before" :submitted "after")))
+          (push (mevedel-agent-invocation--create
+                 :agent-id name :path (concat "/root/" name)
+                 :parent-data-buffer data-buf :parent-tool-use-id name)
+                invocations)))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3))
+      (cl-letf (((symbol-function 'mevedel-view-rerender)
+                 (lambda (&rest _) (ert-fail "Unnecessary full redraw"))))
+        (dolist (invocation (reverse invocations))
+          (setf (mevedel-agent-invocation-call-count invocation) 1234
+                (mevedel-agent-invocation-terminal-reason invocation)
+                (make-string 200 ?x)
+                (mevedel-agent-invocation-transcript-status invocation) 'completed)
+          (mevedel-agent-conversation-refresh invocation)))
+      (with-current-buffer view-buf
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (dolist (name '("first" "second"))
+          (let ((pos (car (car (mevedel-view--agent-handle-refresh-points
+                               (concat "/root/" name))))))
+            (should pos)
+            (should (eq 'completed
+                        (get-text-property pos 'mevedel-view-agent-status)))))
+        (let ((before (buffer-substring-no-properties (point-min) (point-max))))
+          (mevedel-view--full-rerender)
+          (should (equal before (buffer-substring-no-properties
+                                (point-min) (point-max))))))))
   :doc "patches a noteworthy direct-child summary into its exact parent row"
   (let* ((parent (generate-new-buffer " *agent-summary-parent*"))
          (view (generate-new-buffer " *agent-summary-view*"))

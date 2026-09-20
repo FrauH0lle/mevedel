@@ -247,6 +247,46 @@
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render))))))
 
+(mevedel-deftest mevedel-view--flush-scheduled-render/tool-rows
+  (:doc "coalesced full rendering subsumes rows while incremental retains them")
+  (dolist (kind '(tools incremental full))
+    (mevedel-view-test--with-buffers
+      (let ((full 0) (incremental 0) refreshed)
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 3)
+          (setq mevedel-view--pending-render-kind kind
+                mevedel-view--pending-render-data-buffer data-buf
+                mevedel-view--pending-tool-rows '("older" "current")))
+        (cl-letf (((symbol-function 'mevedel-view--full-rerender)
+                   (lambda (&rest _) (cl-incf full)))
+                  ((symbol-function 'mevedel-view--render-stream-update)
+                   (lambda (&rest _) (cl-incf incremental)))
+                  ((symbol-function 'mevedel-view--refresh-tool-row)
+                   (lambda (_buffer id) (push id refreshed) t)))
+          (mevedel-view--flush-scheduled-render view-buf))
+        (should (= full (if (eq kind 'full) 1 0)))
+        (should (= incremental (if (eq kind 'incremental) 1 0)))
+        (should (equal refreshed (unless (eq kind 'full) '("current" "older"))))
+        (with-current-buffer view-buf
+          (should-not mevedel-view--pending-tool-rows)
+          (should-not mevedel-view--pending-render-kind)
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= 3 (- (point) (mevedel-view--input-start)))))))))
+
+(mevedel-deftest mevedel-view--schedule-render/tool-rows
+  (:doc "tool updates never downgrade pending transcript projection")
+  (mevedel-view-test--with-buffers
+    (unwind-protect
+        (with-current-buffer view-buf
+          (cl-loop for kind in '(tools incremental tools full tools incremental)
+                   for expected in '(tools incremental incremental full full full)
+                   do (mevedel-view--schedule-render kind data-buf 10)
+                   (should (eq expected mevedel-view--pending-render-kind)))
+          (setq mevedel-view--pending-tool-rows '("stale"))
+          (mevedel-view--cancel-scheduled-render)
+          (should-not mevedel-view--pending-tool-rows))
+      (with-current-buffer view-buf (mevedel-view--cancel-scheduled-render)))))
+
 (mevedel-deftest mevedel-view--unattended-p ()
   ,test
   (test)

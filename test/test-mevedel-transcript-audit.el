@@ -85,7 +85,19 @@
   (let ((block (mevedel--format-hook-audit-record '(:type tool-context))))
     (should (mevedel-transcript-audit-only-p block))
     (should-not (mevedel-transcript-audit-only-p (concat "visible" block)))
-    (should-not (mevedel-transcript-audit-only-p "   "))))
+    (should-not (mevedel-transcript-audit-only-p "   ")))
+
+  :doc "accepts separated trusted audits but rejects visible gaps and tails"
+  (let ((block (mevedel--format-hook-audit-record '(:type tool-context))))
+    (should (mevedel-transcript-audit-only-p
+             (concat " \t\r\n" block "\n\t" block "\r\n")))
+    (dolist (text (list (concat block "visible" block)
+                       (concat block "visible")
+                       (concat block "\n<!-- mevedel-hook-audit -->\ninvalid\n"
+                               "<!-- /mevedel-hook-audit -->\n")
+                       (substring-no-properties block)
+                       "" nil))
+      (should-not (mevedel-transcript-audit-only-p text)))))
 
 (mevedel-deftest mevedel-transcript-directive-ranges ()
   ,test

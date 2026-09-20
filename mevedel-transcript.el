@@ -565,8 +565,14 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
             (append ranges tool-ranges
                     (mevedel-transcript--unparseable-tool-ranges
                      start end base-segments tool-ranges))))
-    (let (accepted payloads)
+    (let ((base-segments base-segments)
+          accepted payloads)
       (dolist (range (sort ranges (lambda (a b) (< (cadr a) (cadr b)))))
+        ;; Both lists advance in source order.  Prefixes before this range
+        ;; cannot contain it and need not be searched again.
+        (while (and base-segments
+                    (<= (caddr (car base-segments)) (cadr range)))
+          (setq base-segments (cdr base-segments)))
         (let ((audit-p
                (and (eq (car range) 'ignored)
                     (save-excursion

@@ -68,6 +68,27 @@
 ;;
 ;;; Segment extraction
 
+(mevedel-deftest mevedel-transcript--structural-ranges ()
+  ,test
+  (test)
+  :doc "distinguishes generated structure from quotes across many property runs"
+  (with-temp-buffer
+    (org-mode)
+    (let (expected)
+      (dotimes (_ 20)
+        (insert (propertize "Quoted example:\n#+begin_reasoning\nquoted\n#+end_reasoning\n"
+                            'gptel 'response))
+        (let ((start (point)))
+          (insert (propertize "#+begin_reasoning\nactual\n#+end_reasoning\n"
+                              'gptel 'ignore))
+          (push (list 'reasoning start (point)) expected))
+        (insert (propertize "Answer.\n" 'gptel 'response)))
+      (should (equal (nreverse expected)
+                     (mevedel-transcript--structural-ranges
+                      (point-min) (point-max)
+                      (mevedel-transcript--property-segments
+                       (point-min) (point-max))))))))
+
 (mevedel-deftest mevedel-transcript-segments ()
   ,test
   (test)

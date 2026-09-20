@@ -19,7 +19,11 @@ collapsed with a red `×`; warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
 fallback. One scheduler coalesces redraws;
-unattended graphical views defer visual work, then reconcile when attended.
+unattended graphical views defer visual work, retaining changed tool IDs rather
+than forcing a full rebuild on focus return. Incremental projection also drains
+those row updates; full projection subsumes them. Retained-agent metadata
+replacements refresh source-backed handles, with full projection as the fallback
+for unavailable source or generic rows without retained-agent metadata.
 Transcript writers also share per-view mutation ownership: nested projection,
 terminal, disclosure, and agent-refresh work coalesces rather than mutating
 captured view coordinates recursively. Source replacement retires obsolete
@@ -33,7 +37,7 @@ expansion rolls back failed replacement. Reader preservation includes both
 selection endpoints, neighboring managed zones, and table cells across wrapping.
 Views defer table formatting until visible and idle, processing one complete
 table per callback. Semantic marker relocation replaces whole-table text diffing.
-A full projection shares disposable boundary indexes and pure audit-decoding
+A full or live-turn projection shares disposable boundary indexes and pure audit-decoding
 results; callers still establish trust independently.
 
 ## Rationale and alternatives
@@ -54,6 +58,60 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: bounded routine progress and shared live parsing
+
+Replay of session `2026-09-18T13-59-e77a57dec9b5` reproduced expensive redraws
+without running tools or making provider requests. Previously, unattended Bash
+progress upgraded the pending render to full, and retained-agent metadata
+replacement also requested full projection. Both redrew unrelated history.
+The existing source-backed refresh paths preserve draft text, point, and agent
+audit rows across metadata growth, so these events now retain their narrower
+scope. Generic rows and stale agent handles keep their full-render fallback.
+
+Integration testing exposed two requirements for the narrow path: replacement
+at the source endpoint can collapse a marker into deleted metadata, so refresh
+recovers current bounds by source tool-use ID and the enclosing block (restored
+properties can separate call text from metadata); and sampled `sxhash-equal` keys can
+collide for equal-length `running`/`blocked` edits, so content keys now digest
+the complete text. Agent renderer dispatch also retains transcript handles for
+blocked or failed children while preserving their error status; a failed launch
+without retained metadata still uses generic error rendering. Tests assert the
+updated status and expansion of adjacent collaboration disclosures.
+
+Every targeted tool refresh also used to clear all tool-rendering entries.
+Invalidating only entries overlapping the changed source preserves unrelated
+calls across subsequent stream projections. Live projection now uses the same
+temporary indexes and pure audit cache as full projection: a regression case
+decoded one repeated payload twelve times before, once afterward. Structural
+validation advances through ordered property runs, and the audit-only predicate
+checks uncovered whitespace once without stripping and reparsing the payload.
+
+Three paired isolated graphical replays on Emacs 31.1, with Aporetic Serif Mono
+and installed Markdown grammars, produced these median callback times:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| One Bash row after 20 unattended updates | 467 ms | 8.4 ms |
+| Child-agent metadata refresh in a large parent | 461 ms | 19.8 ms |
+| Agent live-turn update | 85 ms | 37 ms |
+| Accumulated agent turn catch-up | 508 ms | 168 ms |
+
+Final rendered text hashes agree across variants. Bash catch-up collections
+fell from two to zero; agent catch-up collections fell from two to one.
+The local protocol and source/fixture hashes are in
+`.scratch/responsiveness-goal/report.md` and its results directory. These are
+source-Lisp callback/redisplay measurements with simulated attention changes,
+not actual keystroke latency or a live-provider comparison. Large full history
+remains expensive: a second 11.5 MB transcript's scheduled rebuild was
+2.05 s before and 2.10 s after the full-content key correction. Avoiding redundant
+full rebuilds is the gain; this change does not solve full-history cost.
+
+These changes reduce work and allocation instead of adding Lisp threads or
+raising global GC thresholds. Emacs Lisp threads share the interpreter lock and
+collector; moving these buffer operations to another thread would not make
+them run in parallel. External processes remain the existing execution boundary
+for tool and provider work. Large full-history projections are still synchronous.
 
 ### September 2026: faster opening and visible idle tables
 

@@ -17,6 +17,16 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Request lifecycle
 
+### Bound remaining large transcript redraws
+
+Profile and reduce uninterrupted full-history and long live-turn projection.
+The September 20 replay still takes about 2.10 s for a scheduled full rebuild
+of an 11.5 MB transcript and 168 ms for a large agent turn's graphical catch-up,
+after narrowing routine Bash/agent updates. Measure callback duration, actual
+input delay, allocations, and long-lived GC cost before choosing pagination,
+work slicing, or external workers. Include many distinct unattended tool rows.
+Replay protocol and frozen local fixtures: `.scratch/responsiveness-goal/`.
+
 ### Prevent system sleep during active requests
 
 Hold an OS sleep inhibitor while root or agent requests run, releasing it on

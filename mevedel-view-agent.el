@@ -85,6 +85,14 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-segment-bounds
+                  "mevedel-tool-render-data" (tool-use-id))
+
+;; `mevedel-transcript'
+(declare-function mevedel-transcript--tool-id-in-range
+                  "mevedel-transcript" (start end))
+
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
@@ -121,6 +129,8 @@
                   "mevedel-view-disclosure" (source vtype collapsed))
 (declare-function mevedel-view-disclosure-section-bounds
                   "mevedel-view-disclosure" (&optional property))
+(declare-function mevedel-view-disclosure-source-range
+                  "mevedel-view-disclosure" (data-buffer start end))
 (declare-function mevedel-view-disclosure-state-entry
                   "mevedel-view-disclosure" (source vtype))
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
@@ -136,6 +146,8 @@
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 (declare-function mevedel-view--insert-rendered-tool "mevedel-view-render" (rendering source))
 (declare-function mevedel-view--segment-rendering "mevedel-view-render" (data-buf seg-start seg-end &optional collapsed-only))
+(declare-function mevedel-view--tool-block-bounds
+                  "mevedel-view-render" (seg-start seg-end))
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-add-display-properties
@@ -1202,9 +1214,30 @@ non-status handle existed but lacked usable source metadata."
 Return non-nil on success."
   (save-excursion
     (goto-char pos)
-    (let* ((source (get-text-property pos 'mevedel-view-source))
+    (let* ((data-buf mevedel--data-buffer)
+           (source (get-text-property pos 'mevedel-view-source))
+           (tool-use-id
+            (and source (buffer-live-p data-buf)
+                 (with-current-buffer data-buf
+                   (mevedel-transcript--tool-id-in-range
+                    (car source) (cdr source)))))
+           ;; Replacing metadata at a segment's end can collapse its end
+           ;; marker into the deleted block.  Recover the owning call and
+           ;; its wrapper: restored properties can separate its metadata.
+           (source
+            (if (and tool-use-id (buffer-live-p data-buf))
+                (when-let* ((range
+                            (with-current-buffer data-buf
+                              (when-let* ((call
+                                          (mevedel-tool-render-data-segment-bounds
+                                           tool-use-id)))
+                                (or (mevedel-view--tool-block-bounds
+                                     (car call) (cdr call))
+                                    call)))))
+                  (mevedel-view-disclosure-source-range
+                   data-buf (car range) (cdr range)))
+              source))
            (bounds (mevedel-view-disclosure-section-bounds))
-           (data-buf mevedel--data-buffer)
            (current-collapsed (and (get-text-property
                                     pos 'mevedel-view-collapsed)
                                    t))
@@ -1217,7 +1250,7 @@ Return non-nil on success."
                  (when-let* ((start (mevedel-view-stream-in-flight-turn-start-position)))
                    (<= (car bounds) start (cdr bounds)))))
            (rendering
-            (and bounds
+            (and bounds source
                  data-buf
                  (buffer-live-p data-buf)
                  (mevedel-view--segment-rendering
