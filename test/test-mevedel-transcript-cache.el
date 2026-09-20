@@ -32,6 +32,34 @@
 (mevedel-deftest mevedel-transcript--tool-block-bounds-for-run ()
                  ,test
                  (test)
+                 :doc "a missing block does not rescan previously indexed history"
+                 (with-temp-buffer
+                   (org-mode)
+                   (dotimes (i 8)
+                     (insert "#+begin_tool\n"
+                             (propertize
+                              (format "(:name \"Read\" :args nil)\nresult %d\n" i)
+                              'gptel (cons 'tool (format "call-%d" i)))
+                             "#+end_tool\n\n"))
+                   (let ((beg (point))
+                         (mevedel-transcript--tool-block-index
+                          (make-hash-table :test #'eq)))
+                     (insert (propertize "unwrapped result\n" 'gptel '(tool . "last")))
+                     ;; Build the canonical index before observing recovery work.
+                     (should-not (mevedel-transcript--tool-block-bounds-for-run
+                                  beg (point-max)))
+                     (let ((scans 0)
+                           (scan (symbol-function
+                                  'mevedel-transcript--tool-block-end-from-start)))
+                       (goto-char (point-min))
+                       (cl-letf (((symbol-function 'mevedel-transcript--tool-block-end-from-start)
+                                  (lambda (&rest args)
+                                    (cl-incf scans)
+                                    (apply scan args))))
+                         (should-not (mevedel-transcript--tool-block-bounds-for-run
+                                      beg (point-max))))
+                       (should (= scans 0))
+                       (should (= (point) (point-min))))))
                  :doc "indexed bounds agree with anchored recovery, including nested marker text and limits"
                  (dolist (body '("result\n"
                                  "#+begin_tool\n(:name \"Fake\" :args nil)\nquoted\n#+end_tool\nresult\n"
@@ -77,3 +105,36 @@
 
 (provide 'test-mevedel-transcript-cache)
 ;;; test-mevedel-transcript-cache.el ends here
+
+(mevedel-deftest mevedel-transcript--control-line-positions
+  (:doc "indexes candidate control lines within the accessible buffer")
+  (with-temp-buffer
+    (insert "ordinary\n# heading\n#+BEGIN_TOOL\n(:name \"Read\")\n#+END_TOOL\n"
+            "<!-- mevedel-render-data -->\n:END:\n<agent-result>\n")
+    (let ((case-fold-search t))
+      (should (= 5 (length (mevedel-transcript--control-line-positions))))
+      (goto-char (point-min))
+      (search-forward "#+END_TOOL")
+      (beginning-of-line)
+      (narrow-to-region (point) (point-max))
+      (should (= 4 (length (mevedel-transcript--control-line-positions)))))))
+
+(mevedel-deftest mevedel-transcript--search-control-line
+  (:doc "indexed search agrees with native matching, including partial line limits")
+  (with-temp-buffer
+    (insert "prose\n#+begin_tool\nbody\n#+end_tool suffix\n\n:END:\n")
+    (dolist (regexp '("^#\\+begin_tool\\b" "^#\\+end_tool[^\n]*\n?" "^:END:[ \t]*\n?" "^<hook-context>"))
+      (dolist (limit (list (point-max) 37 32 20))
+        (dolist (start '(1 8 21))
+          (when (<= start limit)
+            (goto-char start)
+            (let ((expected (re-search-forward regexp limit t))
+                  (expected-point (point))
+                  (expected-match (match-data))
+                  (mevedel-transcript--control-lines
+                   (mevedel-transcript--control-line-positions)))
+              (goto-char start)
+              (should (equal expected
+                             (mevedel-transcript--search-control-line regexp limit)))
+              (should (= expected-point (point)))
+              (when expected (should (equal expected-match (match-data)))))))))))

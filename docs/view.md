@@ -257,7 +257,9 @@ state. The rendering measurements are recorded in
 
 Before rendering a restored transcript, `mevedel-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same
-canonical transcript grammar. Restoration does not maintain a second parser.
+canonical transcript grammar. Successful whole-buffer normalization is reused
+until text or properties change; narrowing alone does not invalidate it.
+Restoration does not maintain a second parser.
 
 Inner transcript disclosures use a two-space left inset for their headers and
 a four-space left inset for expanded bodies. This includes mailbox, tool,
@@ -892,8 +894,8 @@ therefore keeps the reader in the same permission prompt below them.
 
 The allocation-heavy chokepoints run with garbage collection batched
 (`mevedel--with-gc-batched`, a direct `gc-cons-threshold` and
-`gc-cons-percentage` binding with no external GC-tuning dependency): full and
-incremental transcript renders, session save transactions, exclusive
+`gc-cons-percentage` binding with no external GC-tuning dependency): scheduled
+full and incremental transcript flushes, session save transactions, exclusive
 transport sections, every tool-pipeline step chain, and the whole gptel
 stream filter/cleanup advice. An unattended session otherwise runs at
 whatever low threshold the user's idle GC tuning left behind, paying many
@@ -901,6 +903,8 @@ long collections inside a single redraw or settlement. Both GC criteria must
 be satisfied: on a large heap the percentage term can exceed the batched
 absolute threshold, so raising that threshold alone may leave collection
 frequency unchanged.
+Direct full projection does not add that binding; its collection cadence
+depends on the caller's GC settings.
 
 A send that fails or is interrupted before the provider starts gets no
 terminal callback, so that boundary settles the turn itself: it keeps the
@@ -1094,7 +1098,16 @@ either ride a text patch or invalidate the affected tool-rendering entries at
 its mutation point. Progress row refreshes invalidate overlapping source spans
 only, preserving cached renderings of unrelated completed calls.
 Content keys digest the whole text: sampled string hashes can miss same-length
-edits inside metadata. Cache keys normalize marker positions to integers so
+edits inside metadata. Tool keys also include the source's `gptel`, render-data,
+and audit property intervals. A matching content-and-provenance key skips tool-call
+parsing, structural recovery, and request-failure decoding. Restoring trust can
+expose a request failure without changing text, so a text-only hit is insufficient.
+Collapsed activity groups retain tool names with their cached headers rather
+than reparsing hidden arguments and results to count them. Expanding a group,
+or retaining an already expanded child, recovers its complete child data.
+The tool-call reader uses offsets into the existing source string instead of
+copying a large result merely to read its leading call form.
+Cache keys normalize marker positions to integers so
 targeted agent refreshes and full renders share entries, and tool
 block bounds are memoized per segment in a data-buffer-local table
 keyed on `buffer-modified-tick` (property-only changes included, since
@@ -1103,9 +1116,20 @@ changes). Agent-source presence checks reuse the invocation-owned
 render-data markers maintained by the live update path and never scan
 the transcript.
 
+Each structural scan first indexes candidate control-marker lines, so its
+existing parsers skip intervening payload text instead of repeatedly scanning it.
+The index selects possible positions only; the parsers retain their complete
+marker, nesting, boundary, and provenance checks. It expires with the scan.
+Activity classification and insertion also share tool entries within that one
+activity render, keyed by source revision/range and session presentation state.
+Each caller owns its coalescing count; reuse does not carry mutable counts across
+callers or survive into another redraw.
+
 Each full or live-turn projection also shares a lazy canonical tool-boundary
 index and pure audit-decoding results. Boundary lookup uses binary search and
-retains the existing structural-recovery fallback; the index is keyed by buffer, text or
+retains the existing structural-recovery fallback. A missing boundary limits
+backward recovery to the gap after the preceding validated block, avoiding
+repeated scans of unrelated completed history. The index is keyed by buffer, text or
 property modification tick, and accessible range. Audit decoding caches valid
 and invalid results by encoded text, while provenance and trust checks remain
 in their callers. Both caches expire when the projection returns or fails;

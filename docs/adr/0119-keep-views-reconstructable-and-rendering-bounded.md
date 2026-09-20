@@ -38,7 +38,16 @@ selection endpoints, neighboring managed zones, and table cells across wrapping.
 Views defer table formatting until visible and idle, processing one complete
 table per callback. Semantic marker relocation replaces whole-table text diffing.
 A full or live-turn projection shares disposable boundary indexes and pure audit-decoding
-results; callers still establish trust independently.
+results; callers still establish trust independently. Boundary misses search only
+after the preceding validated block. Whole-buffer normalization is reused until
+text or properties change. Complete tool cache entries include content and
+provenance properties, allowing a hit to skip structural parsing and repeated
+request-failure decoding. A structural scan shares candidate control-line
+positions among its existing parsers. Activity classification and insertion
+reuse entries within that render, with independent coalescing counts.
+Collapsed activity summaries reuse cached tool names; expanded children recover
+their complete arguments and results. Tool-call parsing reads from source-string
+offsets rather than copying large result bodies to locate the call's end.
 
 ## Rationale and alternatives
 
@@ -58,6 +67,86 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: full-history parsing and allocation
+
+A second investigation replayed all nine root segments of session
+`2026-09-18T13-59-e77a57dec9b5`, a representative child, and a separate 11.5 MB
+transcript through 2,287 saved semantic events and 65 full-render checkpoints.
+It also compared all 45 child transcript and compaction files from the original
+session. These are deterministic saved-history replays, not reconstruction of
+the original network chunk timing or tool execution.
+
+The large transcript spent about 800 ms in 25 failed boundary recoveries that
+walked backward through already validated blocks. Its unchanged full renders
+also normalized the same properties again, invalidating boundary memoization.
+Collapsed groups reparsed hidden child results just to count their tool names,
+and tool readers copied large results while locating the small leading call.
+That pass removed those repeated operations. Full-content keys also allowed
+complete cached tools to bypass structural parsing. Failure classification stayed
+ahead of lookup: a regression demonstrated that restoring trust properties can
+expose a request failure without changing its bytes. The later growing-activity
+investigation below replaced that ordering with provenance-aware cache keys.
+
+Three paired graphical runs on Emacs 31.1 with Aporetic Serif Mono and installed
+Markdown grammars produced these median scheduled full-rebuild times:
+
+| Transcript | Before | After |
+| --- | ---: | ---: |
+| Original session's final root segment | 404 ms | 277 ms |
+| Separate 11.5 MB history | 2,013 ms | 663 ms |
+
+The larger rebuild collected three times instead of eight. An explicit
+collection after rendering remained small; profiler-reported allocation across
+five rebuilds fell from 846 MB to 369 MB. Across all 45 child files, the batch
+median scheduled rebuild fell from 171 ms to 102 ms. Rendered text hashes match
+for every file and all 65 chronological checkpoints. Regression tests cover
+property-only invalidation, malformed-tool diagnostics, expanded group children,
+and composer preservation.
+
+At the end of that pass, changed-history graphical probes took about 870 ms on
+the large capture, with an observed timer delay around 820 ms. A 9.6 MB tool span in that capture
+also keeps nearby live updates expensive until its activity group closes.
+Full projection and mutable activity runs remain synchronous; these changes do
+not establish a 100 ms latency bound. The protocol, source hashes, profiles,
+per-event timings, and limits are in
+`.scratch/full-history-responsiveness/report.md`.
+
+### September 2026: large tools in growing activity groups
+
+The next investigation isolated a 9,580,671-character tool span and the following
+eight saved updates. A three-character append took 427 ms. Sampling found that
+request-failure classification decoded the entire tool metadata payload before
+looking in the rendering cache; phase timers also found about 130 ms in repeated
+canonical scans. Activity grouping computed each tool entry for classification
+and again for insertion, repeating full-content hashing.
+
+Tool cache keys now include relevant provenance-property intervals, so an
+unchanged key can skip failure decoding without hiding property-only restoration
+of a request failure. A disposable control-line index lets the existing parsers
+seek candidate markers without repeatedly traversing payload text. It grants no
+trust and leaves their boundary and nesting rules in place. A per-activity entry
+cache shares classification with insertion; source or session presentation changes
+invalidate reuse, and callers receive independent coalescing counts.
+
+Three paired graphical runs against the preceding full-history implementation
+on Emacs 31.1, including redisplay, produced these medians:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| Eight updates following the large tool | 448 ms | 105 ms |
+| Timer delay during those updates | 438 ms | 94 ms |
+| Initial large-tool projection | 780 ms | 406 ms |
+| Full history after an append | 885 ms | 377 ms |
+| Timer delay during that full rebuild | 839 ms | 328 ms |
+
+The timer probe measures event-loop blocking, not typing latency. Source and
+restored-property comparisons agree on 57 frozen files and 1,200 generated
+marker cases. The caches expire within their scan/activity; no new mutation
+observers or global GC tuning were added. Large first arrivals and full rebuilds
+remain synchronous, and some following updates still exceed 100 ms. Protocol,
+profiles, correctness checks, and remaining limits:
+`.scratch/large-tool-responsiveness/report.md`.
 
 ### September 2026: bounded routine progress and shared live parsing
 

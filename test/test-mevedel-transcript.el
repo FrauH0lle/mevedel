@@ -1155,6 +1155,33 @@ TOOL-PROP."
 (mevedel-deftest mevedel-transcript-normalize-properties ()
   ,test
   (test)
+  :doc "unchanged normalization is reused and text or property edits invalidate it"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n")
+    (let ((scans 0)
+          (scan (symbol-function 'mevedel-transcript--structural-ranges)))
+      (cl-letf (((symbol-function 'mevedel-transcript--structural-ranges)
+                 (lambda (&rest args)
+                   (cl-incf scans)
+                   (apply scan args))))
+        (mevedel-transcript-normalize-properties)
+        (let ((first scans))
+          (should (> first 0))
+          (save-restriction
+            (narrow-to-region 3 (point-max))
+            (mevedel-transcript-normalize-properties))
+          (should (= scans first))
+          (put-text-property (point-min) (point-max) 'gptel nil)
+          (mevedel-transcript-normalize-properties)
+          (should (> scans first))
+          (should (eq (get-text-property (point-min) 'gptel) 'ignore))
+          (setq first scans)
+          (goto-char (point-max))
+          (insert "#+begin_reasoning\nMore.\n#+end_reasoning\n")
+          (mevedel-transcript-normalize-properties)
+          (should (> scans first))
+          (should (eq (get-text-property (1- (point-max)) 'gptel) 'ignore))))))
   :doc "repairs stale tool, mailbox, and structural transcript properties"
   (with-temp-buffer
     (org-mode)
