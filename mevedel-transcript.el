@@ -316,15 +316,58 @@ beginning of the buffer."
                               :suffix-end suffix-end))))))
             (error nil)))))))
 
+(defvar mevedel-transcript--control-lines nil
+  "Candidate control-line positions shared within one structural scan.")
+
+(defun mevedel-transcript--control-line-positions ()
+  "Return a vector of candidate control lines in the accessible buffer.
+Index prefixes only; the existing parsers still validate each complete marker."
+  (save-excursion
+    (save-match-data
+      (goto-char (point-min))
+      (let (positions)
+        (while (re-search-forward
+                (concat "^\\(?:#\\+\\(?:begin_\\|end_\\)"
+                        "\\|<\\(?:/?\\(?:system-reminder\\|hook-context"
+                        "\\|task-background\\|agent-message\\|agent-result\\)"
+                        "\\|!-- /?mevedel-\\)\\|\\*+ <\\|:PROMPT:\\|:END:\\)")
+                nil t)
+          (push (match-beginning 0) positions))
+        (vconcat (nreverse positions))))))
+
+(defun mevedel-transcript--search-control-line (regexp limit)
+  "Search forward for control REGEXP before LIMIT, returning its end or nil.
+Use the current structural scan's line index when available.  Preserve native
+search bounds and match data, including a match ending partway through a line."
+  (if (not mevedel-transcript--control-lines)
+      (re-search-forward regexp limit t)
+    (let ((origin (point))
+          (limit (or limit (point-max)))
+          (low 0) (high (length mevedel-transcript--control-lines)) found)
+      (while (< low high)
+        (let ((middle (/ (+ low high) 2)))
+          (if (< (aref mevedel-transcript--control-lines middle) origin)
+              (setq low (1+ middle))
+            (setq high middle))))
+      (while (and (< low (length mevedel-transcript--control-lines))
+                  (< (aref mevedel-transcript--control-lines low) limit)
+                  (not found))
+        (goto-char (aref mevedel-transcript--control-lines low))
+        (when (looking-at-p regexp)
+          (setq found (re-search-forward regexp limit t)))
+        (setq low (1+ low)))
+      (unless found (goto-char origin))
+      found)))
+
 (defun mevedel-transcript--delimited-ranges (type open close start end)
   "Return complete TYPE ranges delimited by OPEN and CLOSE in START..END."
   (let (ranges)
     (save-excursion
       (goto-char start)
-      (while (re-search-forward open end t)
+      (while (mevedel-transcript--search-control-line open end)
         (let ((block-start (match-beginning 0))
               (next (match-end 0)))
-          (if (re-search-forward close end t)
+          (if (mevedel-transcript--search-control-line close end)
               (let ((block-end (match-end 0)))
                 (push (list type block-start block-end) ranges)
                 (goto-char block-end))
@@ -343,9 +386,9 @@ nested inside the outer body do not close it early."
           body-end
           block-end)
       (while (and (> depth 0)
-                  (re-search-forward
+                  (mevedel-transcript--search-control-line
                    "^\\(?:\\(?:\\*+ \\)?<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
-                   limit t))
+                   limit))
         (if (save-excursion
               (goto-char (match-beginning 0))
               (looking-at "\\(?:\\*+ \\)?<system-reminder>"))
@@ -364,8 +407,8 @@ nested inside the outer body do not close it early."
   (let (ranges)
     (save-excursion
       (goto-char start)
-      (while (re-search-forward
-              "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" end t)
+      (while (mevedel-transcript--search-control-line
+              "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" end)
         (goto-char (match-beginning 0))
         (if-let* ((range
                    (mevedel-transcript--system-reminder-range-at-point end)))
@@ -380,12 +423,12 @@ nested inside the outer body do not close it early."
   (let (ranges)
     (save-excursion
       (goto-char start)
-      (while (re-search-forward
+      (while (mevedel-transcript--search-control-line
               "^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)"
-              end t)
+              end)
         (let ((line-start (match-beginning 0)))
           (goto-char line-start)
-          (search-forward "<" end t)
+          (search-forward "<" end)
           (backward-char 1)
           (if-let* ((block
                      (mevedel-transcript--mailbox-any-block-at-point end)))
@@ -486,9 +529,9 @@ blocks that still carry stale tool properties."
   (let (ranges)
     (save-excursion
       (goto-char start)
-      (while (re-search-forward "^#\\+begin_tool\\b" end t)
+      (while (mevedel-transcript--search-control-line "^#\\+begin_tool\\b" end)
         (let ((block-start (match-beginning 0)))
-          (if (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
+          (if (mevedel-transcript--search-control-line "^#\\+end_tool[^\n]*\n?" end)
               (let ((block-end (match-end 0)))
                 (when (and
                        (cl-find-if
@@ -527,7 +570,9 @@ own render-data.")
   "Return canonical control ranges in START..END.
 BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
 tool blocks.  Each result is `(TYPE START END VALUE...)'."
-  (let ((ranges
+  (let* ((mevedel-transcript--control-lines
+          (mevedel-transcript--control-line-positions))
+         (ranges
          (append
           (mevedel-transcript--delimited-ranges
            'reasoning "^#\\+begin_reasoning\\b" "^#\\+end_reasoning[^\n]*\n?"
@@ -928,9 +973,16 @@ runs and incomplete control text remains ordinary transcript text."
            (car repair) (cdr repair)
            '(gptel response front-sticky (gptel))))))))
 
+(defvar-local mevedel-transcript--normalized-tick nil
+  "Modification tick after the last successful whole-buffer normalization.
+Text and property edits both invalidate this derived state.")
+
 (defun mevedel-transcript-normalize-properties ()
-  "Normalize structural transcript properties in the current Org buffer."
-  (when (derived-mode-p 'org-mode)
+  "Normalize structural transcript properties in the current Org buffer.
+Reuse normalization until buffer text or properties change."
+  (when (and (derived-mode-p 'org-mode)
+             (not (eql mevedel-transcript--normalized-tick
+                       (buffer-modified-tick))))
     (save-match-data
       (save-excursion
         (save-restriction
@@ -948,7 +1000,8 @@ runs and incomplete control text remains ordinary transcript text."
                  (point-min) drawer-end))
               (mevedel-transcript--apply-structural-properties ranges)
               (mevedel-transcript--repair-response-continuation-properties
-               ranges))))))))
+               ranges))))))
+    (setq mevedel-transcript--normalized-tick (buffer-modified-tick))))
 
 (defun mevedel-transcript-restore-ignored-properties (start end)
   "Restore ignored side-channel properties within START..END."
@@ -971,7 +1024,7 @@ runs."
   (let (blocks)
     (save-excursion
       (goto-char (point-min))
-      (while (re-search-forward "^#\\+begin_tool\\b" end t)
+      (while (mevedel-transcript--search-control-line "^#\\+begin_tool\\b" end)
         (let* ((block-start (match-beginning 0))
                (marker-end (match-end 0))
                (block-end
@@ -1055,25 +1108,30 @@ properties, which can be stale after restoring `GPTEL_BOUNDS'."
 (defun mevedel-transcript--tool-block-bounds-for-run (beg end &optional limit)
   "Return canonical tool bounds overlapping BEG..END, respecting LIMIT.
 Within a projection use a lazily built index, invalidated by text or property
-changes and narrowing.  Incomplete structural ranges use anchored recovery."
-  (or
-   (when mevedel-transcript--tool-block-index
-     (let* ((key (list (buffer-modified-tick) (point-min) (point-max)))
-            (cached (gethash (current-buffer) mevedel-transcript--tool-block-index)))
-       (unless (equal key (car cached))
-         (setq cached
-               (cons key (vconcat (mevedel-transcript--org-tool-blocks-overlapping
-                                  (mevedel-transcript--property-segments (point-min) (point-max))
-                                  (point-min) (point-max)))))
-         (puthash (current-buffer) cached mevedel-transcript--tool-block-index))
-       (let* ((blocks (cdr cached)) (lo 0) (hi (length blocks)))
-         (while (< lo hi)
-           (let ((mid (/ (+ lo hi) 2)))
-             (if (<= (cdr (aref blocks mid)) beg) (setq lo (1+ mid)) (setq hi mid))))
-         (let ((block (and (< lo (length blocks)) (aref blocks lo))))
-           (when (and block (< (car block) end) (or (not limit) (<= (cdr block) limit)))
-             block)))))
-   (mevedel-transcript--recover-tool-block-bounds beg end limit)))
+changes and narrowing.  Incomplete structural ranges use anchored recovery,
+bounded by the preceding validated block so a miss never rescans that history."
+  (if (not mevedel-transcript--tool-block-index)
+      (mevedel-transcript--recover-tool-block-bounds beg end limit)
+    (let* ((key (list (buffer-modified-tick) (point-min) (point-max)))
+           (cached (gethash (current-buffer) mevedel-transcript--tool-block-index)))
+      (unless (equal key (car cached))
+        (setq cached
+              (cons key (vconcat (mevedel-transcript--org-tool-blocks-overlapping
+                                 (mevedel-transcript--property-segments (point-min) (point-max))
+                                 (point-min) (point-max)))))
+        (puthash (current-buffer) cached mevedel-transcript--tool-block-index))
+      (let* ((blocks (cdr cached)) (lo 0) (hi (length blocks)))
+        (while (< lo hi)
+          (let ((mid (/ (+ lo hi) 2)))
+            (if (<= (cdr (aref blocks mid)) beg) (setq lo (1+ mid)) (setq hi mid))))
+        (let ((block (and (< lo (length blocks)) (aref blocks lo))))
+          (if (and block (< (car block) end) (or (not limit) (<= (cdr block) limit)))
+              block
+            (save-excursion
+              (save-restriction
+                (when (> lo 0)
+                  (narrow-to-region (cdr (aref blocks (1- lo))) (point-max)))
+                (mevedel-transcript--recover-tool-block-bounds beg end limit)))))))))
 
 (defun mevedel-transcript--recover-tool-block-bounds (seg-start seg-end
                                                           &optional limit)
@@ -1383,8 +1441,8 @@ next persisted tool."
       (goto-char block-start)
       (forward-line 1)
       (while (and (not done)
-                  (re-search-forward "^#\\+\\(begin_tool\\b\\|end_tool[^\n]*\n?\\)"
-                                     limit t))
+                  (mevedel-transcript--search-control-line "^#\\+\\(begin_tool\\b\\|end_tool[^\n]*\n?\\)"
+                                     limit))
         (let ((marker-start (match-beginning 0))
               (marker-end (match-end 0)))
           (cond

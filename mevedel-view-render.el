@@ -1488,7 +1488,7 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
   (with-current-buffer data-buf
     (let* ((raw (mevedel-view--tool-segment-text seg-start seg-end))
            (wrapped-p (mevedel-view--tool-wrapped-text-p raw))
-           (text (mevedel-view--tool-readable-text raw)))
+           (text (substring raw (mevedel-view--tool-readable-start raw))))
       (condition-case nil
           (let* ((sexp (read text))
                  (name (plist-get sexp :name))
@@ -1585,7 +1585,7 @@ renderer to fall back to the bare `Tool' one-liner."
     (let* ((raw (or raw
                     (mevedel-view--tool-segment-text seg-start seg-end)))
            (wrapped-p (mevedel-view--tool-wrapped-text-p raw))
-           (text (mevedel-view--tool-readable-text raw))
+           (read-start (mevedel-view--tool-readable-start raw))
            (tool-id
             (let ((pos seg-start)
                   found prop)
@@ -1598,17 +1598,13 @@ renderer to fall back to the bare `Tool' one-liner."
                               seg-end)))
               found)))
       (condition-case nil
-          (let* ((sexp (read text))
+          (let* ((parsed (read-from-string raw read-start))
+                 (sexp (car parsed))
                  (name (plist-get sexp :name))
                  (args (plist-get sexp :args)))
             (when (stringp name)
-              (let* ((sexp-end (with-temp-buffer
-                                 (insert text)
-                                 (goto-char (point-min))
-                                 (forward-sexp 1)
-                                 (point)))
-                     (full-result (mevedel--trim-tool-result
-                                   (substring text sexp-end)))
+              (let* ((full-result (mevedel--trim-tool-result
+                                   (substring raw (cdr parsed))))
                      (full-result
                       (if (and (derived-mode-p 'org-mode)
                                (fboundp 'org-unescape-code-in-string))
@@ -2440,7 +2436,7 @@ does not overwrite the identity of the rows it owns."
 RAW is the expanded tool segment text used for content-based invalidation.
 COLLAPSED-ONLY records whether only collapsed rendering is needed.
 Unrelated appends to DATA-BUF should not invalidate completed tool segment
-renderings, but changes to the segment text itself should."
+renderings, but changes to the segment text or provenance properties should."
   (with-current-buffer data-buf
     (list data-buf
           (mevedel-view--source-position seg-start)
@@ -2448,7 +2444,12 @@ renderings, but changes to the segment text itself should."
           (mevedel-view--render-cache-key raw)
           (and (boundp 'mevedel--session)
                (mevedel-view--session-render-state-fingerprint mevedel--session))
-          (and collapsed-only t))))
+          (and collapsed-only t)
+          (cl-loop for (start end properties) in (object-intervals raw)
+                   collect (list start end
+                                 (plist-get properties 'gptel)
+                                 (plist-get properties 'mevedel-render-data)
+                                 (plist-get properties 'mevedel-hook-audit))))))
 
 (defun mevedel-view--collapsed-rendering-p (rendering)
   "Return non-nil when RENDERING initially renders as a collapsed header."
@@ -2533,6 +2534,7 @@ RAW is an optional precomputed expanded tool segment text."
       ;; Grouping needs the same normalized result and render data.  Carry
       ;; them with this one computation; the cache drops the payload below
       ;; so a collapsed header does not retain a large result indefinitely.
+      (setq rendering (plist-put rendering :group-tool name))
       (setq rendering
             (plist-put
              rendering :group-child
@@ -2555,17 +2557,26 @@ bodies for initially collapsed tools."
   (let* ((segment-text
           (with-current-buffer data-buf
             (buffer-substring seg-start seg-end)))
-         (request-data
-          (mevedel-view--request-summary-render-data-from-text segment-text))
-         (failure-p (eq (plist-get request-data :outcome) 'error))
-         (raw (and (not failure-p)
-                   (with-current-buffer data-buf
-                     (mevedel-view--tool-segment-text seg-start seg-end))))
          (cache (and (hash-table-p mevedel-view--tool-rendering-cache)
                      mevedel-view--tool-rendering-cache))
+         (segment-key (and cache
+                           (mevedel-view--tool-cache-key
+                            data-buf seg-start seg-end collapsed-only segment-text)))
+         ;; The key includes provenance: property-only trust restoration
+         ;; must invalidate a hit just as a text edit does.
+         (cached (and segment-key (gethash segment-key cache)))
+         (request-data
+          (unless cached
+            (mevedel-view--request-summary-render-data-from-text segment-text)))
+         (failure-p (eq (plist-get request-data :outcome) 'error))
+         (raw (and (not cached) (not failure-p)
+                   (with-current-buffer data-buf
+                     (mevedel-view--tool-segment-text seg-start seg-end))))
          (key (and raw cache
-                   (mevedel-view--tool-cache-key
-                    data-buf seg-start seg-end collapsed-only raw))))
+                   (if (equal raw segment-text)
+                       segment-key
+                     (mevedel-view--tool-cache-key
+                      data-buf seg-start seg-end collapsed-only raw)))))
     (if failure-p
         (let ((backend (or (plist-get request-data :backend) "Provider"))
               (status (plist-get request-data :status))
@@ -2593,7 +2604,8 @@ bodies for initially collapsed tools."
            :vtype 'request-failure
            :status 'error
            :initially-collapsed-p nil))
-      (or (and key (gethash key cache))
+      (or cached
+          (and key (gethash key cache))
           (let ((rendering (mevedel-view--compute-segment-rendering
                             data-buf seg-start seg-end collapsed-only raw)))
             (when (and key rendering)
@@ -5042,43 +5054,65 @@ added when the text before point does not already end with a blank line
            (mevedel-view--hook-audit-only-segment-p
             data-buf (cadr seg) (caddr seg)))))
 
+(defvar mevedel-view--activity-entry-cache nil
+  "Tool entries shared by classification and insertion of one activity run.")
+
 (defun mevedel-view--tool-segment-entry (seg data-buf)
-  "Return SEG's normalized tool or standalone audit entry in DATA-BUF."
-  (let* ((seg-start (cadr seg))
-         (seg-end (caddr seg))
-         (source (mevedel-view-disclosure-source-range
-                  data-buf seg-start seg-end))
-         (audit-p (eq (car seg) 'ignored))
-         (audits (when audit-p
+  "Return SEG's normalized tool or standalone audit entry in DATA-BUF.
+Reuse classification within one activity run while source and session state
+stay unchanged.  Each caller owns the returned entry's coalescing count."
+  (let* ((state (and mevedel-view--activity-entry-cache
+                     (boundp 'mevedel--session)
+                     (mevedel-view--session-render-state-fingerprint
+                      mevedel--session)))
+         (key (and mevedel-view--activity-entry-cache
                    (with-current-buffer data-buf
-                     (mevedel-view--hook-audit-records-from-text
-                      (buffer-substring seg-start seg-end)
-                      nil data-buf seg-start))))
-         (rendering (unless audit-p
-                      (mevedel-view--segment-rendering
-                       data-buf seg-start seg-end t)))
-         (vtype (or (plist-get rendering :vtype) 'tool-summary))
-         (state (and rendering
-                     (mevedel-view-disclosure-state-entry source vtype))))
-    (when (and state (not (cdr state)))
-      (setq rendering
-            (or (mevedel-view--segment-rendering
-                 data-buf seg-start seg-end)
-                rendering)))
-    (let ((group-child (plist-get rendering :group-child)))
-      (when group-child
-        (setq rendering
-              (plist-put (copy-sequence rendering) :group-child nil)))
-      (unless (or (plist-get rendering :hidden-p)
-                  (and audit-p (null audits)))
-        (list :kind (if audit-p 'hook-audit 'tool)
-              :start seg-start
-              :end seg-end
-              :source source
-              :rendering rendering
-              :hook-audits audits
-              :group-child group-child
-              :count 1)))))
+                     (list data-buf seg (buffer-modified-tick)
+                           (point-min) (point-max) state))))
+         (cached (and key (gethash key mevedel-view--activity-entry-cache))))
+    (if cached
+        (copy-sequence (cdr cached))
+      (let ((entry
+	     (let* ((seg-start (cadr seg))
+		    (seg-end (caddr seg))
+		    (source (mevedel-view-disclosure-source-range
+			     data-buf seg-start seg-end))
+		    (audit-p (eq (car seg) 'ignored))
+		    (audits (when audit-p
+			      (with-current-buffer data-buf
+				(mevedel-view--hook-audit-records-from-text
+				 (buffer-substring seg-start seg-end)
+				 nil data-buf seg-start))))
+		    (rendering (unless audit-p
+				 (mevedel-view--segment-rendering
+				  data-buf seg-start seg-end t)))
+		    (vtype (or (plist-get rendering :vtype) 'tool-summary))
+		    (state (and rendering
+				(mevedel-view-disclosure-state-entry source vtype))))
+	       (when (and state (not (cdr state)))
+		 (setq rendering
+		       (or (mevedel-view--segment-rendering
+			    data-buf seg-start seg-end)
+			   rendering)))
+	       (let ((group-child (plist-get rendering :group-child)))
+		 (when group-child
+		   (setq rendering
+			 (plist-put (copy-sequence rendering) :group-child nil)))
+		 (unless (or (plist-get rendering :hidden-p)
+			     (and audit-p (null audits)))
+		   (list :kind (if audit-p 'hook-audit 'tool)
+			 :start seg-start
+			 :end seg-end
+			 :source source
+			 :rendering rendering
+			 :hook-audits audits
+			 :group-child group-child
+			 :count 1))))))
+        (when key
+          (puthash key (cons t (copy-sequence entry))
+                   mevedel-view--activity-entry-cache))
+        entry))))
+
 
 (defun mevedel-view--thinking-group-entry (segments data-buf)
   "Return one grouped reasoning entry for SEGMENTS in DATA-BUF, or nil."
@@ -5175,7 +5209,8 @@ one renderer, including execution summaries and sender links."
 Special tool rows split otherwise groupable tool/reasoning runs.  Keep
 this activity mutable as one live unit until a response or other turn
 boundary arrives, so later tool calls can join the same group."
-  (let ((unit-start (point)))
+  (let ((unit-start (point))
+        (mevedel-view--activity-entry-cache (make-hash-table :test #'equal)))
     (cl-labels
         ((render-run (segments)
            (if (cl-every
@@ -5499,13 +5534,18 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
                   (substring summary 1))
         summary))))
 
-(defun mevedel-view--tool-group-child (entry data-buf index)
+(defun mevedel-view--tool-group-child (entry data-buf index &optional summary-only)
   "Return the nested-call plist for activity ENTRY in DATA-BUF, or nil.
 INDEX discriminates the row's disclosure key from its siblings.  A
 segment whose own rendering is hidden yields nil so grouping does not
-resurrect rows the renderer suppressed."
+resurrect rows the renderer suppressed.  SUMMARY-ONLY permits a cached
+tool name instead of reparsing arguments and results for a collapsed group."
   (when-let* ((child
-               (or (plist-get entry :group-child)
+               (or (and summary-only
+                        (when-let* ((name (plist-get (plist-get entry :rendering)
+                                                    :group-tool)))
+                          (list :tool name)))
+                   (plist-get entry :group-child)
                    (when-let* ((parsed
                                 (mevedel-view--tool-call-parse
                                  data-buf
@@ -5525,17 +5565,18 @@ resurrect rows the renderer suppressed."
                            (plist-get entry :end)))
             child)))
 
-(defun mevedel-view--tool-group-rendering (entries data-buf)
+(defun mevedel-view--tool-group-rendering (entries data-buf &optional summary-only)
   "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
 The result reuses the compound-tool row machinery: each tool, reasoning
 occurrence, or delivery is a `:child-calls' entry with its own disclosure
-state.  A newly formed group keeps an already open child visible."
+state.  A newly formed group keeps an already open child visible.
+SUMMARY-ONLY omits cached tool bodies; recompute before expanding children."
   (let ((children
           (let ((index 0)
                 out)
             (dolist (entry entries (nreverse out))
               (when-let* ((child (mevedel-view--tool-group-child
-                                  entry data-buf index)))
+                                  entry data-buf index summary-only)))
                 (push child out))
               (cl-incf index)))))
     (when children
@@ -5606,11 +5647,15 @@ Return non-nil when the group row was inserted."
   (let* ((group-start (plist-get (car entries) :start))
          (group-end (plist-get (car (last entries)) :end))
          (rendering (mevedel-view--tool-group-rendering
-                     entries data-buf))
+                     entries data-buf t))
          (source (and rendering
                       (mevedel-view-disclosure-source-range
                        data-buf group-start group-end))))
     (when rendering
+      (unless (plist-get
+               (mevedel-view-disclosure-apply-rendering-state rendering source)
+               :initially-collapsed-p)
+        (setq rendering (mevedel-view--tool-group-rendering entries data-buf)))
       (mevedel-view--insert-rendered-tool rendering source)
       t)))
 
@@ -5744,24 +5789,25 @@ grouped activity row that expands into compound-tool nested rows."
        :elapsed (- (float-time) start-time)))
     (mevedel-view--mark-live-render-unit unit-start unit-source)))
 
-(defun mevedel-view--tool-readable-text (raw)
-  "Return RAW advanced to the readable tool call when possible.
+(defun mevedel-view--tool-readable-start (raw)
+  "Return the reader offset of the tool call in RAW.
 
 Text-property boundaries can include org drawers, `#+begin_tool'
 markers, or other unpropertized scaffolding.  Prefer the structural
-tool form itself when it is present inside RAW."
-  (let ((text raw))
-    (setq text
-          (replace-regexp-in-string
-           "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
-           "" text))
-    (setq text
-          (replace-regexp-in-string
-           "\\`\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
-           "" text))
-    (if (string-match "(\\s-*:name\\_>" text)
-        (substring text (match-beginning 0))
-      text)))
+tool form itself when it is present inside RAW.  Return an offset so
+reading the call does not copy its potentially large result body."
+  (let ((start 0))
+    (when (string-match
+           "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" raw)
+      (setq start (match-end 0)))
+    (when (and (string-match
+                "\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
+                raw start)
+               (= (match-beginning 0) start))
+      (setq start (match-end 0)))
+    (if (string-match "(\\s-*:name\\_>" raw start)
+        (match-beginning 0)
+      start)))
 
 (defun mevedel-view--tool-wrapped-text-p (raw)
   "Return non-nil when RAW includes persisted org tool block scaffolding."
@@ -5785,7 +5831,8 @@ tool form itself when it is present inside RAW."
   (and (mevedel-view--tool-wrapped-text-p raw)
        (string-match-p "\n#\\+end_tool[^\n]*\n?\\'" raw)
        (condition-case nil
-           (let ((sexp (read (mevedel-view--tool-readable-text raw))))
+           (let ((sexp (car (read-from-string
+                            raw (mevedel-view--tool-readable-start raw)))))
              (and (listp sexp)
                   (stringp (plist-get sexp :name))))
          (error nil))))

@@ -20,12 +20,16 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ### Bound remaining large transcript redraws
 
 Profile and reduce uninterrupted full-history and long live-turn projection.
-The September 20 replay still takes about 2.10 s for a scheduled full rebuild
-of an 11.5 MB transcript and 168 ms for a large agent turn's graphical catch-up,
-after narrowing routine Bash/agent updates. Measure callback duration, actual
-input delay, allocations, and long-lived GC cost before choosing pagination,
-work slicing, or external workers. Include many distinct unattended tool rows.
-Replay protocol and frozen local fixtures: `.scratch/responsiveness-goal/`.
+After the September 20 large-tool improvements, an 11.5 MB transcript still
+takes about 377 ms to rebuild after an append, with about 328 ms of observed
+timer delay. The first 9.6 MB tool projection takes about 406 ms; following
+updates take about 105 ms median and still hash the large body. Bound this work
+while preserving source-backed reader/disclosure state; measure actual input
+delay and long-lived heap effects before choosing work slicing or history
+pagination. Include many distinct unattended tool rows. Latest protocol:
+`.scratch/large-tool-responsiveness/`; earlier full-history and Bash/agent
+catch-up protocols: `.scratch/full-history-responsiveness/` and
+`.scratch/responsiveness-goal/`.
 
 ### Prevent system sleep during active requests
 

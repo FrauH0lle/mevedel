@@ -322,6 +322,13 @@
 (mevedel-deftest mevedel-view--tool-one-liner ()
   ,test
   (test)
+  :doc "a readable atom remains a malformed tool diagnostic"
+  (with-temp-buffer
+    (insert "encoded-payload")
+    (let ((line (mevedel-view--tool-one-liner
+                 (current-buffer) (point-min) (point-max))))
+      (should (string-match-p "encoded-payload" line))
+      (should-not (string-match-p "Tool (0 lines)" line))))
   :doc "Read tool summary"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -3586,9 +3593,55 @@
     (should-not (mevedel-view--live-tail-lines-rendered-position
                  '("ok") (point-max)))))
 
+(mevedel-deftest mevedel-view--tool-segment-entry
+  (:doc "activity reuse observes source edits and leaves coalescing counts independent")
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"one.el\"))\n\nbody\n" '(tool . "entry"))
+    (with-current-buffer view-buf
+      (let* ((mevedel-view--activity-entry-cache (make-hash-table :test #'equal))
+             (segment (list 'tool 1 (with-current-buffer data-buf (point-max))))
+             (entry (mevedel-view--tool-segment-entry segment data-buf)))
+        (should entry)
+        (plist-put entry :count 7)
+        (let ((again (mevedel-view--tool-segment-entry segment data-buf)))
+          (should (= 1 (plist-get again :count)))
+          (plist-put again :count 9)
+          (should (= 7 (plist-get entry :count))))
+        (with-current-buffer data-buf
+          (goto-char (point-min))
+          (search-forward "one.el")
+          (replace-match "two.el" t t))
+        (should (string-match-p
+                 "two.el"
+                 (plist-get (plist-get (mevedel-view--tool-segment-entry segment data-buf)
+                                      :rendering) :header)))))))
+
 (mevedel-deftest mevedel-view--render-tool-activity ()
   ,test
   (test)
+  :doc "classification and insertion share each tool entry within one activity"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 2)
+      (mevedel-view-test--insert-data
+       data-buf (format "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\nbody\n" i)
+       `(tool . ,(format "call-%d" i)))
+      (mevedel-view-test--insert-data
+       data-buf "#+begin_reasoning\nThinking.\n#+end_reasoning\n" 'ignore))
+    (let ((render (symbol-function 'mevedel-view--segment-rendering))
+          (calls 0))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
+        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                   (lambda (&rest args)
+                     (cl-incf calls)
+                     (apply render args))))
+          (dotimes (_ 2)
+            (setq calls 0)
+            (mevedel-view--full-rerender)
+            (should (= calls 2))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ 3 (mevedel-view--input-start)))))))))
   :doc "a single coalescing row groups only in an uninterrupted tool run"
   (dolist (mixed '(nil t))
     (mevedel-view-test--with-buffers
@@ -4413,6 +4466,64 @@
           (should (= 0 stable-computations)))
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
         (should (= 4 (- (point) (mevedel-view--input-start))))))))
+
+(mevedel-deftest mevedel-view--segment-rendering ()
+  ,test
+  (test)
+  :doc "a complete cached tool skips parsing but same-length edits invalidate it"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool\n"
+              (propertize "(:name \"Read\" :args (:file_path \"one.el\"))\n\nbody\n"
+                          'gptel '(tool . "cached"))
+              "#+end_tool\n"))
+    (with-current-buffer view-buf
+      (let* ((end (with-current-buffer data-buf (point-max)))
+             (first (mevedel-view--segment-rendering data-buf 1 end t))
+             (reads 0)
+             (metadata-reads 0)
+             (extract (symbol-function 'mevedel-tool-render-data-extract))
+             (read (symbol-function 'mevedel-view--tool-readable-start)))
+        (should first)
+        (cl-letf (((symbol-function 'mevedel-view--tool-readable-start)
+                   (lambda (text) (cl-incf reads) (funcall read text)))
+                  ((symbol-function 'mevedel-tool-render-data-extract)
+                   (lambda (&rest args)
+                     (cl-incf metadata-reads)
+                     (apply extract args))))
+          (should (equal (plist-get first :header)
+                         (plist-get (mevedel-view--segment-rendering data-buf 1 end t)
+                                    :header)))
+          (should (= reads 0))
+          (should (= metadata-reads 0))
+          (with-current-buffer data-buf
+            (goto-char (point-min))
+            (search-forward "one.el")
+            (replace-match "two.el" t t))
+          (let ((changed (mevedel-view--segment-rendering data-buf 1 end t)))
+            (should (> reads 0))
+            (should (string-match-p "two.el" (plist-get changed :header))))))))
+  :doc "property-only restoration of a request failure precedes cached tool display"
+  (mevedel-view-test--with-buffers
+    (let (metadata-start end)
+      (with-current-buffer data-buf
+        (insert "#+begin_tool\n"
+                (propertize "(:name \"Read\" :args nil)\n\nbody\n"
+                            'gptel '(tool . "cached")))
+        (setq metadata-start (point))
+        (insert (substring-no-properties
+                 (mevedel-tool-render-data-format
+                  '(:kind request-summary :outcome error :message "Failed"))))
+        (setq end (point))
+        (insert "#+end_tool\n"))
+      (with-current-buffer view-buf
+        (let ((limit (with-current-buffer data-buf (point-max))))
+          (should (mevedel-view--segment-rendering data-buf 1 limit t))
+          (with-current-buffer data-buf
+            (put-text-property metadata-start end 'mevedel-render-data t))
+          (should (eq 'request-failure
+                      (plist-get (mevedel-view--segment-rendering data-buf 1 limit t)
+                                 :vtype))))))))
 
 (mevedel-deftest mevedel-view--segment-rendering/generic-fallback
   (:before-each (mevedel-tool-clear-registry)
@@ -5317,6 +5428,19 @@
                (unless (featurep 'mevedel-execution-transcript)
                  (error "Execution transcript owner was not loaded")))))))
       (should (string-empty-p (string-trim (buffer-string)))))))
+
+(mevedel-deftest mevedel-view--tool-readable-start
+  (:doc "reads the real call after scaffolding without copying its result")
+  (dolist (prefix '("" "\n\n" "#+end_reasoning\n\n#+begin_tool\n"
+                    ":PROPERTIES:\n:X: (:name \"Drawer\")\n:END:\n#+begin_tool\n"
+                    "#+begin_tool (:name \"Marker\")\n"))
+    (let* ((call "(:name \"Read\" :args (:file_path \"file.el\"))")
+           (raw (concat prefix call "\n\n  result\n(:name \"Quoted\")\n#+end_tool\n"))
+           (start (mevedel-view--tool-readable-start raw))
+           (parsed (read-from-string raw start)))
+      (should (= start (length prefix)))
+      (should (equal (plist-get (car parsed) :name) "Read"))
+      (should (string-prefix-p "\n\n  result\n" (substring raw (cdr parsed)))))))
 
 (mevedel-deftest mevedel-view--tool-call-parse ()
   ,test
@@ -6723,6 +6847,17 @@
   ,test
   (test)
 
+  :doc "provenance changes distinguish identical text"
+  (with-temp-buffer
+    (insert "source")
+    (dolist (property '(gptel mevedel-render-data mevedel-hook-audit))
+      (let ((plain "metadata"))
+        (should-not
+         (equal (mevedel-view--tool-cache-key (current-buffer) 1 7 t plain)
+                (mevedel-view--tool-cache-key
+                 (current-buffer) 1 7 t
+                 (propertize (copy-sequence plain) property t)))))))
+
   :doc "marker positions and integer positions build equal keys"
   (with-temp-buffer
     (insert "#+begin_tool (Read)\n#+end_tool\n")
@@ -7062,8 +7197,16 @@
                    (cl-incf parse-count)
                    (apply parse arguments))))
         (with-current-buffer data-buf
-          (mevedel-view-stream-render-response (point-min) (point-max))))
-      (should (<= 1 parse-count 4)))
+          (mevedel-view-stream-render-response (point-min) (point-max)))
+        (should (<= 1 parse-count 4))
+        ;; A warm collapsed group needs names, not its hidden tool bodies.
+        (setq parse-count 0)
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
+          (mevedel-view--full-rerender)
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 3)))))
+      (should (= parse-count 0)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
