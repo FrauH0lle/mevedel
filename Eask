@@ -30,7 +30,12 @@
        '("docs/tools" "docs/tools/*.md")
        '("prompts/tools" "prompts/tools/*.md"))
 
-(script "test" "echo \"Error: no test specified\" && exit 1")
+(script "test" "python3 test/run_tests.py")
+
+;; Eask's script exporter inherits its source file's CRLF coding on some
+;; installations, which otherwise becomes part of the last shell argument.
+(add-hook 'eask-before-run/script-hook
+          (lambda () (setq coding-system-for-write 'utf-8-unix)))
 
 (source "gnu")
 (source "melpa")

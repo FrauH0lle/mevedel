@@ -40,6 +40,10 @@ jobs:
       with:
         version: 'snapshot'
 
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
     # Bubblewrap: the confinement cases skip without it, and Ubuntu confines
     # unprivileged user namespaces through AppArmor, which stops Bubblewrap from
     # starting at all. A skip renders as "passed", so neither absence would show
@@ -79,8 +83,19 @@ jobs:
         eask emacs --batch --eval \
           "(kill-emacs (if (treesit-language-available-p 'bash) 0 1))"
 
+    - name: Check test runner
+      run: python3 test/test_run_tests.py
+
     - name: Run tests
-      run: eask test ert test/test-*.el
+      run: eask run script test
+
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ert-reports-${{ matrix.os }}-${{ matrix.emacs-version }}
+        path: .scratch/test-suite-performance/
+        include-hidden-files: true
 
     - name: Compile
       run: eask compile

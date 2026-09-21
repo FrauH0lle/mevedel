@@ -78,19 +78,24 @@ npx @emacs-eask/cli test ert test/test-*.el
 npx @emacs-eask/cli test ert test/test-mevedel-compact.el
 ```
 
-For a faster complete ERT run, use the measured parallel runner after installing
-the Eask dependencies:
+For a faster complete ERT run, use the measured parallel runner through the
+same Eask script as GitHub CI after installing the Eask dependencies:
 
 ```bash
-python3 test/run_tests.py
+eask run script test
+# Via npx:
+npx @emacs-eask/cli run script test
 # Limit concurrency on smaller machines:
-python3 test/run_tests.py --jobs 4
+npx @emacs-eask/cli run script test -- --jobs 4
 ```
 
 This command performs the required Eask bytecode cleanup itself, discovers every
 case in `test/test-*.el`, and runs each exactly once across independent Eask/Emacs
 processes. Each worker gets Eask's temporary HOME and XDG roots and loads the
-complete file roster. The default is at most eight workers. Tests must be
+complete file roster. The default uses the CPUs available to the process
+(respecting Linux CPU affinity), capped at eight workers and the number of
+discovered tests. `--jobs` overrides the CPU-based limit. The runner prints the
+available CPU count and selected worker count. Tests must be
 independent of execution order; setup belongs inside the case or `:before-each`,
 not in a separate template form. Shared fixtures isolate tool registries and
 their lookup cache as well as cleaning up runtime state.
@@ -113,8 +118,12 @@ because their tests share target roots. Real transport acceptance remains
 `test/run-remote-acceptance.sh`; its provisioning and runtime are separate from
 the ordinary ERT command. Conditional skips remain visible in reports.
 
-The runner uses Python's standard library and cached `npx` Eask. Dependency
-installation is a separate setup step. Its own checks are:
+The runner uses Python's standard library and Eask from `PATH`. Invoking it
+through `npx` makes that Eask executable available to its workers too. Direct
+`python3 test/run_tests.py` invocation falls back to cached `npx` Eask when
+`eask` is absent from `PATH`. Dependency installation is a separate setup step.
+GitHub CI also checks the runner itself and uploads the report directory,
+including worker logs on failure. The runner's own checks are:
 
 ```bash
 python3 test/test_run_tests.py
