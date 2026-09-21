@@ -14,7 +14,9 @@ Streaming updates retain completed semantic units and reconcile the mutable
 tail. A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
-changes in presentation. Failed tool calls split activity groups and start
+changes in presentation. Nested compound rows retain their own metadata and
+depth, so disclosure replacement removes descendants without consuming siblings.
+Failed tool calls split activity groups and start
 collapsed with a red `×`; warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
@@ -97,6 +99,27 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: nested compound disclosure ownership
+
+Six toggles of a grouped ToolCall left one, one, two, two, three, then three
+copies of each child in a live Emacs replay. Parent metadata stamping overwrote
+descendant identities, while replacement deleted only the parent's body.
+Stamping now stops at that body's boundary; row depth bounds subtree deletion.
+Regression coverage checks repeated toggles, independent child disclosure,
+neighboring rows, and composer preservation.
+
+### September 2026: compiled agent observer isolation
+
+A production replay scheduled an agent's transcript into its parent view,
+replacing the parent's live response with child content. Source-loaded tests
+passed, but compiling the observer module before loading session structs made
+its temporary view-pointer binding lexical and unused. The callback then read
+the child's permanent parent-view pointer. The module now declares the shared
+variable explicitly. A fresh-process compilation regression exercises stream
+and tool callbacks with both views open and checks parent text, composer state,
+and the child's permanent parent binding. This preserves the observer interface
+and closes a compilation-order gap in its implementation and tests.
 
 ### September 2026: ordered structural overlays
 

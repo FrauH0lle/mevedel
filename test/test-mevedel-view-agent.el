@@ -1168,5 +1168,68 @@
                                (buffer-substring-no-properties
                                 (point-min) (point-max)))))))
 
+(mevedel-deftest mevedel-view--agent-live-transcript-dispatch ()
+  ,test
+  (test)
+  :doc "child stream and tool callbacks preserve the open parent transcript and draft"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let ((parent-data data-buf) (parent-view view-buf))
+        (mevedel-view-test--insert-data parent-data "PARENT response must remain visible.\n" 'response)
+        (with-current-buffer parent-view
+          (mevedel-view-stream-begin-turn mevedel-view--status-marker
+                                          (with-current-buffer parent-data (copy-marker 1)))
+          (mevedel-view-render-live-update parent-data)
+          (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4))
+        (mevedel-view-test--with-buffers
+          (let ((child-data data-buf) (child-view view-buf)
+                (mevedel-view-stream-render-delay 60)
+                (mevedel-view-tool-boundary-render-delay 60))
+            (with-current-buffer child-data
+              (setq-local mevedel--view-buffer parent-view)
+              (setq-local mevedel--agent-invocation
+                          (mevedel-agent-invocation--create :buffer child-data :path "/root/child"
+                                                            :transcript-status 'running)))
+            (with-current-buffer child-view
+              (mevedel-view-agent-initialize
+               (list :agent-transcript-p t :agent-path "/root/child"
+                     :parent-view parent-view :preserve-data-view-buffer t
+                     :transcript-info '(:live-buffer t :status running)) child-data)
+              (mevedel-view-stream-begin-turn mevedel-view--status-marker
+                                              (with-current-buffer child-data (copy-marker 1))))
+            (switch-to-buffer parent-view)
+            (select-window (split-window-right))
+            (switch-to-buffer child-view)
+            (mevedel-view-test--insert-data child-data "CHILD response belongs only here.\n" 'response)
+            (dolist (event '(stream pre-tool post-tool progress))
+              (with-current-buffer child-data
+                (pcase event
+                  ('stream (mevedel-view-agent-live-transcript-stream))
+                  ('pre-tool
+                   (mevedel-view-agent-live-transcript-pre-tool
+                    '(:name "Read" :id "child-read" :args (:file_path "child.txt"))))
+                  ('post-tool
+                   (mevedel-view-agent-live-transcript-post-tool
+                    '(:name "Read" :id "child-read" :args (:file_path "child.txt"))))
+                  ('progress
+                   (mevedel-view-stream-handle-tool-progress
+                    (list :type 'progress :data-buffer child-data
+                          :tool-use-id "child-read"
+                          :facts '(:kind ptc :active-tool "Read"))))))
+              (dolist (view (list child-view parent-view))
+                (with-current-buffer view
+                  (when mevedel-view--render-timer (cancel-timer mevedel-view--render-timer))
+                  (mevedel-view--flush-scheduled-render view t)))
+              (with-current-buffer parent-view
+                (should (string-search "PARENT response must remain visible." (buffer-string)))
+                (should-not (string-search "CHILD response" (buffer-string)))
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                (should (= (point) (+ 4 (mevedel-view--input-start))))
+                (should-not mevedel-view--pending-tool-calls))
+              (with-current-buffer child-data
+                (should (eq mevedel--view-buffer parent-view))))
+            (with-current-buffer child-view
+              (should (string-search "CHILD response belongs only here." (buffer-string))))))))))
+
 (provide 'test-mevedel-view-agent)
 ;;; test-mevedel-view-agent.el ends here

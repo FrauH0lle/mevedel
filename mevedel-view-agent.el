@@ -10,6 +10,9 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-view-zone)
 
+;; `cl-extra'
+(declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
+
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 
@@ -88,6 +91,7 @@
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-segment-bounds

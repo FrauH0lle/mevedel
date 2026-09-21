@@ -9,8 +9,10 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (eval-when-compile
-  (require 'cl-lib)
+  ;; The FSM slot setter needs its struct expander during compilation.
+  (require 'gptel-request)
   (require 'mevedel-structs)
   (require 'subr-x))
 
@@ -63,9 +65,12 @@
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-input
                   "mevedel-structs" (session category entry))
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session reminder))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)

@@ -147,6 +147,13 @@ Compile before committing. Keep the compiler silent: no free-variable or
 unknown-function warnings. Use `declare-function` and `defvar` for external
 symbols and `eval-when-compile` for compile-time-only dependencies.
 
+Compilation-order regressions need a fresh Emacs subprocess: preloaded test
+helpers can hide missing special-variable declarations and struct setter
+expanders. The agent observer, agent runtime, and Goal edit cold-compilation
+tests exercise compiled behavior before loading their ordinary test fixtures.
+Required dependencies loaded from source can also hide missing compile-time
+imports; use compiled dependency copies when testing that boundary.
+
 ## Code style
 
 - **Lexical binding**: `;;; file.el -- Description -*- lexical-binding: t -*-`
