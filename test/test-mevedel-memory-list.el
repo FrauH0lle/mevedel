@@ -59,7 +59,8 @@
     (with-current-buffer view (mevedel-view-test--insert-composer-draft draft 4))
     (cl-letf (((symbol-function 'transient-setup) #'ignore))
       (with-current-buffer view (mevedel-menu-open 'top)))
-    (should (= 1 (plist-get (mevedel-memory-list-summary context) :pending)))
+    (mevedel-memory-list--collect context)
+    (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (with-current-buffer view
       (should (string-search "1 pending" (mevedel-menu--memory-description))))
     (let* ((accepted (mevedel-memory-store-accepted workspace
@@ -71,14 +72,18 @@
        scope (plist-get proposal :root)
        (lambda (target) (setq intent (mevedel-memory-write-prepare workspace claim target accepted proposal))))
       (mevedel-journal-claim-settle claim 'cancelled ""))
-    (should (= 1 (plist-get (mevedel-memory-list-summary context) :pending)))
+    (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (setf (plist-get (mevedel-workspace-memory-observation workspace) :at) 0)
-    (should (= 1 (plist-get (mevedel-memory-list-summary context) :recovery)))
+    (with-current-buffer view
+      (should (string-search "cached" (mevedel-menu--memory-description))))
+    (mevedel-memory-list--collect context)
+    (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :recovery)))
     (with-current-buffer view
       (should (string-search "1 recovery" (mevedel-menu--memory-description))))
     (mevedel-memory-decision-recover-write workspace (plist-get intent :id) (plist-get intent :hash))
     (mevedel-memory-decision-reject workspace (plist-get intent :pass) id)
-    (should (= 0 (plist-get (mevedel-memory-list-summary context t) :pending)))
+    (mevedel-memory-list--collect context)
+    (should (= 0 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (with-current-buffer view
       (should-not (string-search "1 recovery" (mevedel-menu--memory-description)))
       (should (equal draft (mevedel-view--input-text)))

@@ -38,6 +38,7 @@
 
 (defun mevedel-test--buddy-cleanup ()
   "Kill buddy test buffers and clear recorded state."
+  (when mevedel-buddy--running (mevedel-buddy--abandon 'test-cleanup))
   (when (timerp mevedel-buddy--timeout-timer)
     (cancel-timer mevedel-buddy--timeout-timer))
   (when (buffer-live-p mevedel-buddy--request-buffer)
@@ -385,6 +386,110 @@
       (let ((mevedel-buddy--running "another-scope"))
         (should-not (mevedel-buddy-review)))))
 
+  :doc "prepares one changed buffer per callback and lets input run before dispatch"
+  (let* ((root (make-temp-file "buddy-preparation-" t))
+         (project (mevedel-test--buddy-project root "project"))
+         (default-directory project)
+         (first (mevedel-test--buddy-buffer "buddy-first" "alpha\n"))
+         (second (mevedel-test--buddy-buffer "buddy-second" "beta\n"))
+         (calls 0) input-ran sent timer
+         (count-section (lambda (&rest _) (cl-incf calls))))
+    (unwind-protect
+        (progn
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer (goto-char (point-max)) (insert "changed\n")))
+          (advice-add 'mevedel-buddy--buffer-section :before count-section)
+          (cl-letf (((symbol-function 'mevedel-buddy--request)
+                     (lambda (scope _profile payload _buffers through _automatic)
+                       (should input-ran)
+                       (should (= calls 2))
+                       (should (string-search "buddy-first" payload))
+                       (should (string-search "buddy-second" payload))
+                       (setq sent t)
+                       (mevedel-buddy--settle scope through))))
+            (with-current-buffer first (should (mevedel-buddy-review t)))
+            (should (= calls 0))
+            (setq timer (run-at-time 0 nil (lambda () (setq input-ran t))))
+            (let ((deadline (+ (float-time) 2)))
+              (while (and (not sent) (< (float-time) deadline)) (sleep-for .002)))
+            (should sent)
+            (should-not (mevedel-test--buddy-all-changes))))
+      (when timer (cancel-timer timer))
+      (advice-remove 'mevedel-buddy--buffer-section count-section)
+      (delete-directory root t)))
+
+  :doc "editing during preparation abandons stale evidence without retiring the new edit"
+  (let ((buffer (mevedel-test--buddy-buffer "buddy-preparing-edit" "alpha\n"))
+        sent)
+    (with-current-buffer buffer
+      (goto-char (point-max)) (insert "first edit\n")
+      (cl-letf (((symbol-function 'mevedel-buddy--request)
+                 (lambda (&rest _) (setq sent t))))
+        (should (mevedel-buddy-review t))
+        (insert "new edit\n")
+        (let ((deadline (+ (float-time) 2)))
+          (while (and mevedel-buddy--running (< (float-time) deadline)) (sleep-for .002)))
+        (should-not sent)
+        (should-not mevedel-buddy--running)
+        (should (string-search "new edit" (mevedel-test--buddy-diff buffer))))))
+
+  :doc "a preempted preparation callback cannot replace its successor's timer"
+  (let ((buffer (mevedel-test--buddy-buffer "buddy-preparation-preempt" "alpha\n")))
+    (with-current-buffer buffer
+      (goto-char (point-max)) (insert "changed\n")
+      (should (mevedel-buddy-review t))
+      (let ((old mevedel-buddy--prepare-timer))
+        (mevedel-buddy--preempt)
+        (should (mevedel-buddy-review t))
+        (let ((successor mevedel-buddy--prepare-timer))
+          (apply (timer--function old) (timer--args old))
+          (should (eq successor mevedel-buddy--prepare-timer))
+          (should mevedel-buddy--running)))))
+
+  :doc "source buffer death cancels preparation before a request can be sent"
+  (let ((buffer (mevedel-test--buddy-buffer "buddy-preparation-death" "alpha\n")) sent)
+    (cl-letf (((symbol-function 'mevedel-buddy--request)
+               (lambda (&rest _) (setq sent t))))
+      (with-current-buffer buffer
+        (goto-char (point-max)) (insert "changed\n")
+        (should (mevedel-buddy-review t)))
+      (kill-buffer buffer)
+      (let ((deadline (+ (float-time) 2)))
+        (while (and mevedel-buddy--running (< (float-time) deadline)) (sleep-for .002)))
+      (should-not sent)
+      (should-not mevedel-buddy--running)))
+
+  :doc "discarding tracked changes cancels preparation before provider dispatch"
+  (let ((buffer (mevedel-test--buddy-buffer "buddy-preparation-untrack" "alpha\n")) sent)
+    (cl-letf (((symbol-function 'mevedel-buddy--request)
+               (lambda (&rest _) (setq sent t))))
+      (with-current-buffer buffer
+        (goto-char (point-max)) (insert "changed\n")
+        (should (mevedel-buddy-review t))
+        (mevedel-buddy--untrack-buffer))
+      (let ((deadline (+ (float-time) 2)))
+        (while (and mevedel-buddy--running (< (float-time) deadline)) (sleep-for .002)))
+      (should-not sent)
+      (should-not mevedel-buddy--running)))
+
+  :doc "a diff failure after preemption cannot abandon the successor"
+  (let ((buffer (mevedel-test--buddy-buffer "buddy-preparation-error" "alpha\n")) successor)
+    (with-current-buffer buffer
+      (goto-char (point-max)) (insert "changed\n")
+      (should (mevedel-buddy-review t))
+      (let ((old mevedel-buddy--prepare-timer))
+        (cancel-timer old)
+        (cl-letf (((symbol-function 'mevedel-buddy--format-changes)
+                   (lambda (&rest _)
+                     (mevedel-buddy--preempt)
+                     (should (mevedel-buddy-review t))
+                     (setq successor mevedel-buddy--prepare-timer)
+                     (error "Interrupted diff"))))
+          (apply (timer--function old) (timer--args old))))
+      (should successor)
+      (should (eq successor mevedel-buddy--prepare-timer))
+      (should mevedel-buddy--running)))
+
   :doc "`mevedel-buddy-review' retires cancelling edits without a request"
   (let ((buf (mevedel-test--buddy-buffer "review-noop" "alpha\n")))
     (with-current-buffer buf
@@ -392,7 +497,9 @@
       (insert "typo\n")
       (delete-region (- (point-max) 5) (point-max)))
     (with-current-buffer buf
-      (should-not (mevedel-buddy-review))
+      (should (mevedel-buddy-review))
+      (let ((deadline (+ (float-time) 2)))
+        (while (and mevedel-buddy--running (< (float-time) deadline)) (sleep-for .002)))
       (should-not (mevedel-buddy--changes-for-scope
                    (mevedel-buddy--scope-key))))))
 

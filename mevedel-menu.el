@@ -102,9 +102,7 @@
 
 ;; `mevedel-memory-list'
 (declare-function mevedel-memory-list-open "mevedel-memory-list" (&optional context))
-(declare-function mevedel-memory-list-summary "mevedel-memory-list" (context &optional refresh))
 (autoload 'mevedel-memory-list-open "mevedel-memory-list")
-(autoload 'mevedel-memory-list-summary "mevedel-memory-list")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label "mevedel-models"
@@ -658,9 +656,15 @@ unavailable until it changes."
          (labels (cl-loop for (key label) in '((:pending "pending") (:recovery "recovery") (:unavailable "unavailable"))
                           for count = (or (plist-get counts key) 0)
                           when (> count 0) collect (format "%d %s" count label))))
-    (mevedel-menu--state-description "Memory" (string-join labels ", ")
-                                     (when (or (> (or (plist-get counts :recovery) 0) 0)
-                                               (> (or (plist-get counts :unavailable) 0) 0)) 'warning))))
+    (mevedel-menu--state-description
+     "Memory"
+     (cond ((null counts) "not checked")
+           ((>= (- (float-time) (plist-get counts :at)) 10)
+            (concat (if labels (string-join labels ", ") "no alerts") " (cached)"))
+           (t (string-join labels ", ")))
+     (when (or (> (or (plist-get counts :recovery) 0) 0)
+               (> (or (plist-get counts :unavailable) 0) 0))
+       'warning))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
@@ -1072,7 +1076,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (let ((context (mevedel-menu--context)))
     (pcase area
       ('top
-       (mevedel-memory-list-summary context)
        (transient-setup 'mevedel-menu--top))
       ('navigate
        (transient-setup 'mevedel-menu--navigate))

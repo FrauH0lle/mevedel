@@ -605,10 +605,12 @@ are untouched. History also includes completed reviews with no candidates;
 details show the retention deadline or unresolved dependency.
 
 The main cockpit's Memory row shows pending/stale proposals, interrupted-write
-recovery, and unavailable-record counts separately. Opening the cockpit refreshes
-observations older than ten seconds; table refresh also updates them. Rendering
-uses the cached counts without reading target files. Counts are disposable UI
-state and never authorize an application or override its freshness checks.
+recovery, and unavailable-record counts separately. Opening and rendering the
+main cockpit use cached observations without reading journal or memory files.
+The row says `not checked` before an observation exists and marks observations
+older than ten seconds as `cached`. Open the Memory table or refresh it to
+collect current evidence. Counts are disposable UI state and never authorize
+an application or override its freshness checks.
 
 `RET`/`i` shows the complete proposed body, retained before/after diff, decision
 reason, retained digest bodies with their original addresses, and dated reference
@@ -720,7 +722,9 @@ existing snapshots and pins.
 Completed turns, successful root compaction, successful `/clear` with captured
 work, and session close schedule one
 background processing opportunity. Scheduling waits until the caller returns
-and the target transport is idle. Duplicate events coalesce, and completion
+and the target transport is idle. Already-due journal and memory opportunities
+leave an event-loop interval between jobs rather than executing back-to-back.
+Duplicate events coalesce, and completion
 does not recursively drain the backlog. Only sealed captures run. A dedicated
 workspace admission claim permits one digest request at a time; the capture's
 own claim accepts its result. Both share a 120-second target-clock deadline.
@@ -853,7 +857,12 @@ workspaces, after completed, saved root turns and existing cleanup opportunities
 These turn opportunities are throttled to once an hour. Review/decision publication
 also schedules idle cleanup. Each batch selects at most 50 content groups and
 prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
-no progress stops the drain. Redraw does not run cleanup. Selection currently scans validated
+no progress stops the drain. Scheduled cleanup returns to Emacs between ownership
+phases and coordination records. It rechecks acquired claims before resuming;
+expired or fenced ownership stops the batch and settles its remaining claims.
+Live-buffer artifact retention checks and their deletions remain one phase.
+Explicit synchronous cleanup drains the same steps. Redraw does not run cleanup.
+Selection currently scans validated
 public entries. Pending captures and pinned review evidence remain retained.
 
 Expiry accepts an immutable manifest through journal mutation ownership before

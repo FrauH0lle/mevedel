@@ -53,7 +53,7 @@
       (remove-text-properties start (point) '(gptel nil)))
     (insert (propertize (concat response "\n") 'gptel 'response))
     (cl-incf (mevedel-session-turn-count session))
-    (mevedel--turn-autosave (gptel-make-fsm :info (list :buffer buffer)))))
+    (mevedel--run-turn-steps (gptel-make-fsm :info (list :buffer buffer)) '(mevedel--turn-save mevedel--turn-checkpoint))))
 
 (provide 'mevedel-journal-test-support)
 ;;; mevedel-journal-test-support.el ends here

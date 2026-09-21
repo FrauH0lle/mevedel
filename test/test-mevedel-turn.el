@@ -428,7 +428,9 @@
             (dolist (fsm fsms)
               (should-not (plist-get (gptel-fsm-info fsm)
                                      :mevedel-turn-settled))
-              (mevedel--fail-turn fsm 'error)))
+              (mevedel--fail-turn fsm 'error))
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (mevedel-turn-busy-p chat-buf) (< (float-time) deadline)) (sleep-for .002))))
           (should (mevedel-session-save-path session))
           (should (file-exists-p
                    (mevedel-session-artifacts-segment-path
@@ -517,7 +519,7 @@
           (should (= 3 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf))))
 
-(mevedel-deftest mevedel--turn-autosave
+(mevedel-deftest mevedel--turn-save
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))
   ,test
@@ -545,10 +547,10 @@
                      (lambda (workspace) (push workspace recovered)))
                     ((symbol-function 'mevedel-memory-pass-schedule)
                      (lambda (workspace) (push workspace offered))))
-            (mevedel--turn-autosave fsm)
+            (mevedel--run-turn-steps fsm '(mevedel--turn-save mevedel--turn-checkpoint))
             (with-current-buffer chat-buf
               (setq-local mevedel-session--read-only-mode t))
-            (mevedel--turn-autosave fsm))
+            (mevedel--run-turn-steps fsm '(mevedel--turn-save mevedel--turn-checkpoint)))
           (should (equal (list (list session chat-buf t)) saved))
           (should (equal (list ws) offered))
           (should (equal (list ws) cleanup))
@@ -568,7 +570,7 @@
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (&rest _) (error "Disk failed"))))
             (mevedel-test--with-captured-diagnostics nil
-              (mevedel--turn-autosave fsm)))
+              (mevedel--run-turn-steps fsm '(mevedel--turn-save mevedel--turn-checkpoint))))
           (should (equal '((:id "ptc" :state settled))
                          (mevedel-session-ptc-checkpoints session))))
       (kill-buffer chat-buf)))
@@ -599,7 +601,7 @@
                 (should (search-forward "Settled response." nil t))
                 (should-error (mevedel-view-fork-point-at-point)
                               :type 'user-error)))
-            (mevedel--turn-autosave fsm)
+            (mevedel--run-turn-steps fsm '(mevedel--turn-save mevedel--turn-checkpoint))
             (with-current-buffer view-buf
               (should (equal draft (mevedel-view--input-text)))
               (should (= (point) (+ (mevedel-view--input-start) 4)))
@@ -674,7 +676,7 @@
                      (lambda (_fsm) (push 'turn events)))
                     ((symbol-function 'mevedel-compact-estimation-record-token-baseline)
                      (lambda (_fsm) (push 'baseline events)))
-                    ((symbol-function 'mevedel--turn-autosave)
+                    ((symbol-function 'mevedel--turn-save)
                      (lambda (_fsm) (push 'save events)))
                     ((symbol-function
                       'mevedel-plan-handoff-settle-request)
@@ -758,7 +760,7 @@
                (lambda (_fsm) (push 'goal-retry events)))
               ((symbol-function 'mevedel--turn-record-request-failure)
                (lambda (_fsm) (push 'failure-record events)))
-              ((symbol-function 'mevedel--turn-autosave)
+              ((symbol-function 'mevedel--turn-save)
                (lambda (_fsm) (push 'save events)))
               ((symbol-function 'mevedel--run-turn-terminal-hook)
                (lambda (_fsm event status)
@@ -879,7 +881,7 @@
                     ((symbol-function 'mevedel-goal-settle-failure) #'ignore)
                     ((symbol-function 'mevedel--turn-record-request-failure)
                      (lambda (_fsm) (cl-incf records)))
-                    ((symbol-function 'mevedel--turn-autosave)
+                    ((symbol-function 'mevedel--turn-save)
                      (lambda (_fsm) (cl-incf saves)))
                     ((symbol-function 'mevedel--run-turn-terminal-hook)
                      (lambda (_fsm _event _status) (cl-incf hooks)))

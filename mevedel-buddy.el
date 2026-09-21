@@ -62,6 +62,9 @@
 (autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace--project-workspace "mevedel-workspace" ())
@@ -473,6 +476,9 @@ are grouped per buffer and each group becomes one section."
 (defvar mevedel-buddy--running nil
   "Scope key of the review currently in flight, or nil.")
 
+(defvar mevedel-buddy--prepare-timer nil
+  "Next callback preparing the current review's changed buffers.")
+
 (defvar mevedel-buddy--running-automatic nil
   "Non-nil when the review in flight was started by the idle timer.
 
@@ -580,6 +586,9 @@ has already seen and growing each request without bound."
 REVIEWED-THROUGH retires the changes it covered, and is passed only
 when the review settled on its own; an abandoned run passes nil so its
 changes are offered again."
+  (when mevedel-buddy--prepare-timer
+    (cancel-timer mevedel-buddy--prepare-timer)
+    (setq mevedel-buddy--prepare-timer nil))
   (when reviewed-through
     (mevedel-buddy--retire-changes scope-key reviewed-through))
   (when mevedel-buddy--timeout-timer
@@ -733,31 +742,87 @@ started by the idle timer, which an explicit request may preempt."
   (format "\n\nReport nothing below %s severity.\n"
           mevedel-buddy-severity-floor))
 
+(defun mevedel-buddy--prepare (scope-key changes automatic)
+  "Prepare CHANGES for SCOPE-KEY one buffer per callback.
+AUTOMATIC retains ordinary review preemption.  A changed source abandons the
+snapshot without retiring edits or sending stale line numbers to a model."
+  (let* ((source (current-buffer))
+         (generation (cl-incf mevedel-buddy--generation))
+         (through (current-time))
+         (names (mevedel-buddy--changed-buffers changes))
+         (stamps (mapcar
+                  (lambda (name)
+                    (with-current-buffer name
+                      (list (current-buffer) (buffer-chars-modified-tick)
+                            (buffer-name) buffer-file-name default-directory)))
+                  names))
+         (groups (mapcar
+                  (lambda (group) (reverse (cdr group)))
+                  (seq-group-by (lambda (change) (plist-get change :buffer))
+                                (reverse changes))))
+         sections dispatching)
+    (setq mevedel-buddy--running scope-key
+          mevedel-buddy--running-automatic automatic)
+    (cl-labels
+        ((currentp ()
+           (and (buffer-live-p source)
+                (equal changes (seq-filter #'mevedel-buddy--live-change-p
+                                           (mevedel-buddy--changes-for-scope scope-key)))
+                (cl-every
+                 (lambda (stamp)
+                   (and (buffer-live-p (car stamp))
+                        (with-current-buffer (car stamp)
+                          (equal (cdr stamp)
+                                 (list (buffer-chars-modified-tick) (buffer-name)
+                                       buffer-file-name default-directory)))))
+                 stamps)))
+         (schedule (delay)
+           (when (mevedel-buddy--current-generation-p generation)
+             (setq mevedel-buddy--prepare-timer (run-at-time delay nil #'step))))
+         (step ()
+           (when (mevedel-buddy--current-generation-p generation)
+             (setq mevedel-buddy--prepare-timer nil)
+             (cond
+              ((not (currentp)) (mevedel-buddy--abandon 'source-changed))
+              ((mevedel-transport-busy-p
+                (buffer-local-value 'default-directory source))
+               (schedule .1))
+              (t
+               (condition-case nil
+                   (with-current-buffer source
+                     (if groups
+                         (progn
+                           (push (mevedel-buddy--format-changes (pop groups)) sections)
+                           (schedule .001))
+                       (let ((payload (string-join
+                                       (seq-remove #'string-empty-p (nreverse sections)) "\n")))
+                         (if (string-empty-p payload)
+                             (mevedel-buddy--settle scope-key through)
+                           (setq dispatching t)
+                           (mevedel-buddy--request
+                            scope-key 'buddy
+                            (concat payload (mevedel-buddy--severity-instruction))
+                            names through automatic)))))
+                 (error
+                  (when (or dispatching (mevedel-buddy--current-generation-p generation))
+                    (mevedel-buddy--abandon 'preparation-failed)))))))))
+      (schedule .001))))
+
 (defun mevedel-buddy-review (&optional automatic)
   "Review the edits recorded for the current buffer's scope.
 
 AUTOMATIC marks a run started by the idle timer rather than by the
-user.  Returns non-nil when a request was sent."
+user.  Returns non-nil when preparation was scheduled."
   (interactive)
+  (require 'mevedel-transport)
   (let* ((scope-key (mevedel-buddy--scope-key))
          (changes (seq-filter #'mevedel-buddy--live-change-p
-                              (mevedel-buddy--changes-for-scope scope-key)))
-         (payload (mevedel-buddy--format-changes changes))
-         (reviewed-through (current-time)))
+                              (mevedel-buddy--changes-for-scope scope-key))))
     (cond
      ((null changes) nil)
      (mevedel-buddy--running nil)
-     ((string-empty-p payload)
-      ;; Everything recorded cancelled out; there is nothing to review
-      ;; and nothing worth keeping.
-      (mevedel-buddy--retire-changes scope-key reviewed-through)
-      nil)
      (t
-      (mevedel-buddy--request
-       scope-key 'buddy
-       (concat payload (mevedel-buddy--severity-instruction))
-       (mevedel-buddy--changed-buffers changes)
-       reviewed-through automatic)
+      (mevedel-buddy--prepare scope-key changes automatic)
       t))))
 
 

@@ -298,6 +298,12 @@ skills, this path is first-class: it ignores user/project skills named
 `/root/review` or `/root/verify_2`, and shares target CAPF for explicit target
 forms such as `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`.
 
+Git evidence packages are prepared after the accepted command returns, one
+section per callback. Aborting the request or killing its source buffer cancels
+preparation and removes the unfinished package before any agent is dispatched.
+Git commands still run individually and synchronously; a very large diff or a
+slow remote command can exceed the normal callback budget.
+
 The owning workflow attaches a one-shot consumer before provider dispatch and
 awaits that leaf's ordinary terminal `RESULT`. Settlement first queues the
 canonical envelope in parent mail; after successful workflow delivery, the

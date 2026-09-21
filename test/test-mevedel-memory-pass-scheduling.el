@@ -298,8 +298,7 @@
                                (insert "Completed turn\n")
                                (setf (mevedel-session-turn-count mevedel--session) 1))
                              (let ((mevedel-journal-enabled nil))
-                               (mevedel--turn-autosave
-                                (gptel-make-fsm :info (list :buffer buffer))))
+                               (mevedel--run-turn-steps (gptel-make-fsm :info (list :buffer buffer)) '(mevedel--turn-save mevedel--turn-checkpoint)))
                              (drain)
                              (if (eq mode 'manual)
                                  (progn (should (= 0 calls))

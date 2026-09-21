@@ -40,7 +40,9 @@ checked application, while instruction changes always await approval.
 Completed, durably saved root turns provide automatic opportunities for journal
 recovery/cleanup and memory review/reconciliation. Publication and explicit
 memory operations retain their existing opportunities. Opening a conversation
-or the session chooser does not launch workspace-wide maintenance.
+or the session chooser does not launch workspace-wide maintenance. The main
+session menu only renders cached memory observations, explicitly marking missing
+or old counts. Opening or refreshing the Memory table collects current evidence.
 
 Application holds both workspace and original target-root claims. It persists
 complete private intent and a hash-only target marker before mutations. Curated
@@ -230,6 +232,13 @@ contains the corresponding operational details.
 
 ### Retention and cost
 
+- **Opening the main menu synchronously refreshed memory evidence after ten
+  seconds.** The September 21 profile attributed 351 of 359 menu CPU samples
+  and about 65 MB of allocations to this collection. Cold checks took 3.36 s
+  from the view and 3.40 s from the data buffer; warm checks took microseconds.
+  The menu now reads observations only and labels unknown or stale counts.
+  Explicit memory inspection retains fresh collection and checked recovery.
+
 - **One-year age-only retention could delete unreviewed evidence.** A native
   cleanup regression reproduced that loss. On 2026-09-13 ordinary recall changed
   to 14 days while physical cleanup retained unreviewed work and recovery
@@ -314,3 +323,33 @@ blocked the Emacs UI. These opportunities now run after completed, durably saved
 root turns. Explicit memory operations retain checked recovery, and publication
 still schedules its existing processing and cleanup. Merely opening a session
 no longer launches consolidation or workspace recovery scans.
+
+### 2026-09-21: yield during scheduled cleanup
+
+A real configured-provider patch request spent 272 ms in journal cleanup after
+its completion message. A separate backlog measurement showed that a bounded
+record count still permits seconds of consecutive filesystem work. Scheduled
+cleanup now advances native Lisp generators between ownership phases and
+coordination records, using the same main-thread pattern as saved-history search.
+Claim ownership is checked afresh before each resumption, including nested
+coordination steps. Closing a pending iterator settles its acquired claims.
+Explicit synchronous lifecycle cleanup drains those same steps.
+
+The artifact-retention phase still checks live buffers and deletes as one unit;
+yielding between its final live-reference check and deletion would permit loss
+of an artifact newly referenced by unsaved input. Individual filesystem
+operations and content dependency groups remain indivisible. This changes
+scheduling, not the accepted-manifest, retention, or target-lock contracts.
+
+### 2026-09-21: separate completion publication from checkpointing
+
+After staged background cleanup, a second real patch request still delayed a
+20-ms timer by 375 ms: session save and journal checkpoint together consumed
+329 ms. Terminal settlement now returns to the event loop after an expensive
+step; publication and journal checkpointing are distinct steps under the same
+admission hold. The request and its file snapshots remain owned until the
+checkpoint and terminal hooks finish. Transport cancellation and source death
+retire the continuation. The existing durable publication and capture APIs keep
+their atomicity and authority checks; this changes the sequencing of their calls.
+Already-due journal and memory opportunities also yield between jobs instead of
+running in one consecutive timer batch.

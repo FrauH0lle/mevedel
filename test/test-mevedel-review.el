@@ -223,12 +223,12 @@
               (should (zerop (process-file "git" nil nil nil
                                            "commit" "-q" "-m" "change"))))
             (should (equal package-file
-                           (mevedel-review--write-package
+                           (iter-do (_ (mevedel-review--write-package
                             root
                             (list :type 'range
                                   :base base
                                   :head "HEAD")
-                            package-file)))
+                            package-file)))))
             (let ((text (with-temp-buffer
                           (insert-file-contents package-file)
                           (buffer-string))))
@@ -290,17 +290,17 @@
                      (cons (concat "GIT_EXTERNAL_DIFF=" helper)
                            process-environment)))
                 (should (equal package-file
-                               (mevedel-review--write-package
+                               (iter-do (_ (mevedel-review--write-package
                                 cwd '(:type commit :sha "--ext-diff")
-                                package-file))))
+                                package-file))))))
               (should-not (file-exists-p marker))
               (let ((text (with-temp-buffer
                             (insert-file-contents package-file)
                             (buffer-string))))
                 (should (string-search "+two" text)))
               (should (equal package-file
-                             (mevedel-review--write-package
-                              cwd '(:type commit :sha "--") package-file)))
+                             (iter-do (_ (mevedel-review--write-package
+                              cwd '(:type commit :sha "--") package-file)))))
               (should-not (file-exists-p marker)))
           (delete-directory root t)))))
 
@@ -311,10 +311,10 @@
         (progn
           (should (zerop (process-file "git" nil nil nil
                                        "init" "-q" "-b" "main" root)))
-          (let ((first (mevedel-review--write-package
-                        root '(:type uncommitted)))
-                (second (mevedel-review--write-package
-                         root '(:type uncommitted))))
+          (let ((first (iter-do (_ (mevedel-review--write-package
+                        root '(:type uncommitted)))))
+                (second (iter-do (_ (mevedel-review--write-package
+                         root '(:type uncommitted))))))
             (should (equal (file-name-directory first)
                            (file-name-as-directory
                             (file-name-concat root ".mevedel" "state" "review-packages"))))
@@ -322,7 +322,7 @@
             (should (file-exists-p first))
             (should (file-exists-p second)))
           (should-error
-           (mevedel-review--write-package root '(:type unsupported))
+           (iter-do (_ (mevedel-review--write-package root '(:type unsupported))))
            :type 'user-error)
           (should (= 2 (length (directory-files
                                 (mevedel-review--package-directory root)
@@ -581,6 +581,72 @@
     (should (equal "stopped" (plist-get interrupted :message)))
     (should (eq 'invalid-agent-result (plist-get invalid :reason)))))
 
+(mevedel-deftest mevedel-review--write-target-package ()
+  ,test
+  (test)
+  :doc "abort and source death remove unfinished packages without delivery"
+  (dolist (action '(abort kill))
+    (let* ((root (make-temp-file "mevedel-review-cancel-" t))
+           (directory (file-name-concat root ".mevedel/state/review-packages"))
+           (source (generate-new-buffer " *review-cancel*"))
+           cancel delivered)
+      (unwind-protect
+          (progn
+            (should (zerop (process-file "git" nil nil nil "init" "-q" root)))
+            (with-current-buffer source
+              (setq cancel (mevedel-review--write-target-package
+                            root '(:type uncommitted) (lambda (_path) (setq delivered t)))))
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (not (file-directory-p directory)) (< (float-time) deadline))
+                (sleep-for .001)))
+            (should (file-directory-p directory))
+            (if (eq action 'kill) (kill-buffer source) (funcall cancel))
+            (funcall cancel)
+            (sleep-for .02)
+            (should-not delivered)
+            (should-not (directory-files directory nil "\\.md\\'")))
+        (when cancel (funcall cancel))
+        (when (buffer-live-p source) (kill-buffer source))
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-review--run-task/preparation ()
+  ,test
+  (test)
+  :doc "prepares real Git evidence after returning and services input before dispatch"
+  (let* ((root (make-temp-file "mevedel-review-preparation-" t))
+         (data (generate-new-buffer " *review-preparation*"))
+         timer input-ran dispatched)
+    (unwind-protect
+        (progn
+          (should (zerop (process-file "git" nil nil nil "init" "-q" root)))
+          (with-temp-file (file-name-concat root "example.txt") (insert "review evidence\n"))
+          (with-current-buffer data
+            (setq default-directory root)
+            (setq-local mevedel--session (mevedel-session--create :authority-mode 'pid-lock :name "review"))
+            (setq-local mevedel--current-request (mevedel-request--create :session mevedel--session))
+            (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                       (lambda (_session _name prompt _callback &rest _options)
+                         (setq dispatched prompt)
+                         #'ignore)))
+              (mevedel-review--run-task "Review this change" "target" #'ignore
+                                        nil nil 'review root '(:type uncommitted))
+              (should-not dispatched)
+              (setq timer (run-at-time 0 nil (lambda () (setq input-ran t))))
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (not dispatched) (< (float-time) deadline)) (sleep-for .002)))
+              (should input-ran)
+              (should (string-search "Review package file:" dispatched))
+              (let ((files (directory-files
+                            (file-name-concat root ".mevedel/state/review-packages") t "\\.md\\'")))
+                (should (= 1 (length files)))
+                (with-temp-buffer
+                  (insert-file-contents (car files))
+                  (should (string-search "example.txt" (buffer-string)))))
+              (mapc #'funcall (mevedel-request-cancellers mevedel--current-request)))))
+      (when timer (cancel-timer timer))
+      (when (buffer-live-p data) (kill-buffer data))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-review--run-task ()
   ,test
   (test)
@@ -822,6 +888,8 @@
               (mevedel-review--run-task
                "prompt" "target" #'ignore nil nil 'review
                root '(:type uncommitted))
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (not captured-message) (< (float-time) deadline)) (sleep-for .002)))
               (should (string-match
                        "Review package file: \\([^\n]+\\)"
                        captured-message))

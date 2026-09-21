@@ -96,15 +96,57 @@
     (should (mevedel-request-p (mevedel-request-begin session)))
     (mevedel-request-end)))
 
+(mevedel-deftest mevedel--complete-turn/responsiveness (:quiet t)
+  ,test
+  (test)
+  :doc "services input between real publication and checkpoint while admission stays fenced"
+  (mevedel-turn-ownership-test--with-session
+    (let* (input timer checkpoint-responsive admission-fenced
+           (saved (lambda (&rest _)
+                    (setq timer (run-at-time
+                                 0 nil
+                                 (lambda ()
+                                   (setq input t
+                                         admission-fenced
+                                         (condition-case nil
+                                             (progn (mevedel-request-begin session) nil)
+                                           (user-error t))))))))
+           (checkpoint (lambda (&rest _) (setq checkpoint-responsive input))))
+      (unwind-protect
+          (progn
+            (advice-add 'mevedel-session-artifacts-save :after saved)
+            (advice-add 'mevedel-journal-capture-checkpoint :before checkpoint)
+            (mevedel--complete-turn fsm)
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (mevedel-turn-busy-p buffer) (< (float-time) deadline)) (sleep-for .002)))
+            (should checkpoint-responsive)
+            (should admission-fenced)
+            (should-not (mevedel-turn-busy-p buffer))
+            (should (file-exists-p (mevedel-session-artifacts-segment-path
+                                   (mevedel-session-save-path session)
+                                   (mevedel-session-current-segment session)))))
+        (when timer (cancel-timer timer))
+        (advice-remove 'mevedel-session-artifacts-save saved)
+        (advice-remove 'mevedel-journal-capture-checkpoint checkpoint)))))
+
 (mevedel-deftest mevedel--defer-turn-steps-ownership (:quiet t)
   ,test
   (test)
+  :doc "source death cancels a pending completion slice and releases its hold"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel--complete-turn fsm)
+    (should (mevedel-turn-busy-p buffer))
+    (should (gethash (list 'turn-settlement (mevedel-request-id request)) mevedel-transport--pending))
+    (kill-buffer buffer)
+    (should-not (gethash (list 'turn-settlement (mevedel-request-id request)) mevedel-transport--pending))
+    (should (= 0 (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds))))
+
   :doc "abort retains the terminal reservation until its real publication completes"
   (dolist (outcome '(success error aborted))
     (mevedel-turn-ownership-test--with-session
       (let (resume)
         (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
-                   (lambda (_key _path thunk &optional _cancel)
+                   (lambda (_key _path thunk &optional _cancel _delay)
                      (setq resume thunk) t)))
           (if (eq outcome 'success)
               (mevedel--complete-turn fsm)
@@ -115,6 +157,8 @@
         (should-error (mevedel-request-begin session) :type 'user-error)
         (should (eq request mevedel--current-request))
         (funcall resume)
+        (let ((deadline (+ (float-time) 5)))
+          (while (and (mevedel-turn-busy-p buffer) (< (float-time) deadline)) (sleep-for .002)))
         (should-not (mevedel-turn-busy-p buffer))
         (with-temp-buffer
           (insert-file-contents
@@ -132,8 +176,8 @@
     (let ((replacement (mevedel-request--create
                         :id "replacement" :session session :turn 2
                         :origin "/root" :file-snapshots (make-hash-table)))
-          (save (symbol-function 'mevedel--turn-autosave)))
-      (cl-letf (((symbol-function 'mevedel--turn-autosave)
+          (save (symbol-function 'mevedel--turn-save)))
+      (cl-letf (((symbol-function 'mevedel--turn-save)
                  (lambda (machine)
                    (funcall save machine)
                    ;; Inject the reentrant replacement at the publication seam.
@@ -155,7 +199,7 @@
     (mevedel-turn-ownership-test--with-session
       (let (cancel resume)
         (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
-                   (lambda (_key _path thunk &optional on-cancel)
+                   (lambda (_key _path thunk &optional on-cancel _delay)
                      (setq resume thunk cancel on-cancel) t)))
           (if (eq outcome 'success)
               (mevedel--complete-turn fsm)
@@ -180,7 +224,7 @@
           resume generated displayed (continued 0))
       (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
                 ((symbol-function 'mevedel-transport-run-when-idle)
-                 (lambda (_key _path thunk &optional _cancel) (setq resume thunk) t))
+                 (lambda (_key _path thunk &optional _cancel _delay) (setq resume thunk) t))
                 ((symbol-function 'mevedel--generate-final-patch)
                  (lambda (_workspace captured)
                    (setq generated captured) "old diff\n"))
@@ -209,7 +253,7 @@
                        (lambda (status _machine) (push status callbacks))))
       (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
                 ((symbol-function 'mevedel-transport-run-when-idle)
-                 (lambda (key _path thunk &optional on-cancel)
+                 (lambda (key _path thunk &optional on-cancel _delay)
                    (if (eq (car key) 'final-patch)
                        (setq resume thunk cancel on-cancel)
                      (setq settle thunk))
@@ -226,6 +270,8 @@
         (should (equal '(abort) callbacks))
         (should (memq fsm mevedel--turn-settlements-pending)))
       (funcall settle)
+      (let ((deadline (+ (float-time) 5)))
+        (while (and (mevedel-turn-busy-p buffer) (< (float-time) deadline)) (sleep-for .002)))
       (should-not mevedel--turn-settlements-pending)
       (should-not mevedel--current-request)
       (with-temp-buffer
@@ -248,6 +294,8 @@
                (lambda (&rest _) (error "Injected patch failure"))))
       (mevedel-preset--apply-final-patch
        fsm buffer workspace request #'mevedel-preset--settle-terminal))
+    (let ((deadline (+ (float-time) 5)))
+      (while (and (mevedel-turn-busy-p buffer) (< (float-time) deadline)) (sleep-for .002)))
     (should-not mevedel--turn-settlements-pending)
     (should-not mevedel--current-request)
     (with-temp-buffer

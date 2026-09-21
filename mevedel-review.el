@@ -11,10 +11,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'generator)
 
 (require 'subr-x)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
+(require 'mevedel-transport)
 
 ;; `gptel'
 (declare-function gptel--update-status
@@ -572,80 +574,70 @@ MODE is the optional markdown fence language."
         (insert "```\n"))
       (insert "\n"))))
 
-(defun mevedel-review--write-range-package (cwd target)
-  "Insert review package sections for range TARGET in CWD."
+(defun mevedel-review--package-sections (target)
+  "Return TARGET's heading and ordered (TITLE ARGS MODE) Git sections."
   (let* ((base (plist-get target :base))
          (head (or (plist-get target :head) "HEAD"))
          (range (format "%s..%s" base head)))
-    (insert "## Target\n\n")
-    (insert (format "- Type: range\n- Base: %s\n- Head: %s\n\n"
-                    base head))
-    (mevedel-review--insert-package-output
-     cwd "Commits" (list "log" "--oneline" range))
-    (mevedel-review--insert-package-output
-     cwd "Diff Stat" (list "diff" "--stat" base head) "")
-    (mevedel-review--insert-package-output
-     cwd "Diff" (list "diff" "--find-renames" "-U10" base head) "diff")))
+    (pcase (plist-get target :type)
+      ('range
+       (list (format "- Type: range\n- Base: %s\n- Head: %s\n\n" base head)
+             (list "Commits" (list "log" "--oneline" range))
+             (list "Diff Stat" (list "diff" "--stat" base head) "")
+             (list "Diff" (list "diff" "--find-renames" "-U10" base head) "diff")))
+      ('commit
+       (let ((sha (plist-get target :sha)))
+         (list (format "- Type: commit\n- Commit: %s\n\n" sha)
+               (list "Commit" (list "show" "--stat" "--format=medium" "--patch"
+                                    "--find-renames" "-U10" sha) "diff"))))
+      ('uncommitted
+       '("- Type: uncommitted changes\n\n"
+         ("Status" ("status" "--short") "")
+         ("Staged Diff Stat" ("diff" "--cached" "--stat") "")
+         ("Staged Diff" ("diff" "--cached" "--find-renames" "-U10") "diff")
+         ("Unstaged Diff Stat" ("diff" "--stat") "")
+         ("Unstaged Diff" ("diff" "--find-renames" "-U10") "diff")
+         ("Untracked Files" ("ls-files" "--others" "--exclude-standard") "")))
+      (_ (user-error "Unsupported review package target: %S" target)))))
 
-(defun mevedel-review--write-commit-package (cwd target)
-  "Insert review package sections for commit TARGET in CWD."
-  (let ((sha (plist-get target :sha)))
-    (insert "## Target\n\n")
-    (insert (format "- Type: commit\n- Commit: %s\n\n" sha))
-    (mevedel-review--insert-package-output
-     cwd "Commit" (list "show" "--stat" "--format=medium"
-                        "--patch" "--find-renames" "-U10" sha)
-     "diff")))
-
-(defun mevedel-review--write-uncommitted-package (cwd)
-  "Insert review package sections for the uncommitted diff in CWD."
-  (insert "## Target\n\n")
-  (insert "- Type: uncommitted changes\n\n")
-  (mevedel-review--insert-package-output
-   cwd "Status" (list "status" "--short") "")
-  (mevedel-review--insert-package-output
-   cwd "Staged Diff Stat" (list "diff" "--cached" "--stat") "")
-  (mevedel-review--insert-package-output
-   cwd "Staged Diff" (list "diff" "--cached" "--find-renames" "-U10") "diff")
-  (mevedel-review--insert-package-output
-   cwd "Unstaged Diff Stat" (list "diff" "--stat") "")
-  (mevedel-review--insert-package-output
-   cwd "Unstaged Diff" (list "diff" "--find-renames" "-U10") "diff")
-  (mevedel-review--insert-package-output
-   cwd "Untracked Files" (list "ls-files" "--others" "--exclude-standard") ""))
-
-(defun mevedel-review--write-package (cwd target &optional output-file)
-  "Write a review package for TARGET in CWD and return its path."
+(iter-defun mevedel-review--write-package (cwd target &optional output-file)
+  "Yield between Git sections for TARGET in CWD, returning the package path.
+Closing the iterator removes its unfinished generated package."
   (let* ((cwd (file-name-as-directory (expand-file-name cwd)))
          (generated-p (null output-file))
          (directory (if output-file
                         (file-name-directory output-file)
-                      (mevedel-review--package-directory cwd))))
-    (make-directory directory t)
-    (when generated-p
-      (setq output-file
-            (make-nearby-temp-file
-             (file-name-concat directory "review-") nil ".md")))
-    (condition-case err
+                      (mevedel-review--package-directory cwd)))
+         (sections (mevedel-review--package-sections target))
+         (buffer (generate-new-buffer " *mevedel-review-package*"))
+         complete)
+    (unwind-protect
         (progn
-          (with-temp-file output-file
+          (iter-yield nil)
+          (make-directory directory t)
+          (when generated-p
+            (setq output-file (make-nearby-temp-file
+                               (file-name-concat directory "review-") nil ".md")))
+          (with-current-buffer buffer
             (insert (format "# Review package: %s\n\n"
                             (or (plist-get target :type) "unknown")))
             (insert (format "- Working directory: %s\n"
                             (mevedel-review--target-native-path cwd cwd)))
             (insert (format "- Generated: %s\n\n"
                             (format-time-string "%Y-%m-%d %H:%M:%S %z")))
-            (pcase (plist-get target :type)
-              ('range (mevedel-review--write-range-package cwd target))
-              ('commit (mevedel-review--write-commit-package cwd target))
-              ('uncommitted (mevedel-review--write-uncommitted-package cwd))
-              (_ (user-error "Unsupported review package target: %S"
-                             target))))
+            (insert "## Target\n\n" (car sections)))
+          (dolist (section (cdr sections))
+            (iter-yield nil)
+            (with-current-buffer buffer
+              (apply #'mevedel-review--insert-package-output cwd section)))
+          (iter-yield nil)
+          (with-current-buffer buffer
+            (write-region (point-min) (point-max) output-file nil 'silent))
+          (setq complete t)
           output-file)
-      (error
-       (when generated-p
-         (ignore-errors (delete-file output-file)))
-       (signal (car err) (cdr err))))))
+      (kill-buffer buffer)
+      (when (and generated-p output-file (not complete))
+        (ignore-errors (delete-file output-file))))))
 
 (defun mevedel-review--target-package-spec (target cwd)
   "Return package target spec for TARGET in CWD, or nil."
@@ -661,13 +653,51 @@ MODE is the optional markdown fence language."
     ('range target)
     (_ nil)))
 
-(defun mevedel-review--write-target-package (cwd target)
-  "Write TARGET's review package in CWD, returning the path or nil."
-  (condition-case nil
-      (when-let* ((spec (mevedel-review--target-package-spec target cwd)))
-        (mevedel-review--target-native-path
-         cwd (mevedel-review--write-package cwd spec)))
-    (error nil)))
+(defun mevedel-review--write-target-package (cwd target callback)
+  "Prepare TARGET's package in CWD in scheduled steps, then call CALLBACK.
+CALLBACK receives the target-native path, or nil on preparation failure.
+Return an idempotent canceller. Source death also cancels preparation."
+  (let ((source (current-buffer)) iterator timer finished stepping)
+    (cl-labels
+        ((cleanup ()
+           (unless stepping
+             (when timer (cancel-timer timer) (setq timer nil))
+             (when iterator (iter-close iterator) (setq iterator nil))
+             (when (buffer-live-p source)
+               (with-current-buffer source (remove-hook 'kill-buffer-hook #'cancel t)))))
+         (cancel () (setq finished t) (cleanup))
+         (finish (path)
+           (unless finished
+             (setq finished t)
+             (when (buffer-live-p source)
+               (with-current-buffer source (funcall callback path)))))
+         (step ()
+           (setq timer nil stepping t)
+           (unwind-protect
+               (unless finished
+                 (cond
+                  ((not (buffer-live-p source)) (cancel))
+                  ((mevedel-transport-busy-p cwd)
+                   (setq timer (run-at-time .1 nil #'step)))
+                  (t
+                   (condition-case nil
+                       (progn
+                         (unless iterator
+                           (if-let* ((spec (mevedel-review--target-package-spec target cwd)))
+                               (setq iterator (mevedel-review--write-package cwd spec))
+                             (finish nil)))
+                         (unless finished
+                           (condition-case done
+                               (iter-next iterator)
+                             (iter-end-of-sequence
+                              (finish (mevedel-review--target-native-path cwd (cdr done)))))))
+                     (error (finish nil)))
+                   (unless finished (setq timer (run-at-time .001 nil #'step))))))
+             (setq stepping nil)
+             (when finished (cleanup)))))
+      (add-hook 'kill-buffer-hook #'cancel nil t)
+      (setq timer (run-at-time .001 nil #'step))
+      #'cancel)))
 
 (defun mevedel-review--prompt-with-package (prompt package-file command)
   "Return PROMPT augmented with PACKAGE-FILE instructions for COMMAND."
@@ -1072,98 +1102,77 @@ Loading the agents module registers the bundled agents."
     (prompt hint callback &optional submit-context progress-callback command
             cwd target)
   "Run and await the dedicated validation leaf for PROMPT and HINT.
-CALLBACK receives the normalized fork-style outcome.  SUBMIT-CONTEXT, when
-non-empty, is appended to the leaf prompt.  PROGRESS-CALLBACK, when non-nil,
-receives the retained invocation before provider dispatch.  COMMAND defaults
-to `review'.  CWD and TARGET, when non-nil, create package evidence after the
-parent request has accepted the review turn."
+CALLBACK receives the normalized fork-style outcome. SUBMIT-CONTEXT is appended
+when non-empty. PROGRESS-CALLBACK receives the invocation before dispatch.
+COMMAND defaults to `review'. CWD and TARGET schedule package preparation only
+after the parent has accepted the review turn; cancellation covers preparation."
   (let* ((command (or command 'review))
          (session mevedel--session))
     (if (null session)
-        (funcall callback
-                 '(:status error :reason no-session
-                   :message "Validation requires an active session"))
-      (let* ((package-file
-              (and cwd target
-                   (mevedel-review--write-target-package cwd target)))
-             (prompt
-              (if package-file
-                  (mevedel-review--prompt-with-package
-                   prompt package-file command)
-                prompt))
-             (message
-              (if (and (stringp submit-context)
-                       (not (string-empty-p submit-context)))
-                  (concat prompt "\n\n" submit-context)
-                prompt))
-             path invocation preparation-cancel cancelled-p settled-p)
+        (funcall callback '(:status error :reason no-session
+                           :message "Validation requires an active session"))
+      (let (path invocation preparation-cancel cancelled-p settled-p)
         (cl-labels
-            ((finish
-              (result)
-              (unless settled-p
-                (setq settled-p t)
-                (unless cancelled-p
-                  (let ((outcome (mevedel-review--result-outcome result)))
-                    (funcall callback
-                             (if (eq command 'verify)
-                                 (mevedel-review--verify-outcome
-                                  outcome invocation)
-                               outcome))))))
-             (cancel
-              ()
-              (unless (or settled-p cancelled-p)
-                (setq cancelled-p t)
-                (if path
-                    (mevedel-agent-control-interrupt session path)
-                  (when preparation-cancel
-                    (funcall preparation-cancel)))))
-             (prepared
-              (outcome)
-              (pcase (plist-get outcome :outcome)
-                ('success
-                 (setq path
-                       (mevedel-agent-record-path
-                        (plist-get outcome :record))))
-                ((or 'error 'aborted)
+            ((finish (result)
+               (unless settled-p
+                 (setq settled-p t)
                  (unless cancelled-p
-                   (finish
-                    (list :type 'RESULT
-                          :outcome 'errored
-                          :payload
-                          (or (plist-get outcome :error)
-                              "Agent preparation was cancelled"))))))))
-          (condition-case err
-              (progn
-                (setq preparation-cancel
-                      (mevedel-agent-control-spawn
-                       session
-                       (mevedel-review--next-task-name session command)
-                       message #'prepared
-                       :agent (mevedel-agent-resolve-role
-                               (mevedel-review--command-agent-name command))
-                       :context "none"
-                       :description
-                       (or hint (mevedel-review--command-description command))
-                       :skill-permission-rules
-                       (if (eq command 'verify)
-                           (mevedel-review--verify-permission-rules)
-                         (mevedel-review--permission-rules))
-                       :on-invocation
-                       (lambda (value)
-                         (setq invocation value
-                               path (mevedel-agent-invocation-path value))
-                         (when progress-callback
-                           (funcall progress-callback value)))
-                       :result-handler #'finish))
-                (unless settled-p
-                  (mevedel-request-push-canceller
-                   mevedel--current-request #'cancel)))
-            (error
-             (unless settled-p
-               (setq settled-p t)
-               (funcall callback
-                        (list :status 'error :reason 'agent-dispatch-failed
-                              :message (error-message-string err)))))))))))
+                   (let ((outcome (mevedel-review--result-outcome result)))
+                     (funcall callback
+                              (if (eq command 'verify)
+                                  (mevedel-review--verify-outcome outcome invocation)
+                                outcome))))))
+             (cancel ()
+               (unless (or settled-p cancelled-p)
+                 (setq cancelled-p t)
+                 (if path
+                     (mevedel-agent-control-interrupt session path)
+                   (when preparation-cancel (funcall preparation-cancel)))))
+             (prepared (outcome)
+               (pcase (plist-get outcome :outcome)
+                 ('success
+                  (setq path (mevedel-agent-record-path (plist-get outcome :record))))
+                 ((or 'error 'aborted)
+                  (unless cancelled-p
+                    (finish (list :type 'RESULT :outcome 'errored
+                                  :payload (or (plist-get outcome :error)
+                                               "Agent preparation was cancelled")))))))
+             (dispatch (package-file)
+               (unless cancelled-p
+                 (let* ((prompt (if package-file
+                                    (mevedel-review--prompt-with-package prompt package-file command)
+                                  prompt))
+                        (message (if (and (stringp submit-context) (not (string-empty-p submit-context)))
+                                     (concat prompt "\n\n" submit-context)
+                                   prompt)))
+                   (condition-case err
+                       (progn
+                         (setq preparation-cancel
+                               (mevedel-agent-control-spawn
+                                session (mevedel-review--next-task-name session command)
+                                message #'prepared
+                                :agent (mevedel-agent-resolve-role (mevedel-review--command-agent-name command))
+                                :context "none"
+                                :description (or hint (mevedel-review--command-description command))
+                                :skill-permission-rules
+                                (if (eq command 'verify) (mevedel-review--verify-permission-rules)
+                                  (mevedel-review--permission-rules))
+                                :on-invocation
+                                (lambda (value)
+                                  (setq invocation value path (mevedel-agent-invocation-path value))
+                                  (when progress-callback (funcall progress-callback value)))
+                                :result-handler #'finish))
+                         (when (and cancelled-p preparation-cancel) (funcall preparation-cancel)))
+                     (error
+                      (unless settled-p
+                        (setq settled-p t)
+                        (funcall callback (list :status 'error :reason 'agent-dispatch-failed
+                                                :message (error-message-string err))))))))))
+          (if (and cwd target)
+              (setq preparation-cancel (mevedel-review--write-target-package cwd target #'dispatch))
+            (dispatch nil))
+          (unless settled-p
+            (mevedel-request-push-canceller mevedel--current-request #'cancel)))))))
 
 (defun mevedel-review--transform-command-outcome (outcome &optional command)
   "Transform validation OUTCOME for COMMAND before parent insertion."

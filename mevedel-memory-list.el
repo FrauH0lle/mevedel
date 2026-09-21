@@ -124,20 +124,6 @@
                 :unavailable (seq-count (lambda (row) (eq (plist-get row :status) 'unavailable)) rows)))
     (sort (nreverse rows) (lambda (left right) (string> (or (plist-get left :created) "") (or (plist-get right :created) ""))))))
 
-;;;###autoload
-(defun mevedel-memory-list-summary (context &optional refresh)
-  "Return disposable proposal counts for cockpit CONTEXT.
-Reuse observations for ten seconds unless REFRESH is non-nil. Collection is
-read-only; this snapshot never authorizes a decision or a file write."
-  (let* ((workspace (mevedel-cockpit-context-workspace context))
-         (observation (mevedel-workspace-memory-observation workspace)))
-    (when (or refresh (null observation) (>= (- (float-time) (plist-get observation :at)) 10))
-      (condition-case nil
-          (mevedel-memory-list--collect context)
-        (error (setf (mevedel-workspace-memory-observation workspace)
-                     (list :at (float-time) :pending 0 :recovery 0 :unavailable 1)))))
-    (mevedel-workspace-memory-observation workspace)))
-
 (defun mevedel-memory-list--entry (item _context)
   "Return ITEM's table row."
   (let ((proposal (plist-get item :proposal)))
