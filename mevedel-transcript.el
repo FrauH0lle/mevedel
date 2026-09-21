@@ -1555,6 +1555,11 @@ thinking blocks or user turns."
                   (and (eq type 'user)
                        (or (and (eq prev-type 'response)
                                 (eq next-type 'ignored)
+                                ;; Guest attribution follows a real prompt too.
+                                (not (string-match-p
+                                      "\\`[ \t\r\n]*\\*+ "
+                                      (buffer-substring-no-properties
+                                       (cadr seg) (caddr seg))))
                                 (string-match-p
                                  "\\`[ \t\r\n]*<!-- mevedel-hook-audit -->"
                                  (buffer-substring-no-properties

@@ -433,7 +433,9 @@ The closed resource resolver accepts the eight documented `scheme://` families
 without adding a model-facing tool. The operation matrix is deliberately
 narrow: `Read` accepts every family; `Glob` and `Grep` accept `work://`,
 `artifact://`, `skill://`, `memory://` (including `memory://journal/`),
-`history://saved/`, and `mevedel://`;
+`history://saved/`, and `mevedel://`. `Grep` also searches the current projected
+transcript at `history://root` and `history://root/PATH`, with Read-compatible
+line references;
 `ApplyPatch` accepts `work://`, explicit memory file descendants, and ordinary
 filesystem paths. Unsupported combinations fail
 explicitly. Bare addresses list only when the family defines a discovery

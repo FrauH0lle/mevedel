@@ -4,7 +4,7 @@
   body[data-reading] .dock:not(:focus-within) { padding-top: .9rem; }
   body[data-reading] .dock:not(:focus-within) :is(#session-box, #artifacts,
     #own-queue, .disclosure, .skill-chips, .composer-scope, .attachments,
-    .queue-state, .composer-name, #attach-button, #send-button,
+    .queue-state, .name-field, .composer-label, #attach-button, #send-button,
     .composer-spacer) {
     display: none;
   }
@@ -33,7 +33,7 @@
   color: inherit;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--control-radius);
   padding: 0 .4rem;
   cursor: pointer;
 }
@@ -45,7 +45,7 @@
 }
 
 /* The sheets wear the panel idiom rather than inventing a second one:
-   the same monospace accent title, muted note, hairline, and rem sizes
+   the same accent title, muted note, hairline, and rem sizes
    the rest of the dock uses. */
 .sheet {
   width: min(30rem, calc(100vw - 2rem));
@@ -71,7 +71,7 @@
 
 .sheet-title {
   margin: 0;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-ui);
   font-size: .85rem;
   font-weight: 700;
   color: var(--accent);

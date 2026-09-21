@@ -9,7 +9,7 @@
   max-width: 28rem;
 }
 .artifact-name {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-ui);
   font-size: .8rem;
   font-weight: 700;
   color: var(--accent);

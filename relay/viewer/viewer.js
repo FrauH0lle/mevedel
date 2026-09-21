@@ -3,6 +3,7 @@
 
 (() => {
   const transcript = document.getElementById('transcript');
+  const emptyState = document.getElementById('empty-state');
   const connection = document.getElementById('connection');
   const notice = document.getElementById('notice');
   const liveButton = document.getElementById('live-button');
@@ -47,7 +48,7 @@
     unseen: new Set(),
     busy: null,
     roster: [],
-    armed: null,
+    armed: [],
     model: null,
     mode: null,
     plan: false,
@@ -99,6 +100,11 @@
       editing.connection(false);
     }
     renderModeline();
+    renderEmptyState();
+  }
+
+  function renderEmptyState() {
+    emptyState.hidden = !state.connected || !!state.staging || state.records.size > 0;
   }
 
   function showNotice(text) {
@@ -225,6 +231,7 @@
     else root.setAttribute('data-theme', theme);
     // Artifacts render in an opaque-origin frame: the stamp is forwarded.
     artifacts.setTheme(theme === 'system' ? null : theme);
+    editing.setTheme(theme);
     if (themeButton) {
       themeButton.textContent = THEME_GLYPH[theme];
       themeButton.setAttribute('aria-label', THEME_LABEL[theme]);
@@ -272,6 +279,7 @@
       updateRecordElement(record, previous.get(record.id));
     });
     refreshFilter();
+    editing.refreshConversation();
     markContinuations();
     if (follow) scrollToLive();
     updateLiveAffordance();
@@ -291,6 +299,8 @@
   }
 
   function removeRecords(ids) {
+    const itemHistoryChanged = (Array.isArray(ids) ? ids : [])
+      .some(id => state.records.get(id)?.shared?.itemId);
     (Array.isArray(ids) ? ids : []).forEach(id => {
       state.records.delete(id);
       const turn = state.elements.get(id);
@@ -298,6 +308,7 @@
       state.elements.delete(id);
     });
     refreshFilter();
+    if (itemHistoryChanged) editing.refreshConversation();
     markContinuations();
   }
 
@@ -322,6 +333,7 @@
   }
 
   function refreshFilter() {
+    renderEmptyState();
     if (filterNav) {
       const ids = [];
       const counts = {all: 0, main: 0};
@@ -378,7 +390,7 @@
     artifacts.render(state.records);
     editing.conversation();
     // The composer follows the filter, so say where a prompt will land.
-    if (composerInput && !state.armed) {
+    if (composerInput && !state.armed.length) {
       composerInput.placeholder = placeholderForFilter();
     }
     renderComposerScope();
@@ -396,16 +408,22 @@
     if (!composerScope) return;
     composerScope.replaceChildren();
     const scoped = state.filter !== 'all' && state.filter !== 'main';
-    if (state.armed) {
+    if (state.armed.length) {
       composerScope.hidden = false;
       composerScope.className = 'composer-scope armed';
-      composerScope.append(
-        `Runs ${sigilFor(state.armed.kind)}${state.armed.name}`);
-      const clear = el('button', 'scope-clear', '✕');
-      clear.type = 'button';
-      clear.setAttribute('aria-label', 'Cancel this command');
-      clear.addEventListener('click', () => setArmedInvocation(null));
-      composerScope.append(clear);
+      state.armed.forEach(entry => {
+        const chip = el('span', 'scope-selection',
+          `${entry.kind === 'skill' ? 'Uses' : 'Runs'} ${sigilFor(entry.kind)}${entry.name}`);
+        const clear = el('button', 'scope-clear', '✕');
+        clear.type = 'button';
+        clear.setAttribute('aria-label', `Remove ${sigilFor(entry.kind)}${entry.name}`);
+        clear.addEventListener('click', () => {
+          setArmedInvocation(state.armed.filter(item => item !== entry));
+          composerInput.focus();
+        });
+        chip.append(clear);
+        composerScope.append(chip);
+      });
       return;
     }
     composerScope.className = 'composer-scope';
@@ -460,6 +478,7 @@
       });
       const custom = el('input', 'request-feedback');
       custom.type = 'text';
+      custom.autocomplete = 'off';
       custom.placeholder = 'Custom answer…';
       custom.setAttribute('aria-label', `Custom answer ${index + 1}`);
       custom.addEventListener('input', () => {
@@ -558,6 +577,7 @@
       const feedbackRow = el('div', 'request-controls');
       const feedback = el('input', 'request-feedback');
       feedback.type = 'text';
+      feedback.autocomplete = 'off';
       feedback.placeholder = 'Feedback…';
       feedback.setAttribute('aria-label', 'Feedback');
       const sendFeedback = el('button', 'btn quiet', 'Send feedback');
@@ -785,27 +805,24 @@
     sessions.setVisible(visible);
   }
 
-  // The welcome's host-curated roster is the whole discovery surface,
-  // offered inside the Session menu. Tapping a chip arms the
-  // invocation, closes the menu and focuses the composer rather than
-  // sending: most commands and skills take arguments, and an immediate
-  // send gives no chance to supply them. The armed name travels as its
-  // own frame field, so composer text is never parsed for a sigil.
+  // The host roster is the discovery surface. Skills combine in one
+  // message; a slash command is a single action. Selection never sends.
   function sigilFor(kind) {
     return kind === 'skill' ? '$' : '/';
   }
 
-  function setArmedInvocation(entry) {
-    state.armed = entry || null;
-    if (entry && sessionBox) sessionBox.open = false;
-    if (composerScope) renderComposerScope();
+  function setArmedInvocation(entries) {
+    state.armed = entries || [];
+    renderComposerScope();
     if (composerInput) {
-      composerInput.placeholder = entry
-        ? (entry.hint
-           ? `Arguments for ${sigilFor(entry.kind)}${entry.name} — ${entry.hint}`
-           : `${sigilFor(entry.kind)}${entry.name} — no arguments needed`)
-        : placeholderForFilter();
-      if (typeof composerInput.focus === 'function') composerInput.focus();
+      const entry = state.armed[0];
+      composerInput.placeholder = state.armed.length > 1
+        ? 'Message for the selected skills…'
+        : entry
+          ? (entry.hint
+             ? `Arguments for ${sigilFor(entry.kind)}${entry.name} — ${entry.hint}`
+             : `${sigilFor(entry.kind)}${entry.name} — no arguments needed`)
+          : placeholderForFilter();
     }
     renderSkillChips();
   }
@@ -818,7 +835,7 @@
       commandsSummary.textContent = plural(state.roster.length, 'command');
     }
     state.roster.forEach(entry => {
-      const armed = state.armed && state.armed.name === entry.name;
+      const armed = state.armed.includes(entry);
       const chip = el('button', `skill-chip${armed ? ' armed' : ''}`,
                       `${sigilFor(entry.kind)}${entry.name}`);
       chip.type = 'button';
@@ -828,7 +845,15 @@
         `${armed ? 'Cancel' : 'Prepare'} ${sigilFor(entry.kind)}${entry.name}`
         + (entry.hint ? ` — arguments: ${entry.hint}` : ' — takes no arguments'));
       chip.addEventListener('click', () => {
-        setArmedInvocation(armed ? null : entry);
+        const selected = state.armed.filter(item => item.kind === 'skill');
+        if (!armed && entry.kind === 'skill' && selected.length >= 6) {
+          flashNotice('Select up to six skills for one message.');
+          return;
+        }
+        setArmedInvocation(armed
+          ? state.armed.filter(item => item !== entry)
+          : entry.kind === 'skill' ? [...selected, entry] : [entry]);
+        skillChips.children[state.roster.indexOf(entry)].focus({preventScroll: true});
       });
       skillChips.append(chip);
     });
@@ -842,8 +867,7 @@
         kind: entry.kind === 'skill' ? 'skill' : 'command',
         hint: typeof entry.hint === 'string' ? entry.hint : null,
       }));
-    state.armed = null;
-    renderSkillChips();
+    setArmedInvocation([]);
     summarizeSession('commands',
       state.roster.length ? plural(state.roster.length, 'command') : '');
   }
@@ -1041,17 +1065,18 @@
       try {
         await attachmentWork;
         // An armed invocation may legitimately carry no arguments.
-        if (!text.trim() && !pendingFiles.length && !armed) return;
+        if (!text.trim() && !pendingFiles.length && !armed.length) return;
         if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
           flashNotice('Prompt too large.');
           return;
         }
         localStorage.setItem('mevedel-guest-name', name);
         const frame = {t: 'prompt', name};
-        if (armed) {
+        if (armed.length) {
           // The name travels as its own field; the host resolves the
           // sigil and validates against its allowlist. Text is arguments.
-          frame.invoke = armed.name;
+          if (armed[0].kind === 'skill') frame.skills = armed.map(entry => entry.name);
+          else frame.invoke = armed[0].name;
           frame.text = text.trim();
         } else {
           frame.text = text.trim() || 'See the attached file.';
@@ -1074,7 +1099,7 @@
         if (composerInput.value === text) composerInput.value = '';
         removeAttachments(submittedFiles);
         // One tap, one invocation: disarm so the next send is a prompt.
-        if (state.armed === armed && armed) setArmedInvocation(null);
+        if (state.armed === armed && armed.length) setArmedInvocation(null);
       } finally {
         submitting = false;
       }

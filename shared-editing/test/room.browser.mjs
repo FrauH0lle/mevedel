@@ -142,6 +142,9 @@ test(
       }
       await pages[0].locator('#composer-input').fill('> Browser draft\nsecond line');
       const chatPage = pages[0];
+      // The room's explicit theme crosses the opaque iframe boundary on open.
+      await chatPage.locator('#theme-button').click();
+      await chatPage.locator('#theme-button').click();
       const openingTab = chatPage.waitForEvent('popup');
       await chatPage.locator('[data-create-editor="whiteboard"]').click();
       pages[0] = await openingTab;
@@ -153,6 +156,11 @@ test(
       await pages[0].locator('#editing-box').evaluate((e) => (e.open = true));
       const frame = (p) => p.frameLocator('#editing-body iframe');
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
+      assert.equal(await frame(pages[0]).locator('html').getAttribute('data-theme'), 'dark');
+      // Programmatic click reaches the room control under the editor panel,
+      // exercising the same live theme forwarding without replacing the iframe.
+      await pages[0].locator('#theme-button').evaluate(button=>button.click());
+      await until(async () => (await frame(pages[0]).locator('html').getAttribute('data-theme')) === null);
       await pages[0].evaluate(() => window.dispatchEvent(new Event('focus')));
       assert.match(await pages[0].title(), /Whiteboard/);
       await until(async () => (await pages[1].locator('#editing-items button').count()) === 1);

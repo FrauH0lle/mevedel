@@ -238,6 +238,27 @@ persisted enablement when supplied."
 (mevedel-deftest mevedel-skills-plan-user-input ()
   ,test
   (test)
+  :doc "combines only explicitly selected skills while argument tokens stay literal"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "selected-skills-" t))
+         (alpha (mevedel-skills-plan-test--skill root "alpha"))
+         (beta (mevedel-skills-plan-test--skill root "beta"))
+         (gamma (mevedel-skills-plan-test--skill root "gamma"))
+         (session (mevedel-skills-plan-test--session alpha beta gamma))
+         (text "$gamma should stay literal"))
+    (unwind-protect
+        (let ((plan (mevedel-skills-plan-user-input
+                     text session '("alpha" "beta"))))
+          (should (equal '("alpha" "beta")
+                         (mevedel-skills-plan-test--names
+                          (mevedel-skill-invocation-plan-entries plan))))
+          (should (equal text (mevedel-skill-invocation-plan-arguments plan)))
+          (should (equal "$alpha $beta $gamma should stay literal"
+                         (mevedel-skill-invocation-plan-text plan)))
+          (should-error (mevedel-skills-plan-user-input
+                         text session '("missing")) :type 'user-error))
+      (delete-directory root t)))
+
   :doc "classifies prose mentions as ordered, deduplicated instructions"
   (let* ((mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skill-plan-" t))

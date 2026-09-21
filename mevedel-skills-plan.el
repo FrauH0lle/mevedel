@@ -271,7 +271,7 @@ the leading command forks."
      :arguments-start (plist-get classification :arguments-start)
      :fork-p (plist-get classification :fork-p))))
 
-(defun mevedel-skills-plan-user-input (text session)
+(defun mevedel-skills-plan-user-input (text session &optional selected-skills)
   "Return a deterministic user skill invocation plan for TEXT and SESSION.
 
 The plan preserves every recognized occurrence and exposes unique command and
@@ -281,15 +281,27 @@ deduplicated, with a command entry winning over instruction occurrences of the
 same source.
 
 Unknown names and escaped, quoted, or code-span syntax are not planned.
-Malformed atomic binding data signals a `user-error'."
+Malformed atomic binding data signals a `user-error'.
+When SELECTED-SKILLS is non-nil, plan only those explicit names with TEXT
+as their literal arguments; tokens inside TEXT carry no skill authority."
   (unless (mevedel-mention-bindings-valid-p text)
     (user-error "Malformed mention binding"))
-  (let ((resolved (mevedel-skills-plan--resolve text session)))
-    (mevedel-skills-plan--build
-     text
-     (mevedel-skills-plan--classify
-      text (plist-get resolved :tokens))
-     (plist-get resolved :unavailable))))
+  (let* ((prefix (when selected-skills
+                   (concat (mapconcat (lambda (name) (concat "$" name))
+                                      selected-skills " ") " ")))
+         (resolved (mevedel-skills-plan--resolve (or prefix text) session))
+         (tokens (plist-get resolved :tokens))
+         (input (if prefix (concat prefix text) text)))
+    (when (and selected-skills
+               (/= (length selected-skills) (length tokens)))
+      (user-error "A selected skill is no longer available"))
+    (let ((classification (mevedel-skills-plan--classify input tokens)))
+      (when prefix
+        (setq classification (plist-put classification :arguments text))
+        (setq classification
+              (plist-put classification :arguments-start (length prefix))))
+      (mevedel-skills-plan--build
+       input classification (plist-get resolved :unavailable)))))
 
 (defun mevedel-skills-plan-replace-instructions
     (text occurrences &optional source-offset)

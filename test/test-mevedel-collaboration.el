@@ -840,6 +840,10 @@
                    (mapcar (lambda (entry) (plist-get entry :input))
                            (mevedel-view--drop-disallowed-guest-skills
                             session))))
+    ;; Losing admission for any selected skill drops the entire message.
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "combined" :guest-skills ("missing")
+                          :guest-role full))
     ;; Nothing to drop leaves the queue untouched and quiet.
     (should (= 3 (length (mevedel-view--drop-disallowed-guest-skills
                           session))))))

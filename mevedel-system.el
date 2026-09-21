@@ -592,7 +592,9 @@ present."
       (push (concat "- `history://` - conversation history. "
                     (when (seq-some (lambda (entry) (plist-get entry :history-p))
                                     (plist-get metadata :agents))
-                      "Read `history://root` for the main conversation or `history://root/PATH` for a retained agent conversation. ")
+                      (concat
+                       "Read/Grep `history://root` for the main conversation or `history://root/PATH` for a retained agent conversation. "
+                       "In scoped conversations, retrieve relevant earlier decisions here when the request needs broader context. "))
                     (when (plist-get metadata :saved-history-p)
                       "Read/Glob/Grep `history://saved` for saved workspace conversations; narrow by the session/segment paths returned there."))
             lines))

@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
+    <link rel="stylesheet" href="/viewer-theme.css">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
     <link rel="stylesheet" href="/viewer-session.css">
@@ -16,6 +17,7 @@
     <link rel="apple-touch-icon" href="/icon.png">
   </head>
   <body>
+    <a class="skip-link" href="#transcript">Skip to transcript</a>
     <header class="topbar">
       <div class="wordmark">MevView<small id="session-label">live session</small></div>
       <button id="theme-button" class="bell" type="button"
@@ -26,7 +28,11 @@
               aria-label="Notifications off">🔔</button>
       <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
     </header>
-    <main id="transcript" class="ledger" aria-live="polite"
+    <section id="empty-state" class="empty-state" aria-label="Empty conversation" hidden>
+      <h1>No messages yet</h1>
+      <p>The shared conversation will appear here. Open Session to find shared documents and whiteboards.</p>
+    </section>
+    <main id="transcript" class="ledger" tabindex="-1" aria-live="polite"
           aria-label="Shared session transcript"></main>
     <section id="agent-panel" class="viewer-panel" hidden
              role="dialog" aria-label="Sub-agent transcript">
@@ -83,7 +89,7 @@
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
           </details>
           <details id="editing-box" class="dock-submenu" hidden><summary>Shared</summary>
-            <div class="editing-create" aria-label="Create shared content">
+            <div class="editing-create" role="group" aria-label="Create shared content">
               <button class="btn" data-create-editor="whiteboard" type="button">＋ Whiteboard</button>
               <button class="btn" data-create-editor="document" type="button">＋ Document</button>
               <button id="editing-import" class="btn quiet" type="button">Import</button>
@@ -94,7 +100,7 @@
           <div class="dock-actions">
             <button id="new-session-button" class="btn quiet" type="button" hidden
                     title="Start a separate session — this room stays open"
-                    aria-label="New session">＋ Session</button>
+                    aria-label="New session"><span aria-hidden="true">＋</span> Session</button>
             <button id="rooms-button" class="btn quiet" type="button" hidden
                     title="Other rooms this browser can get back to"
                     aria-label="Rooms">Rooms</button>
@@ -104,27 +110,29 @@
           </div>
         </div>
       </details>
-      <div id="requests" class="requests" aria-label="Pending interactions"></div>
-      <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
-      <div id="invites" class="own-queue" aria-label="Rooms you can join" hidden></div>
+      <div id="requests" class="requests" role="region" aria-label="Pending interactions"></div>
+      <div id="own-queue" class="own-queue" role="region" aria-label="Your queued prompts" hidden></div>
+      <div id="invites" class="own-queue" role="region" aria-label="Rooms you can join" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>
-      <form id="composer" class="composer" hidden>
+      <form id="composer" class="composer" autocomplete="off" hidden>
         <p id="queue-state" class="queue-state" role="status" hidden></p>
         <p id="composer-scope" class="composer-scope" hidden></p>
+        <label class="composer-label" for="composer-input">Message</label>
         <textarea id="composer-input" class="composer-input" rows="2"
                   placeholder="Queue a follow-up for the session…"
                   aria-label="Prompt"></textarea>
         <div id="attachments" class="attachments"></div>
         <div class="composer-row">
+          <div class="name-field"><label for="composer-name">Display name</label>
           <input id="composer-name" class="composer-name" type="text"
                  maxlength="32" placeholder="Your name"
                  title="Shown beside your prompts in the transcript"
-                 aria-label="Display name">
+                 aria-label="Display name"></div>
           <input id="image-input" type="file" multiple hidden
                  accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
           <button id="attach-button" class="btn quiet" type="button"
                   title="Attach files — images, PDFs, logs and patches"
-                  aria-label="Attach files">📎</button>
+                  aria-label="Attach files">Attach</button>
           <span class="composer-spacer"></span>
           <button id="stop-button" class="btn danger" type="button"
                   title="Stop the running turn in Emacs">Interrupt</button>
@@ -133,7 +141,7 @@
         </div>
       </form>
       <dialog id="new-session" class="sheet" aria-labelledby="new-session-title">
-        <form id="new-session-form" method="dialog" class="sheet-form">
+        <form id="new-session-form" method="dialog" class="sheet-form" autocomplete="off">
           <h2 id="new-session-title" class="sheet-title">New session</h2>
           <p id="new-session-lede" class="sheet-note">A separate room for
           separate work. This room, and everyone in it, stays exactly where

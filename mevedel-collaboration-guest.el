@@ -261,6 +261,16 @@ nil at the end."
        (mevedel-collaboration--policy-admits-p
         (mevedel-collaboration--role-policy role) name)))
 
+(defun mevedel-collaboration--guest-skills-admitted-p (names role session)
+  "Return non-nil when ROLE may apply selected skill NAMES in SESSION."
+  (and (proper-list-p names) names (<= (length names) 6)
+       (= (length names) (length (delete-dups (copy-sequence names))))
+       (cl-every
+        (lambda (name)
+          (and (mevedel-collaboration--guest-invocable-p name role)
+               (eq (mevedel-view-invocation-kind name session) 'skill)))
+        names)))
+
 (defun mevedel-collaboration--guest-roster (room guest)
   "Return the invocations ROOM offers GUEST as JSON-safe descriptors.
 
@@ -704,13 +714,20 @@ FRAME may carry an `:invoke\=' naming an allowlisted command or skill,
 in which case the text is that invocation\='s arguments rather than a
 prompt.  The name travels as its own field and is validated here: guest
 text is never scanned for a sigil, so a pasted log line cannot invoke
-anything."
+anything.  `:skills' carries explicitly selected names applied together
+with literal text, mutually exclusive with `:invoke'."
   (let* ((guest (mevedel-collaboration--guest room peer))
          (role (mevedel-collaboration--guest-role guest))
          (invoke (plist-get frame :invoke))
+         (skills (plist-get frame :skills))
          (text (plist-get frame :text)))
     (when (and invoke
                (not (mevedel-collaboration--guest-invocable-p invoke role)))
+      (cl-return-from mevedel-collaboration--handle-prompt))
+    (when (or (and invoke skills)
+              (and (plist-member frame :skills)
+                   (not (mevedel-collaboration--guest-skills-admitted-p
+                         skills role (plist-get room :session)))))
       (cl-return-from mevedel-collaboration--handle-prompt))
     ;; A bare invocation of a command that would otherwise prompt on the
     ;; host gets the argument the host would have picked first.
@@ -722,7 +739,7 @@ anything."
                (plist-get guest :writable)
                ;; An invocation may carry no arguments at all; a plain
                ;; prompt still has to say something.
-               (or (and invoke (or (null text) (stringp text)))
+               (or (and (or invoke skills) (or (null text) (stringp text)))
                    (mevedel-collaboration--guest-text text)))
       ;; The prompt frame may carry a fresher display name than the hello
       ;; did; the badge should show what the guest typed.
@@ -736,7 +753,7 @@ anything."
       (let ((last (plist-get guest :last-prompt))
             ;; An invocation and a prompt with the same text are
             ;; different sends, so the latch keys on both.
-            (dedup-key (if invoke (format "%s\0%s" invoke (or text "")) text))
+            (dedup-key (list invoke skills text))
             (now (float-time)))
         (when (and last
                    (not (plist-get frame :images))
@@ -786,9 +803,10 @@ anything."
                            :guest-id (plist-get guest :guest-id)
                            :paths paths
                            :invoke invoke
+                           :skills skills
                            :guest-role role
                            :directive-id
-                           (unless invoke
+                           (unless (or invoke skills)
                              (mevedel-collaboration--guest-directive-id
                               room frame))))
                     (when queued

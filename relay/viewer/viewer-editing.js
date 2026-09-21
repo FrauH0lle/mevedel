@@ -19,6 +19,11 @@ window.mevedelEditingView = {
       recovering = false,
       sequence = 0,
       outbound = Promise.resolve();
+    let theme = null, archived = [], conversationTruncated = false, conversationError = null;
+    function setTheme(value) {
+      theme = value === 'light' || value === 'dark' ? value : null;
+      port?.postMessage({ type: 'theme', theme });
+    }
     function reserveTab() {
       if (editorTab) return null;
       const tab = window.open('about:blank', '_blank');
@@ -128,15 +133,46 @@ window.mevedelEditingView = {
         });
       });
     }
+    function setConversationHistory(result) {
+      archived = result.conversation || [];
+      conversationTruncated = Boolean(result.conversationTruncated);
+      conversationError = result.conversationError || null;
+      conversation();
+    }
+    async function refreshConversation() {
+      if (!connected || !current) return;
+      const id = current;
+      try {
+        const result = await request({ action: 'read', id });
+        if (current === id) setConversationHistory(result);
+      } catch (error) {
+        if (current === id) {
+          conversationError = error.message;
+          conversation();
+        }
+      }
+    }
     function conversation() {
       if (!port || !current) return;
-      const records = [];
+      const live = [], questions = new Set();
       let shared;
       for (const record of state.records.values()) {
         if (record.kind === 'user') shared = record.shared;
-        if (shared?.itemId === current) records.push(record);
+        if (shared?.itemId === current) {
+          live.push(record);
+          questions.add(shared.questionId);
+        }
       }
-      port.postMessage({type:'conversation', records,
+      // Compaction preserves a live tail. Prefer its entire question group over
+      // the archived copy, including responses updated after the archive was saved.
+      const records = [];
+      shared = null;
+      for (const record of archived) {
+        if (record.kind === 'user') shared = record.shared;
+        if (shared?.itemId === current && !questions.has(shared.questionId)) records.push(record);
+      }
+      records.push(...live);
+      port.postMessage({type:'conversation', records, conversationTruncated, conversationError,
         own:(state.ownQueue || []).filter(entry => entry.shared?.itemId === current),
         busy:state.busy, paused:state.paused, connected, model:state.model});
     }
@@ -217,6 +253,7 @@ window.mevedelEditingView = {
       port?.close();
       recovering = recoveryOnly;
       current = id;
+      setConversationHistory(result);
       panel.hidden = false;
       document.getElementById('editing-title').textContent = result.title;
       document.title = state.editorTitle = `${result.title} · mevedel`;
@@ -291,6 +328,7 @@ window.mevedelEditingView = {
             draft,
             readOnly: state.readOnly || recoveryOnly,
             online: connected && !recoveryOnly,
+            theme,
             name: state.guestName || 'Participant',
           },
           '*',
@@ -315,6 +353,7 @@ window.mevedelEditingView = {
         }
         if (current) {
           const result = await request({ action: 'read', id: current });
+          setConversationHistory(result);
           if (recovering) await open(current, result);
           else port?.postMessage({
             type: 'sync',
@@ -505,6 +544,6 @@ window.mevedelEditingView = {
           point: null,
         });
     };
-    return { welcome, connection, receive, open, conversation };
+    return { welcome, connection, receive, open, conversation, refreshConversation, setTheme };
   },
 };

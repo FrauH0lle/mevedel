@@ -155,7 +155,7 @@
     (should (equal "history://root" (plist-get parsed :canonical)))
     (should (eq 'session-relative (plist-get parsed :locator-class)))
     (should-not (plist-get parsed :dynamic-p))
-    (dolist (operation '(glob grep apply-patch))
+    (dolist (operation '(glob apply-patch))
       (should-error (mevedel-resource-prepare operation "history://root" nil)
                     :type 'mevedel-resource-error)))
   :doc "decodes one encoded MCP URI component without splitting it"
@@ -797,6 +797,12 @@
                session (list (cons "/root/reviewer" record)))
               (should (equal root-history
                              (read-history "history://root/reviewer")))
+              (dolist (address '("history://root" "history://root/reviewer"))
+                (let ((search (mevedel-resource-execute
+                               (mevedel-resource-prepare
+                                'grep address (list :session session)))))
+                  (should (equal root-history
+                                 (cdar (plist-get search :resource-search-documents))))))
               (let (pages)
                 (dolist (address '("history://root" "history://root/reviewer"))
                   (let* ((attempt (mevedel-resource-prepare

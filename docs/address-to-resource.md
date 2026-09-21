@@ -25,7 +25,7 @@ resource URI.
 | Persisted output | `artifact://`, `artifact://HANDLE` | yes | yes | yes | no |
 | Skill package | `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` | yes | yes | yes | no |
 | Retained agent | `agent://`, `agent://root/PATH[#POINTER]` | yes | no | no | no |
-| Conversation history | `history://`, `history://root`, `history://root/PATH` | yes | no | no | no |
+| Conversation history | `history://`, `history://root`, `history://root/PATH` | yes | no | concrete root/path | no |
 | Saved workspace conversations | `history://saved[/SESSION[/SEGMENT]]` | yes | yes | yes | no |
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | explicit file descendants |
 | Workspace journal | `memory://journal/`, `memory://journal/FILE` | yes | yes | yes | no |
@@ -276,6 +276,13 @@ provider bookkeeping, and persistence scaffolding. History is observational
 and cannot rewrite the transcript. Both addresses retain the existing tool
 output truncation and Read offset/limit behavior. They project the current
 conversation representation, without traversing pre-compaction archives.
+Grep accepts either concrete address and searches exactly that Read projection,
+including unsaved content, with matching line references. Bare `history://`
+is a Read-only discovery listing. A directive or shared-item conversation can
+retrieve relevant parent decisions this way without including the entire room
+in every request. The resource catalog advertises availability; the model
+chooses a search or read when the task needs it. Addresses grant neither new
+permissions nor cross-session access.
 
 `history://saved` searches saved conversations across the current workspace.
 Read or Glob lists sources; adding a returned SESSION narrows discovery, and

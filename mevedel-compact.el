@@ -580,7 +580,8 @@ state machine."
            (unwind-protect
                (funcall continue)
              (set-marker late-tail-start nil))))
-      (if (or (and (listp context)
+      (if (or (plist-get info :mevedel-shared-item)
+              (and (listp context)
                    (plist-get context :mevedel-context-summary))
               (not (buffer-live-p source-buffer)))
           (continue-with-snapshot)

@@ -338,8 +338,55 @@ async function testTransportGiveUp() {
   assert.equal(retry, null);
 }
 
+async function testItemConversations() {
+  const nodes = new Map(), messages = [], state = {records:new Map(), ownQueue:[]};
+  const user = (id, item, question) => ({id,kind:'user',shared:{itemId:item,questionId:question}});
+  const answer = (id, text) => ({id,kind:'assistant',text});
+  const old = [user('old','doc','old-q'),answer('old-a','Archived answer')];
+  const tail = [user('tail','doc','tail-q'),answer('tail-a','Old tail answer')];
+  let archived = [...old,...tail], failure = false, api;
+  const context = {
+    URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
+    localStorage:{length:0,getItem:()=>null},
+    document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
+    window:{location:{href:'http://localhost/?shared=doc',hash:''},history:{replaceState(){}},
+      mevedelViewerTransport:{parseFragment:()=>null}},
+    MessageChannel:class {constructor(){this.port1={postMessage:m=>messages.push(m),close(){}};this.port2={};}},
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
+  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
+    send:async frame=>{
+      const args=JSON.parse(Buffer.from(frame.data,'base64').toString());
+      const result=args.action==='list' ? [{id:'doc',kind:'document',title:'Notes'}]
+        : {id:'doc',kind:'document',title:'Notes',conversation:archived,
+           conversationError:failure?'Missing archive':null,conversationTruncated:failure};
+      const data=Buffer.from(JSON.stringify({result})).toString('base64');
+      api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
+      return true;
+    }});
+  for(const r of [user('room','room','room-q'),answer('room-a','Room secret'),
+    ...tail.slice(0,1),answer('tail-a','Updated tail answer'),
+    user('board','board','board-q'),answer('board-a','Board secret')]) state.records.set(r.id,r);
+  await api.welcome();
+  const latest=()=>messages.filter(m=>m.type==='conversation').at(-1);
+  assert.deepEqual(Array.from(latest().records,r=>r.id),['old','old-a','tail','tail-a']);
+  assert.equal(latest().records.at(-1).text,'Updated tail answer');
+  // A compacted snapshot removes old live messages: refill from canonical archives.
+  state.records.clear();
+  archived.push(user('new','doc','new-q'),answer('new-a','New archived answer'));
+  await api.refreshConversation();
+  assert.equal(latest().records.at(-1).text,'New archived answer');
+  failure=true;
+  await api.refreshConversation();
+  assert.equal(latest().conversationError,'Missing archive');
+  assert.equal(latest().conversationTruncated,true);
+  api.connection(false);
+  assert.equal(latest().connected,false);
+}
+
 async function main() {
   await runNotificationTests();
+  await testItemConversations();
   await testTransportLifecycle();
   await testTransportGiveUp();
   // Shared known-answer vector, mirrored by the ERT crypto suite: 32
@@ -384,7 +431,7 @@ async function main() {
                'artifacts', 'artifact-panel', 'artifact-title',
                'artifact-meta', 'artifact-tab', 'artifact-download',
                'artifact-close', 'artifact-body',
-               'theme-button', 'modeline',
+               'theme-button', 'modeline', 'empty-state',
                'session-box', 'session-summary',
                'tasks-list', 'agents-done-list',
                'new-session-button', 'new-session', 'new-session-form',
@@ -692,7 +739,8 @@ async function main() {
   // through final-flagged chunks with live updates queued behind it.
   await deliver({t: 'welcome', proto: 3, readOnly: false, recordCount: 3,
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
-                            {name: 'review', kind: 'skill', hint: '[target]'}]});
+                            {name: 'review', kind: 'skill', hint: '[target]'},
+                            {name: 'design', kind: 'skill', hint: '[brief]'}]});
   await waitFor(() => first.sent.length === 2, 'shared item catalog request');
   const catalogRequest = await unseal(key, first.sent[1]);
   assert.equal(catalogRequest.t, 'editing');
@@ -710,14 +758,15 @@ async function main() {
   // The roster renders with each namespace's own sigil.
   assert.equal(nodes['skill-chips'].hidden, false);
   assert.equal(nodes['commands-box'].hidden, false);
-  assert.equal(nodes['commands-summary'].textContent, '2 commands');
-  assert.equal(nodes['skill-chips'].children.length, 2);
+  assert.equal(nodes['commands-summary'].textContent, '3 commands');
+  assert.equal(nodes['skill-chips'].children.length, 3);
   assert.equal(textOf(nodes['skill-chips'].children[0]), '/plan');
   // Every control says what it does on hover.
   assert.match(nodes['skill-chips'].children[0].attributes.title,
                /Prepare \/plan.*\[prompt\]/);
   assert.match(nodes['theme-button'].attributes.title, /Colour theme/);
   assert.equal(textOf(nodes['skill-chips'].children[1]), '$review');
+  assert.equal(nodes['empty-state'].hidden, true, 'loading is not an empty session');
   await deliver({t: 'snapshot-chunk', final: false, records: [
     {id: 'assistant', kind: 'assistant', revision: 0,
      text: 'Some **bold** and `inline` text.\n\n```elisp\n(defun demo ()\n  "doc")\n```'},
@@ -1061,7 +1110,7 @@ async function main() {
   assert.equal(nodes['agents-done-list'].children.length, 1);
   assert.equal(nodes['session-box'].hidden, false);
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · 1 agent · 1 finished · invite · Shared');
+               'Session · 3 commands · 1 agent · 1 finished · invite · Shared');
   const agentFetchBefore = first.sent.length;
   nodes.agents.children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
@@ -1077,7 +1126,7 @@ async function main() {
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · invite · Shared');
+               'Session · 3 commands · invite · Shared');
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
@@ -1108,13 +1157,13 @@ async function main() {
     {path: '/root/worker-1', role: 'worker', status: 'blocked'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · invite · Shared');
+               'Session · 3 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · invite · Shared');
   await deliver({t: 'tasks', total: 1, completed: 0, omitted: 0,
     omittedActive: 0, tasks: [
     {id: 1, subject: 'Still going', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · 1 agent · 0/1 tasks · invite · Shared');
+               'Session · 3 commands · 1 agent · 0/1 tasks · invite · Shared');
   assert.equal(nodes['session-summary'].dataset.warning, 'true');
   await deliver({t: 'agents', agents: []});
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
@@ -1122,14 +1171,14 @@ async function main() {
   await deliver({t: 'tasks', total: 0, completed: 0, omitted: 0,
     omittedActive: 0, tasks: []});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · invite · Shared');
+               'Session · 3 commands · invite · Shared');
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // The superseded tasks-only frame is rejected instead of inferred.
   await deliver({t: 'tasks', tasks: [
     {id: 1, subject: 'Legacy task', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · invite · Shared');
+               'Session · 3 commands · invite · Shared');
   assert.equal(nodes['tasks-list'].children.length, 0);
 
   // Routed artifact frames likewise reach the artifact controller.
@@ -1178,10 +1227,12 @@ async function main() {
 
   // Tapping a chip arms the invocation and waits for arguments rather
   // than sending: it is the argument-bearing commands that need this.
+  nodes['session-box'].open = true;
   const skillBefore = first.sent.length;
   nodes['skill-chips'].children[0].dispatch('click');
   await tick();
   assert.equal(first.sent.length, skillBefore);
+  assert.equal(nodes['session-box'].open, true);
   assert.match(nodes['composer-input'].placeholder, /\[prompt\]/);
   assert.match(textOf(nodes['composer-scope']), /Runs \/plan/);
   // Sending carries the name as its own field, never a parsed sigil.
@@ -1199,11 +1250,37 @@ async function main() {
   nodes.composer.dispatch('submit');
   await waitFor(() => first.sent.length === skillBefore + 2, 'bare invocation');
   assert.deepEqual(await unseal(key, first.sent[skillBefore + 1]),
-                   {t: 'prompt', name: 'roland', invoke: 'review', text: ''});
+                   {t: 'prompt', name: 'roland', skills: ['review'], text: ''});
   // Tapping the armed chip again disarms it.
   nodes['skill-chips'].children[0].dispatch('click');
   nodes['skill-chips'].children[0].dispatch('click');
   assert.equal(nodes['composer-scope'].hidden, true);
+
+  // Multiple skills share one prompt; removing one preserves the draft.
+  nodes['skill-chips'].children[1].dispatch('click');
+  nodes['skill-chips'].children[2].dispatch('click');
+  assert.equal(nodes['session-box'].open, true);
+  assert.equal(nodes['composer-scope'].children.length, 2);
+  nodes['composer-input'].value = 'A draft with literal $unselected';
+  nodes['composer-scope'].children[0].children[0].dispatch('click');
+  assert.equal(nodes['composer-input'].value, 'A draft with literal $unselected');
+  assert.equal(nodes['composer-scope'].children.length, 1);
+  nodes['skill-chips'].children[1].dispatch('click');
+  const combinedBefore = first.sent.length;
+  nodes.composer.dispatch('submit');
+  await waitFor(() => first.sent.length === combinedBefore + 1, 'combined skills');
+  assert.deepEqual(await unseal(key, first.sent[combinedBefore]),
+    {t: 'prompt', name: 'roland', skills: ['design', 'review'],
+     text: 'A draft with literal $unselected'});
+  assert.equal(nodes['composer-scope'].hidden, true);
+  nodes['skill-chips'].children[1].dispatch('click');
+  nodes['skill-chips'].children[0].dispatch('click');
+  assert.match(textOf(nodes['composer-scope']), /Runs \/plan/);
+  assert.equal(nodes['composer-scope'].children.length, 1);
+  nodes['skill-chips'].children[2].dispatch('click');
+  assert.match(textOf(nodes['composer-scope']), /Uses \$design/);
+  assert.equal(nodes['composer-scope'].children.length, 1);
+  nodes['skill-chips'].children[2].dispatch('click');
 
   // Notifications are opt-in through the bell and fire only while the
   // tab is hidden: turn settlement (busy true -> false) and interaction
@@ -1627,6 +1704,13 @@ async function main() {
   }
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
+  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question']});
+  assert.equal(nodes['empty-state'].hidden, false, 'removing the final turn restores the empty state');
+  await deliverTo(sockets[1], {t:'record',record:{id:'first-message',kind:'assistant',text:'Ready'}});
+  assert.equal(nodes['empty-state'].hidden, true, 'the first turn replaces the empty state');
+  await deliverTo(sockets[1], {t:'remove',ids:['first-message']});
+  assert.equal(nodes['empty-state'].hidden, false);
+
   // Bye ends the session: no reconnect, composer gone.
   timer = null;
   sockets[1].dispatch('message', {data: await seal(key, 1, {t: 'bye', reason: 'user-stop'})});
@@ -1634,6 +1718,7 @@ async function main() {
   releaseBitmap();
   await staleAttachment;
   assert.equal(nodes.composer.hidden, true);
+  assert.equal(nodes['empty-state'].hidden, true, 'an ended session is not presented as empty');
   assert.equal(nodes['new-session-button'].hidden, true);
   // An ended room's link is dead, so offering to pass it on would lie.
   assert.equal(nodes['invite-button'].hidden, true);

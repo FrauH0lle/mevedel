@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/viewer-theme.css">
     <title>Shared editor</title>
     <link rel="stylesheet" href="/shared-editor.css" />
   </head>
@@ -56,6 +58,8 @@
       <div class="assistant-head"><nav aria-label="Discussion views"><button id="assistant-tab" type="button" aria-pressed="true">Assistant</button><button id="comments-tab" type="button" aria-pressed="false">Comments</button></nav><button id="assistant-close" type="button" aria-label="Close assistant">×</button></div>
       <div id="conversation-state" role="status">Ready</div>
       <div id="assistant-scroll">
+      <p id="conversation-context" class="conversation-context">This item has its own conversation. Earlier room context can be retrieved when needed.</p>
+      <div id="conversation-history-notice" class="conversation-context" role="status" hidden></div>
         <section id="comments-section" hidden><label><input id="show-resolved" type="checkbox" /> Show resolved</label><p id="comments-empty">Select text and choose Add comment to start a discussion.</p><div id="comments"></div></section>
         <div id="conversation" role="log" aria-label="Conversation about this item"></div>
         <div id="queued-questions"></div>
@@ -67,14 +71,14 @@
           <details><summary>Full attached context</summary><pre id="context-detail"></pre></details>
           <button id="refresh-context" type="button">Refresh context</button>
         </details>
-        <form id="ask">
+        <form id="ask" autocomplete="off">
           <label id="compose-label" for="question">Ask the assistant</label>
           <textarea id="question" aria-label="Question for the assistant" placeholder="Ask a question or give an instruction…" maxlength="10000" rows="3" required></textarea>
           <button id="question-send" type="submit">Send to assistant</button>
         </form>
         <small class="shared-notice">Questions and answers are shared with everyone in this room.</small>
       </div>
-      <form id="comment-form" class="assistant-compose" hidden>
+      <form id="comment-form" class="assistant-compose" autocomplete="off" hidden>
         <label for="comment-text">New comment · private until posted</label>
         <blockquote id="comment-quote"></blockquote>
         <button id="comment-refresh" type="button">Refresh passage</button>

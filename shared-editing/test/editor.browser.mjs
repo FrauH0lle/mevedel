@@ -25,7 +25,7 @@ test('editor interaction regressions', async (t) => {
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const browser = await chromium.launch({ headless: true });
-  async function open(kind = 'whiteboard', viewport = { width: 1000, height: 700 }, assistantDraft) {
+  async function open(kind = 'whiteboard', viewport = { width: 1000, height: 700 }, assistantDraft, theme) {
     const page = await browser.newPage({ viewport });
     const created = await handle({
       action: 'create',
@@ -46,7 +46,7 @@ test('editor interaction regressions', async (t) => {
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.evaluate(
-      ({item, assistantDraft}) => {
+      ({item, assistantDraft, theme}) => {
         const channel = new MessageChannel();
         window.port = channel.port1;
         window.messages = [];
@@ -66,23 +66,58 @@ test('editor interaction regressions', async (t) => {
         document
           .querySelector('iframe')
           .contentWindow.postMessage(
-            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly: false, name: 'Alice' },
+            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly: false, name: 'Alice', theme },
             '*',
             [channel.port2],
           );
       },
-      {item:{ ...state, crdt: state.crdt }, assistantDraft},
+      {item:{ ...state, crdt: state.crdt }, assistantDraft, theme},
     );
     const frame = page.frameLocator('iframe');
     await frame.locator(kind === 'whiteboard' ? '#scene [data-shape]' : '.tiptap').waitFor();
     return { page, frame };
   }
   try {
+    await t.test('editor theme follows its trusted port without losing document or question drafts', async () => {
+      const {page, frame} = await open('document', {width:1280,height:800}, undefined, 'dark');
+      assert.equal(await frame.locator('html').getAttribute('data-theme'), 'dark');
+      await frame.locator('.tiptap').click();
+      await page.keyboard.type('Keep this document.');
+      await frame.locator('#ask-toggle').click();
+      await frame.locator('#question').fill('> Keep this question\nsecond line');
+      for (const theme of ['light', 'dark', 'system', 'invalid']) {
+        await page.evaluate(theme => window.port.postMessage({type:'theme',theme}), theme);
+        await frame.locator('html').evaluate((root, expected) => new Promise((resolve,reject) => {
+          const deadline = Date.now()+1500;
+          const check = () => root.getAttribute('data-theme') === expected ? resolve()
+            : Date.now()>deadline ? reject(new Error('Theme was not applied')) : requestAnimationFrame(check);
+          check();
+        }), ['light','dark'].includes(theme) ? theme : null);
+        const colors = await frame.locator('#question-send').evaluate(button => {
+          const style = getComputedStyle(button);
+          return {text:style.color,background:style.backgroundColor};
+        });
+        const luminance = color => color.match(/[\d.]+/g).slice(0,3).map(Number)
+          .map(c=>c/255).map(c=>c<=.04045?c/12.92:((c+.055)/1.055)**2.4)
+          .reduce((sum,c,i)=>sum+c*[.2126,.7152,.0722][i],0);
+        const a=luminance(colors.text), b=luminance(colors.background);
+        assert.ok((Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5,JSON.stringify(colors));
+        assert.equal(await frame.locator('#question').inputValue(), '> Keep this question\nsecond line');
+        assert.match(await frame.locator('.tiptap').innerText(), /Keep this document/);
+      }
+      await page.close();
+    });
     for (const kind of ['whiteboard', 'document']) {
       await t.test(`${kind} shows assistant activity and clears it on idle or disconnect`, async () => {
         const {page, frame} = await open(kind);
         await frame.locator('#ask-toggle').click();
         const state = frame.locator('#conversation-state');
+        await frame.locator('#question').fill('> Preserved question\nsecond line');
+        await page.evaluate(()=>window.port.postMessage({type:'conversation',connected:true,
+          conversationError:'Archive is unavailable',records:[],own:[]}));
+        await frame.locator('#conversation-history-notice').getByText('Earlier conversation unavailable: Archive is unavailable',{exact:true}).waitFor();
+        assert.equal(await frame.locator('#question').inputValue(),'> Preserved question\nsecond line');
+        assert.match(await frame.locator('#conversation-context').innerText(),/own conversation/);
         for (const activity of [{connected:true,busy:true,paused:true}, {connected:true,busy:false}, {connected:false,busy:true}]) {
           await page.evaluate(activity=>window.port.postMessage({type:'conversation',records:[],own:[],...activity}),activity);
           const active = activity.connected && activity.busy;
@@ -209,6 +244,27 @@ test('editor interaction regressions', async (t) => {
           assert.ok(b.width > b.height, JSON.stringify(b));
         }
         assert.equal(await page.locator('#composer-input').inputValue(), '> Draft\nsecond line');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      }
+      await page.close();
+    });
+    await t.test('room session navigation sits beside wide conversations and above narrow composers', async () => {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${server.address().port}/menu`);
+      await page.evaluate(() => {
+        const menu = document.getElementById('session-box');
+        menu.hidden = false; menu.open = true;
+        document.getElementById('editing-box').hidden = false;
+        document.getElementById('editing-box').open = true;
+        document.getElementById('composer').hidden = false;
+      });
+      for (const width of [1440,1280,1000,375]) {
+        await page.setViewportSize({width,height:800});
+        const menu = await page.locator('#session-box').boundingBox();
+        const composer = await page.locator('#composer').boundingBox();
+        if (width >= 1280) assert.ok(menu.x >= composer.x + composer.width);
+        else assert.ok(menu.y + menu.height <= composer.y);
+        assert.ok(menu.x >= 0 && menu.x + menu.width <= width);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       }
       await page.close();

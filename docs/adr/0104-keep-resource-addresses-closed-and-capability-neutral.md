@@ -19,7 +19,11 @@ lifetimes. Shared files survive cleanup of an individual session; separate
 workspace roots remain isolated. Explicit memory-root descendants are writable
 through the native patch transaction, while `memory://journal/` exposes only
 validated, temporary, read-only evidence. Saved conversation search uses
-`history://saved`; curated memory and journal retention are independent of it.
+`history://saved`. Concrete live `history://root[/PATH]` supports Read and Grep
+over the same projected text, including unsaved turns. Scoped item and directive
+conversations use it for deliberate retrieval of parent decisions; no new scheme
+or automatic context import is needed. Bare `history://` remains Read-only
+discovery. Curated memory and journal retention are independent of it.
 
 Standalone and sticky Plan permit ApplyPatch only when every source and
 destination is a non-bare session-owned `work://` descendant outside
@@ -108,3 +112,10 @@ All revisions below refine ADR 0104's closed resolver decision.
   and internal recovery authority while reserving a read-only namespace inside
   memory; sharing a scheme did not confer curated-memory write authority. The
   old scheme has no alias.
+
+- **Live history search.** Dedicated item conversations exposed the need to find
+  earlier room decisions before they have been saved. Live history previously
+  supported only Read. Grep now searches the same projection and line references
+  at concrete root/agent addresses; saved-history search remains the route to
+  archived segments. This extends an existing resource rather than adding a
+  conversation-specific lookup interface.

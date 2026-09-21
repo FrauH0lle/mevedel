@@ -60,6 +60,10 @@
 ;; `mevedel-collaboration'
 (defvar mevedel-collaboration-guest-skills)
 
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--guest-skills-admitted-p
+                  "mevedel-collaboration-guest" (names role session))
+
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-in-flight)
 
@@ -202,7 +206,7 @@
 (declare-function mevedel-view--submit-planned-input
                   "mevedel-view-composer"
                   (input &optional before-send on-block dispatch after-insert
-                         inert-skills))
+                         inert-skills selected-skills))
 (declare-function mevedel-view-composer-scope-label
                   "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view-refresh-input-prompt
@@ -390,7 +394,7 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
 
 (cl-defun mevedel-view-enqueue-external-follow-up
     (data-buffer text &key guest-name guest-id paths directive-id invoke
-                 guest-role shared-question)
+                 guest-role shared-question skills)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
@@ -409,7 +413,8 @@ GUEST-ROLE: TEXT is then that invocation's arguments, dispatched
 through `mevedel-view-run-invocation' at delivery and rechecked
 against the same allowlist and tier first.  Return the queued entry,
 or nil without a live session view.  SHARED-QUESTION is host-validated
-shared-item attribution retained with the delivered prompt."
+shared-item attribution retained with the delivered prompt.  SKILLS names
+explicitly selected skills applied together, with the same admission recheck."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -430,6 +435,7 @@ shared-item attribution retained with the delivered prompt."
                             :guest-id guest-id
                             :guest-paths paths
                             :guest-invoke invoke
+                            :guest-skills skills
                             :guest-role guest-role
                             :shared-question shared-question
                             ;; An invocation is dispatched by name at
@@ -654,11 +660,17 @@ remaining queue."
   (let ((entries (mevedel-session-pending-follow-ups session))
         dropped)
     (dolist (entry entries)
-      (when-let* ((name (plist-get entry :guest-invoke))
-                  ((not (and (fboundp 'mevedel-collaboration--guest-invocable-p)
-                             (mevedel-collaboration--guest-invocable-p
-                              name (plist-get entry :guest-role))))))
-        (push entry dropped)))
+      (let ((name (plist-get entry :guest-invoke))
+            (skills (plist-get entry :guest-skills))
+            (role (plist-get entry :guest-role)))
+        (when (or (and name
+                       (not (and (fboundp 'mevedel-collaboration--guest-invocable-p)
+                                 (mevedel-collaboration--guest-invocable-p name role))))
+                  (and skills
+                       (not (and (fboundp 'mevedel-collaboration--guest-skills-admitted-p)
+                                 (mevedel-collaboration--guest-skills-admitted-p
+                                  skills role session)))))
+          (push entry dropped))))
     (when dropped
       (mevedel-pending-inputs--set-queues
        session 'follow-up
@@ -674,6 +686,7 @@ remaining queue."
   (cond
    ((plist-get entry :scope) 'directive)
    ((plist-get entry :guest-invoke) 'invocation)
+   ((plist-get entry :guest-skills) 'skills)
    ((plist-get entry :submission) 'prepared)
    (t 'prompt)))
 
@@ -724,6 +737,10 @@ implement the drain's shared delivery transaction."
       (plist-get entry :guest-invoke) input
       :on-quiet after-insert
       :on-sent after-insert))
+    ('skills
+     (mevedel-view--submit-planned-input
+      input before-send release nil after-insert nil
+      (plist-get entry :guest-skills)))
     ('prepared
      (mevedel-view--dispatch-prepared-outcome
       (plist-get entry :submission) data-buffer
@@ -1299,7 +1316,7 @@ an unrelated remote operation started by redisplay or another package included
     ;; The follow-up drain owns both the delivery-time allowlist recheck
     ;; and the command dispatch a guest invocation needs; steering
     ;; delivery has neither.
-    (when (plist-get entry :guest-invoke)
+    (when (or (plist-get entry :guest-invoke) (plist-get entry :guest-skills))
       (user-error "Guest invocations cannot be converted to steering"))
     (when mevedel-pending-inputs--converting-id
       (user-error "Pending-input conversion is still running"))

@@ -10,12 +10,12 @@
   display: inline-flex;
   align-items: center;
   gap: .4rem;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-ui);
   font-size: .74rem;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--control-radius);
   padding: .25rem .7rem;
   cursor: pointer;
 }
@@ -39,8 +39,7 @@
   align-items: center;
   gap: .8rem;
   padding: .55rem 1.1rem;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: blur(10px);
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 .panel-headline {
@@ -51,7 +50,7 @@
   flex: 1 1 auto;
 }
 .panel-title {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-ui);
   font-size: .85rem;
   font-weight: 700;
   color: var(--accent);
@@ -74,4 +73,4 @@
 #editing-title { flex: 1; }
 #editing-panel { bottom: auto; height: 100dvh; }
 #editing-panel .panel-head { padding: 3px 10px; min-height: 32px; }
-#editing-close { padding: 3px 10px; font-size: 12px; }
+#editing-close { padding: 3px 10px; font-size: 12px; min-height: 28px; }

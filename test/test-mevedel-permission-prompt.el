@@ -69,7 +69,10 @@
                 received)
             (overlay-put ov 'mevedel-permission-prompt t)
             (overlay-put ov 'mevedel-view-interaction-entry
-                         (list :kind 'sandbox :resource-selection-cell
+                         (list :kind 'sandbox
+                               :session (mevedel-session--create
+                                         :permission-mode 'ask :sandbox-mode 'required)
+                               :resource-selection-cell
                                (list (list (list :path root :access 'write)))))
             (overlay-put ov 'mevedel--callback
                          (lambda (outcome) (setq received outcome)))

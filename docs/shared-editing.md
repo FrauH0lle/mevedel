@@ -11,7 +11,10 @@ The editor tab reconnects independently and reopens its item on reload.
 a browser share link. Browser popup permission is needed to open a new tab.
 
 Documents use a continuous paper surface and a compact, horizontally scrolling
-formatting bar. **Assistant** opens a conversation sidebar on desktop and a
+formatting bar. Room and editor controls share a light/dark palette; the room's
+theme choice follows the editor without replacing its document or question draft.
+The whiteboard keeps a light drawing surface so authored colors remain unchanged.
+**Assistant** opens a conversation sidebar on desktop and a
 full-width overlay on phones. Closing it preserves the private draft, captured
 context, and editor position. The editor follows the visible viewport above the
 keyboard; Escape closes the panel, and Ctrl/Command+Enter submits its composer.
@@ -214,6 +217,37 @@ Pending edits must save first. The host compares the captured content with its
 committed content; a concurrent change rejects the request with an explicit
 **Refresh context** recovery. It never substitutes a whole item for a missing
 selection. Large contexts must be narrowed to fit the 128 KiB snapshot limit.
+
+Each document and whiteboard has its own model conversation. A question receives
+its reviewed content snapshot and recent turns about the same item, including
+questions sent from its comment threads. Other items and ordinary room chat are
+excluded. Ordinary room requests and room compaction summaries likewise exclude
+item discussion turns. The room transcript still shows their shared chronology;
+this is context selection, not a privacy boundary or a separate execution agent.
+Questions keep the session's permissions, tools, queue, and checkpoints, so they
+can edit content. Directive discussions retain their separate read-only contract.
+
+When broader context matters, the assistant can search `history://root` with
+Grep and read the matching line range with Read. This includes unsaved room
+turns; `history://saved` covers archived segments. The prompt advertises those
+resources, and the model chooses whether to retrieve them from the request's
+meaning. No keyword trigger or automatic full-room attachment runs. For example,
+“Make this consistent with our earlier architecture decision” can prompt a
+search followed by reading the relevant exchange. An unavailable decision must
+be retrieved or clarified, not assumed to have been included.
+
+Canonical transcript segments remain the only conversation store. On subsequent
+requests, same-item turns are restored from archived segments and deduplicated by
+question identity against the live tail. The request includes up to 128,000
+characters of prior complete turns, newest first in selection and chronological
+in presentation; omitted older history is explicitly disclosed and remains
+retrievable. The current question is retained separately. Item requests do not
+compact the unrelated room to make space. Current snapshots, tools, and provider
+context limits still apply; a large single turn may need a narrower question.
+The editor restores recent archived discussion on opening, reconnecting, or
+transcript replacement/removal, and reports truncated or unavailable history.
+An archive read failure prevents a model request from silently losing context,
+but does not prevent editing the item.
 
 Accepted questions include item identity, title, committed revision, exact selected
 text or shapes, bounded surrounding document blocks or connector endpoints, and
