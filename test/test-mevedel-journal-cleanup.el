@@ -307,14 +307,14 @@
          first current calls)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
-                   (lambda (_key _root callback) (funcall callback)))
-                  ((symbol-function 'mevedel-journal-cleanup-expired)
-                   (lambda (owner &optional force) (push (list owner force) calls))))
+                   (lambda (_key _root callback &optional _on-cancel) (funcall callback) t))
+                  ((symbol-function 'mevedel-journal-cleanup--steps)
+                   (iter-lambda (owner force) (push (list owner force) calls))))
           (mevedel-journal-cleanup-schedule workspace t)
           (setq first (car (gethash temporary-file-directory mevedel-journal-cleanup--pending)))
           (mevedel-journal-cleanup-schedule workspace)
           (setq current (car (gethash temporary-file-directory mevedel-journal-cleanup--pending)))
-          (should-not (memq first timer-idle-list))
+          (should (eq first current))
           (should (memq current timer-idle-list))
           (should (= 1 (hash-table-count mevedel-journal-cleanup--pending)))
           (cancel-timer current)
@@ -323,6 +323,150 @@
           (should (= 0 (hash-table-count mevedel-journal-cleanup--pending))))
       (when (timerp first) (cancel-timer first))
       (when (timerp current) (cancel-timer current)))))
+
+(mevedel-deftest mevedel-journal-cleanup-schedule/responsiveness ()
+  ,test
+  (test)
+  :doc "services another event before claiming cleanup and retains fresh evidence"
+  (let* ((root (make-temp-file "mevedel-cleanup-responsive-" t))
+         (workspace (mevedel-workspace--create :type 'project :id root :root root))
+         (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+         timer input-ran claimed blocked
+         (claim-probe (lambda (&rest _)
+                        (setq claimed t)
+                        (unless input-ran (setq blocked t)))))
+    (unwind-protect
+        (progn
+          (mevedel-test-journal-cleanup--entry root "fresh" t)
+          (advice-add 'mevedel-journal-claim-acquire :before claim-probe)
+          (let ((mevedel-journal-cleanup--inhibit-scheduling nil))
+            (mevedel-journal-cleanup-schedule workspace)
+            (setq timer (run-at-time 0 nil (lambda () (setq input-ran t))))
+            ;; Start the real idle opportunity without depending on batch
+            ;; Emacs becoming interactively idle.
+            (let ((start (car (gethash root mevedel-journal-cleanup--pending))))
+              (cancel-timer start)
+              (apply (timer--function start) (timer--args start)))
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (> (hash-table-count mevedel-journal-cleanup--pending) 0)
+                          (< (float-time) deadline))
+                (sleep-for .002)))
+            (should claimed)
+            (should-not blocked)
+            (should (= 0 (hash-table-count mevedel-journal-cleanup--pending))))
+          (should (= 1 (length (mevedel-test-journal-cleanup--digests root)))))
+      (when timer (cancel-timer timer))
+      (advice-remove 'mevedel-journal-claim-acquire claim-probe)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-journal-cleanup--steps ()
+  ,test
+  (test)
+  :doc "closing between phases settles every acquired claim"
+  (let* ((root (make-temp-file "mevedel-cleanup-cancel-" t))
+         (workspace (mevedel-workspace--create :type 'project :id root :root root))
+         (directory (mevedel-journal-store-directory root))
+         (iterator (mevedel-journal-cleanup--steps workspace t)))
+    (unwind-protect
+        (progn
+          (mevedel-test-journal-cleanup--entry root "retained" t)
+          (dotimes (_ 5) (iter-next iterator))
+          (dolist (kind '(mutation digest-run consolidation))
+            (should (mevedel-journal-claim-owned-p
+                     (mevedel-journal-claim-current
+                      (mevedel-journal-store-claim-directory directory kind)))))
+          (iter-close iterator)
+          (dolist (kind '(mutation digest-run consolidation))
+            (should (eq 'completed
+                        (plist-get
+                         (mevedel-journal-claim-outcome
+                          (mevedel-journal-claim-current
+                           (mevedel-journal-store-claim-directory directory kind)))
+                         :status))))
+          (should (= 1 (length (mevedel-test-journal-cleanup--digests root)))))
+      (iter-close iterator)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-journal-cleanup-schedule/ownership ()
+  ,test
+  (test)
+  :doc "fenced ownership between callbacks stops cleanup before deletion"
+  (let* ((root (make-temp-file "mevedel-cleanup-fenced-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+         taken timer diagnostics
+         (fence (lambda (token)
+                  (when (and token (not taken))
+                    (setq taken token
+                          timer (run-at-time 0 nil
+                                             (lambda ()
+                                               (mevedel-journal-claim-settle token 'cancelled "fenced")))))
+                  token)))
+    (unwind-protect
+        (progn
+          (mevedel-test-journal-cleanup--entry root "retained-after-fencing")
+          (advice-add 'mevedel-journal-claim-acquire :filter-return fence)
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (let ((mevedel-journal-cleanup--inhibit-scheduling nil))
+              (mevedel-journal-cleanup-schedule workspace)
+              (let ((start (car (gethash root mevedel-journal-cleanup--pending))))
+                (cancel-timer start)
+                (apply (timer--function start) (timer--args start)))
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (gethash root mevedel-journal-cleanup--pending)
+                            (< (float-time) deadline))
+                  (sleep-for .002)))))
+          (should taken)
+          (should-not (gethash root mevedel-journal-cleanup--pending))
+          (should (string-search "ownership expired before resumption" (format "%S" diagnostics)))
+          (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome taken) :status)))
+          (should (= 1 (length (mevedel-test-journal-cleanup--digests root)))))
+      (when timer (cancel-timer timer))
+      (advice-remove 'mevedel-journal-claim-acquire fence)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-journal-cleanup-schedule/cancellation ()
+  ,test
+  (test)
+  :doc "transport cancellation and disabled dispatch close acquired claims"
+  (dolist (disabled '(nil t))
+    (let* ((root (make-temp-file "mevedel-cleanup-transport-" t))
+           (workspace (mevedel-workspace--create :root root))
+           (directory (mevedel-journal-store-directory root))
+           (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+           (mevedel-transport--pending (make-hash-table :test #'equal))
+           (mevedel-transport--enabled-p t)
+           (mevedel-journal-cleanup--inhibit-scheduling nil))
+      (unwind-protect
+          (progn
+            (mevedel-test-journal-cleanup--entry root "retained" t)
+            (mevedel-journal-cleanup-schedule workspace t)
+            ;; Run through acquisition, then suspend at the transport boundary.
+            (dotimes (_ 5)
+              (let ((timer (car (gethash root mevedel-journal-cleanup--pending))))
+                (cancel-timer timer)
+                (apply (timer--function timer) (timer--args timer))))
+            (let ((mevedel-transport--depth (if disabled 0 1))
+                  (mevedel-transport--enabled-p (not disabled))
+                  (timer (car (gethash root mevedel-journal-cleanup--pending))))
+              (cancel-timer timer)
+              (apply (timer--function timer) (timer--args timer)))
+            (unless disabled
+              (should (gethash (list 'journal-cleanup root) mevedel-transport--pending))
+              (mevedel-transport-cancel-pending (list 'journal-cleanup root)))
+            (should-not (gethash root mevedel-journal-cleanup--pending))
+            (dolist (kind '(mutation digest-run consolidation))
+              (should (eq 'completed
+                          (plist-get
+                           (mevedel-journal-claim-outcome
+                            (mevedel-journal-claim-current
+                             (mevedel-journal-store-claim-directory directory kind)))
+                           :status))))
+            (should (= 1 (length (mevedel-test-journal-cleanup--digests root)))))
+        (mevedel-transport-cancel-pending)
+        (when-let* ((timer (car (gethash root mevedel-journal-cleanup--pending))))
+          (cancel-timer timer))
+        (delete-directory root t)))))
 
 (provide 'test-mevedel-journal-cleanup)
 ;;; test-mevedel-journal-cleanup.el ends here

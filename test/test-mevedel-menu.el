@@ -152,6 +152,39 @@
             (mevedel-menu-open (car area))
             (should (eq called-prefix (cdr area))))))))
 
+  :doc "top menu never collects stale memory evidence and preserves the composer"
+  (mevedel-menu-test--with-buffers
+    (let* ((collections 0)
+           (probe (lambda (&rest _) (cl-incf collections))))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (require 'mevedel-memory-list)
+      (unwind-protect
+          (progn
+            (advice-add 'mevedel-memory-list--collect :before probe)
+            (dolist (buffer (list view-buf data-buf))
+              (setf (mevedel-workspace-memory-observation workspace)
+                    '(:at 0 :pending 7 :recovery 1 :unavailable 0))
+              (save-window-excursion
+                (unwind-protect
+                    (with-current-buffer buffer
+                      (call-interactively #'mevedel-menu)
+                      (should (= collections 0))
+                      (should (string-match-p "7 pending.*cached" (mevedel-menu--memory-description))))
+                  (transient--emergency-exit))))
+            (setf (mevedel-workspace-memory-observation workspace) nil)
+            (save-window-excursion
+              (unwind-protect
+                  (with-current-buffer view-buf
+                    (call-interactively #'mevedel-menu)
+                    (should (string-search "not checked" (mevedel-menu--memory-description))))
+                (transient--emergency-exit)))
+            (should (= collections 0))
+            (with-current-buffer view-buf
+              (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))))
+        (advice-remove 'mevedel-memory-list--collect probe))))
+
   :doc "opens the permissions cockpit from the owning data buffer"
   (mevedel-menu-test--with-buffers
     (let (opened-context opened-buffer)

@@ -120,6 +120,14 @@ is a perfectly reasonable way to run it.
 
 ## Reviewed edits are retired
 
+Review preparation runs in scheduled steps, assembling one source buffer's diff
+per callback before sending the request. The one-review slot covers preparation
+as well as the provider request. Editing, renaming, killing, or untracking a
+source during preparation abandons that snapshot without retiring pending edits.
+Guidance and abort can cancel preparation through the same review ownership.
+Each individual buffer diff still runs synchronously; an unusually large file
+can exceed the normal callback budget.
+
 A settled review discards the changes it covered, so the next one sends only
 what you have written since. Edits made *while* a request was in flight survive
 it, and an abandoned or timed-out review retires nothing, so its edits are

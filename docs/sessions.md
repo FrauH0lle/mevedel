@@ -174,7 +174,7 @@ Opening, auto-saving, aborting, or closing a fresh zero-byte conversation does
 not materialize it. Partial first-turn text and already materialized sessions
 remain eligible for saving, including a previously saved session rewound empty.
 
-When remote work defers final-patch generation or settlement, the data buffer
+When transport or event-loop breaks defer final-patch generation or settlement, the data buffer
 remains busy until that terminal continuation completes or is cancelled. Abort
 stops the provider but preserves the request reservation and file snapshots
 needed by already pending settlement. The pending holds nest and release on
@@ -750,13 +750,17 @@ connection however the argument is spelled. The same mistake is available
 inside this package, and the transport's own state is the only reliable
 answer to "will this reach the target".
 
-Turn settlement is deferred as one unit for the same reason. gptel drives it
+Turn settlement waits for transport ownership for the same reason. gptel drives it
 from a process sentinel, which Emacs may dispatch from inside an unrelated
 remote operation. Only the turn commit — the single-use reservation fence,
 which touches no target — runs synchronously there; the publishing steps wait
-for an idle transport. The chain defers whole rather than step by step because
-its order is load-bearing: ending the request follows the autosave, and
-inverting them drops the turn's file-history checkpoints.
+for an idle transport. Cheap steps share a five-millisecond callback budget;
+expensive steps return to the event loop before the next step. Durable saving
+and journal checkpointing are separate steps. One admission hold covers the
+entire ordered chain, so ending the request still follows saving and checkpointing
+and a new request cannot overtake either. Transport cancellation and source-buffer
+death retire the continuation and release its hold. Individual publication
+transactions and checkpoint operations remain synchronous.
 
 Without a prefix, `M-x mevedel` lists persisted workspace sessions before
 creating a buffer, after sweeping expired sessions and locks left behind by

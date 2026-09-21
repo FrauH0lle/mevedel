@@ -6,6 +6,12 @@ It reuses the `guardian` model workload. Ordinary confined work in Edits needs
 no review; Full Access bypasses it entirely. [Permissions](permissions.md)
 describes the deterministic policy that remains authoritative.
 
+The model request is asynchronous: the proposed invocation waits for its
+decision while Emacs can handle editing. Evidence collection and the final
+policy, ownership, and evidence checks still run locally before dispatch and
+approval. They do not bypass authority checks to make review invisible; remote
+filesystem checks or unusually large transcripts can still add local latency.
+
 ## Trust boundary
 
 The isolated gptel request has no tools, ambient conversation, skills, memory,

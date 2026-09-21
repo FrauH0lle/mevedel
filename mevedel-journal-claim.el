@@ -15,6 +15,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'generator)
 (require 'mevedel-journal-store)
 (require 'mevedel-session-control-fs)
 
@@ -67,28 +68,38 @@ it must never be retained between operations."
          (mevedel-session-control-fs-read-file path)) outcome-p)
     (mevedel-session-control-fs-absent nil)))
 
-(defun mevedel-journal-claim-owned-p (token)
-  "Observe whether TOKEN is the current unexpired, unsettled owner.
+(defun mevedel-journal-claim-owned-p (token &rest tokens)
+  "Observe whether TOKEN and additional TOKENS are live, unsettled owners.
 Every call takes a fresh pinned target observation. This is a precondition,
-not atomic admission; settlement still uses its exclusive outcome election."
-  (let* ((directory (mevedel-session-control-fs-physical-path
-                     (plist-get token :directory)))
-         (path (mevedel-journal-claim--path token nil))
+not atomic admission; settlement still uses its exclusive outcome election.
+All tokens must address the same execution target."
+  (let* ((tokens (cons token tokens))
          (results
           (mevedel-session-control-fs-run-program
-           (list (list :op 'list-directory :path directory)
-                 (list :op 'read :path path)
-                 (list :op 'absent :path (mevedel-journal-claim--path token t))
-                 (list :op 'target-time :path directory)))))
+           (cl-mapcan
+            (lambda (owner)
+              (let ((directory (mevedel-session-control-fs-physical-path
+                                (plist-get owner :directory))))
+                (list (list :op 'list-directory :path directory)
+                      (list :op 'read :path (mevedel-journal-claim--path owner nil))
+                      (list :op 'absent :path (mevedel-journal-claim--path owner t))
+                      (list :op 'target-time :path directory))))
+            tokens))))
     (and (cl-every (lambda (result) (eq (plist-get result :status) 'ok)) results)
-         (equal (file-name-nondirectory path)
-                (car (sort (seq-filter
-                            (lambda (name) (string-match-p mevedel-journal-claim--name-regexp name))
-                            (plist-get (car results) :value)) #'string>)))
-         (equal token
-                (append (list :directory directory)
-                        (mevedel-journal-claim--decode (plist-get (nth 1 results) :value) nil)))
-         (< (plist-get (nth 3 results) :value) (plist-get token :expires-at)))))
+         (cl-loop for owner in tokens
+                  for observed on results by #'cddddr
+                  always
+                  (and
+                   (equal (file-name-nondirectory (mevedel-journal-claim--path owner nil))
+                          (car (sort (seq-filter
+                                      (lambda (name) (string-match-p mevedel-journal-claim--name-regexp name))
+                                      (plist-get (car observed) :value)) #'string>)))
+                   (equal owner
+                          (append (list :directory (mevedel-session-control-fs-physical-path
+                                                    (plist-get owner :directory)))
+                                  (mevedel-journal-claim--decode
+                                   (plist-get (nth 1 observed) :value) nil)))
+                   (< (plist-get (nth 3 observed) :value) (plist-get owner :expires-at)))))))
 
 (defun mevedel-journal-claim-current (directory)
   "Return DIRECTORY's newest claim token, or nil when no claim exists.
@@ -201,11 +212,12 @@ successful completed outcome authorizes publication of its exact payload."
                 (mevedel-journal-claim--path token nil) nil))
     (mevedel-journal-claim--finish token status payload)))
 
-(defun mevedel-journal-claim-prune (directory protected limit)
-  "Delete at most LIMIT obsolete settled claim pairs in DIRECTORY.
+(iter-defun mevedel-journal-claim-prune (directory protected limit)
+  "Yield while deleting at most LIMIT settled claim pairs in DIRECTORY.
 PROTECTED lists generations still referenced by durable work.  Keep the newest
 claim as the numbering anchor and all attempts whose deadlines have not passed.
-Checks and deletion share the claim admission/settlement target lock."
+Checks and deletion share the claim admission/settlement target lock.
+Return the deletion count when the iterator completes."
   (let* ((current (mevedel-journal-claim-current directory))
          (head (or (plist-get current :generation) 0))
          (now (mevedel-session-control-fs-target-time directory))
@@ -214,6 +226,7 @@ Checks and deletion share the claim admission/settlement target lock."
          (generations (sort (delete-dups (mapcar (lambda (path) (string-to-number (file-name-base path))) names)) #'<))
          (deleted 0))
     (dolist (generation generations)
+      (iter-yield nil)
       (when (and (< deleted limit) (< generation head) (not (memq generation protected)))
         (let* ((token (list :directory directory :generation generation))
                (claim-path (mevedel-journal-claim--path token nil))

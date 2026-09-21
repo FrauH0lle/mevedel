@@ -11,6 +11,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'generator)
 (require 'mevedel-journal-claim)
 (require 'mevedel-journal-index)
 (require 'mevedel-journal-store)
@@ -238,37 +239,51 @@ Select at most LIMIT content groups (default 50), including recovery."
                    (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))))))
     deleted))
 
-;;;###autoload
-(defun mevedel-journal-cleanup-expired (workspace &optional force)
-  "Collect one batch of resolved WORKSPACE journal state.
-Throttle opportunities to once an hour unless FORCE is non-nil.  Live mutation
-or digest owners postpone cleanup.  No inference runs.  Return a deletion count
-or nil when busy, throttled, or unavailable."
+(iter-defun mevedel-journal-cleanup--steps (workspace force)
+  "Yield between WORKSPACE cleanup phases, bypassing its throttle with FORCE.
+Claims remain held across yields.  Closing the iterator settles acquired
+claims.  Live-buffer artifact retention remains an indivisible phase."
   (when (and workspace (mevedel-workspace-root workspace)
              (or force (null (mevedel-workspace-journal-cleanup-at workspace))
                  (>= (- (float-time) (mevedel-workspace-journal-cleanup-at workspace)) 3600)))
     (setf (mevedel-workspace-journal-cleanup-at workspace) (float-time))
     (mevedel-state-cleanup workspace)
+    (iter-yield nil)
     (condition-case err
         (let* ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
                (present (or (mevedel-session-control-fs-directory-p
                              (mevedel-journal-store-state-directory root))
                             (mevedel-session-control-fs-directory-p root)))
-               (claim (and present
-                           (mevedel-journal-claim-acquire (mevedel-journal-store-claim-directory root 'mutation) 120)))
-               digest consolidation)
+               claim digest consolidation)
           (unwind-protect
               (progn
+                ;; The asynchronous owner checks this before every resumed
+                ;; step, including yields delegated by coordination GC.  A
+                ;; suspension must not let expired claims protect stale
+                ;; dependency observations against a successor.
+                (iter-yield
+                 (lambda ()
+                   (when (and claim
+                              (not (apply #'mevedel-journal-claim-owned-p
+                                          (delq nil (list claim digest consolidation)))))
+                     (error "Journal cleanup ownership expired before resumption"))))
+                (when present
+                  (setq claim (mevedel-journal-claim-acquire
+                               (mevedel-journal-store-claim-directory root 'mutation) 120)))
+                (iter-yield nil)
                 (when claim
                   (setq digest (mevedel-journal-claim-acquire
                                 (mevedel-journal-store-claim-directory root 'digest-run) 120
                                 (plist-get claim :expires-at))))
+                (iter-yield nil)
                 (when digest
                   (setq consolidation (mevedel-journal-claim-acquire
                                        (mevedel-journal-store-claim-directory root 'consolidation) 120
                                        (plist-get claim :expires-at))))
+                (iter-yield nil)
                 (if (and claim digest consolidation)
-                    (let* ((collected (mevedel-journal-gc workspace claim))
+                    (let* ((collected (iter-yield-from (mevedel-journal-gc workspace claim)))
+                           (_ (iter-yield nil))
                            (deleted (mevedel-journal-cleanup--owned workspace claim (plist-get collected :remaining))))
                       (when (> (+ (plist-get collected :progress) deleted) 0)
                         (mevedel-journal-cleanup-schedule workspace t))
@@ -284,6 +299,14 @@ or nil when busy, throttled, or unavailable."
        (message "mevedel: journal cleanup failed: %s" (error-message-string err))
        nil))))
 
+;;;###autoload
+(defun mevedel-journal-cleanup-expired (workspace &optional force)
+  "Collect one batch of resolved WORKSPACE journal state synchronously.
+Throttle opportunities to once an hour unless FORCE is non-nil.  Live mutation
+or digest owners postpone cleanup.  No inference runs.  Return a deletion count
+or nil when busy, throttled, or unavailable."
+  (iter-do (_ (mevedel-journal-cleanup--steps workspace force))))
+
 (defvar mevedel-journal-cleanup--inhibit-scheduling nil
   "Non-nil suppresses idle cleanup during exit or isolated tests.")
 
@@ -292,23 +315,47 @@ or nil when busy, throttled, or unavailable."
 
 ;;;###autoload
 (defun mevedel-journal-cleanup-schedule (workspace &optional force)
-  "Schedule WORKSPACE cleanup at idle, bypassing the hourly gate with FORCE."
+  "Schedule WORKSPACE cleanup in phases, bypassing the hourly gate with FORCE.
+Start at idle and return to the event loop between phases.  Repeated requests
+coalesce; a forced request received during cleanup runs after that batch."
   (unless mevedel-journal-cleanup--inhibit-scheduling
     (let* ((root (mevedel-workspace-root workspace))
            (old (gethash root mevedel-journal-cleanup--pending)))
-      (setq force (or force (cdr old)))
-      (when (timerp (car old)) (cancel-timer (car old)))
-      (puthash
-       root
-       (cons (run-with-idle-timer
-        0.1 nil
-        (lambda ()
-          (remhash root mevedel-journal-cleanup--pending)
-          (unless mevedel-journal-cleanup--inhibit-scheduling
-            (mevedel-transport-run-when-idle
-             (list 'journal-cleanup root) root
-             (lambda () (mevedel-journal-cleanup-expired workspace force)))))) force)
-       mevedel-journal-cleanup--pending))))
+      (if old
+          (setcdr old (or force (cdr old)))
+        (let ((job (cons nil force)) iterator guard)
+          (cl-labels
+              ((finish ()
+                 (when iterator (iter-close iterator) (setq iterator nil))
+                 (remhash root mevedel-journal-cleanup--pending)
+                 (when (cdr job) (mevedel-journal-cleanup-schedule workspace t)))
+               (cancel ()
+                 (setcdr job nil)
+                 (finish))
+               (step ()
+                 (when (eq job (gethash root mevedel-journal-cleanup--pending))
+                   (setcar job nil)
+                   (unless (mevedel-transport-run-when-idle
+                            (list 'journal-cleanup root) root
+                            (lambda ()
+                              (condition-case err
+                                  (if mevedel-journal-cleanup--inhibit-scheduling
+                                      (finish)
+                                    (unless iterator
+                                      (setq iterator (mevedel-journal-cleanup--steps workspace (cdr job)))
+                                      (setcdr job nil))
+                                    (when guard (funcall guard))
+                                    (when-let* ((value (iter-next iterator)))
+                                      (when (functionp value) (setq guard value)))
+                                    (setcar job (run-at-time .001 nil #'step)))
+                                (iter-end-of-sequence (finish))
+                                ((error quit)
+                                 (finish)
+                                 (message "mevedel: journal cleanup failed: %s" (error-message-string err)))))
+                            #'cancel)
+                     (cancel)))))
+            (puthash root job mevedel-journal-cleanup--pending)
+            (setcar job (run-with-idle-timer .1 nil #'step))))))))
 
 (provide 'mevedel-journal-cleanup)
 ;;; mevedel-journal-cleanup.el ends here

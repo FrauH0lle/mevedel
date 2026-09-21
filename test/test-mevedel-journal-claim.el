@@ -154,8 +154,8 @@
           (while (< (mevedel-session-control-fs-target-time directory)
                     (plist-get second :expires-at))
             (sleep-for 0.02))
-          (should (= 1 (mevedel-journal-claim-prune
-                        directory (list (plist-get second :generation)) 200)))
+          (should (= 1 (iter-do (_ (mevedel-journal-claim-prune
+                                    directory (list (plist-get second :generation)) 200)))))
           (should-not (mevedel-journal-claim-settle first 'completed "late"))
           (should (equal "retained proof" (plist-get (mevedel-journal-claim-outcome second) :payload)))
           (should (equal current (mevedel-journal-claim-current directory)))
@@ -182,7 +182,7 @@
                            (while (< (mevedel-session-control-fs-target-time directory) (plist-get second :expires-at))
                              (sleep-for 0.02))
                            (setq winner (mevedel-journal-claim-acquire directory 120))
-                           (should (= 2 (mevedel-journal-claim-prune directory nil 200)))))
+                           (should (= 2 (iter-do (_ (mevedel-journal-claim-prune directory nil 200)))))))
                        (funcall run operations lock))))
             (should-not (mevedel-journal-claim-acquire directory 120)))
           (should (equal winner (mevedel-journal-claim-current directory)))
@@ -228,6 +228,23 @@
             (should (mevedel-journal-claim-owned-p next))
             (should-not (mevedel-journal-claim-owned-p claim))))
       (delete-directory directory t)))
+
+  :doc "checks several claims in one target program and rejects any fenced owner"
+  (let ((root (make-temp-file "mevedel-journal-owned-batch-" t)))
+    (unwind-protect
+        (let* ((first (mevedel-journal-claim-acquire (file-name-concat root "first") 120))
+               (second (mevedel-journal-claim-acquire (file-name-concat root "second") 120))
+               (native (symbol-function 'mevedel-session-control-fs-run-program))
+               (calls 0))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args) (cl-incf calls) (apply native args))))
+            (should (mevedel-journal-claim-owned-p first second)))
+          (should (= calls 1))
+          (mevedel-journal-claim-settle second 'cancelled "fenced")
+          (should-not (mevedel-journal-claim-owned-p first second))
+          (should-not (mevedel-journal-claim-owned-p second first))
+          (should (mevedel-journal-claim-owned-p first)))
+      (delete-directory root t)))
 
   :doc "refuses expired, missing and malformed ownership without cached proof"
   (let ((directory (make-temp-file "mevedel-journal-owned-expiry-" t)))

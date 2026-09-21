@@ -580,6 +580,34 @@
           (should (= 0 (hash-table-count table))))
       (mevedel-transport-cancel-idle table 'test-idle))))
 
+(mevedel-deftest mevedel-transport-schedule-idle/responsiveness ()
+  ,test
+  (test)
+  :doc "separates already-due background jobs with an event-loop opportunity"
+  (let ((table (make-hash-table :test #'equal))
+        (mevedel-transport--background-resume-at 0)
+        input input-timer second saw-input)
+    (unwind-protect
+        (let ((first (mevedel-transport-schedule-idle
+                      table "first" 'test-background "/tmp"
+                      (lambda ()
+                        (setq input-timer (run-at-time 0 nil (lambda () (setq input t)))))))
+              (next (mevedel-transport-schedule-idle
+                     table "next" 'test-background "/tmp"
+                     (lambda () (setq second t saw-input input)))))
+          ;; Both callbacks are already due in the same timer batch.
+          (cancel-timer first)
+          (cancel-timer next)
+          (apply (timer--function first) (timer--args first))
+          (apply (timer--function next) (timer--args next))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (not second) (< (float-time) deadline)) (sleep-for .002)))
+          (should second)
+          (should saw-input)
+          (should (= 0 (hash-table-count table))))
+      (when input-timer (cancel-timer input-timer))
+      (mevedel-transport-cancel-idle table 'test-background))))
+
 (provide 'test-mevedel-transport)
 
 ;;; test-mevedel-transport.el ends here

@@ -7,6 +7,7 @@
 
 ;;; Code:
 (eval-when-compile (require 'cl-lib))
+(require 'generator)
 (require 'mevedel-memory-store)
 (require 'mevedel-memory-write)
 
@@ -23,11 +24,12 @@ FILES is an alist of absolute paths and their complete contents."
          (append (mapcar (lambda (file) (list :op 'verify :path (car file) :content (cdr file))) files)
                  (mapcar (lambda (file) (list :op 'delete-file :path (car file))) files)) lock)))
 
-(defun mevedel-journal-gc--manifests (root now limit)
-  "Remove finished expiry manifests below ROOT whose claims expired by NOW.
+(iter-defun mevedel-journal-gc--manifests (root now limit)
+  "Yield while removing ROOT manifests whose claims expired by NOW.
 Remove at most LIMIT groups; return protected generations and removal count."
   (let ((directory (file-name-concat (mevedel-journal-store-state-directory root) "expiry")) (removed 0) protected)
     (dolist (path (mevedel-session-control-fs-list-directory directory "\\.json\\'"))
+      (iter-yield nil)
       (let* ((manifest (mevedel-journal-cleanup--read root path))
              (token (plist-get manifest :token))
              (done (concat path ".done"))
@@ -52,6 +54,7 @@ Remove at most LIMIT groups; return protected generations and removal count."
     ;; If interruption followed manifest removal, only its harmless receipt
     ;; remains.  It cannot authorize publication or deletion on its own.
     (dolist (path (mevedel-session-control-fs-list-directory directory "\\.json\\.done\\'"))
+      (iter-yield nil)
       (when (and (< removed limit)
                  (not (mevedel-session-control-fs-path-exists-p (string-remove-suffix ".done" path))))
         (mevedel-journal-gc--remove (list (cons path (mevedel-session-control-fs-read-file path)))
@@ -59,14 +62,15 @@ Remove at most LIMIT groups; return protected generations and removal count."
         (cl-incf removed)))
     (list :protected protected :removed removed)))
 
-(defun mevedel-journal-gc--passes (workspace mutation now limit)
-  "Retire abandoned WORKSPACE preparations under MUTATION at NOW.
+(iter-defun mevedel-journal-gc--passes (workspace mutation now limit)
+  "Yield while retiring WORKSPACE preparations under MUTATION at NOW.
 Return the number of removed preparations, at most LIMIT per opportunity."
   (let ((removed 0)
         (cutoff (- now (* mevedel-memory-history-max-age-days 86400))))
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes")
                         mevedel-journal-store-id-regexp))
+      (iter-yield nil)
       (let ((id (file-name-nondirectory directory)))
         (when (and (< removed limit)
                    (not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) id))
@@ -81,29 +85,34 @@ Return the number of removed preparations, at most LIMIT per opportunity."
                 ;; Remove the preparation last so interrupted deletion keeps
                 ;; the authority and deadline needed to finish collection.
                 (dolist (name '("accepted.el" "prepared.el"))
+                  (iter-yield nil)
                   (let ((path (file-name-concat directory name)))
                     (when (mevedel-session-control-fs-path-exists-p path)
                       (push (cons path (mevedel-session-control-fs-read-file path)) files))))
                 (mevedel-memory-store--assert-owned mutation)
                 (mevedel-journal-gc--remove (nreverse files) (plist-get mutation :directory))
                 (cl-incf removed)))))
+        (iter-yield nil)
         (when (and (< removed limit) (mevedel-journal-gc--empty directory))
           (cl-incf removed))))
     removed))
 
-(defun mevedel-journal-gc--references (root)
-  "Return consolidation claim generations referenced by private ROOT records.
+(iter-defun mevedel-journal-gc--references (root)
+  "Yield while collecting claim generations referenced by ROOT records.
 Read all remaining records, including partially retired groups.  Refuse broken
 references instead of guessing that their claim can be removed."
   (let (files protected)
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory root) "passes") mevedel-journal-store-id-regexp))
+      (iter-yield nil)
       (let ((path (file-name-concat directory "prepared.el")))
         (when (mevedel-session-control-fs-path-exists-p path) (push path files))))
     (dolist (kind '("decisions" "writes"))
+      (iter-yield nil)
       (setq files (append files (mevedel-session-control-fs-list-directory
                                  (file-name-concat (mevedel-journal-store-state-directory root) kind) mevedel-memory-write-intent-file-regexp))))
     (dolist (path files)
+      (iter-yield nil)
       (let* ((data (car (mevedel-memory-store--read-lisp path)))
              (claim (plist-get data :claim))
              (generation (plist-get claim :generation)))
@@ -113,26 +122,28 @@ references instead of guessing that their claim can be removed."
         (push generation protected)))
     (delete-dups protected)))
 
-(defun mevedel-journal-gc (workspace mutation)
-  "Collect bounded obsolete WORKSPACE state under live MUTATION ownership.
+(iter-defun mevedel-journal-gc (workspace mutation)
+  "Yield while collecting WORKSPACE state under live MUTATION ownership.
 The caller also holds digest and consolidation admission.  Return progress
 and the remaining content budget.  Delete at most 200 claim pairs and 50
 content groups across all directories in one batch."
   (let* ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
          (now (mevedel-session-control-fs-target-time (plist-get mutation :directory)))
-         (manifests (mevedel-journal-gc--manifests root now 50))
+         (manifests (iter-yield-from (mevedel-journal-gc--manifests root now 50)))
          (groups (plist-get manifests :removed))
-         (groups (+ groups (mevedel-journal-gc--passes workspace mutation now (- 50 groups))))
+         (groups (+ groups (iter-yield-from (mevedel-journal-gc--passes workspace mutation now (- 50 groups)))))
          (removed groups)
-         (references (mevedel-journal-gc--references root))
+         (references (iter-yield-from (mevedel-journal-gc--references root)))
          (remaining 200)
          (directories (list (cons (mevedel-journal-store-claim-directory root 'mutation) (plist-get manifests :protected))
                             (cons (mevedel-journal-store-claim-directory root 'digest-run) nil)
                             (cons (mevedel-journal-store-claim-directory root 'consolidation) references))))
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory root) "captures") mevedel-journal-store-id-regexp))
+      (iter-yield nil)
       (push (cons (file-name-concat directory "attempts") nil) directories))
     (dolist (memory (mevedel-system--memory-roots workspace))
+      (iter-yield nil)
       (let ((control (mevedel-memory-write-control-directory
                       (file-truename (plist-get memory :dir)))))
         ;; Pending markers may belong to another workspace.  Keep their
@@ -141,13 +152,15 @@ content groups across all directories in one batch."
                    (not (mevedel-session-control-fs-list-directory (file-name-concat control "pending") "\\`[^.]")))
           (push (cons (file-name-concat control "claims") nil) directories))))
     (dolist (entry directories)
+      (iter-yield nil)
       (when (and (> remaining 0) (mevedel-session-control-fs-directory-p (car entry)))
         (mevedel-memory-store--assert-owned mutation)
-        (let ((count (mevedel-journal-claim-prune (car entry) (cdr entry) remaining)))
+        (let ((count (iter-yield-from (mevedel-journal-claim-prune (car entry) (cdr entry) remaining))))
           (cl-incf removed count)
           (cl-decf remaining count))))
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins") mevedel-journal-store-id-regexp))
+      (iter-yield nil)
       (when (and (< groups 50) (mevedel-journal-gc--empty directory))
         (cl-incf groups)
         (cl-incf removed)))

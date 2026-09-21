@@ -257,20 +257,21 @@ still be delivered after a suspended timer list is restored."
     (remhash key mevedel-transport--pending)
     (mevedel-transport-run-when-idle key path thunk on-cancel)))
 
-(defun mevedel-transport-run-when-idle (key path thunk &optional on-cancel)
+(defun mevedel-transport-run-when-idle (key path thunk &optional on-cancel delay)
   "Call THUNK once no remote operation for PATH is in flight.
 
 KEY coalesces repeated scheduling of the same logical work, so a caller that
 re-arms on every event queues one retry rather than a growing fan of timers.
 THUNK runs immediately when the transport is already idle, because a filter or
 sentinel is only unsafe when it nests.  ON-CANCEL runs if queued work is
-cancelled before THUNK starts.  Return non-nil when work was accepted; disabled
-transport drops late work and returns nil."
+cancelled before THUNK starts. Non-nil DELAY queues the first attempt by that
+many seconds even when transport is idle, retaining the same cancellation owner.
+Return non-nil when work was accepted; disabled transport drops late work."
   (when mevedel-transport--enabled-p
-    (if (mevedel-transport-busy-p path)
+    (if (or delay (mevedel-transport-busy-p path))
         (unless (gethash key mevedel-transport--pending)
           (let ((timer (timer-create)))
-            (timer-set-time timer (time-add nil mevedel-transport-retry-seconds))
+            (timer-set-time timer (time-add nil (or delay mevedel-transport-retry-seconds)))
             (timer-set-function timer #'mevedel-transport--retry
                                 (list timer key path thunk on-cancel))
             (timer-activate timer)
@@ -283,33 +284,44 @@ transport drops late work and returns nil."
       (funcall thunk))
     t))
 
+(defvar mevedel-transport--background-running nil
+  "Non-nil while a scheduled background opportunity is executing.")
+
+(defvar mevedel-transport--background-resume-at 0
+  "Earliest client time for the next scheduled background opportunity.")
+
 (defun mevedel-transport-schedule-idle (table key tag path thunk)
   "Run THUNK once for KEY after the current command, when PATH's transport is idle.
 TABLE maps KEY to its pending timer until THUNK starts or the work is
 cancelled, so repeated calls coalesce into one opportunity.  TAG names the
 transport queue entry `(TAG PATH)'.  A superseded timer, a cancelled queue
 entry, or a disabled transport removes KEY without calling THUNK.  Return the
-timer, or nil when KEY already has pending work."
+timer, or nil when KEY already has pending work. Already-due background jobs
+leave an event-loop opportunity between calls instead of running as one batch."
   (unless (gethash key table)
     (let (timer)
-      (setq timer
-            (run-at-time
-             0 nil
-             (lambda ()
-               (let ((forget (lambda ()
-                               (when (eq timer (gethash key table))
-                                 (remhash key table)))))
-                 (when (eq timer (gethash key table))
-                   (unless (mevedel-transport-run-when-idle
-                            (list tag path) path
-                            (lambda ()
-                              (when (eq timer (gethash key table))
-                                (funcall forget)
-                                (funcall thunk)))
-                            forget)
-                     (funcall forget)))))))
-      (puthash key timer table)
-      timer)))
+      (cl-labels
+          ((forget ()
+             (when (eq timer (gethash key table)) (remhash key table)))
+           (run ()
+             (when (eq timer (gethash key table))
+               (if (or mevedel-transport--background-running
+                       (< (float-time) mevedel-transport--background-resume-at))
+                   (progn
+                     (timer-set-time timer (time-add nil .001))
+                     (timer-activate timer))
+                 (forget)
+                 (unwind-protect
+                     (let ((mevedel-transport--background-running t)) (funcall thunk))
+                   (setq mevedel-transport--background-resume-at (+ (float-time) .001))))))
+           (attempt ()
+             (when (eq timer (gethash key table))
+               (unless (mevedel-transport-run-when-idle
+                        (list tag path) path #'run #'forget)
+                 (forget)))))
+        (setq timer (run-at-time 0 nil #'attempt))
+        (puthash key timer table)
+        timer))))
 
 (defun mevedel-transport-cancel-idle (table tag &optional path-of-key)
   "Cancel every timer in TABLE and its queued `(TAG PATH)' transport work.
