@@ -9,12 +9,13 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORTS = ROOT / '.scratch/test-suite-performance'
-EASK = ['npx', '--offline', '@emacs-eask/cli']
+EASK = ['eask'] if shutil.which('eask') else ['npx', '--offline', '@emacs-eask/cli']
 
 
 def partition_tests(names, weights, jobs):
@@ -66,7 +67,10 @@ def run_logged(command, path, env=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--jobs', type=int, default=min(8, os.cpu_count() or 1))
+    available_cpus = len(os.sched_getaffinity(0))
+    parser.add_argument('--jobs', type=int, default=min(8, available_cpus),
+                        help=f'worker limit (default: {min(8, available_cpus)}; '
+                             f'{available_cpus} CPUs available)')
     parser.add_argument('--output', type=Path, default=REPORTS / datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
     args = parser.parse_args()
@@ -99,7 +103,8 @@ def main():
         with args.durations.open() as stream:
             weights = {row['test']: float(row['seconds']) for row in csv.DictReader(stream)}
     groups = partition_tests(names, weights, args.jobs)
-    print(f'{len(names)} tests; {len(groups)} isolated Eask workers; reports: {output}', flush=True)
+    print(f'{len(names)} tests; {available_cpus} CPUs available; '
+          f'{len(groups)} isolated Eask workers; reports: {output}', flush=True)
 
     def run(index):
         request = output / f'{index}-partition.json'

@@ -1,6 +1,8 @@
 """Checks for complete-suite partitioning and measurement reporting."""
 
 import csv
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,6 +12,40 @@ import run_tests
 
 
 class RunnerTests(unittest.TestCase):
+    def test_default_concurrency_respects_cpu_affinity(self):
+        original = os.sched_getaffinity(0)
+        try:
+            for count in sorted({1, min(2, len(original)), len(original)}):
+                with self.subTest(cpus=count):
+                    os.sched_setaffinity(0, set(sorted(original)[:count]))
+                    result = subprocess.run(
+                        [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'), '--help'],
+                        capture_output=True, text=True, check=True)
+                    self.assertIn(f'default: {min(8, count)}; {count} CPUs available',
+                                  ' '.join(result.stdout.split()))
+        finally:
+            os.sched_setaffinity(0, original)
+
+    def test_launcher_prefers_installed_eask_and_preserves_cleanup_failure(self):
+        for installed in (True, False):
+            with self.subTest(installed=installed), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                for name in (('eask', 'npx') if installed else ('npx',)):
+                    executable = path / name
+                    executable.write_text(f'#!/bin/sh\necho {name} "$@"\nexit 3\n')
+                    executable.chmod(0o755)
+                output = path / 'reports'
+                result = subprocess.run(
+                    [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'),
+                     '--output', str(output)],
+                    env={**os.environ, 'PATH': str(path)},
+                    capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Cleanup failed', result.stderr)
+                launcher = 'eask' if installed else 'npx --offline @emacs-eask/cli'
+                self.assertEqual((output / 'clean.log').read_text(),
+                                 f'{launcher} clean elc\n')
+
     def test_partition_covers_inventory_and_balances_measured_cost(self):
         names = ['slow', 'medium', 'short', 'new']
         groups = run_tests.partition_tests(names, {'slow': 10, 'medium': 6, 'short': 4}, 2)
