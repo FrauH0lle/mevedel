@@ -78,6 +78,17 @@ formatting stays on one scrolling row and the assistant panel overlays phone wor
 A tab URL identifies the item, while credentials continue through the existing
 fragment-to-tab-storage lifecycle and never reach the iframe.
 
+The browser design comparison exposed an unrelated editor palette and a
+light-only document surface beside the room's dark theme. Room and editor now
+share CSS color and typography tokens. The trusted viewer sends its initial
+theme and subsequent choices through the existing item-scoped port; the editor
+accepts only light, dark, or system fallback. Theme changes do not reload the
+editor or alter content, presence, or exported colors. The whiteboard keeps its
+light drawing substrate so authored stroke and image colors remain faithful.
+The document uses the selected theme. A real parent/iframe phone test caught
+the taller header consuming typing space with the keyboard open; compact
+short-viewport spacing retains at least 150px of document viewport in that test.
+
 The trial also showed that a contribution row per 300 ms save was unreadable.
 Keep those commits and their exact inverse records; group their presentation
 by participant name and five-second idle gaps. Agent transactions remain
@@ -143,7 +154,36 @@ asynchronous submissions in different sessions cannot exchange metadata. No
 second conversation store or model-request controller is needed. Canonical
 provider failure summaries are projected without their private error payloads.
 
+## Dedicated item conversation context
+
+The first sidebar filtered displayed replies while model requests still consumed
+room history. The resulting mismatch made document follow-ups depend on unrelated
+room work and let item snapshots accumulate in ordinary chat. Each item's trusted
+question attribution now selects its model context before reminder delivery:
+current reviewed question plus recent same-item turns. Ordinary room requests
+and compaction evidence exclude these turns, while the canonical chronology and
+operational queue remain shared. Comment questions participate in their item's
+conversation; comments remain their presentation subthreads.
+
+Archived canonical segments restore prior item turns after compaction and reload.
+Question identities deduplicate preserved tails. Prior history has a complete-turn
+character budget with an explicit omission notice; damaged archives fail requests
+visibly. The editor shows available live discussion and an archive warning while
+content editing remains usable. No placeholder directive is created: its lifecycle
+and read-only discussion capability would be wrong for requests that edit an item.
+
+Read and Grep of `history://root` give scoped conversations deliberate access to
+parent decisions, including unsaved turns. `history://saved` covers archived
+segments. This extends the existing resource family for directives and all other
+session callers; neither an address nor retrieval expands editing authority.
+The model chooses retrieval from the task, without an automatic keyword router.
+
 ### Decision history
+
+Initially sidebar filtering alone separated item discussions visually. Dedicated
+request context replaces that behavior because a focused editor conversation
+should not implicitly consume unrelated room and other-item turns. Transcript
+storage, shared visibility, and normal editing authority are retained.
 
 A document trial exposed ambiguity when selection always opened comment mode,
 posting immediately repurposed the draft as an AI question, and a button named

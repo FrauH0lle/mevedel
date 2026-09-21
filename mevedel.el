@@ -86,6 +86,7 @@
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-transcript-restore)
+(require 'mevedel-shared-conversation)
 (require 'mevedel-compact-estimation)
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-target)
@@ -704,6 +705,11 @@ always prompt for the session name."
   (add-hook 'gptel-prompt-transform-functions
             #'mevedel-skills--transform-apply-request-model-policy -100)
 
+  ;; Select item history before reminder retention is assessed; discarded room
+  ;; turns must not suppress guidance the scoped request has never received.
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel-shared-conversation-transform -92)
+
   ;; Substitute view-derived text only in gptel's temporary request buffer.
   (add-hook 'gptel-prompt-transform-functions
             #'mevedel-view--transform-model-input -91)
@@ -794,6 +800,8 @@ always prompt for the session name."
   ;; Remove directive context projection
   (remove-hook 'gptel-prompt-transform-functions
                #'mevedel-transcript-exclude-directive-turns)
+  (remove-hook 'gptel-prompt-transform-functions
+               #'mevedel-shared-conversation-transform)
 
   ;; Remove auto-compaction transform
   (remove-hook 'gptel-prompt-transform-functions

@@ -1,0 +1,109 @@
+/* Shared room/editor palette. Semantic colors distinguish errors, diffs,
+   comments and participant identity from the single teal action accent.
+   Radii: 6px controls, 10px panels, 14px floating tool groups.
+   Viewer layers: header 10, dock 20, panels 30, skip link 40.
+   Editor layers: tools 3, header 4, inline text 6, discussion 8,
+   selection 9, menus 10, mobile discussion 12. */
+:root {
+  --font-ui: "Aptos", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+  --control-radius: .375rem;
+  --panel-radius: .625rem;
+  --paper: var(--surface);
+  color-scheme: light;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; }
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent-soft); color: var(--ink); }
+input, textarea, select { accent-color: var(--accent); }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+button:not(:disabled):active { transform: translateY(1px); }
+@media (prefers-reduced-motion: no-preference) {
+  button { transition: transform 120ms cubic-bezier(.2,.8,.2,1); }
+}
+:root {
+  --ground: #F6F7F6;
+  --surface: #FDFEFD;
+  --surface-2: #EDEFEE;
+  --ink: #1A211F;
+  --muted: #5C6764;
+  --line: #DCE0DE;
+  --accent: #14707A;
+  --accent-soft: #E2F0EE;
+  --on-accent: #FDFEFD;
+  --on-danger: #FDFEFD;
+  --guest: #A44A30;
+  --guest-soft: #F6E6E0;
+  --running: #14707A;
+  --ok: #2E7D32;
+  --failed: #9B1C2E;
+  --diff-add: #E3F0E4;
+  --diff-add-ink: #1F5F23;
+  --diff-del: #F7E4E7;
+  --diff-del-ink: #8A1626;
+  --code-bg: #F1F3F2;
+  --kw: #7A3E9D;
+  --str: #2E7D32;
+  --fn: #14707A;
+  --com: #6E7A77;
+  --shadow: 0 1px 2px rgb(20 30 28 / 6%), 0 6px 20px rgb(20 30 28 / 5%);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101413;
+    --surface: #171D1C;
+    --surface-2: #1E2624;
+    --ink: #E4E9E7;
+    --muted: #A2AEAA;
+    --line: #2A3331;
+    --accent: #5FC2CC;
+    --accent-soft: #12312F;
+    --on-accent: #102220;
+    --on-danger: #291315;
+    --guest: #E08A6E;
+    --guest-soft: #33201A;
+    --running: #5FC2CC;
+    --ok: #6BBF73;
+    --failed: #F08A8A;
+    --diff-add: #14291A;
+    --diff-add-ink: #8FD79A;
+    --diff-del: #351A1D;
+    --diff-del-ink: #F5A9A9;
+    --code-bg: #0C1110;
+    --kw: #C8A0E8;
+    --str: #6BBF73;
+    --fn: #5FC2CC;
+    --com: #788582;
+    --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 6px 20px rgb(0 0 0 / 35%);
+  }
+}
+:root[data-theme="dark"] {
+    --ground: #101413;
+  --surface: #171D1C;
+  --surface-2: #1E2624;
+  --ink: #E4E9E7;
+  --muted: #A2AEAA;
+  --line: #2A3331;
+  --accent: #5FC2CC;
+  --accent-soft: #12312F;
+    --on-accent: #102220;
+    --on-danger: #291315;
+  --guest: #E08A6E;
+  --guest-soft: #33201A;
+  --running: #5FC2CC;
+  --ok: #6BBF73;
+  --failed: #F08A8A;
+  --diff-add: #14291A;
+  --diff-add-ink: #8FD79A;
+  --diff-del: #351A1D;
+  --diff-del-ink: #F5A9A9;
+  --code-bg: #0C1110;
+  --kw: #C8A0E8;
+  --str: #6BBF73;
+  --fn: #5FC2CC;
+  --com: #788582;
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 6px 20px rgb(0 0 0 / 35%);
+}

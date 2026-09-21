@@ -625,7 +625,8 @@ Filesystem-shaped tools consume one closed set of eight resource-address
 families: `work://`, `artifact://`, `skill://`, `agent://`, `history://`,
 `memory://` (including `memory://journal/`), `mcp://`, and `mevedel://`. `Read` supports all eight; `Glob` and
 `Grep` support `work://`, `artifact://`, `skill://`, `memory://` (including
-`memory://journal/`), `history://saved`, and `mevedel://`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
+`memory://journal/`), `history://saved`, and `mevedel://`. `Grep` also accepts
+concrete live history at `history://root[/PATH]`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
 paths. Addresses serialize canonical resource locators and do not replace
 target-native paths, mentions, or permissions. `mevedel://` is an always-
 available, read-only view of packaged Markdown documentation and exposes no

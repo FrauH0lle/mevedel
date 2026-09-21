@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'mevedel-shared-editing)
+(require 'mevedel-shared-conversation)
 (require 'mevedel-transcript-audit)
 
 ;; `mevedel-collaboration'
@@ -21,6 +22,10 @@
 (declare-function mevedel-collaboration--guest-role "mevedel-collaboration-guest" (guest))
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--save-guest-attachments "mevedel-collaboration-guest" (images))
+
+;; `mevedel-collaboration-projection'
+(declare-function mevedel-collaboration--canonical-records
+                  "mevedel-collaboration-projection" (data-buffer))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
@@ -148,7 +153,7 @@
                       :commentVersion (plist-get args :commentVersion)))))
 
 (defun mevedel-collaboration-editing--find-question (room args)
-  "Find an accepted question matching ARGS in ROOM's queue or transcript.
+  "Find accepted ARGS in ROOM's queue or live/archived transcript.
 This survives reconnecting peers and delivered transcript restoration.  A
 retracted or never-delivered queue entry can be explicitly submitted again."
   (let* ((id (plist-get args :questionId))
@@ -167,6 +172,11 @@ retracted or never-delivered queue entry can be explicitly submitted again."
             (let ((shared (plist-get (cdr attribution) :shared)))
               (when (equal id (plist-get shared :questionId))
                 (setq receipt (list :delivered t :question shared))))))))
+    (unless receipt
+      (dolist (turn (mevedel-shared-conversation-history session (plist-get args :id)))
+        (let ((shared (plist-get turn :shared)))
+          (when (equal id (plist-get shared :questionId))
+            (setq receipt (list :delivered t :question shared))))))
     (when (and receipt
                (not (equal (plist-get (plist-get receipt :question) :fingerprint)
                            (mevedel-collaboration-editing--question-key args))))
@@ -215,6 +225,26 @@ retracted or never-delivered queue entry can be explicitly submitted again."
           (unless queued
             (dolist (path paths) (ignore-errors (delete-file path))))))))
 
+(defun mevedel-collaboration-editing--conversation (session item-id)
+  "Return bounded archived conversation records for ITEM-ID in SESSION."
+  (let ((turns (mevedel-shared-conversation-history session item-id))
+        (remaining mevedel-shared-conversation--history-limit)
+        selected truncated)
+    (dolist (turn turns)
+      (let ((text (plist-get turn :text)))
+        (if (and (not truncated) (<= (length text) remaining))
+            (progn (push text selected) (cl-decf remaining (length text)))
+          (setq truncated t))))
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq-local mevedel--session session)
+      (dolist (text selected) (insert text "\n"))
+      (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+        (dolist (record records)
+          (plist-put record :id (concat "archive:" (plist-get record :id))))
+        (list :conversation (vconcat records)
+              :conversationTruncated (if truncated t :json-false))))))
+
 (cl-defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
   "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM."
   (let* ((action (plist-get args :action))
@@ -252,6 +282,15 @@ retracted or never-delivered queue entry can be explicitly submitted again."
          (when (funcall authorize)
            (condition-case err
                (progn
+                 (when (and (equal action "read") (not (plist-get reply :error)))
+                   (setq reply
+                         (list :result
+                               (append (plist-get reply :result)
+                                       (condition-case history-error
+                                           (mevedel-collaboration-editing--conversation
+                                            session (plist-get args :id))
+                                         (error (list :conversationError
+                                                      (error-message-string history-error))))))))
                  (when (and (equal action "ask") (not (plist-get reply :error)))
                    (setq reply (list :result (mevedel-collaboration-editing--ask
                                               room guest args (plist-get reply :result)))))

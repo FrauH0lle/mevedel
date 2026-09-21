@@ -101,14 +101,14 @@ therefore involves neither the host nor the relay -- the Invite sheet
 builds the links in the page and copies them. That is also why the tiers
 are a prefix chain rather than three unrelated tokens.
 
-The Invite and Rooms buttons sit in the dock's Session menu rather than
+The Invite and Rooms buttons sit in the Session menu rather than
 in the composer row: a read-only guest never sees the composer and has
 its own link to hand on. Invite does go away when the room ends, because
 the link goes with it.
 
 ## The Session menu
 
-The dock has one collapsible menu, the `Session` disclosure, and every
+The viewer has one collapsible menu, the `Session` disclosure, and every
 non-transcript surface the viewer offers lives in it: the host-admitted
 command and skill chips, live sub-agent chips, finished agents, the task
 list, artifact chips, and the New Session, Rooms, and Invite buttons. Its
@@ -118,9 +118,23 @@ section is empty. Commands and artifacts fold into closed submenus of
 their own, because an owner link with `t` sees every skill on the host
 and a flat list would push the agents and tasks out of view. Each section reports its own fragment through one `summarize`
 seam keyed by section, so a module adds itself to the menu without
-knowing about the others. Tapping a command chip arms the invocation,
-closes the menu, and focuses the composer, whose scope line keeps showing
-what is armed.
+knowing about the others. Tapping a chip selects it while keeping the menu and keyboard focus in place.
+Skills combine on one message (up to six); a slash command is a single action
+and replaces the skill selection. Selecting a skill replaces a slash command.
+Selected chips stay highlighted and appear above the composer, each with a
+remove button. Removing a selection preserves the message draft.
+
+At viewport widths of 80rem and above, Session occupies a separate right-hand
+column so opening shared work does not cover the transcript. At smaller widths
+and increased browser zoom, it returns to the bottom dock. The same disclosure
+and controls serve both layouts. Conversation text and the composer share a
+bounded reading width. Message and display-name fields have visible labels;
+keyboard users can skip the header directly to the transcript.
+
+Room and editor chrome share the same light/dark palette and native font stack.
+Teal identifies actions; guest attribution, errors, diffs, comments, and presence
+retain their distinct semantic colors. The theme control follows the system by
+default and can select light or dark explicitly.
 
 ## Guest-requested sessions
 
@@ -299,10 +313,13 @@ resolving to the command first, and
 holds the commands that escalate, mutate durable state, manage the share, or
 only report to the host's display (`tokens`, `ps`, `tools`, `worktree`
 included), none of which can do anything useful for a guest. The guest may
-queue an admitted command or skill with arguments through a typed invocation
-frame; free text remains skill-inert, and the host revalidates the name
-against the tier the entry was queued under on receipt and again at
-delivery. `/review` and `/verify` sent without an argument are queued as
+queue a command through the typed `invoke` field or combine selected skills
+through the `skills` name array on one prompt frame. These fields are mutually
+exclusive. Free text remains skill-inert; only selected names are planned.
+The host revalidates every selection against the original link tier on receipt
+and again at delivery. A removed or disallowed skill drops the whole queued
+selection. Selected skills use the existing ordered skill planner, including
+its command/instruction and fork semantics. `/review` and `/verify` sent without an argument are queued as
 `uncommitted`, because their argument-less form is a minibuffer picker on
 the host, and their chip hint lists the accepted target forms.
 Browser tool rows use the host's bounded semantic presentation tree. Direct
@@ -430,6 +447,8 @@ contain credentials or secrets and that the links are bearer credentials.
 
 Shared-item questions retain item and comment correlation in the canonical
 transcript's guest attribution. The editor panel reuses those records and the
-existing pending-input queue; it does not maintain a separate conversation.
+existing pending-input queue. Each item has separate model context, selected
+from the live transcript and archived segments without a second transcript store.
+Room chat can retrieve those turns through the same history resources.
 Canonical provider-failure summaries also appear in browser conversations.
 See [shared editing](shared-editing.md#questions-and-document-comments).

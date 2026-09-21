@@ -1405,7 +1405,13 @@ the union index read, which already tolerates missing roots."
          (concat (mevedel-resource--agent-list-result session t)
                  (when (mevedel-resource--workspace context session)
                    "\nhistory://saved\tSaved workspace conversations (Read, Glob, Grep)")))
-        (t (mevedel-resource--history-read (plist-get data :record) session))))
+        (t
+         (let ((text (mevedel-resource--history-read
+                      (plist-get data :record) session)))
+           (if (eq operation 'grep)
+               (list :resource-search-documents
+                     (list (cons (car (last components)) text)))
+             text)))))
       ((and 'memory (guard (equal (car components) "journal")))
        (let* ((components (cdr components))
               (workspace (mevedel-resource--workspace context session))
@@ -1660,7 +1666,10 @@ errors before any content or handler is reached."
       (unless (or (eq operation 'read)
                   (and (memq operation '(glob grep))
                        (or (memq scheme '(work artifact skill memory mevedel))
-                           (and (eq scheme 'history) (equal (car components) "saved"))))
+                           (and (eq scheme 'history)
+                                (or (equal (car components) "saved")
+                                    (and (eq operation 'grep)
+                                         (equal (car components) "root"))))))
                   (and (eq operation 'apply-patch)
                        (memq scheme '(work memory))))
         (signal 'mevedel-resource-error

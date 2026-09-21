@@ -55,6 +55,12 @@ flowchart TD
     M -- Fork --> O[Dispatch one sub-agent]
 ```
 
+Browser skill selections use the same planner with explicit skill names and
+literal message arguments. Only the selected prefix is resolved; a `$skill`
+inside the message does not acquire invocation authority. The collaboration
+host checks each selected name at receipt and queued delivery. See
+[browser collaboration](collaboration.md#commands-skills-and-tool-display).
+
 ## Discovery
 
 Skills are scanned from configured user/project/managed/plugin dirs plus

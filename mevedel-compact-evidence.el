@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-shared-conversation)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'subr-x)
@@ -460,13 +461,16 @@ reconstructed into a child conversation."
      :skill-provenance
      (mevedel-compact-evidence--skill-provenance session 0 agent-path))))
 
-(defun mevedel-compact-evidence--directive-ranges ()
-  "Return complete directive ranges using current-buffer positions."
-  (mevedel-transcript-buffer-directive-ranges))
+(defun mevedel-compact-evidence--isolated-ranges ()
+  "Return ordered directive and shared-item ranges excluded from room context."
+  (sort (append (mevedel-transcript-buffer-directive-ranges)
+                (mevedel-shared-conversation-ranges))
+        (lambda (left right)
+          (< (plist-get left :start) (plist-get right :start)))))
 
-(defun mevedel-compact-evidence--regions-without-directives (regions)
-  "Return REGIONS with complete directive turns removed."
-  (let ((directives (mevedel-compact-evidence--directive-ranges))
+(defun mevedel-compact-evidence--regions-without-isolated-turns (regions)
+  "Return REGIONS with directive and shared-item turns removed."
+  (let ((directives (mevedel-compact-evidence--isolated-ranges))
         result)
     (dolist (region regions)
       (let ((cursor (car region))
@@ -517,7 +521,7 @@ BODY-START defaults to the main-session body start."
                     (> (- limit start) budget-chars))
           (cl-decf turns)
           (setq start (start-for turns))))
-      (or (cl-loop for range in (mevedel-compact-evidence--directive-ranges)
+      (or (cl-loop for range in (mevedel-compact-evidence--isolated-ranges)
                    when (and (> start (plist-get range :start))
                              (< start (plist-get range :end)))
                    return (plist-get range :start))
@@ -575,7 +579,10 @@ compaction was in flight remain in place."
               (insert compacted-prefix))
           (erase-buffer)
           (insert-buffer-substring source-buffer))
-        (mevedel-transcript-exclude-directive-turns)))))
+        (mevedel-transcript-exclude-directive-turns)
+        (dolist (range (mevedel-shared-conversation-ranges))
+          (add-text-properties (plist-get range :start) (plist-get range :end)
+                               '(gptel ignore)))))))
 
 (defun mevedel-compact-evidence-previous-summary ()
   "Return the leading compaction summary body, or nil."
@@ -676,7 +683,7 @@ AGGRESSIVE selects whether to preserve the ordinary recent-turn tail."
           (mevedel-compact-evidence-tail-start limit aggressive body-start))
          (compact-end (max body-start tail-start))
          (history-regions
-          (mevedel-compact-evidence--regions-without-directives
+          (mevedel-compact-evidence--regions-without-isolated-turns
            (append (plist-get target :history-prefix-regions)
                    (list (cons body-start compact-end)))))
          (preserved-tail-turns

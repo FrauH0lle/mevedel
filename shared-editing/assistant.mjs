@@ -265,6 +265,7 @@ export class AssistantPanel {
         };
         actions.append(ask, refresh, resolve);
         const form = el('form', undefined, 'reply-form');
+        form.autocomplete = 'off';
         const input = el('textarea'); input.rows = 2; input.maxLength = 10000; input.required = true;
         input.placeholder = 'Reply to this discussion…'; input.setAttribute('aria-label','Reply to comment');
         const draft = this.drafts.replies[comment.id] ||= newDraft();
@@ -325,7 +326,12 @@ export class AssistantPanel {
     this.setComments(this.comments);
   }
   renderConversation() {
-    const { records = [], own = [], busy, paused, connected, model } = this.conversation;
+    const { records = [], own = [], busy, paused, connected, model,
+      conversationTruncated, conversationError } = this.conversation;
+    const historyNotice = $('conversation-history-notice');
+    historyNotice.textContent = conversationError ? `Earlier conversation unavailable: ${conversationError}`
+      : conversationTruncated ? 'Showing recent conversation. Older turns remain in session history.' : '';
+    historyNotice.hidden = !historyNotice.textContent;
     if (this.receipt && records.some(r => r.shared?.questionId === this.receipt.questionId)) {
       this.receipt = null;
       this.notice('');

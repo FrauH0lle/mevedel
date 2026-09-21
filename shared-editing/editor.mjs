@@ -1198,6 +1198,10 @@ function revealPassage(range) {
   const [from, to] = selectionPositions(doc, range);
   editor.chain().focus().setTextSelection({from, to}).scrollIntoView().run();
 }
+function setTheme(theme) {
+  if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+}
 async function start(event) {
   if (
     initialized ||
@@ -1207,6 +1211,7 @@ async function start(event) {
   )
     return;
   initialized = true;
+  setTheme(event.data.theme);
   port = event.ports[0];
   item = event.data.item;
   participant = event.data.name || 'You';
@@ -1225,6 +1230,10 @@ async function start(event) {
     }
   }
   port.onmessage = ({ data }) => {
+    if (data.type === 'theme') {
+      setTheme(data.theme);
+      return;
+    }
     if (data.type === 'reply') {
       const r = replies.get(data.reqId);
       if (r) {

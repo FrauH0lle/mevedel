@@ -443,7 +443,7 @@ func TestHealthzAndViewer(t *testing.T) {
 		"/manifest.json", "/icon.svg", "/icon.png", "/notifications.js",
 		"/renderer.js", "/transport.js", "/viewer-agent.js",
 		"/viewer-artifact.js", "/viewer-task.js", "/viewer-session.js",
-		"/viewer-panel.css",
+		"/viewer-panel.css", "/viewer-theme.css",
 		"/viewer-agent.css", "/viewer-artifact.css", "/viewer-session.css",
 		"/viewer-task.css",
 		"/service-worker.js",

@@ -294,7 +294,7 @@
       (cl-letf (((symbol-function 'mevedel-agent-conversation-project-history)
                  (lambda (&rest _) (ert-fail "Roster read history"))))
         (let ((roster (mevedel-system--resource-roster context)))
-          (should (string-match-p "history://root`" roster))
+          (should (string-match-p "Read/Grep `history://root`" roster))
           (should (string-match-p "history://root/PATH" roster))
           (should-not (string-match-p "agent://" roster)))))
     (should-not (string-match-p

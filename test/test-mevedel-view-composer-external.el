@@ -22,6 +22,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-view-input-files)
+(require 'mevedel-skills-plan)
 
 (mevedel-deftest mevedel-view-enqueue-external-follow-up
   (:doc "queues attributed, granted, skill-inert input through the real session queue")
@@ -44,8 +45,10 @@
             (let ((entry (mevedel-view-enqueue-external-follow-up
                           data-buffer "look at this $review please"
                           :guest-name "Herr Boing"
+                          :skills '("alpha" "beta")
                           :paths (list image))))
               (should entry)
+              (should (equal '("alpha" "beta") (plist-get entry :guest-skills)))
               ;; The @file mention and its grant ride the entry; skill
               ;; tokens stay literal at submission.
               (should (string-prefix-p "look at this $review please @file:"
@@ -104,5 +107,44 @@
             (should-not planned)))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
+
+(mevedel-deftest mevedel-view--submit-planned-input/selected-skills
+  (:doc "submits one real plan for explicit skills without planning argument tokens")
+  (let* ((root (make-temp-file "external-skills-" t))
+         (mevedel-skills-check-for-modifications nil)
+         (skills (mapcar
+                  (lambda (name)
+                    (let ((source (mevedel-skills-test--write-skill
+                                   root name
+                                   (format "name: %s\ndescription: Test\n" name)
+                                   (upcase name))))
+                      (mevedel-skill--create
+                       :name name :source-file source :active-p t
+                       :source-dir (file-name-directory source)
+                       :user-invocable-p t :context 'inline)))
+                  '("alpha" "beta" "gamma")))
+         (session (mevedel-session--create :name "selected" :skills skills))
+         (data (generate-new-buffer " *selected-data*"))
+         (view (generate-new-buffer " *selected-view*"))
+         plans)
+    (unwind-protect
+        (progn
+          (with-current-buffer data (setq-local mevedel--session session))
+          (with-current-buffer view
+            (setq-local mevedel--data-buffer data)
+            (cl-letf (((symbol-function 'mevedel-skills-plan-prepare)
+                       (lambda (plan _callback &optional _cancelled)
+                         (push plan plans))))
+              (mevedel-view--submit-planned-input
+               "$gamma is pasted text" nil nil nil nil nil '("alpha" "beta"))))
+          (should (= 1 (length plans)))
+          (should (equal '("alpha" "beta")
+                         (mapcar #'mevedel-skill-plan-entry-name
+                                 (mevedel-skill-invocation-plan-entries (car plans)))))
+          (should (equal "$gamma is pasted text"
+                         (mevedel-skill-invocation-plan-arguments (car plans)))))
+      (kill-buffer view)
+      (kill-buffer data)
+      (delete-directory root t))))
 
 ;;; test-mevedel-view-composer-external.el ends here

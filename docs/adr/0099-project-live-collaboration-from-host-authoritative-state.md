@@ -31,7 +31,10 @@ Link tiers grant progressively more typed actions:
 
 The host validates credentials, action, audience, byte limits, and current
 admission at receipt and, for queued invocations, delivery. Free text never runs
-a slash or skill parser. Directive-scoped prompts select discussion only.
+a slash or skill parser. Browsers can combine up to six explicitly selected
+skills in one prompt; the typed names are checked independently of literal
+message arguments, and cannot accompany a slash command. Directive-scoped
+prompts select discussion only.
 Interaction answers share the per-string input bound used by prompts.
 Attachments have allowlisted types and host-generated filenames. Browser input
 uses the ordinary pending-input path; guest attribution is visible to users but
@@ -165,3 +168,9 @@ The following changes belong to ADR 0099 unless another ID is named.
   tab could use an owner tab's stored offer to open as owner. Per-tab current-share
   storage prevents reload from choosing an older notification-enabled room.
   The original browser manual supplied no separate dates for these corrections.
+
+- **Combined skill selection, 2026-09-20:** the single armed chip and automatic
+  menu dismissal prevented composing several skills on one message. The menu
+  now stays open, selected skills travel as an explicit name array, and the
+  existing planner applies them together. Admission is checked for every name
+  on receipt and delivery; pasted message tokens remain inert.

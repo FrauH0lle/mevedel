@@ -1197,6 +1197,42 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
               (should-not (string-search root result)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-tool-fs-search/live-history ()
+  ,test
+  (test)
+  :doc "searches unsaved root history with the same addresses and lines as Read"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((session (mevedel-session--create :name "history"))
+           (root (current-buffer)))
+      (mevedel-session-set-root-buffer session root)
+      (insert "Architecture decision: host owns persistence.\n")
+      (let* ((attempt (mevedel-resource-prepare
+                       'grep "history://root" (list :session session)))
+             (mevedel-resource-current-attempts
+              (list (cons "history://root" attempt)))
+             (result (test-mevedel-tool-fs-search--await-callback
+                      #'mevedel-tool-fs-search-grep
+                      '(:path "history://root" :pattern "host owns" :output_mode "content")))
+             (read (plist-get (mevedel-resource-execute
+                              (mevedel-resource-prepare
+                               'read "history://root" (list :session session))) :result)))
+        (should (string-search "history://root" result))
+        (should (string-search "2:Architecture decision: host owns persistence." result))
+        (should (equal "Architecture decision: host owns persistence."
+                       (nth 1 (split-string read "\n")))))
+      (goto-char (point-max))
+      (insert "Latest unsaved correction: host also validates edits.\n")
+      (let* ((attempt (mevedel-resource-prepare
+                       'grep "history://root" (list :session session)))
+             (mevedel-resource-current-attempts
+              (list (cons "history://root" attempt))))
+        (should (string-search
+                 "Latest unsaved correction"
+                 (test-mevedel-tool-fs-search--await-callback
+                  #'mevedel-tool-fs-search-grep
+                  '(:path "history://root" :pattern "Latest" :output_mode "content"))))))))
+
 (mevedel-deftest mevedel-tool-fs-search--documents/diagnostics ()
   ,test
   (test)

@@ -283,12 +283,14 @@
 		  "mevedel-skills-plan" (cl-x) t)
 (declare-function mevedel-skill-invocation-plan-occurrences
 		  "mevedel-skills-plan" (cl-x) t)
+(declare-function mevedel-skill-invocation-plan-text
+                  "mevedel-skills-plan" (cl-x) t)
 (declare-function mevedel-skills-plan-prepare "mevedel-skills-plan"
 		  (plan callback &optional cancelled-p))
 (declare-function mevedel-skills-plan-render-data
 		  "mevedel-skills-plan" (plan prepared))
 (declare-function mevedel-skills-plan-user-input "mevedel-skills-plan"
-		  (text session))
+		  (text session &optional selected-skills))
 (autoload 'mevedel-skills-plan-user-input "mevedel-skills-plan")
 
 ;; `mevedel-skills-ui'
@@ -1967,7 +1969,8 @@ ran survives the send."
            (plist-get prepared :hook-context)))))))
 
 (defun mevedel-view--submit-planned-input
-    (input &optional before-send on-block dispatch after-insert inert-skills)
+    (input &optional before-send on-block dispatch after-insert inert-skills
+           selected-skills)
   "Plan, prepare, and submit atomically bound user INPUT.
 
 BEFORE-SEND runs exactly once at the dispatch boundary.  ON-BLOCK runs when
@@ -1977,7 +1980,8 @@ When DISPATCH is non-nil, call it with an accepted prompt submission instead of
 starting a new request.  AFTER-INSERT runs once the prompt is durably recorded.
 When INERT-SKILLS is non-nil, skip skill planning entirely: any skill token in
 INPUT stays literal text.  External input -- a collaboration guest's prompt --
-carries prompting authority only, never skill invocation."
+carries prompting authority only, never skill invocation.
+SELECTED-SKILLS explicitly names the skills to apply to literal INPUT."
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session))
@@ -1989,7 +1993,9 @@ carries prompting authority only, never skill invocation."
             (unless inert-skills
               (with-current-buffer data-buffer
                 (mevedel-skills-input-refresh-bound-input input session)
-                (mevedel-skills-plan-user-input input session)))))
+                (mevedel-skills-plan-user-input input session selected-skills)))))
+      (when selected-skills
+        (setq input (mevedel-skill-invocation-plan-text plan)))
       (if (or inert-skills
               (null (mevedel-skill-invocation-plan-occurrences plan)))
           (if dispatch

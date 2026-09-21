@@ -812,6 +812,65 @@
          room 1 (list :invoke "plan" :text ""))
         (should-not enqueued)))))
 
+(mevedel-deftest mevedel-collaboration--guest-skills-admitted-p
+  (:doc "admits only a bounded unique set of currently visible skills")
+  (let* ((root (make-temp-file "guest-skills-" t))
+         (source (mevedel-skills-test--write-skill
+                  root "alpha" "name: alpha\ndescription: Alpha\n" "Alpha"))
+         (skill (mevedel-skill--create
+                 :name "alpha" :source-file source
+                 :source-dir (file-name-directory source)
+                 :source 'project :active-p t :user-invocable-p t))
+         (session (mevedel-session--create :name "skills" :skills (list skill)))
+         (mevedel-collaboration-guest-skills '((full "alpha") (owner . t))))
+    (unwind-protect
+        (progn
+          (should (mevedel-collaboration--guest-skills-admitted-p
+                   '("alpha") 'full session))
+          (dolist (names '(nil "alpha" ["alpha"] (42) ("missing")
+                          ("alpha" "alpha") ("plan") ("mode")
+                          ("a" "b" "c" "d" "e" "f" "g")))
+            (should-not (mevedel-collaboration--guest-skills-admitted-p
+                         names 'owner session)))
+          (let ((mevedel-collaboration-guest-skills nil))
+            (should-not (mevedel-collaboration--guest-skills-admitted-p
+                         '("alpha") 'full session))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-collaboration--handle-prompt--selected-skills
+  (:doc "queues selected skills once and rejects mixed or unauthorized selections")
+  (with-temp-buffer
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :data-buffer (current-buffer) :guests guests
+                       :transport 'transport :session 'session))
+           (guest (list :name "Phone" :writable t :ready t))
+           queued)
+      (puthash 1 guest guests)
+      (puthash 2 (list :writable nil) guests)
+      (setq-local mevedel--view-buffer (current-buffer))
+      (cl-letf (((symbol-function 'mevedel-collaboration--guest-skills-admitted-p)
+                 (lambda (names _role _session) (equal names '("alpha" "beta"))))
+                ((symbol-function 'mevedel-view-enqueue-external-follow-up)
+                 (lambda (_data text &rest keys)
+                   (push (cons text keys) queued) (list :id 10)))
+                ((symbol-function 'mevedel-collaboration--queue-position) (lambda (&rest _) 1))
+                ((symbol-function 'mevedel-collaboration--publish-queue) #'ignore)
+                ((symbol-function 'mevedel-collaboration--transport-send) #'ignore))
+        (dolist (frame '((:skills ("missing") :text "work")
+                         (:skills ("alpha" "beta") :invoke "plan" :text "work")))
+          (mevedel-collaboration--handle-prompt room 1 frame))
+        (mevedel-collaboration--handle-prompt
+         room 2 '(:skills ("alpha" "beta") :text "work"))
+        (should-not queued)
+        (dotimes (_ 2)
+          (mevedel-collaboration--handle-prompt
+           room 1 '(:skills ("alpha" "beta") :text "$unselected stays literal")))
+        (should (= 1 (length queued)))
+        (should (equal "$unselected stays literal" (caar queued)))
+        (should (equal '("alpha" "beta") (plist-get (cdar queued) :skills)))
+        (should (eq 'full (plist-get (cdar queued) :guest-role)))
+        (should-not (plist-get (cdar queued) :directive-id))))))
+
 (mevedel-deftest mevedel-collaboration--guest-roster
   (:doc "describes each admitted name with its namespace and hint")
   (mevedel-view-test--with-buffers
