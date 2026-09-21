@@ -173,7 +173,8 @@ retracted or never-delivered queue entry can be explicitly submitted again."
               (when (equal id (plist-get shared :questionId))
                 (setq receipt (list :delivered t :question shared))))))))
     (unless receipt
-      (dolist (turn (mevedel-shared-conversation-history session (plist-get args :id)))
+      (dolist (turn (plist-get (mevedel-shared-conversation-history
+                               session (plist-get args :id)) :turns))
         (let ((shared (plist-get turn :shared)))
           (when (equal id (plist-get shared :questionId))
             (setq receipt (list :delivered t :question shared))))))
@@ -227,14 +228,10 @@ retracted or never-delivered queue entry can be explicitly submitted again."
 
 (defun mevedel-collaboration-editing--conversation (session item-id)
   "Return bounded archived conversation records for ITEM-ID in SESSION."
-  (let ((turns (mevedel-shared-conversation-history session item-id))
-        (remaining mevedel-shared-conversation--history-limit)
-        selected truncated)
-    (dolist (turn turns)
-      (let ((text (plist-get turn :text)))
-        (if (and (not truncated) (<= (length text) remaining))
-            (progn (push text selected) (cl-decf remaining (length text)))
-          (setq truncated t))))
+  (let* ((history (mevedel-shared-conversation-history
+                   session item-id :limit mevedel-shared-conversation--history-limit))
+         (selected (mapcar (lambda (turn) (plist-get turn :text))
+                           (reverse (plist-get history :turns)))))
     (with-temp-buffer
       (delay-mode-hooks (org-mode))
       (setq-local mevedel--session session)
@@ -243,7 +240,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
         (dolist (record records)
           (plist-put record :id (concat "archive:" (plist-get record :id))))
         (list :conversation (vconcat records)
-              :conversationTruncated (if truncated t :json-false))))))
+              :conversationTruncated (if (plist-get history :truncated) t :json-false))))))
 
 (cl-defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
   "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM."

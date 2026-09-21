@@ -256,13 +256,20 @@ requests, same-item turns are restored from archived segments and deduplicated b
 question identity against the live tail. The request includes up to 128,000
 characters of prior complete turns, newest first in selection and chronological
 in presentation; omitted older history is explicitly disclosed and remains
-retrievable. The current question is retained separately. Item requests do not
+retrievable. The budget is applied while reading history: once the next unique
+item turn exceeds it, older segments are not opened. The current question and
+its archived duplicates do not consume that budget. Sparse item history can
+still require scanning all segments before reaching the budget. Retry identity
+checks remain exhaustive so old accepted questions cannot be submitted twice.
+The current question is retained separately. Item requests do not
 compact the unrelated room to make space. Current snapshots, tools, and provider
 context limits still apply; a large single turn may need a narrower question.
 The editor restores recent archived discussion on opening, reconnecting, or
 transcript replacement/removal, and reports truncated or unavailable history.
-An archive read failure prevents a model request from silently losing context,
-but does not prevent editing the item.
+Failure to read a needed archive prevents a model request from silently losing
+context, but does not prevent editing the item. Archives older than an already
+established truncation point are not consulted. Ordinary requests without
+trusted item attribution skip item-related transcript classification.
 
 Accepted questions include item identity, title, committed revision, exact selected
 text or shapes, bounded surrounding document blocks or connector endpoints, and

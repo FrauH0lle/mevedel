@@ -176,8 +176,8 @@ conversation; comments remain their presentation subthreads.
 
 Archived canonical segments restore prior item turns after compaction and reload.
 Question identities deduplicate preserved tails. Prior history has a complete-turn
-character budget with an explicit omission notice; damaged archives fail requests
-visibly. The editor shows available live discussion and an archive warning while
+character budget with an explicit omission notice; damaged archives needed for
+that selection fail requests visibly. The editor shows available live discussion and an archive warning while
 content editing remains usable. No placeholder directive is created: its lifecycle
 and read-only discussion capability would be wrong for requests that edit an item.
 
@@ -188,6 +188,24 @@ session callers; neither an address nor retrieval expands editing authority.
 The model chooses retrieval from the task, without an automatic keyword router.
 
 ### Decision history
+
+An isolated native-request benchmark exposed unnecessary work in the first
+history selector: ordinary room requests classified the transcript twice even
+without item attribution, mixed histories searched all user turns for each item
+turn, and the character budget was applied only after reading every archive.
+With 1,000 turns, request preparation measured 60 ms for ordinary chat and 114 ms
+for mixed history; a dense item history across 30 segments took 86 ms and opened
+all 30 files. These are local synthetic medians, not network or model latency.
+
+Selection now checks trusted attribution first, matches ordered turn boundaries
+in one pass, and applies the complete-turn budget during newest-first archive
+reads. Matching fixtures measured 44 ms, 54 ms, and 11 ms respectively; the last
+case opened two archives. All 15 native request payload hashes matched the prior
+implementation. No persistent index or cache was added. Sparse item histories
+can still require all archive reads; retry checks deliberately retain exhaustive
+history. Unused older archives no longer block already-truncated context, while
+failures in the needed prefix remain visible. The reproducible benchmark and
+raw measurements are in `.scratch/shared-conversation-performance/report.md`.
 
 Initially sidebar filtering alone separated item discussions visually. Dedicated
 request context replaces that behavior because a focused editor conversation
