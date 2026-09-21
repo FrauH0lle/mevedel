@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'gptel-anthropic)
 (require 'mevedel-permission-rules)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
@@ -789,7 +790,63 @@
           (should (equal '("Imenu" "Eval")
                          (mapcar #'cadar (mevedel-session-tool-catalog session))))))
       (mevedel-preset--setup-catalog 'read-test)
-      (should-not (mevedel-session-tool-catalog session)))))
+      (should-not (mevedel-session-tool-catalog session))))
+
+  :doc "discovers built-in capabilities through native ToolSearch without changing schemas"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create :name "discovery"))
+      (mevedel-preset--refresh-tools 'mevedel-implement)
+      (mevedel-preset--setup-catalog 'mevedel-implement)
+      (let* ((search (mevedel-tool-gptel-tool (mevedel-tool-get "ToolSearch")))
+             (backend (gptel--make-anthropic :name "discovery-test"))
+             (schemas (gptel--json-encode
+                       (gptel--parse-tools backend gptel-tools)))
+             (native (copy-sequence gptel-tools)))
+        (dolist (key '("elisp" "code" "tasks" "agents" "web"))
+          (should (string-search (concat "`" key "`")
+                                 (gptel-tool-description search))))
+        (dolist (case '(("emacs" "Found 16 tools" "function_documentation"
+                        "variable_value" "always asks")
+                       ("tasks" "Found 5 tools" "- TaskCreate: "
+                        "- TaskUpdate: " "- TaskNote: " "- TaskList: "
+                        "- TaskGet: ")
+                       ("plan" "TaskCreate" "Calling signature:")
+                       ("checklist" "TaskCreate")
+                       ("dependencies" "TaskCreate" "TaskUpdate" "TaskList")
+                       ("ownership" "TaskUpdate")
+                       ("function_documentation" "Calling signature:"
+                        "mevedel-introspection/function_documentation :function")))
+          (let (result)
+            (funcall (gptel-tool-function search)
+                     (lambda (value) (setq result value)) (car case))
+            (dolist (text (cdr case))
+              (should (string-search text result)))))
+        (should (equal native gptel-tools))
+        ;; gptel creates fresh uninterned property keys on each parse; compare
+        ;; the serialized payload rather than their Lisp symbol identities.
+        (should (equal schemas (gptel--json-encode
+                                (gptel--parse-tools backend gptel-tools))))
+        ;; A capability hint must not add tools to a narrower role or request.
+        (mevedel-preset--refresh-tools 'mevedel-discuss)
+        (mevedel-preset--setup-catalog 'mevedel-discuss)
+        (dolist (query '("emacs" "plan" "dependencies"))
+          (let (result)
+            (funcall (gptel-tool-function search)
+                     (lambda (value) (setq result value)) query)
+            (should (string-prefix-p "No matching tools found." result))))
+        (mevedel-preset--setup-catalog 'mevedel-implement)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :ptc-primitives '("TaskList")))
+        (let (result)
+          (funcall (gptel-tool-function search)
+                   (lambda (value) (setq result value)) "dependencies")
+          (should (string-search "TaskList" result))
+          (should-not (string-search "TaskCreate" result))
+          (should-not (string-search "TaskUpdate" result)))))))
 
 (mevedel-deftest mevedel-preset--parent-chain-to
   (:after-each

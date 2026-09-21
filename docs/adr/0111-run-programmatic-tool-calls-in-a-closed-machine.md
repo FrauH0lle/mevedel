@@ -132,6 +132,15 @@ contracts, with result-specific recovery and optional path-skill notices at
 their existing seams. Persisted agent templates containing the removed recipes
 are rejected under the project's no-compatibility policy; start fresh agents.
 
+A subsequent discovery investigation found that `elisp` returned the available
+introspection tools while `emacs` found none, and task tools had no catalog
+summaries for queries such as `plan` or `dependencies`. ToolSearch now carries
+small, static capability cues, and those tools have outcome-oriented searchable
+summaries. This restores capability awareness without restoring per-read nudges,
+mandatory routing, or dynamic native schemas. It fixes demonstrated discovery
+gaps; improved autonomous tool selection remains a behavioral measurement, not
+an established consequence of these changes.
+
 The original root-only restriction protected two host seams, not the evaluator.
 Agents lacked effective-roster handling, and their session resolution could write
 an envelope checkpoint into the root sidecar and later recover it into the root

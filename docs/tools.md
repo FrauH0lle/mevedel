@@ -482,6 +482,18 @@ agent communication tools and configured wrapped tools, remain discoverable.
 User extras use `mevedel-preset-extra-tool-specs` and
 `mevedel-agent-extra-tool-specs`; an explicitly native extra remains native.
 
+ToolSearch's static description gives a compact capability index with example
+search keys for Elisp introspection, code navigation, tasks, agents, and web
+tools. These are suitability cues, not a live availability roster or a required
+workflow. The current role and request still determine search results. A known,
+appropriate tool can be used directly; a generic tool's ability to reproduce an
+operation does not by itself make specialist discovery unnecessary.
+
+Built-in summaries describe useful outcomes in ordinary vocabulary. In
+particular, introspection summaries identify Emacs, and task summaries expose
+plan/checklist tracking, ownership, and dependencies. These summaries serve both
+search matching and broad result listings; full prompts are not search indexes.
+
 ToolSearch performs case-insensitive OR matching over names, summaries,
 categories and groups. One to three matches return all contracts, arguments,
 signatures and manual references. Broader queries return at most 20 names and
