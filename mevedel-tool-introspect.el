@@ -211,7 +211,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "symbol_exists"
    :description "Check if a symbol is interned in obarray."
-   :summary "Check if a symbol is interned in obarray."
+   :summary "Check whether a symbol is interned in the running Emacs."
    :prompt-file "prompts/tools/symbol_exists.md"
    :handler (lambda (args)
 	      (list :result
@@ -228,7 +228,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "load_paths"
    :description "Return user load-path entries."
-   :summary "Return user load-path entries."
+   :summary "List the running Emacs's library load-path entries."
    :prompt-file "prompts/tools/load_paths.md"
    :handler (lambda (_args) (list :result (string-join load-path "\n")))
    :args nil
@@ -242,7 +242,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "features"
    :description "Check whether a feature is loaded or available."
-   :summary "Check whether a feature is loaded or available."
+   :summary "Check whether an Emacs feature is loaded or available."
    :prompt-file "prompts/tools/features.md"
    :handler (lambda (args)
 	      (list :result
@@ -261,7 +261,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "manual_names"
    :description "List available info manuals."
-   :summary "List available info manuals."
+   :summary "List Info manuals available to Emacs."
    :prompt-file "prompts/tools/manual_names.md"
    :handler (lambda (_args)
 	      (list :result
@@ -278,7 +278,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "manual_nodes"
    :description "List section nodes of an info manual."
-   :summary "List section nodes of an info manual."
+   :summary "List section nodes of an Info manual available to Emacs."
    :prompt-file "prompts/tools/manual_nodes.md"
    :handler (lambda (args)
 	      (list :result
@@ -297,7 +297,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "manual_node_contents"
    :description "Read the contents of an info manual node."
-   :summary "Read the contents of an info manual node."
+   :summary "Read an Info manual node through Emacs."
    :prompt-file "prompts/tools/manual_node_contents.md"
    :handler (lambda (args)
 	      (list :result
@@ -317,7 +317,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "symbol_manual_section"
    :description "Find which manual section documents a symbol."
-   :summary "Find which manual section documents a symbol."
+   :summary "Find the Info manual section documenting an Emacs Lisp symbol."
    :prompt-file "prompts/tools/symbol_manual_section.md"
    :handler (lambda (args)
 	      (list :result
@@ -335,7 +335,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "function_completions"
    :description "List function names matching an Orderless pattern."
-   :summary "List function names matching an Orderless pattern."
+   :summary "Find Emacs function names matching an Orderless pattern."
    :prompt-file "prompts/tools/function_completions.md"
    :handler (lambda (args)
 	      (list :result
@@ -354,7 +354,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "command_completions"
    :description "List interactive command names matching an Orderless pattern."
-   :summary "List interactive command names matching an Orderless pattern."
+   :summary "Find interactive Emacs commands matching an Orderless pattern."
    :prompt-file "prompts/tools/command_completions.md"
    :handler (lambda (args)
 	      (list :result
@@ -373,7 +373,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "variable_completions"
    :description "List variable names matching an Orderless pattern."
-   :summary "List variable names matching an Orderless pattern."
+   :summary "Find bound Emacs variable names matching an Orderless pattern."
    :prompt-file "prompts/tools/variable_completions.md"
    :handler (lambda (args)
 	      (list :result
@@ -391,7 +391,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "function_source"
    :description "Read the source code for a function or macro."
-   :summary "Read the source code for a function or macro."
+   :summary "Locate an Emacs function or macro's source definition."
    :prompt-file "prompts/tools/function_source.md"
    :handler (lambda (args)
 	      (list :result
@@ -409,7 +409,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "variable_source"
    :description "Read the source code for a variable."
-   :summary "Read the source code for a variable."
+   :summary "Read an Emacs variable's source declaration, not its current value."
    :prompt-file "prompts/tools/variable_source.md"
    :handler (lambda (args)
 	      (list :result
@@ -427,7 +427,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "function_documentation"
    :description "Read the docstring for a function or macro."
-   :summary "Read the docstring for a function or macro."
+   :summary "Read a function or macro docstring from the running Emacs."
    :prompt-file "prompts/tools/function_documentation.md"
    :handler (lambda (args)
 	      (list :result
@@ -445,7 +445,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "variable_documentation"
    :description "Read the docstring for a variable."
-   :summary "Read the docstring for a variable."
+   :summary "Read a variable docstring from the running Emacs."
    :prompt-file "prompts/tools/variable_documentation.md"
    :handler (lambda (args)
 	      (list :result
@@ -464,7 +464,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "library_source"
    :description "Read the source code for a library."
-   :summary "Read the source code for a library."
+   :summary "Read library source resolved through Emacs load-path."
    :prompt-file "prompts/tools/library_source.md"
    :handler (lambda (args)
 	      (list :result
@@ -482,7 +482,7 @@ TYPE is nil for functions or defvar for variables."
   (mevedel-define-tool
    :name "variable_value"
    :description "Return a variable's global value (always asks)."
-   :summary "Return a variable's global value (always asks)."
+   :summary "Inspect an Emacs variable's current global runtime value (always asks)."
    :prompt-file "prompts/tools/variable_value.md"
    :handler (lambda (args)
 	      (list :result

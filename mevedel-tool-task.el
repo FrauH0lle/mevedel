@@ -1155,6 +1155,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskCreate"
     :description "Create one or more tasks in the session task list."
+    :summary "Track a plan or checklist with task status, owners, and dependencies."
     :prompt-file "prompts/tools/taskcreate.md"
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
@@ -1172,6 +1173,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskUpdate"
     :description "Update the status or fields of an existing task."
+    :summary "Update task status, ownership, and dependencies."
     :prompt-file "prompts/tools/taskupdate.md"
     :handler #'mevedel-tool-task--handle-update
     :args ((id integer :required
@@ -1200,6 +1202,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskNote"
     :description "Set or clear the current status note for an owner task group."
+    :summary "Set or clear an owner's progress note above open tasks."
     :prompt-file "prompts/tools/tasknote.md"
     :handler #'mevedel-tool-task--handle-note
     :args ((note string :required
@@ -1213,6 +1216,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskList"
     :description "List the tasks currently tracked in the session."
+    :summary "List session tasks, progress, owners, and dependencies."
     :prompt-file "prompts/tools/tasklist.md"
     :handler #'mevedel-tool-task--handle-list
     :args ((status string :optional
@@ -1224,6 +1228,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskGet"
     :description "Retrieve full details for a single task by ID."
+    :summary "Read one task's full description, status, ownership, and metadata."
     :prompt-file "prompts/tools/taskget.md"
     :handler #'mevedel-tool-task--handle-get
     :args ((id integer :required

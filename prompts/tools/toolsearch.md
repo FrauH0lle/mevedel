@@ -2,12 +2,21 @@ Find specialist tools and retrieve their contracts for ToolCall.
 
 ### When to use `ToolSearch`
 
-- Find a capability beyond the native core tools, including configured MCP tools.
+- Find a specialist better suited to the work, including configured MCP tools.
 - Retrieve exact arguments or rediscover a contract after compaction.
+
+Useful search keys, subject to the current role and request:
+
+- `elisp`: running Emacs documentation, symbol/source lookup, Info manuals, and
+  runtime values. Static source alone does not establish a current runtime value.
+- `code`: symbol outlines, definitions, references, and syntax structure.
+- `tasks`: session-visible plans/checklists, status, ownership, and dependencies.
+- `agents`: delegate independent work and coordinate retained agents.
+- `web`: web search and page retrieval.
 
 ### When NOT to use `ToolSearch`
 
-- A native tool or a known current contract already covers the operation.
+- A known, appropriate tool already suffices; discovery would add no useful value.
 
 ### How to use `ToolSearch`
 
