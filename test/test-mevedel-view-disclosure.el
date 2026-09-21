@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tool-ptc)
 (require 'mevedel-view)
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-render)
@@ -228,6 +229,57 @@
          (should (eq 'tool-child
                      (get-text-property (match-beginning 0)
                                         'mevedel-view-type)))))))
+
+  :doc "repeated nested compound toggles retain descendants and siblings exactly once"
+  (mevedel-view-test--with-buffers
+   (mevedel-tool-ptc--register)
+   (with-current-buffer data-buf (insert "source\n"))
+   (with-current-buffer view-buf
+     (let ((inhibit-read-only t))
+       (goto-char mevedel-view--input-marker)
+       (mevedel-view--render-expanded-body
+        '(:header "Activity" :vtype tool-group
+          :child-calls
+          ((:id "group/1" :tool "ToolCall" :status success :result "ok"
+            :render-data
+            (:kind ptc :outcome completed
+             :calls ((:id "ptc/1" :tool "Read" :status success
+                      :args (:file_path "a.el") :result "first output")
+                     (:id "ptc/2" :tool "Read" :status success
+                      :args (:file_path "b.el") :result "second output"))))
+           (:id "group/2" :tool "Read" :status success
+            :args (:file_path "sibling.el") :result "sibling output")))
+        (cons 1 8)))
+     (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+     (let ((draft-point (copy-marker (point))))
+       (unwind-protect
+           (dotimes (i 6)
+             (save-excursion
+               (goto-char (point-min))
+               (search-forward "ToolCall: 2 calls")
+               (mevedel-view-toggle-section)
+               (let ((text (buffer-substring-no-properties
+                            (point-min) mevedel-view--input-marker)))
+                 (should (= (if (zerop (% i 2)) 1 0)
+                            (mevedel-view-test--count-substring "Read: a.el" text)))
+                 (should (= (if (zerop (% i 2)) 1 0)
+                            (mevedel-view-test--count-substring "Read: b.el" text)))
+                 (should (= 1 (mevedel-view-test--count-substring
+                               "Read: sibling.el" text))))
+               (when (zerop (% i 2))
+                 ;; A descendant toggles its own output, not its parent's calls.
+                 (goto-char (point-min))
+                 (search-forward "Read: a.el")
+                 (mevedel-view-toggle-section)
+                 (should (string-search "first output" (buffer-string)))
+                 (should-not (string-search "second output" (buffer-string)))
+                 (goto-char (point-min))
+                 (search-forward "Read: a.el")
+                 (mevedel-view-toggle-section)))
+             (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+             (should (= (point) draft-point))
+             (should (= (point) (+ (mevedel-view--input-start) 4))))
+         (set-marker draft-point nil)))))
 
   :doc "non-expandable tool events remain non-toggleable and untracked"
   (mevedel-view-test--with-buffers

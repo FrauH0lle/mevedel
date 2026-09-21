@@ -2261,6 +2261,9 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
 (defconst mevedel-view--child-call-indent "  "
   "Extra line prefix that sets a nested call row in from its own block.")
 
+(defvar mevedel-view--child-call-depth 0
+  "Nesting depth of the child call currently being rendered.")
+
 (defun mevedel-view--child-call-rendering (child)
   "Return the rendering plist for nested call CHILD, or nil.
 
@@ -2381,6 +2384,7 @@ body of the block that ran them."
            (indent (or indent mevedel-view--child-call-indent))
            (mevedel-view--rendering-indent
             (concat mevedel-view--rendering-indent indent))
+           (mevedel-view--child-call-depth (1+ mevedel-view--child-call-depth))
            (start (point)))
       (if-let* ((text (plist-get rendering :mailbox-text)))
           (let ((mevedel-view-mailbox-collapse-line-threshold
@@ -2407,10 +2411,14 @@ body of the block that ran them."
         (if collapsed
             (mevedel-view--render-collapsed-header rendering source)
           (mevedel-view--render-expanded-body rendering source)))
-      (add-text-properties start (point)
-                           `(mevedel-view-tool-child ,child
-                                                     mevedel-view-child-indent ,indent
-                                                     mevedel-view-source-key ,key))
+      ;; Descendants have their own source identity and disclosure state.
+      ;; Stamp only this row's body, even when it contains a compound call.
+      (add-text-properties
+       start (next-single-property-change start 'mevedel-view-source nil (point))
+       `(mevedel-view-tool-child ,child
+         mevedel-view-child-indent ,indent
+         mevedel-view-child-depth ,mevedel-view--child-call-depth
+         mevedel-view-source-key ,key))
       (mevedel-view-render-add-display-properties start (point) 'tool-child)
       (mevedel-view-disclosure-record-state-for-key key collapsed))))
 
@@ -2422,16 +2430,20 @@ body of the block that ran them."
       (mevedel-view--insert-child-call-block
        child source 'derive (pop prefixes)))))
 
-(defun mevedel-view-render-child-calls-end (start limit)
+(defun mevedel-view-render-child-calls-end (start limit &optional parent-depth)
   "Return the end of the nested call rows that begin at START, before LIMIT.
 Return START when no row begins there.  Nested rows always follow the
 body of the block that ran them, so a run starting at START belongs to
-the section that ends there."
+the section that ends there.  With PARENT-DEPTH, stop before any row at
+that depth or shallower, preserving siblings of a nested compound call."
   (let ((pos start))
     (while (and (< pos limit)
-                (eq (get-text-property pos 'mevedel-view-type) 'tool-child))
+                (eq (get-text-property pos 'mevedel-view-type) 'tool-child)
+                (or (null parent-depth)
+                    (> (get-text-property pos 'mevedel-view-child-depth)
+                       parent-depth)))
       (setq pos (or (next-single-property-change
-                     pos 'mevedel-view-type nil limit)
+                     pos 'mevedel-view-source nil limit)
                     limit)))
     pos))
 
@@ -2456,15 +2468,18 @@ does not overwrite the identity of the rows it owns."
          (source (and start (get-text-property start 'mevedel-view-source)))
          (collapsed (and start (get-text-property start 'mevedel-view-collapsed)))
          (indent (and start (get-text-property start 'mevedel-view-child-indent)))
+         (depth (and start (get-text-property start 'mevedel-view-child-depth)))
          (turn-id (and start (get-text-property start 'mevedel-view-turn-id))))
     (unless (and bounds child)
       (user-error "No collapsible section at point"))
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char start)
-        (delete-region start (cdr bounds))
-        (mevedel-view--insert-child-call-block
-         child source (not collapsed) indent)
+        (delete-region start (mevedel-view-render-child-calls-end
+                              (cdr bounds) (point-max) depth))
+        (let ((mevedel-view--child-call-depth (1- depth)))
+          (mevedel-view--insert-child-call-block
+           child source (not collapsed) indent))
         (when turn-id
           (put-text-property start (point) 'mevedel-view-turn-id turn-id))))))
 

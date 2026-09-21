@@ -62,6 +62,9 @@ agent events out to open transcript views and applies their read-only chrome;
 it does not maintain a parallel rendering implementation. The live agent data
 buffer keeps its existing parent-view binding, so opening an inspection view
 does not redirect parent status and interaction UI.
+Stream and tool callbacks temporarily bind that pointer to the inspection view.
+The observer module declares the pointer as a special variable itself, so this
+routing also works when compiled before the session structs have been loaded.
 
 Agent transcript views are observation-only. Permission, Ask,
 plan, and other actionable interactions remain exclusively in the parent
@@ -331,7 +334,10 @@ without a verb mapping — MCP tools included — appear as `NAME ×N`. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
-with it. Delivered agent messages, agent results, and Bash completions inside
+with it. Nested compound calls retain each descendant's row identity and
+nesting depth: toggling one removes its descendants with it while preserving
+sibling rows, so repeated expansion never accumulates copies.
+Delivered agent messages, agent results, and Bash completions inside
 an activity run join the same group as independently expandable cards;
 `received N messages` counts them separately from tools. Their sender links,
 execution summaries, and mailbox collapse threshold stay the same. A newly

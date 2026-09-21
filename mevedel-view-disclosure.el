@@ -40,7 +40,7 @@
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 (declare-function mevedel-view-render-child-calls-end
-                  "mevedel-view-render" (start limit))
+                  "mevedel-view-render" (start limit &optional parent-depth))
 (declare-function mevedel-view-render-collapsed-disclosure
                   "mevedel-view-render" (data-buf source vtype))
 (declare-function mevedel-view-render-insert-expanded-disclosure
