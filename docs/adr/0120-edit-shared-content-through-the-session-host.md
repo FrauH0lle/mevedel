@@ -63,7 +63,16 @@ asset service or remote fetch. Existing session activity drives visible working
 indicators in the room and editor chats; no second request lifecycle is tracked.
 
 The cost is a local Node runtime and packaged browser/helper bundles. End
-users do not install npm dependencies. Large content and operation histories
+users do not install npm dependencies. Missing Node previously left editing
+actions clickable until they failed. Availability now uses a read-only request
+through the existing serialized helper protocol: actual startup, document schema,
+and PNG rendering must succeed before the browser enables editing actions. The
+saved catalog remains visible independently. Recheck starts a fresh helper
+between jobs to pick up runtime configuration and resource repairs, without
+cancelling queued edits or creating durable state. Chat and static artifacts
+remain independent of this optional dependency.
+
+Large content and operation histories
 have explicit bounds; reaching them calls for a smaller item or a native
 export/import, rather than unbounded memory or hidden history truncation.
 

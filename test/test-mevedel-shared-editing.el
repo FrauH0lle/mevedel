@@ -14,7 +14,9 @@
 (require 'mevedel-shared-editing)
 
 (mevedel-deftest mevedel-shared-editing-call
-		 (:doc "Commits a board through the host helper and reopens durable state")
+		 ()
+  ,test (test)
+  :doc "Commits a board through the host helper and reopens durable state"
 		 (let* ((directory (make-temp-file "mevedel-editing-" t))
 			(session (mevedel-session--create :save-path directory
 							  :authority-mode 'pid-lock))
@@ -49,7 +51,57 @@
 		     (when (buffer-live-p buffer)
 		       (with-current-buffer buffer (mevedel-shared-editing-stop))
 		       (kill-buffer buffer))
-		     (delete-directory directory t))))
+		     (delete-directory directory t)))
+  :doc "Availability is optional, read-only, and recovers after runtime and resource repair"
+  (let* ((directory (make-temp-file "mevedel-editing-status-" t))
+         (resources mevedel-shared-editing--directory)
+         (node mevedel-shared-editing-node-program)
+         (session (mevedel-session--create))
+         (buffer (generate-new-buffer " *editing-status-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (insert "> Host draft\nsecond line")
+          (setq buffer-read-only t)
+          (cl-labels ((call (action)
+                       (let (reply)
+                         (mevedel-shared-editing-call
+                          session (list :action action) (lambda (value) (setq reply value)))
+                         (let ((deadline (+ (float-time) 10)))
+                           (while (and (not reply) (< (float-time) deadline))
+                             (accept-process-output nil 0.05)))
+                         (should reply)
+                         reply)))
+            (let ((mevedel-shared-editing-node-program
+                   (file-name-concat directory "missing-node")))
+              (should (string-match-p "Install Node" (plist-get (call "status") :error)))
+              (should (equal [] (plist-get (call "list") :result))))
+            (should (eq t (plist-get (plist-get (call "status") :result) :available)))
+            (let ((mevedel-shared-editing--directory directory))
+              (should (string-match-p "resources" (plist-get (call "status") :error))))
+            (copy-file (file-name-concat resources "host.bundle.mjs")
+                       (file-name-concat directory "host.bundle.mjs"))
+            (let ((mevedel-shared-editing--directory directory))
+              (should (string-match-p "resources" (plist-get (call "status") :error)))
+              (dolist (file '("resvg.wasm" "font.ttf"))
+                (copy-file (file-name-concat resources file)
+                           (file-name-concat directory file)))
+              (should (eq t (plist-get (plist-get (call "status") :result) :available))))
+            ;; A configured runtime change also invalidates a live helper.
+            (let ((mevedel-shared-editing-node-program
+                   (file-name-concat directory "missing-node")))
+              (should (plist-get (call "status") :error)))
+            (let ((mevedel-shared-editing-node-program node))
+              (should (eq t (plist-get (plist-get (call "status") :result) :available))))
+            (should-not (mevedel-session-save-path session))
+            (should (equal (buffer-string) "> Host draft\nsecond line"))
+            (should (equal (sort (directory-files directory nil "^[^.]") #'string<)
+                           '("font.ttf" "host.bundle.mjs" "resvg.wasm")))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (mevedel-shared-editing-stop))
+        (kill-buffer buffer))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-shared-editing-stop
 		 (:doc "Killing a buffer after commit settles once and stops its private helper")

@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { handle } from '../host.mjs';
 
+test('availability verifies schema and renderer without returning durable state', async () => {
+  assert.deepEqual(await handle({ action: 'status' }), { result: { available: true } });
+});
+
+test('availability rejects unsupported Node versions with an actionable reason', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(process.versions, 'node');
+  try {
+    for (const version of ['20.19.0', '22.3.0']) {
+      Object.defineProperty(process.versions, 'node', { value: version });
+      await assert.rejects(handle({ action: 'status' }), /Node 22.4 or newer on the Emacs host/);
+    }
+  } finally {
+    Object.defineProperty(process.versions, 'node', descriptor);
+  }
+});
+
 test('host creates, exports, imports independently, and renders without a browser', async () => {
   const made = await handle({
     action: 'create',

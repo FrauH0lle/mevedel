@@ -452,3 +452,9 @@ from the live transcript and archived segments without a second transcript store
 Room chat can retrieve those turns through the same history resources.
 Canonical provider-failure summaries also appear in browser conversations.
 See [shared editing](shared-editing.md#questions-and-document-comments).
+
+Shared editing is optional: missing Node or helper resources on the Emacs host
+disable editing actions with a reason while chat, static artifacts, and the saved
+item list remain available. **Recheck availability** enables them after repair
+without reloading the room. Browser guests do not install Node. See the
+[runtime contract](shared-editing.md#runtime-and-build).

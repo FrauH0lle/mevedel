@@ -78,6 +78,29 @@ function differences(before, after) {
 }
 export async function handle(request) {
   const { action } = request;
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  check(
+    major > 22 || (major === 22 && minor >= 4),
+    'Shared editing requires Node 22.4 or newer on the Emacs host',
+  );
+  if (action === 'status') {
+    const doc = create('document', 'Runtime check');
+    try {
+      initializeDocument(doc);
+      validate(doc);
+      await png(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><text x="1" y="18">M</text></svg>',
+      );
+      return { result: { available: true } };
+    } catch (error) {
+      throw new Error(
+        'Repair or reinstall the shared-editing helper resources on the Emacs host, then recheck',
+        { cause: error },
+      );
+    } finally {
+      doc.destroy();
+    }
+  }
   check(
     ['create', 'import', 'read', 'update', 'patch', 'rename', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',

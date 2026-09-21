@@ -71,6 +71,8 @@
 #editing-body { flex: 1; min-height: 0; }
 #editing-body iframe { width: 100%; height: 100%; border: 0; }
 #editing-title { flex: 1; }
+.editing-availability { padding: 8px 0; }
+#editing-status { margin: 0 0 6px; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
 #editing-panel { bottom: auto; height: 100dvh; }
 #editing-panel .panel-head { padding: 3px 10px; min-height: 32px; }
 #editing-close { padding: 3px 10px; font-size: 12px; min-height: 28px; }

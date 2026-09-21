@@ -288,6 +288,26 @@ test(
       await frame(pages[1]).locator('#title').fill('Whiteboard');
       await frame(pages[1]).locator('#title').press('Tab');
       await until(async () => (await frame(pages[0]).locator('#title').inputValue()) === 'Whiteboard');
+      // Missing host dependencies leave chat and the catalog usable. A recheck
+      // repairs an already-open room without a reload or draft replacement.
+      await agent('RuntimeAvailable', { available: false });
+      const unavailableContext = await browser.newContext();
+      const unavailablePage = await unavailableContext.newPage();
+      await unavailablePage.goto(links.full);
+      await unavailablePage.locator('#session-box').evaluate(e => e.open = true);
+      await unavailablePage.locator('#editing-box').evaluate(e => e.open = true);
+      await until(async () => (await unavailablePage.locator('#editing-status').innerText()).includes('Install Node'));
+      assert.equal(await unavailablePage.locator('[data-create-editor="document"]').isDisabled(), true);
+      assert.equal(await unavailablePage.locator(`#editing-items [data-item-id="${boardId}"]`).isDisabled(), true);
+      await unavailablePage.locator('#composer-input').fill('> Optional editing\nChat draft');
+      await agent('RuntimeAvailable', { available: true });
+      await unavailablePage.locator('#editing-recheck').click();
+      await until(async () => (await unavailablePage.locator('#editing-status').innerText()).includes('ready'));
+      assert.equal(await unavailablePage.locator('[data-create-editor="document"]').isEnabled(), true);
+      assert.equal(await unavailablePage.locator(`#editing-items [data-item-id="${boardId}"]`).isEnabled(), true);
+      assert.equal(await unavailablePage.locator('#composer-input').inputValue(), '> Optional editing\nChat draft');
+      assert.equal((await agent('InspectTest')).draft, '> Host draft\nsecond line');
+      await unavailableContext.close();
       await agent('RestartHelper');
       assert.equal(
         JSON.parse((await agent('SharedRead', { id: boardId })).result).content.length,
