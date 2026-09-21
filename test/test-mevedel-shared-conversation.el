@@ -12,6 +12,7 @@
 (require 'gptel-request)
 (require 'gptel-openai)
 (require 'gptel-org)
+(require 'mevedel-collaboration)
 (require 'mevedel-collaboration-editing)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-shared-conversation)
@@ -41,6 +42,8 @@
     (mevedel-shared-conversation-test--turn "Board question" "Board reply" "board" "q2")
     (let ((ranges (mevedel-shared-conversation-ranges)))
       (should (= 2 (length ranges)))
+      (should-not (plist-get (car ranges) :last-user))
+      (should (plist-get (cadr ranges) :last-user))
       (should (equal '("doc" "board")
                      (mapcar (lambda (r) (plist-get (plist-get r :shared) :itemId)) ranges)))
       (should (string-match-p "Doc reply"
@@ -54,7 +57,31 @@
       (mevedel--format-hook-audit-record
        '(:type guest-prompt :name "Spoof" :shared (:itemId "fake" :questionId "bad"))))
      "Literal response")
-    (should (= 2 (length (mevedel-shared-conversation-ranges))))))
+    (let ((ranges (mevedel-shared-conversation-ranges)))
+      (should (= 2 (length ranges)))
+      (should-not (cl-some (lambda (range) (plist-get range :last-user)) ranges))))
+
+  :doc "ordered item ranges stop at intervening directive boundaries"
+  (with-temp-buffer
+    (org-mode)
+    (let (expected)
+      (dotimes (index 20)
+        (mevedel-shared-conversation-test--turn
+         (format "Item %d" index) "Item answer" "doc" (format "q%d" index))
+        (let ((start (point)))
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'directive-turn-boundary :edge 'start
+                         :directive-id "directive" :turn index)))
+          (push start expected))
+        (mevedel-shared-conversation-test--turn "Directive question" "Directive answer")
+        (insert (mevedel--format-hook-audit-record
+                 (list :type 'directive-turn-boundary :edge 'end
+                       :directive-id "directive" :turn index)))
+        (mevedel-shared-conversation-test--turn "Room question" "Room answer"))
+      (let ((ranges (mevedel-shared-conversation-ranges)))
+        (should (= 20 (length ranges)))
+        (should (equal (reverse expected) (mapcar (lambda (range) (plist-get range :end)) ranges)))
+        (should-not (cl-some (lambda (range) (plist-get range :last-user)) ranges))))))
 
 (mevedel-deftest mevedel-shared-conversation-request ()
   ,test
@@ -164,7 +191,75 @@
           (mevedel-shared-conversation-transform fsm)
           (should (string-match-p "Older item turns were omitted" (buffer-string)))
           (should-not (string-match-p "Earlier answer" (buffer-string)))
-          (should (string-match-p "Current question" (buffer-string))))))))
+          (should (string-match-p "Current question" (buffer-string)))))))
+
+  :doc "ordinary native requests avoid transcript classification for item context"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((session (mevedel-session--create :name "room"))
+           (scans 0)
+           (probe (lambda (&rest _) (cl-incf scans))))
+      (setq-local mevedel--session session gptel-track-response t
+                  gptel-backend (gptel-make-openai "plain-test" :key "test" :models '(test-model))
+                  gptel-model 'test-model gptel-use-context nil gptel-use-tools nil)
+      (mevedel-session-set-root-buffer session (current-buffer))
+      (dotimes (index 20)
+        (mevedel-shared-conversation-test--turn (format "Ordinary %d" index) "Answer"))
+      (mevedel-shared-conversation-test--turn "Current room question" nil)
+      (insert (mevedel--format-hook-audit-record '(:type guest-prompt :name "Guest")))
+      (unwind-protect
+          (progn
+            (advice-add 'mevedel-transcript-segments :before probe)
+            (let* ((fsm (gptel-request nil :dry-run t :transforms '(mevedel-shared-conversation-transform)))
+                   (data (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
+              (should (string-match-p "Ordinary 0" data))
+              (should (string-match-p "Current room question" data)))
+            (should (= scans 0)))
+        (advice-remove 'mevedel-transcript-segments probe))))
+
+  :doc "context and browser history stop at overflow without reading an unused older archive"
+  (let* ((directory (make-temp-file "bounded-item-history-" t))
+         (session (mevedel-session--create :save-path directory :current-segment 4
+                                           :authority-mode 'pid-lock))
+         (mevedel-shared-conversation--history-limit 1500)
+         reads
+         (probe (lambda (_session number) (push number reads))))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          ;; Segment one is intentionally absent. The newer complete turn fits;
+          ;; the next turn proves overflow, so the oldest file is irrelevant.
+          (dolist (number '(2 3))
+            (erase-buffer)
+            (mevedel-shared-conversation-test--turn
+             (format "Archived %d" number) (make-string 1000 (+ ?a number))
+             "doc" (format "q%d" number))
+            (let ((gptel--bounds nil)) (gptel--save-state))
+            (write-region (point-min) (point-max)
+                          (mevedel-session-artifacts-segment-path directory number) nil 'silent))
+          (erase-buffer)
+          (setq-local mevedel--session session gptel-track-response t
+                      gptel-backend (gptel-make-openai "bounded-test" :key "test" :models '(test-model))
+                      gptel-model 'test-model gptel-use-context nil gptel-use-tools nil)
+          (mevedel-session-set-root-buffer session (current-buffer))
+          (mevedel-shared-conversation-test--turn "Current question" nil "doc" "current")
+          (advice-add 'mevedel-session-artifacts-read-segment :before probe)
+          (let* ((fsm (gptel-request nil :dry-run t :transforms '(mevedel-shared-conversation-transform)))
+                 (data (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
+            (should (string-match-p "Current question" data))
+            (should (string-match-p "Archived 3" data))
+            (should-not (string-match-p "Archived 2" data))
+            (should (string-match-p "Older item turns were omitted" data))
+            (should (equal '(2 3) reads)))
+          (setq reads nil)
+          (let ((result (mevedel-collaboration-editing--conversation session "doc")))
+            (should (eq t (plist-get result :conversationTruncated)))
+            (should (equal '(2 3) reads)))
+          ;; A damaged archive within the selected prefix still fails visibly.
+          (delete-file (mevedel-session-artifacts-segment-path directory 3))
+          (should-error (mevedel-collaboration-editing--conversation session "doc") :type 'user-error))
+      (advice-remove 'mevedel-session-artifacts-read-segment probe)
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-shared-conversation-history ()
   ,test
@@ -185,10 +280,24 @@
           (erase-buffer)
           (mevedel-shared-conversation-test--turn "Tail question" "Tail answer" "doc" "q2")
           (mevedel-shared-conversation-test--turn "Other question" "Other answer" "board" "q3")
-          (let ((history (mevedel-shared-conversation-history session "doc" (current-buffer))))
+          (let ((history (plist-get (mevedel-shared-conversation-history
+                                     session "doc" :live-buffer (current-buffer)) :turns)))
             (should (equal '("q2" "q1")
                            (mapcar (lambda (turn) (plist-get (plist-get turn :shared) :questionId)) history)))
-            (should (string-match-p "Archived answer" (plist-get (cadr history) :text))))
+            (should (string-match-p "Archived answer" (plist-get (cadr history) :text)))
+            (let ((limited (mevedel-shared-conversation-history
+                            session "doc" :live-buffer (current-buffer)
+                            :limit (length (plist-get (car history) :text)))))
+              (should (equal (list (car history)) (plist-get limited :turns)))
+              (should (plist-get limited :truncated)))
+            ;; Current-question exclusion and compaction-tail deduplication
+            ;; happen before the budget, including an exact complete-turn fit.
+            (let ((excluded (mevedel-shared-conversation-history
+                             session "doc" :live-buffer (current-buffer)
+                             :limit (length (plist-get (cadr history) :text))
+                             :exclude-question "q2")))
+              (should (equal (list (cadr history)) (plist-get excluded :turns)))
+              (should-not (plist-get excluded :truncated))))
           (let* ((result (mevedel-collaboration-editing--conversation session "doc"))
                  (records (append (plist-get result :conversation) nil)))
             (should (= 4 (length records)))
@@ -210,7 +319,7 @@
             (should (string-match-p "New document question" data))
             (should-not (string-match-p "Other question\\|Other answer" data)))
           (delete-file (mevedel-session-artifacts-segment-path directory 1))
-          (should-error (mevedel-shared-conversation-history session "doc" (current-buffer))
+          (should-error (mevedel-shared-conversation-history session "doc" :live-buffer (current-buffer))
                         :type 'user-error))
       (delete-directory directory t))))
 

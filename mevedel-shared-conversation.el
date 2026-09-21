@@ -31,55 +31,76 @@
 (defun mevedel-shared-conversation-ranges ()
   "Return trusted shared-item turn ranges in the current transcript.
 Each range carries :start, :end and the host-authored :shared attribution.
+:last-user identifies attribution to the final canonical user prompt.
 A turn ends before the next canonical user prompt or directive boundary."
-  (let* ((users (cl-remove-if-not
-                 (lambda (segment) (eq (car segment) 'user))
-                 (mevedel-transcript-segments (point-min) (point-max))))
-         (directives (mevedel-transcript-buffer-directive-ranges t))
-         ranges)
-    (dolist (attribution (mevedel-transcript-audit-guest-prompts))
-      (when-let* ((shared (plist-get (cdr attribution) :shared))
-                  ((stringp (plist-get shared :itemId)))
-                  ((stringp (plist-get shared :questionId))))
-        (let (owner (end (point-max)))
-          (dolist (user users)
-            (if (<= (cadr user) (car attribution))
-                (setq owner (cadr user))
-              (setq end (min end (cadr user)))))
-          (when owner
-            (dolist (range directives)
-              (when (> (plist-get range :start) owner)
-                (setq end (min end (plist-get range :start)))))
-            (push (list :start owner :end end :shared shared) ranges)))))
-    (nreverse ranges)))
+  ;; Most requests have no item attribution. Avoid classifying their transcript.
+  (when-let* ((attributions
+               (cl-remove-if-not
+                (lambda (entry)
+                  (let ((shared (plist-get (cdr entry) :shared)))
+                    (and (stringp (plist-get shared :itemId))
+                         (stringp (plist-get shared :questionId)))))
+                (mevedel-transcript-audit-guest-prompts))))
+    (let ((users (cl-remove-if-not
+                  (lambda (segment) (eq (car segment) 'user))
+                  (mevedel-transcript-segments (point-min) (point-max))))
+          (directives (mevedel-transcript-buffer-directive-ranges t))
+          owner ranges)
+      ;; All three lists are ordered. Advance each cursor once instead of
+      ;; searching the complete transcript again for every attribution.
+      (dolist (attribution attributions)
+        (while (and users (<= (cadr (car users)) (car attribution)))
+          (setq owner (cadr (pop users))))
+        (when owner
+          (while (and directives (<= (plist-get (car directives) :start) owner))
+            (pop directives))
+          (push (list :start owner
+                      :end (min (or (cadr (car users)) (point-max))
+                                (or (plist-get (car directives) :start) (point-max)))
+                      :last-user (null users)
+                      :shared (plist-get (cdr attribution) :shared))
+                ranges)))
+      (nreverse ranges))))
 
-(defun mevedel-shared-conversation-history (session item-id &optional current-buffer)
+(cl-defun mevedel-shared-conversation-history
+    (session item-id &key live-buffer limit exclude-question)
   "Return prior canonical turns for ITEM-ID in SESSION, newest first.
-CURRENT-BUFFER supplies live content; nil selects archived segments only.
+LIVE-BUFFER supplies live content; nil selects archived segments only.
 Repeated question identities in preserved compaction tails appear once.
-Returned entries carry :text and :shared; callers choose a context budget."
-  (let ((seen (make-hash-table :test #'equal)) entries)
-    (cl-labels
-        ((collect ()
-           (dolist (range (reverse (mevedel-shared-conversation-ranges)))
-             (let* ((shared (plist-get range :shared))
-                    (id (plist-get shared :questionId)))
-               (when (and (equal item-id (plist-get shared :itemId))
-                          (not (gethash id seen)))
-                 (puthash id t seen)
-                 (push (list :shared shared
-                             :text (buffer-substring (plist-get range :start)
-                                                     (plist-get range :end)))
-                       entries))))))
-      (when (buffer-live-p current-buffer)
-        (with-current-buffer current-buffer (collect)))
-      (cl-loop for number downfrom (1- (or (mevedel-session-current-segment session) 1))
-               to 1 do
-               (let ((buffer (mevedel-session-artifacts-read-segment session number)))
-                 (unwind-protect
-                     (with-current-buffer buffer (collect))
-                   (kill-buffer buffer)))))
-    (nreverse entries)))
+LIMIT bounds complete-turn characters; nil requests exhaustive history.
+EXCLUDE-QUESTION omits one identity, including its archived duplicates.
+Return :turns carrying :text and :shared, and :truncated when LIMIT omitted
+an older turn. Stop reading archives once that omission is established."
+  (let ((seen (make-hash-table :test #'equal))
+        (remaining limit) entries truncated)
+    (when exclude-question (puthash exclude-question t seen))
+    (catch 'full
+      (cl-labels
+          ((collect ()
+             (dolist (range (reverse (mevedel-shared-conversation-ranges)))
+               (let* ((shared (plist-get range :shared))
+                      (id (plist-get shared :questionId)))
+                 (when (and (equal item-id (plist-get shared :itemId))
+                            (not (gethash id seen)))
+                   (puthash id t seen)
+                   (let ((size (- (plist-get range :end) (plist-get range :start))))
+                     (when (and limit (> size remaining))
+                       (setq truncated t)
+                       (throw 'full nil))
+                     (when limit (cl-decf remaining size))
+                     (push (list :shared shared
+                                 :text (buffer-substring (plist-get range :start)
+                                                         (plist-get range :end)))
+                           entries)))))))
+        (when (buffer-live-p live-buffer)
+          (with-current-buffer live-buffer (collect)))
+        (cl-loop for number downfrom (1- (or (mevedel-session-current-segment session) 1))
+                 to 1 do
+                 (let ((buffer (mevedel-session-artifacts-read-segment session number)))
+                   (unwind-protect
+                       (with-current-buffer buffer (collect))
+                     (kill-buffer buffer))))))
+    (list :turns (nreverse entries) :truncated truncated)))
 
 (defun mevedel-shared-conversation-transform (fsm)
   "Isolate shared-item context in FSM's temporary request buffer.
@@ -91,11 +112,7 @@ changes neither the stored transcript nor the request's editing permissions."
               (session (buffer-local-value 'mevedel--session source))
               ((eq source (mevedel-session-root-buffer session))))
     (let* ((ranges (mevedel-shared-conversation-ranges))
-           (last-user (car (last (cl-remove-if-not
-                                 (lambda (segment) (eq (car segment) 'user))
-                                 (mevedel-transcript-segments (point-min) (point-max))))))
-           (current (cl-find (cadr last-user) ranges
-                             :key (lambda (range) (plist-get range :start)))))
+           (current (cl-find-if (lambda (range) (plist-get range :last-user)) ranges)))
       (plist-put (gptel-fsm-info fsm) :mevedel-shared-item nil)
       (if (not current)
           (dolist (range ranges)
@@ -105,23 +122,18 @@ changes neither the stored transcript nor the request's editing permissions."
                (id (plist-get shared :itemId))
                (question-id (plist-get shared :questionId))
                (question (buffer-substring (plist-get current :start) (point-max)))
-               (history (mevedel-shared-conversation-history session id source))
-               (remaining mevedel-shared-conversation--history-limit)
-               selected omitted)
-          (dolist (turn history)
-            (unless (equal question-id
-                           (plist-get (plist-get turn :shared) :questionId))
-              (let ((text (plist-get turn :text)))
-                (if (and (not omitted) (<= (length text) remaining))
-                    (progn (push text selected)
-                           (cl-decf remaining (length text)))
-                  (setq omitted t)))))
+               (history (mevedel-shared-conversation-history
+                         session id :live-buffer source
+                         :limit mevedel-shared-conversation--history-limit
+                         :exclude-question question-id))
+               (selected (mapcar (lambda (turn) (plist-get turn :text))
+                                 (reverse (plist-get history :turns)))))
           (erase-buffer)
           (insert (format "Conversation about shared item %s (%s).\n"
                           (plist-get shared :title) id)
                   "Earlier snapshots below are historical; the current question carries its reviewed content.\n"
                   "Read/Grep history://root for relevant room decisions; history://saved includes archived conversations.\n"
-                  (if omitted
+                  (if (plist-get history :truncated)
                       "Older item turns were omitted from this request; retrieve them from session history when needed.\n"
                     "")
                   "\n")
