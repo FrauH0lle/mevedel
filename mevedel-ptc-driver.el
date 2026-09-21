@@ -368,17 +368,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                  :calls audit))
                           finalization-error)
                       (condition-case err
-                          (progn
-                            (mevedel-ptc-close state)
-                            (when (and checkpoint-session
-                                       (not
-                                        (mevedel-ptc-checkpoint-update
-                                         checkpoint-session data-buffer
-                                         envelope-id
-                                         (list :state 'settled :result result
-                                               :render-data render-data))))
-                              (error
-                               "ToolCall final audit could not be persisted")))
+                          (mevedel-ptc-close state)
                         (error (setq finalization-error err)))
                       (when finalization-error
                         (setq result
@@ -389,16 +379,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                               outcome 'script-error
                               error-kind 'checkpoint
                               render-data
-                              (plist-put render-data :outcome outcome))
-                        ;; A transient write failure gets one retry with the
-                        ;; honest error outcome.  Persistent failure still
-                        ;; settles the outer call instead of stranding it.
-                        (when checkpoint-session
-                          (ignore-errors
-                            (mevedel-ptc-checkpoint-update
-                             checkpoint-session data-buffer envelope-id
-                             (list :state 'settled :result result
-                                   :render-data render-data)))))
+                              (plist-put render-data :outcome outcome)))
                       (funcall progress 'terminal nil)
                       (ignore-errors
                         (mevedel-ptc-driver--finish-telemetry
@@ -406,6 +387,8 @@ ERROR-KIND is the interpreter's typed failure category when available."
                       (funcall callback
                                (append
                                 (list :result result :status status
+                                      :ptc-checkpoint-id
+                                      (and checkpoint-session envelope-id)
                                       :render-data render-data
                                       :media (plist-get direct-outcome :media)
                                       :hook-additional-context forwarded-context
@@ -416,7 +399,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                ;; In-memory only: per-child sidecar writes dominated script
                ;; runtime, serialized parallel batches, and cost one remote
                ;; round-trip each on TRAMP targets.  Durable writes are the
-               ;; start checkpoint and the settled write in `finish'.
+               ;; start checkpoint and the pipeline's result settlement.
                (checkpoint
                 (lambda ()
                   (mevedel-ptc-checkpoint-note
@@ -441,7 +424,11 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                   (if direct args
                                     (mevedel-ptc-driver--child-args args)))
 				:status status
-				:result result
+                                ;; Direct display uses the outer result; do not
+                                ;; serialize another full text copy in its audit.
+                                :result (if (and direct (stringp result))
+                                            (mevedel-ptc-driver--preview result)
+                                          result)
 				:batch (plist-get task :batch)
 				:render-data
 				(if direct (plist-get outcome :render-data)

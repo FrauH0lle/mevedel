@@ -150,7 +150,7 @@ toggleable.")
 (defun mevedel-view-disclosure--vtype-p (vtype)
   "Return non-nil when VTYPE can be restored from source coordinates."
   (or (memq vtype mevedel-view-disclosure--collapsible-vtypes)
-      (eq vtype 'agent-handle)))
+      (eq vtype 'turn-summary)))
 
 (defconst mevedel-view-disclosure--missing-state
   (make-symbol "mevedel-view-missing-collapse-state")
@@ -347,10 +347,15 @@ mailbox cards as the caller scans in display order."
   (let* ((vtype (get-text-property position 'mevedel-view-type))
          (source (get-text-property position 'mevedel-view-source))
          (source-key (get-text-property position 'mevedel-view-source-key))
-         (state-type (if (eq vtype 'tool-child)
-                         (or (cadr source-key) vtype)
-                       vtype)))
+         (state-type (cond
+                      ((eq vtype 'tool-child) (or (cadr source-key) vtype))
+                      ((memq vtype '(turn-header turn-summary)) 'turn-summary)
+                      (t vtype))))
     (cond
+     ;; Directives retain their explicit collapse policy, including the newest
+     ;; settled turn.  Ordinary manual turn folds use source identity instead.
+     ((and (eq state-type 'turn-summary)
+           (get-text-property position 'mevedel-view-directive)) nil)
      ((or (mevedel-view-disclosure--in-flight-source-p source)
           (mevedel-view-disclosure--in-flight-key-p source-key)
           (and (markerp (car-safe source))
@@ -432,6 +437,8 @@ knows the freshly rendered span was rewritten after insertion."
                       (setq toggled t)
                       (goto-char pos)
                       (cond
+                       ((memq vtype '(turn-header turn-summary))
+                        (mevedel-view-render-toggle-turn collapsed))
                        ((eq vtype 'mailbox-delivery)
                         (mevedel-view-disclosure--toggle-mailbox))
                        ((eq vtype 'tool-child)

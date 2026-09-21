@@ -19,17 +19,46 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ### Bound remaining large transcript redraws
 
-Profile and reduce uninterrupted full-history and long live-turn projection.
-After the September 20 large-tool improvements, an 11.5 MB transcript still
-takes about 377 ms to rebuild after an append, with about 328 ms of observed
-timer delay. The first 9.6 MB tool projection takes about 406 ms; following
-updates take about 105 ms median and still hash the large body. Bound this work
-while preserving source-backed reader/disclosure state; measure actual input
-delay and long-lived heap effects before choosing work slicing or history
-pagination. Include many distinct unattended tool rows. Latest protocol:
-`.scratch/large-tool-responsiveness/`; earlier full-history and Bash/agent
-catch-up protocols: `.scratch/full-history-responsiveness/` and
-`.scratch/responsiveness-goal/`.
+Prepared historical tools now update their containing turn. Three paired stress
+replays reduced median completion from 806 to 539 ms; worst typing delay remained
+about 118 ms. Bound source segmentation, individual native operations and large
+turn insertion, and extend batching to remaining synchronous callers without
+losing live text. Consider independently trusted summary/payload storage for old
+hidden metadata; the current producer already emits bounded direct-call metadata.
+Preserve failure classification, source ownership and expansion behavior.
+
+Subprocess experiments isolated GC but added startup, snapshot/export costs and
+about 196 MiB worker RSS. Revisit immutable offload only where those costs are
+amortized. Use original captures: measurements based on `second-bounded.org` are
+withdrawn because its serialization changed unrelated history. Protocols and
+remaining limits: `.scratch/session-performance/report.md` and
+`.scratch/bounded-responsiveness/report.md`.
+
+### Bound remaining publication callbacks and legacy storage
+
+Interactive tool pipelines now yield between steps, and large control writes
+stream encoded fields. A 9 MiB portable completion still has about 245 ms
+worst input delay after the checkpoint placement and timer fixes. Follow-up
+profiling attributes the longest remaining step to synchronous lease checks and
+publication writes, sometimes including GC. Removing redundant copies and scans
+reduced completion allocation but left worst input delay unchanged. Capture
+production stalls before restructuring those transactions; split only at boundaries
+preserving ownership, recovery and cancellation.
+
+Exact-file collection reduces the example's publications from 1.14 GB to 405 MB
+and response streaming brings its cold scan from 31.1 to 20.7 s before collection
+and to 0.95 s afterward. Individual collection callbacks can still take about
+140 ms including GC; a targeted callback replay attributed about 53 ms to GC
+and measured 75 ms input delay when typing began inside a running callback
+without GC, or 130 ms when the targeted callback included GC.
+Investigate smaller validation batches if production background pauses persist. Idle collection now progresses
+without requiring new user input; the transport timer restoration bug is fixed.
+Existing fixed file-history caches also remain: verify all consumers and recovery
+paths before reclaiming historical cache copies. New snapshot writes already
+omit them. Deferred idle-agent hydration is implemented; measure real follow-up
+workloads before adding another residency mechanism. Protocols and limits:
+`.scratch/remaining-performance/report.md` and
+`.scratch/completion-collection/report.md` and `.scratch/pause-followup/report.md`.
 
 ### Prevent system sleep during active requests
 

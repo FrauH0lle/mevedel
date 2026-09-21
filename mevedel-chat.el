@@ -145,6 +145,8 @@
 		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-context
 		  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-display-text
+                  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-input
 		  "mevedel-prompt-submission" (cl-x) t)
 (autoload 'mevedel-prompt-submission-commit "mevedel-prompt-submission")
@@ -164,6 +166,8 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-inhibit-so-long
                   "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-sessions-dir
+                  "mevedel-session-artifacts" (workspace))
 (declare-function
  mevedel-session-artifacts-install-gptel-save-state-advice
  "mevedel-session-artifacts" nil)

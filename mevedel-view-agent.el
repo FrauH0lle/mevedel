@@ -37,6 +37,10 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-ensure-conversation
+                  "mevedel-agent-persistence"
+                  (session record root-buffer &optional readonly-p))
+(autoload 'mevedel-agent-persistence-ensure-conversation "mevedel-agent-persistence")
 (declare-function mevedel-agent-persistence-transcript-path-p
                   "mevedel-agent-persistence" (path save-path))
 (autoload 'mevedel-agent-persistence-transcript-path-p
@@ -292,8 +296,11 @@ badges promptly."
 (defconst mevedel-view--status-agent-collapse-key '(status agents)
   "Stable fragment collapse key for the aggregate agent status block.")
 
-(defvar-local mevedel-view--agent-refresh-timers nil
-  "Hash table of pending coalesced agent refresh timers by canonical path.")
+(defvar-local mevedel-view--agent-refresh-pending nil
+  "Canonical agent paths waiting for a presentation refresh.")
+
+(defvar-local mevedel-view--agent-refresh-timer nil
+  "Timer draining the view's pending agent refreshes one at a time.")
 
 
 (defvar-keymap mevedel-view--agent-handle-map
@@ -325,8 +332,8 @@ transcript on click."
               (plist-get options :transcript-info))
   (setq-local mevedel-view--agent-transcript-parent-view
               (plist-get options :parent-view))
-  (setq-local mevedel-view--agent-refresh-timers
-              (make-hash-table :test #'equal))
+  (mevedel-view-agent-cancel-refresh)
+  (add-hook 'kill-buffer-hook #'mevedel-view-agent-cancel-refresh nil t)
   (when mevedel-view--agent-transcript-p
     (use-local-map (copy-keymap mevedel-view-mode-map))
     (local-set-key (kbd "q") #'mevedel-view-close-agent-transcript)
@@ -943,6 +950,13 @@ buffer whether running or idle."
                               (plist-get (cdr entry) :agent-path))
                             (mevedel-session-agent-transcripts session))))))
           nil t)))
+  (when-let* ((data mevedel--data-buffer)
+              ((buffer-live-p data))
+              (session (buffer-local-value 'mevedel--session data))
+              (record (mevedel-view--agent-record agent-path)))
+    (mevedel-agent-persistence-ensure-conversation
+     session record data
+     (with-current-buffer data (bound-and-true-p mevedel-session--read-only-mode))))
   (let* ((parent-view (current-buffer))
          (info (mevedel-view--resolve-agent-transcript agent-path))
          (agent-view (mevedel-view--ensure-agent-transcript-view
@@ -1324,33 +1338,49 @@ Return non-nil on success."
       (mevedel-view-rerender (current-buffer)))
     (not stale-p)))
 
+(defun mevedel-view-agent-cancel-refresh ()
+  "Cancel pending agent presentation work in the current view."
+  (when (timerp mevedel-view--agent-refresh-timer)
+    (cancel-timer mevedel-view--agent-refresh-timer))
+  (setq mevedel-view--agent-refresh-timer nil
+        mevedel-view--agent-refresh-pending nil))
+
+(defun mevedel-view-agent--flush-refresh (view-buffer)
+  "Refresh one queued agent in VIEW-BUFFER, then return control to Emacs."
+  (when (buffer-live-p view-buffer)
+    (with-current-buffer view-buffer
+      (when (timerp mevedel-view--agent-refresh-timer)
+        (cancel-timer mevedel-view--agent-refresh-timer))
+      (setq mevedel-view--agent-refresh-timer nil)
+      (when-let* ((path (pop mevedel-view--agent-refresh-pending)))
+        (unwind-protect
+            (mevedel-view--refresh-agent-rendering-now path)
+          (when (and (buffer-live-p view-buffer)
+                     mevedel-view--agent-refresh-pending
+                     (not (timerp mevedel-view--agent-refresh-timer)))
+            (setq mevedel-view--agent-refresh-timer
+                  (run-at-time 0.001 nil #'mevedel-view-agent--flush-refresh
+                               view-buffer))))))))
+
 (defun mevedel-view-refresh-agent-rendering (view-buffer agent-path)
-  "Refresh VIEW-BUFFER's visible rendering for AGENT-PATH.
-Rapid calls for the same agent are coalesced so tool start/finish bursts update
-one handle/status row without scheduling repeated full rerenders."
+  "Queue a coalesced refresh of AGENT-PATH in VIEW-BUFFER.
+One timer drains distinct agents in separate callbacks so a burst of completions
+does not schedule many expensive refreshes to expire together."
   (when (and agent-path (buffer-live-p view-buffer))
     (with-current-buffer view-buffer
-      (unless (hash-table-p mevedel-view--agent-refresh-timers)
-        (setq mevedel-view--agent-refresh-timers
-              (make-hash-table :test #'equal)))
-      (when-let* ((timer (gethash agent-path mevedel-view--agent-refresh-timers)))
-        (when (timerp timer)
-          (cancel-timer timer)))
       (if (or (not (numberp mevedel-view-agent-refresh-delay))
               (<= mevedel-view-agent-refresh-delay 0))
-          (mevedel-view--refresh-agent-rendering-now agent-path)
-        (puthash
-         agent-path
-         (run-at-time
-          mevedel-view-agent-refresh-delay nil
-          (lambda (buffer id)
-            (when (buffer-live-p buffer)
-              (with-current-buffer buffer
-                (when (hash-table-p mevedel-view--agent-refresh-timers)
-                  (remhash id mevedel-view--agent-refresh-timers))
-                (mevedel-view--refresh-agent-rendering-now id))))
-          view-buffer agent-path)
-         mevedel-view--agent-refresh-timers)))))
+          (progn
+            (setq mevedel-view--agent-refresh-pending
+                  (delete agent-path mevedel-view--agent-refresh-pending))
+            (mevedel-view--refresh-agent-rendering-now agent-path))
+        (unless (member agent-path mevedel-view--agent-refresh-pending)
+          (setq mevedel-view--agent-refresh-pending
+                (nconc mevedel-view--agent-refresh-pending (list agent-path))))
+        (unless (timerp mevedel-view--agent-refresh-timer)
+          (setq mevedel-view--agent-refresh-timer
+                (run-at-time mevedel-view-agent-refresh-delay nil
+                             #'mevedel-view-agent--flush-refresh view-buffer)))))))
 
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."

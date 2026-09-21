@@ -22,6 +22,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(defvar mevedel-buddy--idle-timer)
+
 ;; `gptel'
 (declare-function gptel-abort "ext:gptel" (buffer))
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))

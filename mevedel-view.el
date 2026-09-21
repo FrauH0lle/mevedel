@@ -5,6 +5,10 @@
 ;; Defines the shared ephemeral surface mode and coordinates the user-facing
 ;; chat view, session lifecycle, and managed zones.  `mevedel-view-composer'
 ;; owns editable input and submission;
+;; `mevedel-view-prepare'
+(declare-function mevedel-view-prepare-resume "mevedel-view-prepare" ())
+(defvar mevedel-view-prepare-enabled)
+
 ;; `mevedel-view-render' owns the transcript projection.  The gptel data
 ;; buffer remains the authoritative conversation.
 ;;
@@ -222,6 +226,8 @@
                   "mevedel-view-render" (data-buffer tool-use-id))
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
+(declare-function mevedel-view-render-batched-full "mevedel-view-render" ())
+(declare-function mevedel-view-render-resume-batch "mevedel-view-render" ())
 (declare-function mevedel-view-render-initialize
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-invalidate-live-tail
@@ -1169,13 +1175,16 @@ quarter of its CPU redisplaying spinner frames and live rows nobody saw."
                        (null (frame-focus-state top))))))
           windows))))
 
-(defun mevedel-view--flush-scheduled-render (view-buffer)
+(defun mevedel-view--flush-scheduled-render (view-buffer &optional synchronous)
   "Run VIEW-BUFFER's pending transcript render once.
+SYNCHRONOUS finishes a full projection before returning; ordinary timer work
+batches settled history around its readers.
 An unattended view keeps its pending kind instead: the focus and
 redisplay hooks reschedule it once someone can see the result."
   (when (buffer-live-p view-buffer)
     (with-current-buffer view-buffer
-      (let ((kind mevedel-view--pending-render-kind)
+      (let ((mevedel-view-prepare-enabled (not synchronous))
+            (kind mevedel-view--pending-render-kind)
             (tool-rows mevedel-view--pending-tool-rows)
             (data-buffer mevedel-view--pending-render-data-buffer))
         (cond
@@ -1206,7 +1215,9 @@ redisplay hooks reschedule it once someone can see the result."
                       (mevedel-view--interaction-rebuild)
                       (mevedel-view--ensure-request-progress data-buffer))
                   (pcase kind
-                    ('full (mevedel-view--full-rerender))
+                    ('full (if synchronous
+                               (mevedel-view--full-rerender)
+                             (mevedel-view-render-batched-full)))
                     ('incremental
                      (when (buffer-live-p data-buffer)
                        (mevedel-view--render-stream-update data-buffer))))
@@ -1228,14 +1239,16 @@ redisplay hooks reschedule it once someone can see the result."
   (when (buffer-live-p view-buffer)
     (with-current-buffer view-buffer
       (when (and (derived-mode-p 'mevedel-view-mode)
-                 mevedel-view--pending-render-kind
-                 (buffer-live-p mevedel-view--pending-render-data-buffer)
-                 (not (mevedel--timer-pending-p mevedel-view--render-timer))
                  (not (mevedel-view--unattended-p)))
-        (mevedel-view--schedule-render
-         mevedel-view--pending-render-kind
-         mevedel-view--pending-render-data-buffer
-         mevedel-view-rerender-debounce)))))
+        (if mevedel-view--pending-render-kind
+            (when (and (buffer-live-p mevedel-view--pending-render-data-buffer)
+                       (not (mevedel--timer-pending-p mevedel-view--render-timer)))
+              (mevedel-view--schedule-render
+               mevedel-view--pending-render-kind
+               mevedel-view--pending-render-data-buffer
+               mevedel-view-rerender-debounce))
+          (mevedel-view-render-resume-batch))
+        (mevedel-view-prepare-resume)))))
 
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.
@@ -1279,7 +1292,7 @@ while the view is unattended."
                    view-buffer))))
       (when (timerp mevedel-view--render-timer)
         (cancel-timer mevedel-view--render-timer))
-      (mevedel-view--flush-scheduled-render (current-buffer)))))
+      (mevedel-view--flush-scheduled-render (current-buffer) t))))
 
 (defun mevedel-view-rerender (&optional buffer)
   "Schedule a coalesced full re-render of BUFFER.

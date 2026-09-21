@@ -23,7 +23,16 @@ unattended graphical views defer visual work, retaining changed tool IDs rather
 than forcing a full rebuild on focus return. Incremental projection also drains
 those row updates; full projection subsumes them. Retained-agent metadata
 replacements refresh source-backed handles, with full projection as the fallback
-for unavailable source or generic rows without retained-agent metadata.
+for unavailable source or generic rows without retained-agent metadata. Distinct
+agent paths share a per-view queue, drained one path per callback; duplicate paths
+coalesce and view teardown cancels the queue.
+Scheduled settled-history rebuilds likewise render reader-visible turns first
+and fill the remaining turns one per callback. Each callback preserves fresh
+reader/composer state and validates its source generation. Losing focus pauses
+the job; source changes replace it. In-flight reconciliation, explicit immediate
+refreshes, and other writers' correctness fallbacks remain synchronous. A batch
+still cannot interrupt source segmentation or one large turn. Large collapsed
+tool parsing has a separate staged preparation lifecycle.
 Transcript writers also share per-view mutation ownership: nested projection,
 terminal, disclosure, and agent-refresh work coalesces rather than mutating
 captured view coordinates recursively. Source replacement retires obsolete
@@ -40,14 +49,35 @@ table per callback. Semantic marker relocation replaces whole-table text diffing
 A full or live-turn projection shares disposable boundary indexes and pure audit-decoding
 results; callers still establish trust independently. Boundary misses search only
 after the preceding validated block. Whole-buffer normalization is reused until
-text or properties change. Complete tool cache entries include content and
-provenance properties, allowing a hit to skip structural parsing and repeated
-request-failure decoding. A structural scan shares candidate control-line
+text or properties change. Complete tool cache entries use source-buffer character revisions and explicit
+provenance intervals. Observed appends retain preceding tools; suffix edits,
+missing hooks, and unobserved character changes retire affected identities.
+This allows hits to skip payload copying, hashing, structural parsing, and
+repeated request-failure decoding. Partial spans depending on surrounding source
+are not cached under their own range alone. A structural scan shares candidate control-line
 positions among its existing parsers. Activity classification and insertion
 reuse entries within that render, with independent coalescing counts.
+Structural overlays advance through ordered role segments and reuse unchanged
+suffixes, restarting at earlier source positions when precedence requires it.
+This preserves the existing overlay and tool-metadata containment rules without
+repeatedly traversing and copying the complete segment list.
 Collapsed activity summaries reuse cached tool names; expanded children recover
 their complete arguments and results. Tool-call parsing reads from source-string
 offsets rather than copying large result bodies to locate the call's end.
+Audit-free results also avoid copying their source just to look for audits, and
+the audit stripper returns unchanged text without allocating a duplicate.
+Collapsed tool projection requests summary-only renderer work. Bash defers output
+cleanup and command-prefix construction; ToolCall defers formatting and splitting
+the returned value and constructing nested rows. Headers, outcome/warning status,
+visibility and grouping remain available. Live expanded output, explicit expansion
+and browser projection request complete rendering. Scheduled projection initially
+shows a pending row for large uncached tool spans. A view-owned native thread
+runs the canonical parser with explicit waits between stages; main-thread
+publication validates source identity and invokes current renderers. The worker
+uses private timer queues, pauses while unattended or transport is busy, and is
+cancelled on source replacement or teardown. Payloads are released after
+publication. Explicit synchronous callers and expansion retain ordinary parsing;
+metadata is still decoded before the final summary, and shared GC remains.
 
 ## Rationale and alternatives
 
@@ -67,6 +97,24 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: ordered structural overlays
+
+A follow-up profile put 208 ms of the example root history's 325 ms full rebuild
+in source preparation. Applying 428 control ranges repeatedly walked and copied
+the role list; overlay calls alone took 94 ms. Advancing through ordered ranges
+and sharing untouched suffixes reduced those calls below 1 ms while retaining
+precedence, overlap recovery, and contained tool metadata semantics.
+
+Three paired original-history trials then measured worst composer key delay at
+247 ms before and 74 ms after, and total batched work at 329 versus 176 ms.
+Cold synchronous projection took 322 versus 163 ms; profiler-reported temporary
+allocation fell from 82.1 to 60.0 MB and collections from two to one. These are
+allocation totals, not retained memory. Every injected key, draft and history
+projection matched. The separate stress capture's worst key delay did not
+improve (229 versus 240 ms); its individual multi-megabyte decode remains an
+atomic cost. The change reduces preparation work without adding another cache
+or an asynchronous lifecycle.
 
 ### September 2026: full-history parsing and allocation
 
@@ -356,3 +404,213 @@ This record consolidates rationale previously embedded in the view manual:
 
 The original notes did not supply separate dates or general benchmark bounds.
 These observations explain the implementation choices, not performance promises.
+
+### September 2026: source revisions and distinct-agent batching
+
+A subsequent investigation found that even a complete tool cache hit still
+copied and hashed the entire source body. Complete ranges now use bounded
+source-buffer revision identities and explicit provenance intervals; appends
+retain preceding tools, while missed hooks retire identities conservatively.
+Character and property changes are separate so normalization's property writes
+do not invalidate unchanged payloads. Provenance conses are copied into keys so
+an in-place property mutation cannot alter a stored key. Partial spans depending
+on enclosing text remain uncached under their own range.
+
+Three paired graphical replays reduced the median update after the 9.6 MB tool
+from 98 to 36 ms, with matching history hashes. The eight-update allocation
+profile fell from 361 to about 90 MB median (52--90 MB across three after runs);
+these are temporary allocations, not retained heap. Changed full rebuilds improved only from 374 to 337 ms. The direct ToolCall
+audit correction recorded in ADR 0111 prevents the discovered redundant payload
+in new captures. The in-memory transformation retained identical full view and
+expanded Eval text, but later validation found that its serialized fixture changed
+other history after reload. The derived fixture's latency figures are withdrawn;
+original-capture comparisons remain valid. Original captures are unchanged.
+
+Independent per-agent timers also expired together. A per-view queue now drains
+one distinct path per callback, coalescing repeated paths and cancelling on view
+teardown. In two real-terminal-input runs of three waves of 32 distinct agents,
+maximum observed key delay fell from 630--635 to 105--106 ms; completion time
+increased from about 1.82 to 1.91 seconds. This does not bound the cost of one row,
+source-patching bursts, or GC.
+
+The initial cooperative turn-rendering and immutable subprocess prototypes were experiments.
+Native threads alone did not make CPU-heavy classification or the existing save
+path responsive. Waiting-thread and timer batches allowed input, while an
+asynchronous subprocess isolated parsing and its GC. Exporting the large live
+snapshot itself still took about 384 ms. These measurements support bounded
+source representations and smaller work units; they do not justify moving live
+view mutations or publication transactions into a worker thread wholesale.
+At this stage production full rebuilds remained synchronous. Reproducible protocols, actual-input
+results, lifecycle probes and limitations are in
+`.scratch/bounded-responsiveness/report.md`.
+
+### September 2026: resumable settled-history projection
+
+The turn-batching experiment showed that returning to the command loop between
+turns reduced input stalls on the unchanged original captures. Scheduled settled-history refreshes now use canonical
+source preparation followed by a reader-prioritized projection and individual
+turn callbacks. They retain source coordinates, not rendered payload copies.
+One owner controls each mutation, including callbacks queued inside a yielding
+writer. Source identity and modification ticks reject obsolete work; focus and
+transport gates pause it. Cancellation releases timers and pending markers.
+
+Each callback preserves the current draft, point, selection and window anchors.
+Regression coverage includes typing between callbacks, source replacement,
+reentrant writers, failure rollback, focus recovery, and expanded disclosures.
+That coverage also exposed ordinary manually collapsed turns losing their fold
+on a full rebuild. Those summaries now retain source identity, and ordinary turn
+folds participate in disclosure-state restoration. Directive folds keep their
+existing separate policy.
+
+This does not establish a hard responsiveness bound: source preparation and each
+turn remain synchronous. The archived 9.6 MB metadata span still dominates its
+callback. Direct synchronous callers and in-flight reconciliation retain the
+existing complete-projection contract. The implementation and actual-input
+measurements are recorded in `.scratch/bounded-responsiveness/report.md`.
+Three actual-input runs reduced the median worst key delay from 618 to 362 ms
+on the archived stress capture and from 325 to 255 ms on the example session's
+final root history. Elapsed work increased from 618 to 655 ms and from 325 to
+343 ms respectively. Final history hashes matched for each capture. These
+modest gains on long individual turns motivate dividing work below turn size.
+
+### September 2026: avoid copying first-arrival payloads before reading them
+
+A profile of the unchanged archived 9.6 MB tool span showed repeated copies
+before metadata decoding: the block parser copied and trimmed the entire
+serialized plist, and structural recovery copied the source span a second time.
+The parser now reads within bounds in the existing string; complete spans reuse
+their initial source copy. Partial spans still recover the enclosing block, and
+reader validation, metadata ownership and failure classification stay intact.
+
+Three paired first-arrival profiles reduced median rendering from 369 to 241 ms
+and temporary allocation from 225 to 177 MB. Three separate terminal-input pairs
+reduced median worst key delay from 362 to 234 ms, preserving all 100 keys, the
+multiline draft and identical history hashes. These compare against the preceding
+turn-batching implementation, not the original baseline. Decoding remains
+synchronous; the remaining reader allocation alone was about 88 MB in this
+profile. This is an allocation reduction, not general lazy payload rendering.
+The protocol and frozen comparison functions are recorded in
+`.scratch/bounded-responsiveness/report.md`.
+
+### September 2026: defer body formatting for collapsed tools
+
+Collapsed tool caching previously discarded bodies only after the renderer built
+them. A summary-only rendering context now lets Bash and ToolCall avoid that work
+until expansion, without changing the renderer's argument or return types.
+The built-in renderers keep their header and status logic on the summary path;
+live Bash output still supplies its initially expanded body. This avoids a new
+lazy-function body type and changes to every body consumer.
+
+Three paired synthetic 3 MB result probes reduced collapsed Bash rendering from
+142 to 89 ms and ToolCall from 231 to 89 ms, with identical complete-rendering
+hashes. ToolCall temporary allocation fell from 66 to 27 MB. Three actual composer
+input pairs on that synthetic ToolCall reduced median worst key delay from 233 to
+101 ms. Ordinary pipeline results are capped at 30 KB for these tools: at that
+size the measured savings were only about 0.1 ms for Bash and 0.4 ms for ToolCall.
+The larger cases test archived/imported or otherwise oversized transcript bodies;
+they are not claims about typical new tool results. The archived 9.6 MB span is
+mostly metadata, which this change still decodes. Source-range parsing remains
+the next boundary for deferring payload work.
+
+### September 2026: targeted subprocess experiment
+
+A follow-up exported only the original 9.6 MB tool span and its provenance,
+computed a collapsed rendering in another Emacs, then installed the compact
+result before the normal incremental update. The actual composer-input probe
+included export, reply decoding and view application. Three-run medians were
+240 ms elapsed / 241 ms worst key delay synchronously, 527 / 74 ms with an
+initialized prestarted worker, and 1,134 / 70 ms with a cold worker. The worker
+added about 196 MiB of resident memory at the measured checkpoint; it exited
+after one job, so this is not evidence about a persistent pool's retained heap.
+
+Plain `emacs-mule` export, even with Unix line endings, changed the captured
+span's character count. An escaped Lisp-string snapshot preserved its character
+count and content hash. Export then took about 49 ms and parent application
+about 81 ms; the worker returned roughly 470 bytes. One parent GC remained,
+alongside two worker GCs. The experiment rejected replies after in-span text or
+provenance edits, retained them across appends outside the span, and cancelled
+the worker with snapshot cleanup. History, draft and all keys matched.
+
+This remains a prototype. It establishes a responsiveness/throughput/memory
+tradeoff for this captured tool, not a general offload contract for custom
+renderers or session-dependent presentation. Production rendering still uses
+cooperative batches and source-tracked caches. The protocol and limitations are
+recorded in `.scratch/bounded-responsiveness/report.md`.
+
+### September 2026: staged native-thread preparation experiment
+
+A selective decoder that skipped large nested result strings with the native
+syntax scanner was slower than the ordinary reader on the archived metadata
+(61 versus 31 ms), and accepted six malformed escape forms that the reader
+rejected. It was not adopted. Reader validation remains intact.
+
+An alternative kept the existing parser and inserted explicit 1 ms waits
+between its stages in a Lisp thread. Three original-span composer trials gave
+these medians, including normal view application:
+
+| Experimental path | Elapsed work | Worst key delay |
+| --- | ---: | ---: |
+| Synchronous | 227 ms | 228 ms |
+| Thread without explicit waits | 270 ms | 273 ms |
+| Thread with waits between stages | 287 ms | 85 ms |
+| Thread parses; main thread invokes renderer | 284 ms | 71 ms |
+| Initialized prestarted subprocess | 543 ms | 77 ms |
+
+All injected keys, multiline drafts and history hashes matched. The thread
+variants collected twice versus once synchronously; shared-heap collection still
+pauses the editor. The parse-only thread's RSS checkpoint was about 185 MiB;
+the subprocess checkpoints were about 205 MiB in the parent and 196 MiB in the
+worker. These are point measurements, not peak or retained-memory guarantees.
+Worker startup is excluded from the prestarted measurement.
+
+Keeping renderer invocation on the main thread preserved a custom renderer in
+the caller's local registry. New threads do not inherit dynamic bindings, as
+confirmed by the experiment's initially missing local environment switches and
+the [Emacs thread contract](https://github.com/emacs-mirror/emacs/blob/emacs-31/doc/lispref/threads.texi).
+The parse-only experiment rejected in-span text/provenance changes, accepted an
+append outside the fixed span, and cancelled a verified paused thread in about
+2 ms. That cancellation measurement starts at a yield point; it does not bound
+interruption of an ongoing native operation.
+
+This prototype kept the previous view until parsing finished. It demonstrated
+that deliberately staged thread work can improve responsiveness without a second
+Emacs process; merely moving the same function to a thread does not. The following
+implementation replaced its global instrumentation with owned preparation jobs.
+
+### September 2026: deferred first-arrival preparation
+
+The integrated path shows a pending tool row, parses one large span at a time per
+view, and publishes through the existing projection owner. Three paired trials
+on the unchanged 9.6 MB archived span measured median initial display at 48 ms,
+worst composer key delay at 65 ms versus 233 ms synchronously, and elapsed work
+at 392 versus 232 ms. All 100 injected keys, multiline drafts and final history
+hashes matched in each trial. This deliberately trades throughput for input
+responsiveness. Collections increased from one (34 ms) to three (102 ms);
+threads share the heap and do not solve GC pauses.
+
+A lifecycle regression exposed that `sleep-for` can dispatch ordinary timers in
+the worker: a separate experiment observed 18 worker-dispatched callbacks. A stale
+job could then signal itself before replacing its pending row. Private worker
+timer queues fixed the reproducible regression, keeping editor callbacks and
+renderer context on the main thread. Source edits, truncation, provenance changes,
+cache eviction, queued jobs, focus loss, buffer death, mode changes, renderer
+failure and expanded disclosures have regression coverage. Unrenderable complete
+spans also fall back rather than being admitted repeatedly.
+
+Refreshing only the active turn after preparation avoided a redundant full
+projection; the first integrated replay had a 129 ms worst key delay before this
+change. Historical publication retains reader-preserving batches. The native
+reader and individual string operations remain indivisible, and hidden metadata
+is still decoded in preparation. A separate summary/payload representation would
+be needed to defer all payload decoding until expansion.
+
+Complete paired rebuilds measured 163 versus 175 ms elapsed and 162 versus 73 ms
+worst key delay for the example root segment. On the stress capture they measured
+465 versus 830 ms elapsed and 464 versus 141 ms worst key delay; collections rose
+from four to a median seven. Historical publication currently repeats projection
+work, so throughput remains a cost of this responsiveness improvement. All draft,
+key and history checks passed. Eight repeated preparations left no live parser
+threads or timers; post-collection Lisp object accounting rose by about 18 KB,
+with RSS settling near 206 MiB. These limited observations are not a leak bound.
+Stale-source recovery also respects focus and transport gates; a regression caught
+recovery redrawing an unattended view before that ordering was corrected.

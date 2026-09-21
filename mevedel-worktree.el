@@ -19,6 +19,8 @@
 (require 'mevedel-cockpit)
 (require 'transient)
 
+(defvar mevedel-worktree-list--surface)
+
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"

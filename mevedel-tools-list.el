@@ -18,6 +18,8 @@
 (require 'mevedel-cockpit)
 (require 'mevedel-structs)
 
+(defvar mevedel-tools-list--surface)
+
 ;; `gptel'
 (defvar gptel-tools)
 

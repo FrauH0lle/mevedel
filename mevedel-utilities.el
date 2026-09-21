@@ -761,7 +761,12 @@ beyond Unicode's maximum are kept visible as `\\xNN' byte escapes.  Normal
 ASCII and Unicode text, including text properties on unaffected ranges, is
 preserved."
   (if (or (not (stringp text))
-          (not (cl-some #'mevedel--invalid-message-char-p text)))
+          ;; Equal byte and character counts imply ASCII in a multibyte
+          ;; string.  Unibyte characters also cannot be invalid code points.
+          (= (length text) (string-bytes text))
+          ;; Raw-byte characters lie above Unicode's maximum.  Search in C
+          ;; instead of allocating Lisp iteration state for every character.
+          (not (string-match-p "[^\0-\uD7FF\uE000-\U0010FFFF]" text)))
       text
     (mevedel--escape-invalid-message-chars
      (let ((start 0)

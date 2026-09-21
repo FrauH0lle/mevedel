@@ -337,6 +337,11 @@ Return the hydrated conversation buffer."
                 (mevedel-agent-conversation-configure invocation)
                 (mevedel-session-artifacts-strip-gptel-config-properties)
                 (mevedel-session-artifacts-stabilize-gptel-bounds)
+                ;; Entering the conversation's major mode clears the resolver's
+                ;; buffer locals.  Restore its inspection/no-save contract.
+                (setq-local mevedel-session--inspection-buffer-p inspection
+                            buffer-offer-save (not inspection))
+                (setq buffer-read-only inspection)
                 (set-buffer-modified-p nil)))
             buffer)
         (error

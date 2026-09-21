@@ -74,6 +74,8 @@
                   "mevedel-view-composer" (info data-buffer))
 (declare-function mevedel-view--call-preserving-input-point
                   "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-preserving-user-view-state
+                  "mevedel-view-composer" (thunk))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-mutate

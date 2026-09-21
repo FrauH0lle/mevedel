@@ -764,15 +764,17 @@ Header shows a truncated first line of the command; body fontifies as
     (let* ((write-stdin-p (equal name "WriteStdin"))
            (cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
-           (output
-            (replace-regexp-in-string
-             "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result))
            (body
-            (if write-stdin-p
-                output
-              (concat "$ " cmd
-                      (unless (string-empty-p output) "\n\n")
-                      output)))
+            (unless (and (bound-and-true-p mevedel-tool-render-summary-only)
+                         (not (plist-get render-data :live-execution-p)))
+              (let ((output
+                     (replace-regexp-in-string
+                      "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result)))
+                (if write-stdin-p
+                    output
+                  (concat "$ " cmd
+                          (unless (string-empty-p output) "\n\n")
+                          output)))))
            (status (plist-get render-data :status))
            (state (plist-get render-data :state))
            (execution-id

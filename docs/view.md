@@ -216,6 +216,22 @@ Progress spacing also reconciles when the preceding content changes. Managed
 zone boundaries advance past history inserted immediately before them, keeping
 status, interaction, and progress overlays outside the transcript.
 
+Scheduled full refreshes of settled history prepare the canonical source once,
+render the turns needed to restore point, selection, and window anchors immediately,
+then replace other visible turns and offscreen turn placeholders one per timer
+callback, in that priority order. Each callback
+captures the current draft and reader state, so typing between callbacks is
+preserved. Source text or property changes retire the old plan. Callbacks pause
+while the view is unattended or its transport is busy, and view teardown cancels
+them. Ordinary manual turn folds retain source identity across rebuilds, as do
+expanded tool disclosures. A competing projection writer completes the history
+before resolving its own source positions; failed batch insertion rolls back
+and falls back to synchronous projection. Explicit zero-delay refreshes, direct
+full-render calls, and in-flight streaming reconciliation retain synchronous
+projection. Scheduled projection can defer large tool parsing as described below.
+Source segmentation and an individual turn remain indivisible work units;
+batching does not impose a maximum input delay on a very large single turn.
+
 Transcript mutations additionally share per-view ownership. Full, incremental,
 and terminal projection, agent-handle refreshes, and disclosure actions cannot
 write the same projection recursively. Nested requests coalesce and run after
@@ -238,7 +254,7 @@ composer text and point, source-backed reader anchors, and adjacent disclosures.
 Agent transcript inspection uses the same projection ownership rather than a
 second renderer.
 
-Spinner ticks, scheduled transcript flushes, and live tool-row refreshes
+Spinner ticks, scheduled transcript flushes and history batches, and live tool-row refreshes
 are attention-gated (`mevedel-view--unattended-p`).  When every window
 showing the view sits on an invisible or iconified frame, or on an unfocused
 graphical frame, the tick and the row refresh do nothing and a scheduled
@@ -1088,31 +1104,80 @@ Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
 headers/status — currently permission-queue origins and pending plan
 approval — and collapsed-header cache entries should omit large bodies
-so expansion can recompute body content when needed. Agent registry
+so expansion can recompute body content when needed. The collapsed projection
+also requests summary-only renderer work: Bash skips output cleanup and prefix
+construction, and ToolCall skips returned-value formatting and nested-row
+construction. Status and warning classification still run. Live expanded Bash
+output, explicitly expanded disclosures, and browser projection retain their
+complete bodies. This defers body formatting, not transcript or metadata decoding.
+Agent registry
 activity is deliberately excluded from the key: agent handle status
 reaches a rendering only through render-data blocks patched into the
-transcript text, which the content term already invalidates, while
+transcript text, which source-change tracking already invalidates, while
 registry activity changes on every agent tick and would defeat the
 cache exactly during agent runs. A new live-state dependency must
 either ride a text patch or invalidate the affected tool-rendering entries at
 its mutation point. Progress row refreshes invalidate overlapping source spans
 only, preserving cached renderings of unrelated completed calls.
-Content keys digest the whole text: sampled string hashes can miss same-length
-edits inside metadata. Tool keys also include the source's `gptel`, render-data,
-and audit property intervals. A matching content-and-provenance key skips tool-call
-parsing, structural recovery, and request-failure decoding. Restoring trust can
+Complete tool keys use bounded, source-buffer-local character revisions rather
+than copying and hashing payloads on every redraw. Before/after-change hooks
+retain ranges preceding an edit and invalidate the affected suffix. A character
+tick mismatch or missing observer discards all identities, including after edits
+made with hooks inhibited. Partial spans depending on enclosing text are not
+cached under their own range alone. Keys also inspect the source's `gptel`,
+render-data, and audit property intervals directly, independently of character
+revisions; unrelated fontification properties do not invalidate them. A matching
+revision-and-provenance key skips payload copying, tool-call parsing, structural
+recovery, and request-failure decoding. Restoring trust can
 expose a request failure without changing text, so a text-only hit is insufficient.
 Collapsed activity groups retain tool names with their cached headers rather
 than reparsing hidden arguments and results to count them. Expanding a group,
 or retaining an already expanded child, recovers its complete child data.
 The tool-call reader uses offsets into the existing source string instead of
 copying a large result merely to read its leading call form.
+The render-data reader likewise reads within explicit string bounds instead of
+copying and trimming the serialized payload. A cold complete tool reuses its
+initial source copy during structural recovery; partial spans still recover the
+enclosing block. These reduce first-arrival allocation without deferring decoding
+or changing metadata validation and ownership checks.
+Scheduled projections show a non-toggleable `Tool: preparing result...` row for
+uncached collapsed tool spans of at least 256 Ki characters. The row indicates
+pending presentation, not a successful tool outcome. One parser thread per view
+processes admitted spans sequentially, waiting between the canonical parser's
+stages. Its timer queues are private: `sleep-for` can otherwise dispatch editor
+timers inside the worker. Registered renderers and view mutations run on the main
+thread with current presentation context. Prepared payloads are temporary and are
+released after publication or cancellation; collapsed caches retain summaries.
+
+Each job validates its exact source range, character identity, trusted properties,
+session context and view lifetime. Unchanged source ticks can renew evicted cache
+identities; partial spans additionally require an unchanged whole-source tick.
+Source replacement, mode change and buffer death cancel owned work. Focus loss
+and busy transport pause preparation. Publication acquires projection ownership
+before validating and retiring a job; failures fall back without repeatedly
+admitting the same source. Active-turn results invalidate retained live units and
+refresh that turn. Historical results replace only their containing rendered
+turn while its source buffer, tick and render context still match. The local
+replacement reuses the turn-batch projector and preserves other pending turns;
+whole-turn folds retain the same context. A changed source, missing context or
+failed local projection uses the reader-preserving full-history fallback.
+Drafts, selection and disclosure state survive publication.
+
+Explicit synchronous projections and expansion retain the ordinary parser path.
+Deferred preparation still decodes hidden metadata before displaying its final
+summary: this is not general payload-on-expansion storage. Native reader calls,
+string operations and shared-heap GC remain atomic costs, so staged preparation
+does not establish a maximum input latency.
+
 Cache keys normalize marker positions to integers so
 targeted agent refreshes and full renders share entries, and tool
 block bounds are memoized per segment in a data-buffer-local table
 keyed on `buffer-modified-tick` (property-only changes included, since
 restored transcripts stamp gptel properties without character
-changes). Agent-source presence checks reuse the invocation-owned
+changes). Distinct agent refreshes share one per-view queue. Each callback refreshes one
+path using its current state, coalescing duplicate paths while allowing input
+between rows. Killing or reinitializing the view cancels queued work; a failed
+row does not strand other paths. Agent-source presence checks reuse the invocation-owned
 render-data markers maintained by the live update path and never scan
 the transcript.
 
@@ -1120,6 +1185,11 @@ Each structural scan first indexes candidate control-marker lines, so its
 existing parsers skip intervening payload text instead of repeatedly scanning it.
 The index selects possible positions only; the parsers retain their complete
 marker, nesting, boundary, and provenance checks. It expires with the scan.
+Structural ranges overlay the role segments in precedence order, advancing
+through their unchanged prefix as source positions increase and reusing untouched
+suffixes. A return to earlier source restarts the cursor; contained tool metadata
+retains the same classification. This avoids walking and copying the entire role
+list for each control range.
 Activity classification and insertion also share tool entries within that one
 activity render, keyed by source revision/range and session presentation state.
 Each caller owns its coalescing count; reuse does not carry mutable counts across

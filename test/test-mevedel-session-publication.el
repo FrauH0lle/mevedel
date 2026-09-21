@@ -13,6 +13,115 @@
           "mevedel-session-test-support"))
 (require 'mevedel-journal-pins)
 
+(mevedel-deftest mevedel-session-publication--immutable-entry ()
+  (let* ((root (make-temp-file "mevedel-entry-" t))
+         (source (file-name-concat root "source"))
+         (directory (file-name-concat root ".publications/generation-test/"))
+         (bytes (unibyte-string 0 127 128 255 10))
+         (reader (symbol-function 'insert-file-contents-literally))
+         (reads 0)
+         entry)
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent))
+          (cl-letf (((symbol-function 'insert-file-contents-literally)
+                     (lambda (&rest args)
+                       (cl-incf reads)
+                       (apply reader args))))
+            (setq entry
+                  (mevedel-session-publication--immutable-entry
+                   directory (list :source source :logical "tool-results/result")
+                   1 root)))
+          (should (= reads 1))
+          (should (equal bytes (plist-get entry :content)))
+          (should (equal (secure-hash 'sha256 bytes)
+                         (plist-get (cdr (plist-get entry :entry)) :sha256)))
+          (should (equal ".publications/generation-test/000001.data"
+                         (plist-get (cdr (plist-get entry :entry)) :published))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-publication--deduplicate-artifacts ()
+  ,test
+  (test)
+  :doc "keeps the last occurrence in source order without rescanning old entries"
+  (let* ((artifacts '((:logical "a" :content "old")
+                      (:path "/outside")
+                      (:logical "b" :delete t)
+                      (:logical "a" :delete t)
+                      (:logical "c" :content "new")
+                      (:logical "b" :content "restored")))
+         (original (copy-tree artifacts)))
+    (should (equal (mevedel-session-publication--deduplicate-artifacts artifacts)
+                   '((:logical "a" :delete t)
+                     (:logical "c" :content "new")
+                     (:logical "b" :content "restored"))))
+    (should (equal artifacts original)))
+  (let* ((artifacts (cl-loop for n below 1000 collect
+                             (list :logical (number-to-string n) :delete t)))
+         (get (symbol-function 'plist-get))
+         (calls 0))
+    (cl-letf (((symbol-function 'plist-get)
+               (lambda (plist property &optional predicate)
+                 (cl-incf calls)
+                 (funcall get plist property predicate))))
+      (should (equal artifacts
+                     (mevedel-session-publication--deduplicate-artifacts artifacts))))
+    (should (<= calls 2000))))
+
+(mevedel-deftest mevedel-session-publication--capture-publication ()
+  ,test
+  (test)
+  :doc "qualifies many immutable artifacts without repeating shared root work"
+  (let* ((root (make-temp-file "mevedel-publication-paths-" t))
+         (prefix ".publications/generation-0123456789abcdef0123/")
+         (artifacts (cl-loop for n below 100
+                             collect (list (if (zerop n) "session.meta.el"
+                                             (format "file-history/%d" n))
+                                           :published (concat prefix (format "%d.data" n))
+                                           :sha256 (make-string 64 ?a))))
+         (raw (list :head (concat prefix "manifest.el")
+                    :sidecar "session.meta.el" :artifacts artifacts))
+         (original (copy-tree raw))
+         (physical (symbol-function 'mevedel-session-control-fs-physical-path))
+         (calls 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-physical-path)
+                   (lambda (path) (cl-incf calls) (funcall physical path))))
+          (let ((captured (mevedel-session-publication--capture-publication
+                           (concat root "//") raw)))
+            (should (equal raw original))
+            (should (equal (plist-get captured :head) (plist-get raw :head)))
+            (should (equal (plist-get captured :sidecar)
+                           (file-name-concat root prefix "0.data")))
+            (should (= 100 (length (plist-get captured :artifacts))))
+            (cl-mapc (lambda (before after)
+                       (should (equal (car before) (car after)))
+                       (should (equal (plist-get (cdr after) :published)
+                                      (file-name-concat root (plist-get (cdr before) :published))))
+                       (should (equal (plist-get (cdr before) :sha256)
+                                      (plist-get (cdr after) :sha256))))
+                     artifacts (plist-get captured :artifacts))
+            (should (<= calls 102))))
+      (delete-directory root t)))
+
+  :doc "keeps remote prefixes and rejects paths outside immutable generations"
+  (let ((root "/ssh:example.invalid:/workspace/session/"))
+    (dolist (path '("/tmp/outside" "../outside" ".publications/../outside"
+                    ".publications/generation-0123456789abcdef0123/../outside"
+                    ".publications/generation-0123456789abcdef0123/nested/file"))
+      (should-error
+       (mevedel-session-publication--capture-publication
+        root (list :artifacts (list (list "session.meta.el" :published path)))))))
+  (let* ((path ".publications/generation-0123456789abcdef0123/1.data")
+         (root "/ssh:example.invalid:/workspace//session/")
+         (captured
+          (mevedel-session-publication--capture-publication
+           root (list :artifacts (list (list "session.meta.el" :published path))))))
+    (should (equal (plist-get captured :sidecar)
+                   (concat "/ssh:example.invalid:/workspace/session/" path))))
+  (should-not (mevedel-session-publication--capture-publication "/tmp/unused" nil)))
+
 (mevedel-deftest mevedel-session-publication--delete-batch ()
   ,test
   (test)
@@ -51,7 +160,7 @@
 HOST names the mock target, PREFIX the temporary root, and CLIENT-ID the
 durability client character.  BODY receives the session, its directory,
 and its segment path."
-  (let ((mevedel-session-publication--manifest-cache
+  (let ((mevedel-session-publication--generation-cache
          (make-hash-table :test #'equal))
         (mevedel-session-publication--facts-cache
          (make-hash-table :test #'equal))
@@ -83,6 +192,34 @@ and its segment path."
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-publication-publish/tombstone-cost (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-tombstones" "mevedel-tombstones-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((paths (cl-loop for n below 40
+                            collect (file-name-concat session-dir "file-history" (format "unused-%d" n))))
+            (marker (list :path (file-name-concat session-dir "session.meta.el")
+                          :content (mevedel-session-artifacts-printed-value
+                                    (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+                          :commit-marker t))
+            (program (symbol-function 'mevedel-session-control-fs-run-program))
+            (programs 0) old-head)
+       (mevedel-session-publication-publish
+        session (append (mapcar (lambda (path) (list :path path :content "retained bytes")) paths)
+                        (list marker)))
+       (should-not (seq-some #'file-exists-p paths))
+       (setq old-head (plist-get (mevedel-session-publication session) :head))
+       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (&rest args) (cl-incf programs) (apply program args))))
+         (mevedel-session-publication-publish
+          session (append (mapcar (lambda (path) (list :path path :delete t)) paths)
+                          (list marker))))
+       (should (<= programs 20))
+       (should-not (assoc "file-history/unused-0" (plist-get (mevedel-session-publication session) :artifacts)))
+       (let* ((old (mevedel-session-publication-read session-dir old-head))
+              (entry (cdr (assoc "file-history/unused-0" (plist-get old :artifacts)))))
+         (should (equal "retained bytes" (mevedel-session-control-fs-read-file (plist-get entry :published)))))))))
 
 (mevedel-deftest mevedel-session-publication-generation-summaries ()
   ,test
@@ -154,7 +291,139 @@ and its segment path."
   (should-not (mevedel-session-publication-settled-summary-p
                '(:turn-count nil :prompt nil))))
 
-(mevedel-deftest mevedel-session-publication-collect-generations ()
+(defun test-mevedel-publication--collect (session)
+  "Drain native bounded collection for SESSION, returning deleted directories."
+  (condition-case err
+      (when (and (mevedel-session-codec-portable-authority-p session)
+                 (mevedel-session-durability-lease-owned-p session))
+        (let* ((summaries (mevedel-session-publication-generation-summaries
+                           (mevedel-session-save-path session) most-positive-fixnum))
+               (plan (mevedel-session-publication-collection-plan session summaries))
+               (steps 0))
+          (while (mevedel-session-publication-collect-step session plan)
+            (cl-incf steps)
+            (should (< steps 1000)))
+          (plist-get plan :deleted-directories)))
+    (error
+     (display-warning 'mevedel (format "Could not collect published generations: %s"
+                                      (error-message-string err)) :warning)
+     nil)))
+
+(mevedel-deftest mevedel-session-publication-collect-step/files ()
+  (let ((mevedel-session-publication-keep-recent-generations 1))
+    (test-mevedel-session-publication--with-published
+     "publication-file-collection" "mevedel-file-collection-" ?a
+     (lambda (session directory _segment)
+       (setf (mevedel-session-turn-count session) 1)
+       (let ((marker (list :path (file-name-concat directory "session.meta.el")
+                           :content (mevedel-session-artifacts-printed-value
+                                     (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+                           :commit-marker t)))
+         (mevedel-session-publication-publish
+          session (list (list :path (file-name-concat directory "stable") :content "keep")
+                        (list :path (file-name-concat directory "obsolete") :content "discard") marker))
+         (let* ((old (plist-get (mevedel-session-publication session) :head))
+                (manifest (mevedel-session-publication-read directory old))
+                (stable (plist-get (cdr (assoc "stable" (plist-get manifest :artifacts))) :published))
+                (obsolete (plist-get (cdr (assoc "obsolete" (plist-get manifest :artifacts))) :published)))
+           (mevedel-session-publication-publish
+            session (list (list :path (file-name-concat directory "obsolete") :delete t) marker))
+           (let ((current (plist-get (mevedel-session-publication session) :head)))
+             (set-file-times (file-name-concat directory old) '(1 0 0 0))
+             (let* ((summaries (mevedel-session-publication-generation-summaries
+                                directory most-positive-fixnum))
+                    (plan (mevedel-session-publication-collection-plan session summaries))
+                    (program (symbol-function 'mevedel-session-control-fs-run-program)))
+               (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                          (lambda (operations)
+                            (when (seq-some
+                                   (lambda (op)
+                                     (and (memq (plist-get op :op) '(delete-file delete-directory))
+                                          (not (equal (file-name-nondirectory (plist-get op :path))
+                                                      "manifest.el")))) operations)
+                              (error "Injected interrupted payload sweep"))
+                            (funcall program operations))))
+                 (should-error
+                  (while (mevedel-session-publication-collect-step session plan))))
+               ;; Every remaining discoverable head is still readable.  The
+               ;; interrupted pass retired obsolete heads before any payload.
+               (should-not (file-exists-p (file-name-concat directory old)))
+               (should (file-exists-p obsolete))
+               (dolist (generation (mevedel-session-publication--generation-names directory))
+                 (should (mevedel-session-publication-read directory (plist-get generation :head)))))
+             (test-mevedel-publication--collect session)
+             (should-not (file-exists-p (file-name-concat directory old)))
+             (should-not (file-exists-p obsolete))
+             (should (equal "keep" (mevedel-session-control-fs-read-file stable)))
+             (should (mevedel-session-publication-read directory current))
+             ;; Once its last retained reference disappears, an artifact-only
+             ;; generation is reclaimed too, despite having no manifest.
+             (mevedel-session-publication-publish
+              session (list (list :path (file-name-concat directory "stable") :delete t) marker))
+             (set-file-times (file-name-concat directory current) '(1 0 0 0))
+             (test-mevedel-publication--collect session)
+             (should-not (file-exists-p (file-name-directory stable))))))))))
+
+(mevedel-deftest mevedel-session-publication--retained-heads ()
+  (let ((mevedel-session-publication-keep-recent-generations 1))
+    (should (equal (mevedel-session-publication--retained-heads
+                    '((:head "recent" :turn-count 2 :prompt (:cum-turn 3))
+                      (:head "settled" :turn-count 2)
+                      (:head "duplicate" :turn-count 2)
+                      (:head "fork" :turn-count 2 :fork-point-id "fork")
+                      (:head "unknown")))
+                   '("recent" "settled" "fork" "unknown")))))
+
+(mevedel-deftest mevedel-session-publication-collection-plan ()
+  (test-mevedel-session-publication--with-published
+   "publication-plan" "mevedel-publication-plan-" ?d
+   (lambda (session directory _segment)
+     (let ((summaries (mevedel-session-publication-generation-summaries directory most-positive-fixnum)))
+       (cl-letf (((symbol-function 'mevedel-session-publication--read-publication-raw)
+                  (lambda (&rest _) (error "Planning decoded a manifest"))))
+         (let ((plan (mevedel-session-publication-collection-plan session summaries)))
+           (should (member (plist-get (mevedel-session-publication session) :head)
+                           (plist-get plan :heads)))
+           (should (= 0 (hash-table-count (plist-get plan :keep))))))))))
+
+(mevedel-deftest mevedel-session-publication-collect-step/freshness ()
+  (test-mevedel-session-publication--with-published
+   "publication-plan-freshness" "mevedel-plan-freshness-" ?e
+   (lambda (session directory segment)
+     (let* ((old (test-mevedel-session-persistence--publish-generation session directory segment "old" 1))
+            (current (test-mevedel-session-persistence--publish-generation session directory segment "new" 1))
+            (summaries (mevedel-session-publication-generation-summaries directory most-positive-fixnum))
+            (plan (mevedel-session-publication-collection-plan session summaries))
+            (capture (make-string 64 ?f)))
+       (while (not (plist-get plan :marked))
+         (mevedel-session-publication-collect-step session plan))
+       (mevedel-journal-pins-retain directory capture (list old))
+       (should-error (mevedel-session-publication-collect-step session plan))
+       (should (mevedel-session-publication-read directory old))
+       (should (mevedel-session-publication-read directory current))
+       (mevedel-journal-pins-release directory capture)
+       (test-mevedel-session-persistence--publish-generation session directory segment "later" 2)
+       (should-error (mevedel-session-publication-collect-step session plan))))))
+
+(mevedel-deftest mevedel-session-publication-collect-step/unreadable ()
+  (test-mevedel-session-publication--with-published
+   "publication-unreadable" "mevedel-publication-unreadable-" ?b
+   (lambda (session directory _segment)
+     (let* ((summaries (mevedel-session-publication-generation-summaries directory most-positive-fixnum))
+            (plan (mevedel-session-publication-collection-plan session summaries))
+            (path (file-name-concat directory (plist-get plan :head)))
+            (bytes (mevedel-session-control-fs-read-file path)))
+       (unwind-protect
+           (progn
+             (mevedel-session-control-fs-write-file path "(:broken")
+             (should-error (mevedel-session-publication-collect-step session plan))
+             (should-not (plist-get plan :marked))
+             (should-not (plist-get plan :operations))
+             (should (= (length summaries)
+                        (length (mevedel-session-publication--generation-names directory)))))
+         (mevedel-session-control-fs-write-file path bytes))))))
+
+(mevedel-deftest mevedel-session-publication-collect-step ()
   ,test
   (test)
   :doc "keeps the current head, settled turn states, and a recent grace window"
@@ -176,7 +445,7 @@ and its segment path."
                (current (publish "Turn two\n" 2))
                (before (length (mevedel-session-publication--generation-names
                                 session-dir)))
-               (deleted (mevedel-session-publication-collect-generations
+               (deleted (test-mevedel-publication--collect
                          session))
                (kept (mapcar (lambda (entry) (plist-get entry :head))
                              (mevedel-session-publication--generation-names
@@ -186,7 +455,7 @@ and its segment path."
           (should (member current kept))
           (should (= (length kept)
                      (hash-table-count
-                      mevedel-session-publication--manifest-cache)))
+                      mevedel-session-publication--generation-cache)))
           (should (= (length kept)
                      (hash-table-count
                       mevedel-session-publication--facts-cache)))
@@ -204,7 +473,7 @@ and its segment path."
                          (mevedel-session-artifacts-read-artifact
                           session "segment-0001.chat.org" t)))
           ;; Collecting again finds nothing left to reclaim.
-          (should (= 0 (mevedel-session-publication-collect-generations
+          (should (= 0 (test-mevedel-publication--collect
                         session))))))))
 
   :doc "retains captured evidence until its journal pin is released"
@@ -221,7 +490,7 @@ and its segment path."
          (mevedel-journal-pins-retain session-dir capture heads)
          (test-mevedel-session-persistence--publish-generation
           session session-dir segment "Later turn\n" 2)
-         (mevedel-session-publication-collect-generations session)
+         (test-mevedel-publication--collect session)
          (dolist (head heads)
            (let* ((publication (mevedel-session-publication-read session-dir head))
                   (artifact (cdr (assoc "segment-0001.chat.org"
@@ -231,7 +500,7 @@ and its segment path."
                       (mevedel-session-control-fs-read-file
                        (plist-get artifact :published))))))
          (mevedel-journal-pins-release session-dir capture)
-         (should (= 3 (mevedel-session-publication-collect-generations session)))
+         (should (= 3 (test-mevedel-publication--collect session)))
          (should (= 1 (length
                        (seq-filter
                         (lambda (head) (file-exists-p (file-name-concat session-dir head)))
@@ -261,7 +530,7 @@ and its segment path."
               session-dir most-positive-fixnum)
              (should (= first-pass reads))))))))
 
-  :doc "collects every collectible generation in one batched pass"
+  :doc "collects every collectible generation through bounded steps"
   (let ((mevedel-session-publication-keep-recent-generations 1))
     (test-mevedel-session-publication--with-published
      "publication-bound" "mevedel-publication-bound-" ?b
@@ -269,9 +538,9 @@ and its segment path."
        (dolist (turns '(1 1 1 2))
          (test-mevedel-session-persistence--publish-generation
           session session-dir segment (format "Turn %d\n" turns) turns))
-       (should (= 2 (mevedel-session-publication-collect-generations session)))
+       (should (= 2 (test-mevedel-publication--collect session)))
        ;; The pass was complete; nothing is left for later.
-       (should (= 0 (mevedel-session-publication-collect-generations
+       (should (= 0 (test-mevedel-publication--collect
                      session))))))
 
   :doc "warns instead of failing when collection cannot inspect generations"
@@ -284,23 +553,23 @@ and its segment path."
                      'mevedel-session-publication-generation-summaries)
                     (lambda (&rest _) (error "Injected scan failure"))))
            (should-not
-            (mevedel-session-publication-collect-generations session))))
+            (test-mevedel-publication--collect session))))
        (should (string-match-p
                 "Could not collect published generations.*Injected scan failure"
                 captured)))))
 
   :doc "refuses without the lease and for a PID-lock session"
   (should-not
-   (mevedel-session-publication-collect-generations
+   (test-mevedel-publication--collect
     (mevedel-session--create :authority-mode 'pid-lock)))
   (should-not
-   (mevedel-session-publication-collect-generations
+   (test-mevedel-publication--collect
     (mevedel-session--create :authority-mode 'portable
                              :save-path "/tmp/mevedel-absent/"))))
 
-(mevedel-deftest mevedel-session-publication--cached-manifest
-  (:doc "Caches only successfully read immutable manifests")
-  (let ((mevedel-session-publication--manifest-cache
+(mevedel-deftest mevedel-session-publication--cached-generation
+  (:doc "Caches compact observations only after a successful immutable read")
+  (let ((mevedel-session-publication--generation-cache
          (make-hash-table :test #'equal))
         (head ".publications/generation-deadbeef/manifest.el")
         (reads 0))
@@ -312,12 +581,45 @@ and its segment path."
                      (error "Transient read failure")
                    '(:head "generation")))))
       (should-not
-       (mevedel-session-publication--cached-manifest "/tmp/session/" head))
+       (mevedel-session-publication--cached-generation "/tmp/session/" head))
       (should
-       (equal '(:head "generation")
-              (mevedel-session-publication--cached-manifest
+       (equal '(:references nil :sidecar nil :transcript-bytes nil)
+              (mevedel-session-publication--cached-generation
                "/tmp/session/" head)))
+      (should (mevedel-session-publication--cached-generation "/tmp/session/" head))
       (should (= 2 reads)))))
+
+(mevedel-deftest mevedel-session-publication-generation-summary/space ()
+  (let* ((root (make-temp-file "mevedel-generation-cache-" t))
+         (name "generation-0123456789abcdef0123")
+         (head (file-name-concat ".publications" name "manifest.el"))
+         (manifest-path (file-name-concat root head))
+         (sidecar (file-name-concat ".publications" name "sidecar.data"))
+         (generation (list :name name :head head :time (current-time)))
+         (mevedel-session-publication--generation-cache (make-hash-table :test #'equal))
+         (artifacts
+          (cons (list "session.meta.el" :published sidecar :sha256 (make-string 64 ?a))
+                (cl-loop for index below 1200
+                         collect (list (format "file-history/%d" index)
+                                       :published (file-name-concat ".publications" name (format "%d.data" index))
+                                       :sha256 (make-string 64 ?b))))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory manifest-path) t)
+          (with-temp-file manifest-path
+            (prin1 (list :sidecar "session.meta.el" :artifacts artifacts) (current-buffer)))
+          (let ((summary (mevedel-session-publication-generation-summary root generation)))
+            (should (plist-get summary :manifest-readable-p))
+            (should (equal (plist-get summary :references) (list name)))
+            (should (equal summary (mevedel-session-publication-generation-summary root generation)))
+            (setcar (plist-get summary :references) "changed-by-caller")
+            (should (equal (plist-get (mevedel-session-publication-generation-summary root generation) :references)
+                           (list name)))
+            (should (= 1 (hash-table-count mevedel-session-publication--generation-cache)))
+            ;; Retention needs the referenced generations, not every file entry.
+            (maphash (lambda (_ value) (should (< (length (prin1-to-string value)) 2048)))
+                     mevedel-session-publication--generation-cache)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-publication--cached-sidecar-facts
   (:doc "Caches only successfully read immutable sidecar facts")
@@ -623,6 +925,24 @@ and its segment path."
         (delete-directory root t)
         (mevedel-session-durability-forget-removed-session session)
         (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-session-publication--valid-published-path-p ()
+  (let ((prefix ".publications/generation-0123456789abcdef0123/")
+        (remote (symbol-function 'file-remote-p))
+        (calls 0))
+    (cl-letf (((symbol-function 'file-remote-p)
+               (lambda (&rest args) (cl-incf calls) (apply remote args))))
+      (dolist (leaf '("manifest.el" "artifact-1" "a b" ".hidden" "a..b" "~name"))
+        (should (mevedel-session-publication--valid-published-path-p
+                 (concat prefix leaf))))
+      (dolist (leaf '("" "." ".." "a/b" "/a" "a/" "../a"))
+        (should-not (mevedel-session-publication--valid-published-path-p
+                     (concat prefix leaf))))
+      (dolist (path '(nil 1 "/ssh:host:/file" "../manifest.el" "~/.publications/x"
+                          ".publications/generation-short/manifest.el"))
+        (should-not (mevedel-session-publication--valid-published-path-p path))))
+    ;; The fixed relative grammar itself proves this is not a remote spelling.
+    (should (= 0 calls))))
 
 (provide 'test-mevedel-session-publication)
 ;;; test-mevedel-session-publication.el ends here

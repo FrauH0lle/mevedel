@@ -353,6 +353,19 @@ Generated task background is ordinary persisted conversation context with its
 own structural type. Follow-ups and agent compaction therefore absorb it
 naturally without replaying or regenerating it.
 
+Resume validates the registry, configuration and transcript locations without
+loading idle conversations. The first FollowupAgent, history resource read, or
+Emacs transcript inspection hydrates only the selected identity through the same
+verified artifact resolver. Unread mail and pending hook context remain in the
+registry until their ordinary delivery boundary. Active abandoned turns still
+hydrate during resume so recovery can retain their partial responses. Failure to
+load a deferred conversation is reported at access before provider dispatch.
+
+Inspection keeps the resolver's read-only/no-save marker after major-mode setup.
+A later owned follow-up loads a writable conversation rather than writing through
+an inspection snapshot. Browser polling keeps its existing resident-only contract;
+it does not cause cold target reads.
+
 The registry stores each conversation location as a session-relative path.
 For a remote session, cold hydration, terminal inspection, recovery links, and
 compaction resolve that logical path through the session's staged or captured

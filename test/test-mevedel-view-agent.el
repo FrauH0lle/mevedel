@@ -109,6 +109,52 @@
             (kill-buffer agent-view))
           (when (buffer-live-p agent-data) (kill-buffer agent-data)))))))
 
+(mevedel-deftest mevedel-view-open-agent-transcript ()
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((root (make-temp-file "mevedel-cold-agent-view-" t))
+             (session (mevedel-session-create
+                       "cold" (mevedel-workspace--create
+                               :type 'file :id root :root root :name "cold")))
+             (path "/root/cold")
+             (relative "agents/cold.chat.org")
+             (record (mevedel-view-agent-test--record path 'idle))
+             agent-view)
+        (unwind-protect
+            (progn
+              (make-directory (file-name-concat root "agents") t)
+              (write-region "* Agent Task: cold\nRetained response\n" nil
+                            (file-name-concat root relative) nil 'silent)
+              (setf (mevedel-session-authority-mode session) 'pid-lock
+                    (mevedel-session-save-path session) root
+                    (mevedel-session-root-buffer session) data-buf
+                    (mevedel-session-agent-registry session) (list (cons path record))
+                    (mevedel-agent-record-conversation-location record) relative
+                    (mevedel-agent-record-configuration record)
+                    (mevedel-agent-configuration--create :agent (mevedel-agent-default)
+                                                        :request-locals nil))
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session
+                            mevedel--workspace (mevedel-session-workspace session)))
+              (with-current-buffer view-buf
+                (switch-to-buffer view-buf)
+                (goto-char (mevedel-view--input-start))
+                (insert "> draft\nsecond line")
+                (let ((before (buffer-string)))
+                  (mevedel-view-open-agent-transcript path)
+                  (setq agent-view (window-buffer (selected-window)))
+                  (should (with-current-buffer agent-view
+                            (and buffer-read-only
+                                 (string-search "Retained response" (buffer-string)))))
+                  (with-current-buffer agent-view (mevedel-view-close-agent-transcript))
+                  (should (equal before (buffer-string)))))
+              (should (buffer-live-p (mevedel-agent-record-conversation-buffer record)))
+              (should-not (buffer-local-value 'buffer-read-only
+                                              (mevedel-agent-record-conversation-buffer record))))
+          (when (buffer-live-p agent-view) (kill-buffer agent-view))
+          (mevedel-agent-control-teardown-session session)
+          (delete-directory root t))))))
+
 (mevedel-deftest mevedel-view-agent--handle-badge
   (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
   ,test
@@ -1024,10 +1070,68 @@
         (should-not
          (mevedel-view--agent-source-present-p "/root/worker_1"))))))
 
+(mevedel-deftest mevedel-view-agent-cancel-refresh ()
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-agent-refresh-delay 60))
+        (mevedel-view-refresh-agent-rendering view-buf "/root/a")
+        (let ((timer mevedel-view--agent-refresh-timer))
+          (should (memq timer timer-list))
+          (mevedel-view-agent-cancel-refresh)
+          (should-not (memq timer timer-list))
+          (should-not mevedel-view--agent-refresh-pending)
+          (should-not mevedel-view--agent-refresh-timer))))))
+
+(mevedel-deftest mevedel-view-agent--flush-refresh ()
+  ,test
+  (test)
+  :doc "one callback consumes one distinct agent and preserves pending order"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-agent-refresh-delay 60) refreshed)
+        (dolist (path '("/root/a" "/root/b" "/root/a"))
+          (mevedel-view-refresh-agent-rendering view-buf path))
+        (cl-letf (((symbol-function 'mevedel-view--refresh-agent-rendering-now)
+                   (lambda (path) (push path refreshed))))
+          (mevedel-view-agent--flush-refresh view-buf)
+          (should (equal refreshed '("/root/a")))
+          (should (equal mevedel-view--agent-refresh-pending '("/root/b")))
+          (mevedel-view-agent--flush-refresh view-buf)
+          (should (equal refreshed '("/root/b" "/root/a")))
+          (should-not mevedel-view--agent-refresh-pending)
+          (should-not mevedel-view--agent-refresh-timer)))))
+  :doc "a failed row does not strand other agents and view death cancels work"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-agent-refresh-delay 60))
+        (mevedel-view-refresh-agent-rendering view-buf "/root/a")
+        (mevedel-view-refresh-agent-rendering view-buf "/root/b")
+        (cl-letf (((symbol-function 'mevedel-view--refresh-agent-rendering-now)
+                   (lambda (_) (error "Injected refresh failure"))))
+          (should-error (mevedel-view-agent--flush-refresh view-buf)))
+        (should (equal mevedel-view--agent-refresh-pending '("/root/b")))
+        (let ((timer mevedel-view--agent-refresh-timer))
+          (kill-buffer view-buf)
+          (should-not (memq timer timer-list)))))))
+
 (mevedel-deftest mevedel-view-refresh-agent-rendering
   (:doc "coalesces canonical-path refreshes without altering the composer")
   ,test
   (test)
+
+  :doc "distinct agent bursts share one timer rather than expiring together"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-agent-refresh-delay 60)
+          (schedule (symbol-function 'run-at-time)) timers)
+      (unwind-protect
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (&rest args)
+                       (let ((timer (apply schedule args)))
+                         (push timer timers) timer))))
+            (dolist (path '("/root/a" "/root/b" "/root/c" "/root/a"))
+              (mevedel-view-refresh-agent-rendering view-buf path))
+            (should (= (length timers) 1)))
+        (mapc #'cancel-timer timers))))
 
   :doc "no handle and no source leaves the draft untouched"
   (mevedel-view-test--with-buffers

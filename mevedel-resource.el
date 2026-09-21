@@ -55,10 +55,10 @@
   "mevedel-agent-conversation")
 
 ;; `mevedel-agent-persistence'
-(declare-function mevedel-agent-persistence-restore-tree
+(declare-function mevedel-agent-persistence-ensure-conversation
                   "mevedel-agent-persistence"
-                  (session root-buffer &optional readonly-p))
-(autoload 'mevedel-agent-persistence-restore-tree
+                  (session record root-buffer &optional readonly-p))
+(autoload 'mevedel-agent-persistence-ensure-conversation
   "mevedel-agent-persistence")
 
 ;; `mevedel-execution'
@@ -1256,26 +1256,25 @@ When NESTED in an array or object, retain JSON string quoting."
           (mevedel-resource--json-render selected))))))
 
 (defun mevedel-resource--history-hydrate (record session)
-  "Hydrate cold RECORD from SESSION and return its conversation buffer.
-The temporary parent buffer supplies the same session/workspace context used
-by normal session resume; the hydrated retained buffer remains live after the
-parent is discarded."
-  (let ((root-buffer (generate-new-buffer
-                      " *mevedel-resource-history-root*")))
+  "Load only RECORD's conversation from SESSION for history inspection.
+Use the live root's context when available; otherwise use a temporary read-only
+context.  Other retained agents and their activity remain untouched."
+  (let* ((live (mevedel-session-root-buffer session))
+         (temporary (not (buffer-live-p live)))
+         (root-buffer (if temporary
+                          (generate-new-buffer " *mevedel-resource-history-root*")
+                        live)))
     (unwind-protect
         (progn
-          (with-current-buffer root-buffer
-            (mevedel--transcript-org-mode)
-            (setq-local mevedel--session session)
-            (setq-local mevedel--workspace
-                        (and session (mevedel-session-workspace session))))
-          (mevedel-agent-persistence-restore-tree session root-buffer t)
-          (let ((buffer (mevedel-agent-record-conversation-buffer record)))
-            (if (buffer-live-p buffer)
-                buffer
-              (signal 'mevedel-resource-unavailable
-                      (list "Retained agent conversation is unavailable")))))
-      (when (buffer-live-p root-buffer)
+          (when temporary
+            (with-current-buffer root-buffer
+              (mevedel--transcript-org-mode)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace (mevedel-session-workspace session))))
+          (mevedel-agent-persistence-ensure-conversation
+           session record root-buffer
+           (or temporary (buffer-local-value 'mevedel-session--read-only-mode root-buffer))))
+      (when (and temporary (buffer-live-p root-buffer))
         (kill-buffer root-buffer)))))
 
 (defun mevedel-resource--history-read (record session)

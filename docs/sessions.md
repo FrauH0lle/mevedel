@@ -214,9 +214,8 @@ Layout:
   repair-log.el                      ; redacted tool-input validation telemetry
   telemetry-log.el                   ; correlated lifecycle events, one plist/line
   diagnostics/run-*/                 ; resource reports; local sessions only
-  file-history/                      ; per-session backup store
-    4f1e8c9a3b2d6e57@v1
-    4f1e8c9a3b2d6e57@v2
+  file-history/                      ; optional materialized backup cache
+    <sha256-of-raw-file-contents>
   local/                              ; lazy session-owned shared resources
     plans/current.md                 ; mutable Plan draft/proposal
     plans/accepted-*.md              ; immutable accepted plans
@@ -403,6 +402,15 @@ Content payloads and listings travel base64-encoded inside a NUL-framed request
 and response, because filenames and content both contain bytes a shell cannot pass
 through a command substitution literally. Numeric request fields travel as digit
 strings and are validated on the target without a decoding subprocess.
+Oversized stdin requests include each encoded field's byte length. Required
+writes that use a temporary destination stream large payloads through `dd` and
+`base64`, then require the trailing framing byte before rename or link commits
+them. Client framing joins the encoded fields once, without first copying each
+large payload into a separate operation string. Optional operations and plain
+append decode their field before execution.
+The operation decoder owns its shell variables, avoiding repeated large copies
+through shell function argument lists. Parent proofs, per-operation results,
+and failed-precondition ordering remain the same for both request carriers.
 An operation marked optional does not end its program, which is how ensuring
 a directory that may already exist
 shares a round trip with the write that needs it. Target diagnostics are
@@ -414,7 +422,9 @@ Interpreter paths are cached per target; whole-process failure invalidates them
 for a later lookup, while an operation-level refusal does not. ASCII request
 fields travel as arguments when shell-quoted physical lines fit 3 KiB, individual
 fields fit 96 KiB, and the total fits 512 KiB. Wrapped payloads can occupy several
-short lines. Larger requests or non-ASCII fields use an explicitly UTF-8 encoded
+short lines. Fields whose raw byte length already exceeds the individual bound
+select the input-file carrier before ASCII classification or shell quoting; quoting
+cannot make them fit. Larger requests or non-ASCII fields use an explicitly UTF-8 encoded
 input file, which incurs TRAMP transfer overhead. The carrier changes without
 splitting the program. See [ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md)
 for these bounds and their transport rationale.
@@ -428,10 +438,12 @@ directory is listed in one more, and both observations are then shared with
 the reads they feed: a candidate proved free of a PID lock is recorded in the
 durable transaction that spans the listing, so the assertions each publication
 read repeats cost nothing, and each listing is handed to that read in place of
-its own listing round trip. What remains scales with sessions rather than with
-probes -- one lease-record read and one manifest read each -- so a workspace
-holding dozens of candidate directories spends dozens of round trips instead
-of hundreds.
+its own listing round trip. Lease records, manifests, and sidecars are then
+read in bounded batches rather than separate programs for each session.
+Capturing a manifest canonicalizes its session root once and qualifies each
+validated relative artifact name beneath it. It does not repeatedly canonicalize
+the shared directories for every artifact. Actual reads still prove physical
+containment on the target and verify the required artifact digests.
 Portable lease expiry and transfer deadlines use the target filesystem clock at
 whole-second resolution, so clients with skewed wall clocks cannot change one
 another's authority and lease durations are configured in whole seconds.  A
@@ -487,10 +499,21 @@ publishes regardless, for a user who wants a snapshot rather than a record of a
 change.
 
 Repeated captures within a turn reuse that file's checkpoint version and
-logical backup names. New bytes still receive immutable publication storage;
-previous heads keep their original bytes. Portable saves remove logical
+timestamp. Backup names are the full SHA-256 of raw file contents, so identical
+pre/post images share bytes across files and turns. Checkpoint records retain
+their individual paths and versions. New bytes receive immutable publication
+storage; previous heads keep their original bytes. Portable saves remove logical
 `file-history/` entries no longer named by the checkpoint index, including
 files changed and then restored to their pre-turn contents.
+Portable saves write these snapshots only into immutable publications, without
+an additional fixed copy. Rewind and WorktreeFork read the committed artifact;
+fork staging can still materialize a fixed cache. Existing caches are not pruned
+by this change.
+PID sessions remove unindexed content-addressed backups only after the replacement
+sidecar commits. A failed sidecar write therefore leaves the previous checkpoint
+bytes available; cleanup failure is diagnostic and retried on a later save.
+Snapshot contents remain raw and owner-only. Readers resolve the names in the
+checkpoint index; saving does not rewrite existing archived history.
 
 The free-form `artifacts/` subtree is included recursively as literal regular
 files in every portable save candidate. Its absent committed entries are
@@ -501,6 +524,15 @@ not a remote fixed cache, authority for artifact bytes after Resume, Save As,
 and Fork. After an owned cold Resume fences and revalidates the publication
 head, it replaces the fixed `artifacts/` subtree from verified manifest bytes;
 a read-only inspector never performs that reconciliation.
+
+Retained idle agents remain registry entries until their first conversation access;
+resume eagerly hydrates only active abandoned turns needed for partial-response
+recovery. See [agent persistence](agents.md#transcript-persistence-and-views).
+
+The artifact resolver verifies immutable bytes without requiring a live lease.
+It checks lease ownership only when a newer staged candidate exists, immediately
+before using those local bytes. Losing ownership excludes staged content and
+leaves the captured publication as the read source.
 
 The marker transaction copies the merged logical artifacts into a unique,
 never-overwritten directory below `.publications/`, records each target-native
@@ -672,7 +704,9 @@ whole save transaction around them, therefore run inside
 duration, exactly as TRAMP does around its own critical sections. A timer the
 body arms is re-armed on exit rather than lost, and a `with-timeout` opened
 inside it still fires, because the bound lists are the ones Emacs consults
-while the body runs; only timers that existed beforehand are held.
+while the body runs; only timers that existed beforehand are held. Restoring
+an idle timer preserves whether it may run in the current idle period, so
+incremental cleanup continues without requiring a new user command.
 
 Suspension stops timers, not process sentinels. `accept-process-output` with
 JUST-THIS-ONE suppresses other processes' output but still dispatches their
@@ -782,10 +816,12 @@ the payload directory is gone. Missing bytes without that recorded intent remain
 an invalid recovery marker.
 
 Critical publication changes the owned generation to `publishing` and reserves
-a one-hour ownership window before each artifact.  Timer callbacks perform no
+a one-hour ownership window before each fixed artifact write. Timer callbacks perform no
 target I/O while publication is active, avoiding reentrant TRAMP calls; the
-serialized publisher renews before and immediately after every artifact
-instead.  If one uninterrupted target filesystem operation exceeds that
+serialized publisher renews before each such write and after the final write.
+Tombstones and immutable-only file-history artifacts do not cause fixed writes
+or per-entry renewals. The final proof and the immutable manifest commit still
+check ownership. If one uninterrupted target filesystem operation exceeds that
 window, the next ownership check fails closed and preserves local recovery.
 Another client may take over an expired publishing generation only after an
 explicit prompt warns that a critical write may still be in flight and asks
@@ -799,20 +835,37 @@ artifacts.
 Turn settlement and lease-acquiring restore schedule publication collection
 without scanning history on the foreground path. The coalesced job reads at
 most eight generations per idle slice, yielding after 50 ms between reads.
-A single target read can exceed that budget. Input, active root requests,
+A single target read can exceed that budget. Finishing the scan yields before
+marking retained files. Pending input prevents all collection target I/O,
+including ownership checks and deletion after a completed scan. Active root requests,
 busy transport and pending publications defer work; closing the root or losing
 its lease cancels it. A changed head restarts the scan before deletion.
-After a complete scan, at most eight obsolete directories are deleted under
-a reserved lease. Failure warns without breaking settlement or restore.
+After a complete scan, retained manifests are validated one per idle step and
+mark their exact referenced files. All obsolete manifests are retired before
+any unreferenced payloads are removed, so interruption cannot leave discoverable
+heads whose bytes have been collected. Each deletion batch contains at most
+eight operations under a reserved lease; directory enumeration also yields
+between generations. A changed journal pin set stops the plan before deletion.
+Failure warns without breaking settlement or restore.
 
 Collection follows references rather than age: manifests can retain unchanged
 bytes in older generations. It reads every published sidecar, using cached
-immutable manifest/sidecar facts, and retains the current head, settled-turn
+immutable generation/sidecar facts, and retains the current head, settled-turn
 representatives, journal capture pins, the newest
 `mevedel-session-publication-keep-recent-generations` (default 3), and their
-artifact-reference closure. Mid-turn generations become collectible once their
-turn settles unless another retained root needs them. An unreadable journal pin
-blocks collection.
+referenced artifact files. Referencing one file in an older generation does not
+retain its obsolete manifest, sidecar, or unrelated files. Artifact-only
+directories remain eligible for later collection when their last reference
+disappears. Mid-turn heads become collectible once their turn settles unless
+selected by the grace window or pinned. An unreadable journal pin or retained
+manifest blocks collection before any deletion.
+
+The generation cache retains only referenced generation names, the sidecar
+locator, and first-transcript size. Full artifact indexes are discarded after
+validation and extraction; caching every generation's repeated index would keep
+hundreds of megabytes of redundant Lisp objects alive. Retention receives its
+own copies of the compact reference lists so destructive list operations cannot
+change later observations. Authority reads still verify the actual publication.
 
 Ordinary transcript readers have no read pins. The recent-generation grace
 window protects typical following, but a reader of an older non-boundary head
@@ -1505,7 +1558,7 @@ retention and human inspection contract.
 
 Pending journal capture pins under a session's `.journal-pins/` prevent that
 session from expiring. Publication-generation collection also retains each
-pinned head and every generation referenced by its manifest. Pins survive
+pinned head and every artifact file referenced by its manifest. Pins survive
 independently of a live buffer; publication or explicit discard must release
 them. An unreadable pin blocks generation collection, and even a malformed
 pin keeps its session from expiring. Completed root-turn autosave creates

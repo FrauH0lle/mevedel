@@ -896,6 +896,39 @@
       (should (= (marker-position mevedel-view--interaction-marker)
                  (marker-position mevedel-view--input-marker))))))
 
+(mevedel-deftest mevedel-view--full-rerender-plan ()
+  ,test
+  (test)
+  :doc "preparation preserves the view and returns the canonical source turns"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (let* ((before (buffer-string))
+             (position (point))
+             (plan (mevedel-view--full-rerender-plan data-buf data-buf view-buf nil)))
+        (should (equal before (buffer-string)))
+        (should (= position (point)))
+        (should (equal '(user assistant)
+                       (mapcar (lambda (turn) (plist-get turn :role))
+                               (plist-get plan :turns))))
+        (should (= (plist-get plan :end) (with-current-buffer data-buf (point-max))))
+        (should-not (plist-get plan :summary-source)))))
+  :doc "respects the view's source start without permanently narrowing the data"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Old response\n" 'response)
+    (let ((start (with-current-buffer data-buf (copy-marker (point-max) nil))))
+      (mevedel-view-test--insert-data data-buf "*** New prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "New response\n" 'response)
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--transcript-start start)
+        (let ((plan (mevedel-view--full-rerender-plan data-buf data-buf view-buf t)))
+          (should (= (plist-get plan :start) start))
+          (should-not (plist-get plan :session))
+          (should (= (with-current-buffer data-buf (point-min)) 1))
+          (should (= (plist-get (car (plist-get plan :turns)) :start) start)))))))
+
 (mevedel-deftest mevedel-view--full-rerender-project ()
   ,test
   (test)
@@ -4444,7 +4477,7 @@
   (mevedel-view-test--with-buffers
     (let ((stable-position nil)
           (stable-computations 0)
-          (compute (symbol-function 'mevedel-view--compute-segment-rendering)))
+          (compute (symbol-function 'mevedel-view--prepare-tool-segment)))
       (with-current-buffer data-buf
         (dolist (id '("changing" "stable"))
           (insert "#+begin_tool Custom\n")
@@ -4456,7 +4489,7 @@
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
-        (cl-letf (((symbol-function 'mevedel-view--compute-segment-rendering)
+        (cl-letf (((symbol-function 'mevedel-view--prepare-tool-segment)
                    (lambda (buffer start end &rest options)
                      (when (and (<= start stable-position) (< stable-position end))
                        (cl-incf stable-computations))
@@ -4467,9 +4500,73 @@
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
         (should (= 4 (- (point) (mevedel-view--input-start))))))))
 
+(mevedel-deftest mevedel-view-render-summary-expansion
+  (:doc "a collapsed Bash row defers its body until the user's expansion")
+  (mevedel-view-test--with-buffers
+    (let ((body-builds 0))
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "Bash" :category "mevedel"
+        :renderer (lambda (name args result data)
+                    (let ((rendering (mevedel-tool-exec--render-bash name args result data)))
+                      (when (plist-get rendering :body) (cl-incf body-builds))
+                      rendering))))
+      (with-current-buffer data-buf
+        (insert "#+begin_tool\n"
+                (propertize "(:name \"Bash\" :args (:command \"printf output\"))\n\noutput\n"
+                            'gptel '(tool . "deferred"))
+                "#+end_tool\n"))
+      (with-current-buffer view-buf
+        (goto-char (point-max)) (insert "> draft\nsecond line")
+        (mevedel-view--full-rerender)
+        (should (= 0 body-builds))
+        (goto-char (point-min)) (search-forward "Bash: printf output")
+        (mevedel-view-toggle-section)
+        (should (> body-builds 0))
+        (should (string-search "$ printf output\n\noutput" (buffer-string)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+
+(mevedel-deftest mevedel-view--tool-segment-text
+  (:doc "pre-read complete spans are reused while partial spans still recover their enclosing tool")
+  (with-temp-buffer
+    (insert "#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\n\nbody\n"
+                        'gptel '(tool . "partial"))
+            "#+end_tool\n")
+    (let ((raw (buffer-string)))
+      (should (eq raw (mevedel-view--tool-segment-text
+                       (point-min) (point-max) raw)))
+      (goto-char (point-min))
+      (search-forward "body")
+      (let* ((end (point)) (start (- end 4))
+             (part (buffer-substring start end)))
+        (should (equal raw (mevedel-view--tool-segment-text start end part)))))))
+
 (mevedel-deftest mevedel-view--segment-rendering ()
   ,test
   (test)
+  :doc "a cold complete tool copies its source only once"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool\n"
+              (propertize "(:name \"Read\" :args (:file_path \"one.el\"))\n\nbody\n"
+                          'gptel '(tool . "cold"))
+              "#+end_tool\n"))
+    (with-current-buffer view-buf
+      (let ((end (with-current-buffer data-buf (point-max)))
+            (copies 0)
+            (copy (symbol-function 'buffer-substring)))
+        (cl-letf (((symbol-function 'buffer-substring)
+                   (lambda (beg limit)
+                     (when (and (eq (current-buffer) data-buf)
+                                (= beg 1) (= limit end))
+                       (cl-incf copies))
+                     (funcall copy beg limit))))
+          (should (string-match-p
+                   "one.el" (plist-get
+                             (mevedel-view--segment-rendering data-buf 1 end t)
+                             :header)))
+          (should (= copies 1))))))
   :doc "a complete cached tool skips parsing but same-length edits invalidate it"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
@@ -4503,6 +4600,28 @@
           (let ((changed (mevedel-view--segment-rendering data-buf 1 end t)))
             (should (> reads 0))
             (should (string-match-p "two.el" (plist-get changed :header))))))))
+  :doc "unrelated appends reuse completed tools without copying or hashing payloads"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool\n"
+              (propertize "(:name \"Read\" :args (:file_path \"one.el\"))\n\nbody\n"
+                          'gptel '(tool . "cached"))
+              "#+end_tool\n\n"))
+    (with-current-buffer view-buf
+      (let* ((end (with-current-buffer data-buf (1- (point-max))))
+             (first (mevedel-view--segment-rendering data-buf 1 end t))
+             (copies 0)
+             (copy (symbol-function 'buffer-substring)))
+        (with-current-buffer data-buf (goto-char (point-max)) (insert "next"))
+        (cl-letf (((symbol-function 'buffer-substring)
+                   (lambda (beg limit)
+                     (when (and (eq (current-buffer) data-buf) (= beg 1))
+                       (cl-incf copies))
+                     (funcall copy beg limit))))
+          (should (equal (plist-get first :header)
+                         (plist-get (mevedel-view--segment-rendering data-buf 1 end t)
+                                    :header)))
+          (should (= copies 0))))))
   :doc "property-only restoration of a request failure precedes cached tool display"
   (mevedel-view-test--with-buffers
     (let (metadata-start end)
@@ -4612,6 +4731,25 @@
                        (plist-get collapsed :header)))
         (should-not (plist-get collapsed :body))
         (should (equal "large body" (plist-get expanded :body))))))
+  :doc "summary context reaches renderers only for the collapsed projection"
+  (let ((phases nil))
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "Bash" :category "mevedel"
+      :renderer (lambda (name args result data)
+                  (push mevedel-tool-render-summary-only phases)
+                  (mevedel-tool-exec--render-bash name args result data))))
+    (with-temp-buffer
+      (insert "(:name \"Bash\" :args (:command \"printf output\"))\noutput\n")
+      (let ((summary (mevedel-view--segment-rendering
+                      (current-buffer) (point-min) (point-max) t))
+            (expanded (mevedel-view--segment-rendering
+                       (current-buffer) (point-min) (point-max))))
+        (should (equal '(nil t) phases))
+        (should (equal (plist-get summary :header) (plist-get expanded :header)))
+        (should-not (plist-get summary :body))
+        (should (equal "$ printf output\n\noutput" (plist-get expanded :body)))))
+    (should-not mevedel-tool-render-summary-only))
   :doc "unrelated appends keep completed tool renderings cached"
   (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
         (mevedel-view--render-cache-entries 0)
@@ -5395,7 +5533,7 @@
 ;;
 ;;; Tool-call parsing with render-data
 
-(mevedel-deftest mevedel-view--compute-segment-rendering/cold-load ()
+(mevedel-deftest mevedel-view--render-tool-call/cold-load ()
   ,test
   (test)
   :doc "loads pending execution data through its transcript owner"
@@ -5415,16 +5553,14 @@
                (require 'mevedel-view-render)
                (with-temp-buffer
                  (cl-letf
-                     (((symbol-function 'mevedel-view--tool-call-parse)
-                       (lambda (&rest _)
-                         '(:name "Bash" :args nil :tool-use-id "cold"
-                                 :result "" :render-data nil)))
-                      ((symbol-function 'mevedel-tool-get) #'ignore)
+                     (((symbol-function 'mevedel-tool-get) #'ignore)
                       ((symbol-function
                         'mevedel-view--generic-tool-rendering)
                        (lambda (&rest _) '(:vtype tool))))
-                   (mevedel-view--compute-segment-rendering
-                    (current-buffer) (point-min) (point-max))))
+                   (mevedel-view--render-tool-call
+                    '(:name "Bash" :args nil :tool-use-id "cold"
+                            :result "" :render-data nil)
+                    (current-buffer))))
                (unless (featurep 'mevedel-execution-transcript)
                  (error "Execution transcript owner was not loaded")))))))
       (should (string-empty-p (string-trim (buffer-string)))))))
@@ -5580,7 +5716,7 @@
           (should (string-match-p (regexp-quote literal)
                                   (plist-get call :result)))
           (should-not (plist-get call :render-data))
-          (should (mevedel-view--compute-segment-rendering
+          (should (mevedel-view--segment-rendering
                    data-buf (point-min) (point-max)))))))
   :doc "preserves literal trailing end-tool marker in unwrapped result"
   (mevedel-view-test--with-buffers
@@ -6843,6 +6979,82 @@
     (insert "abcdef")
     (should (= 2 (mevedel-view--source-position (copy-marker 2))))))
 
+(mevedel-deftest mevedel-view--source-revision ()
+  ,test
+  (test)
+  :doc "observed appends and properties retain character identities but text edits invalidate"
+  (with-temp-buffer
+    (insert "first second tail")
+    (let ((first (mevedel-view--source-revision 1 6))
+          (second (mevedel-view--source-revision 7 13)))
+      (goto-char (point-max)) (insert " more")
+      (should (eq first (mevedel-view--source-revision 1 6)))
+      (should (eq second (mevedel-view--source-revision 7 13)))
+      (put-text-property 7 8 'mevedel-render-data t)
+      (should (eq first (mevedel-view--source-revision 1 6)))
+      (should (eq second (mevedel-view--source-revision 7 13)))
+      (goto-char 2) (delete-char 1) (insert "X")
+      (should-not (eq first (mevedel-view--source-revision 1 6)))))
+  :doc "missed modifications cannot be hidden by a later observed append"
+  (dolist (property-only '(nil t))
+    (with-temp-buffer
+      (insert "first second tail")
+      (let ((first (mevedel-view--tool-cache-key (current-buffer) 1 6 t)))
+        (let ((inhibit-modification-hooks t))
+          (if property-only
+              (put-text-property 1 3 'gptel 'response)
+            (goto-char 2) (delete-char 1) (insert "X")))
+        (goto-char (point-max)) (insert " more")
+        (should-not (equal first (mevedel-view--tool-cache-key (current-buffer) 1 6 t))))))
+  :doc "silent property changes and removed hooks retire old identities"
+  (with-temp-buffer
+    (insert "first second tail")
+    (let ((first (mevedel-view--tool-cache-key (current-buffer) 1 6 t)))
+      (with-silent-modifications (put-text-property 1 3 'gptel 'response))
+      (should-not (equal first (mevedel-view--tool-cache-key (current-buffer) 1 6 t))))
+    (let ((first (mevedel-view--source-revision 1 6)))
+      (remove-hook 'before-change-functions #'mevedel-view--source-before-change t)
+      (should-not (eq first (mevedel-view--source-revision 1 6)))))
+  :doc "narrowing preserves identities and the range map stays bounded"
+  (with-temp-buffer
+    (insert "first second tail")
+    (let ((first (mevedel-view--source-revision 1 6)))
+      (save-restriction
+        (narrow-to-region 1 6)
+        (should (eq first (mevedel-view--source-revision 1 6)))))
+    (let ((mevedel-view-render-cache-max-entries 2))
+      (mevedel-view--source-revision 7 10)
+      (mevedel-view--source-revision 11 12)
+      (should (<= (hash-table-count mevedel-view--source-revisions) 2)))))
+
+(mevedel-deftest mevedel-view--source-before-change ()
+  (with-temp-buffer
+    (insert "first second tail")
+    (let ((first (mevedel-view--source-revision 1 6))
+          (second (mevedel-view--source-revision 7 13)))
+      (mevedel-view--source-before-change 6 6)
+      (should (eq first (gethash '(1 . 6) mevedel-view--source-revisions)))
+      (should (eq second (gethash '(7 . 13) mevedel-view--source-revisions)))
+      (should second))))
+
+(mevedel-deftest mevedel-view--source-after-change ()
+  (with-temp-buffer
+    (insert "first second tail")
+    (mevedel-view--source-revision 1 6)
+    (let ((inhibit-modification-hooks t)) (goto-char 10) (insert "x"))
+    (mevedel-view--source-after-change 10 11 0)
+    (should (= 0 (hash-table-count mevedel-view--source-revisions)))))
+
+(mevedel-deftest mevedel-view--tool-source-properties ()
+  (with-temp-buffer
+    (insert "abcdef")
+    (put-text-property 2 4 'gptel 'response)
+    (put-text-property 4 6 'mevedel-render-data t)
+    (put-text-property 3 5 'face 'bold)
+    (should (equal '((0 1 nil nil nil) (1 3 response nil nil)
+                     (3 5 nil t nil) (5 6 nil nil nil))
+                   (mevedel-view--tool-source-properties 1 7)))))
+
 (mevedel-deftest mevedel-view--tool-cache-key ()
   ,test
   (test)
@@ -6851,23 +7063,31 @@
   (with-temp-buffer
     (insert "source")
     (dolist (property '(gptel mevedel-render-data mevedel-hook-audit))
-      (let ((plain "metadata"))
-        (should-not
-         (equal (mevedel-view--tool-cache-key (current-buffer) 1 7 t plain)
-                (mevedel-view--tool-cache-key
-                 (current-buffer) 1 7 t
-                 (propertize (copy-sequence plain) property t)))))))
+      (let ((plain (mevedel-view--tool-cache-key (current-buffer) 1 7 t)))
+        (put-text-property 1 7 property t)
+        (should-not (equal plain (mevedel-view--tool-cache-key
+                                 (current-buffer) 1 7 t))))))
+
+  :doc "mutating a provenance cons cannot mutate an already stored key"
+  (with-temp-buffer
+    (insert "source")
+    (let ((provenance (cons 'tool "first")))
+      (put-text-property 1 7 'gptel provenance)
+      (let ((before (mevedel-view--tool-cache-key (current-buffer) 1 7 t)))
+        (setcdr provenance "second")
+        (should-not (equal before (mevedel-view--tool-cache-key
+                                  (current-buffer) 1 7 t))))))
 
   :doc "marker positions and integer positions build equal keys"
   (with-temp-buffer
     (insert "#+begin_tool (Read)\n#+end_tool\n")
     (let ((buf (current-buffer)))
-      (should (equal (mevedel-view--tool-cache-key buf 2 9 nil "raw")
+      (should (equal (mevedel-view--tool-cache-key buf 2 9 nil)
                      (mevedel-view--tool-cache-key
-                      buf (copy-marker 2) (copy-marker 9) nil "raw")))
+                      buf (copy-marker 2) (copy-marker 9) nil)))
       :doc "collapsed-only still discriminates"
-      (should-not (equal (mevedel-view--tool-cache-key buf 2 9 nil "raw")
-                         (mevedel-view--tool-cache-key buf 2 9 t "raw"))))))
+      (should-not (equal (mevedel-view--tool-cache-key buf 2 9 nil)
+                         (mevedel-view--tool-cache-key buf 2 9 t))))))
 
 (mevedel-deftest mevedel-view--session-render-state-fingerprint ()
   ,test
@@ -7726,6 +7946,23 @@
       (with-temp-buffer (should (mevedel-view--scaffolding-only-text-p glue)))
       (with-temp-buffer (should (mevedel-view--scaffolding-only-text-p glue)))
       (should (= 1 cleans)))))
+
+(mevedel-deftest mevedel-view--tool-call-parse/absent-audits
+  (:doc "an audit-free tool does not copy its large source merely to look for audits")
+  (with-temp-buffer
+    (org-mode)
+    (let* ((body (make-string 262144 ?x))
+           (raw (concat "(:name \"Eval\" :args (:expression \"x\"))\n" body))
+           (original (symbol-function 'buffer-substring)))
+      (insert raw)
+      (cl-letf (((symbol-function 'buffer-substring)
+                 (lambda (start end)
+                   (should (< (- end start) 262144))
+                   (funcall original start end))))
+        (let ((call (mevedel-view--tool-call-parse
+                     (current-buffer) (point-min) (point-max) raw)))
+          (should (equal body (plist-get call :result)))
+          (should-not (plist-get call :hook-audits)))))))
 
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here

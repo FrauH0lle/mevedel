@@ -1350,6 +1350,28 @@ the execution boundary owns the session's single unavailable warning"
 (mevedel-deftest mevedel-tool-exec--render-bash ()
   ,test
   (test)
+  :doc "collapsed summaries skip output formatting while live output still expands"
+  (let* ((output (concat (make-string 100000 ?x)
+                         "\n<bash-execution state=\"completed\"/>"))
+         (args '(:command "printf output"))
+         (data '(:status error :state completed :outcome failure :exit-code 1))
+         (full (mevedel-tool-exec--render-bash "Bash" args output data))
+         (replace (symbol-function 'replace-regexp-in-string))
+         summary)
+    (let ((mevedel-tool-render-summary-only t))
+      (cl-letf (((symbol-function 'replace-regexp-in-string)
+                 (lambda (regexp replacement string &rest rest)
+                   (should-not (eq string output))
+                   (apply replace regexp replacement string rest))))
+        (setq summary (mevedel-tool-exec--render-bash "Bash" args output data))))
+    (should-not (plist-get summary :body))
+    (should (equal (plist-put (copy-sequence full) :body nil) summary))
+    (let* ((mevedel-tool-render-summary-only t)
+           (live (mevedel-tool-exec--render-bash
+                  "Bash" args output (append '(:live-execution-p t) data))))
+      (should (equal (plist-get full :body) (plist-get live :body)))
+      (should (plist-get live :force-expanded-p))
+      (should-not (plist-get live :initially-collapsed-p))))
   :doc "returns nil for non-string result"
   (should (null (mevedel-tool-exec--render-bash
                  "Bash" '(:command "ls") nil nil)))

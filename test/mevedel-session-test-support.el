@@ -601,6 +601,9 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                     (mevedel-agent-record-conversation-buffer active)))
               (should (equal "opaque-idle" (mevedel-agent-record-id idle)))
               (should (eq 'idle (mevedel-agent-record-activity active)))
+              (should-not idle-buffer)
+              (setq idle-buffer (mevedel-agent-persistence-ensure-conversation
+                                 restored-session idle restored))
               (should (buffer-live-p idle-buffer))
               (should (buffer-live-p active-buffer))
               (should
@@ -714,11 +717,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                 (should (= 1 (how-many
                               "Agent turn was interrupted by session recovery"
                               (point-min) (point-max)))))
-              (with-current-buffer idle-buffer
-                (should (= 1 (how-many "child mail"
-                                       (point-min) (point-max))))
-                (should (string-match-p "Independent compacted history"
-                                        (buffer-string))))
+              (should-not idle-buffer)
               (with-current-buffer restored
                 (cl-letf
                     (((symbol-function 'mevedel-agent-runtime-dispatch)
@@ -732,7 +731,12 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                         t)))
                   (mevedel-agent-control-followup
                    restored-session "/root/idle" "Continue after resume.")))
+              (setq idle-buffer (mevedel-agent-record-conversation-buffer idle))
+              (should (buffer-live-p idle-buffer))
               (should (eq idle-buffer captured-buffer))
+              (with-current-buffer idle-buffer
+                (should (= 1 (how-many "child mail" (point-min) (point-max))))
+                (should (string-match-p "Independent compacted history" (buffer-string))))
               (should (eq 'running (mevedel-agent-record-activity idle)))
               (setf (mevedel-agent-record-activity idle) 'idle
                     (mevedel-agent-record-invocation idle) nil)

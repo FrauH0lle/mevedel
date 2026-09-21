@@ -113,6 +113,7 @@ Chat / view
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-control-transfer.el cooperative transfer polling, presentation, and commands
   mevedel-view-disclosure.el  source-backed transcript disclosure state and actions
+  mevedel-view-prepare.el     deferred large-tool parsing, source validation, job lifecycle
   mevedel-view-render.el      transcript projection, source mapping, live navigation
   mevedel-view-segments.el    historical session segment projection and navigation
   mevedel-view-stream.el      request progress and streaming redraw scheduling
