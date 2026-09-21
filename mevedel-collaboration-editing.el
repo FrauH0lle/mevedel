@@ -249,12 +249,12 @@ retracted or never-delivered queue entry can be explicitly submitted again."
   "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM."
   (let* ((action (plist-get args :action))
          (session (plist-get room :session))
-         (read-only (member action '("list" "read" "export")))
+         (read-only (member action '("list" "read" "export" "status")))
          (authorize (lambda ()
                       (and (eq room (mevedel-collaboration--room-for-session session))
                            (eq guest (mevedel-collaboration--guest room peer))
                            (or read-only (plist-get guest :writable))))))
-    (unless (and (member action '("list" "read" "create" "import" "update"
+    (unless (and (member action '("list" "status" "read" "create" "import" "update"
                                   "rename" "revert" "export" "ask" "comment" "reply-comment" "resolve-comment"))
                  (funcall authorize))
       (error "This link does not permit that editing operation"))

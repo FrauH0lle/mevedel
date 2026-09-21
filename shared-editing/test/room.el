@@ -21,6 +21,7 @@
     editing-test-root))
 (defvar editing-test-buffer (get-buffer-create " *shared editing acceptance*"))
 (defvar editing-test-successor nil)
+(defvar editing-test-node mevedel-shared-editing-node-program)
 (defvar editing-test-session
   (mevedel-session-create
    "editing" (mevedel-workspace--create :type 'project :root editing-test-workspace-root)
@@ -75,6 +76,12 @@
                        (error "Successor could not acquire the released lease")))
                    ;; Model a paused former host waking with its old epoch.
                    (setf (mevedel-session-lease editing-test-session) lease))
+                 (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
+                ("RuntimeAvailable"
+                 (setq mevedel-shared-editing-node-program
+                       (if (eq (plist-get (plist-get command :args) :available) t)
+                           editing-test-node
+                         (file-name-concat editing-test-root "missing-node")))
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("RestartHelper"
                  (mevedel-shared-editing-stop)

@@ -357,7 +357,7 @@ async function testItemConversations() {
   api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
     send:async frame=>{
       const args=JSON.parse(Buffer.from(frame.data,'base64').toString());
-      const result=args.action==='list' ? [{id:'doc',kind:'document',title:'Notes'}]
+      const result=args.action==='status' ? {available:true} : args.action==='list' ? [{id:'doc',kind:'document',title:'Notes'}]
         : {id:'doc',kind:'document',title:'Notes',conversation:archived,
            conversationError:failure?'Missing archive':null,conversationTruncated:failure};
       const data=Buffer.from(JSON.stringify({result})).toString('base64');
@@ -384,9 +384,51 @@ async function testItemConversations() {
   assert.equal(latest().connected,false);
 }
 
+async function testEditingAvailability() {
+  const nodes = new Map(), creates = [new Element('button'), new Element('button')];
+  let api, failure = true;
+  const state = {records:new Map(),ownQueue:[],readOnly:false};
+  const node = id => { if (!nodes.has(id)) nodes.set(id,new Element('div')); return nodes.get(id); };
+  const context = {
+    URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
+    localStorage:{length:0,getItem:()=>null},
+    document:{getElementById:node,querySelectorAll:()=>creates},
+    window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
+  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+    send:async frame=>{
+      const args=JSON.parse(atob(frame.data));
+      const reply=args.action==='list' ? {result:[{id:'doc',kind:'document',title:'Notes'}]}
+        : failure ? {error:'Install Node 22.4+ on the Emacs host, then recheck'} : {result:{available:true}};
+      const data=btoa(JSON.stringify(reply));
+      api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
+      return true;
+    }});
+  await api.welcome();
+  assert.match(node('editing-status').textContent,/Install Node/);
+  assert.equal(node('editing-items').children.length,1);
+  assert.equal(node('editing-items').children[0].disabled,true);
+  assert.equal(creates[0].disabled,true);
+  assert.equal(node('editing-recheck').disabled,false);
+  failure=false;
+  await node('editing-recheck').onclick();
+  assert.match(node('editing-status').textContent,/ready/);
+  assert.equal(node('editing-items').children[0].disabled,false);
+  assert.equal(creates[0].disabled,false);
+  state.readOnly=true;
+  await node('editing-recheck').onclick();
+  assert.equal(creates[0].hidden,true);
+  assert.equal(node('editing-items').children[0].disabled,false);
+  api.connection(false);
+  assert.equal(node('editing-recheck').disabled,true);
+  assert.equal(node('editing-items').children[0].disabled,true);
+}
+
 async function main() {
   await runNotificationTests();
   await testItemConversations();
+  await testEditingAvailability();
   await testTransportLifecycle();
   await testTransportGiveUp();
   // Shared known-answer vector, mirrored by the ERT crypto suite: 32
@@ -439,7 +481,7 @@ async function main() {
                'new-session-prompt',
                'new-session-create', 'new-session-lede',
                'invites', 'invite-button', 'invite', 'invite-tiers',
-               'editing-box', 'editing-items', 'editing-panel', 'editing-body',
+               'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
                'editing-title', 'editing-file', 'editing-import', 'editing-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the
@@ -748,6 +790,12 @@ async function main() {
   const catalogReply = btoa(JSON.stringify({result: []}));
   await deliver({t: 'editing', reqId: catalogRequest.reqId, offset: 0,
                  total: catalogReply.length, data: catalogReply});
+  await waitFor(() => first.sent.length === 3, 'shared editing availability');
+  const statusRequest = await unseal(key, first.sent[2]);
+  assert.deepEqual(JSON.parse(atob(statusRequest.data)), {action: 'status'});
+  const statusReply = btoa(JSON.stringify({result: {available: true}}));
+  await deliver({t: 'editing', reqId: statusRequest.reqId, offset: 0,
+                 total: statusReply.length, data: statusReply});
   assert.equal(nodes.composer.hidden, false);
   // Asking for a session needs write authority, nothing more; the owner
   // token only decides whether asking is granted or put to the host.
@@ -939,8 +987,8 @@ async function main() {
   nodes['composer-input'].value = 'check the tests';
   nodes['composer-name'].value = 'roland';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 3, 'sealed prompt');
-  const prompt = await unseal(key, first.sent[2]);
+  await waitFor(() => first.sent.length === 4, 'sealed prompt');
+  const prompt = await unseal(key, first.sent[3]);
   assert.deepEqual(prompt, {t: 'prompt', text: 'check the tests',
                             name: 'roland'});
   assert.equal(nodes['composer-input'].value, '');
@@ -965,8 +1013,8 @@ async function main() {
   assert.equal(nodes['queue-state'].hidden, true);
 
   nodes['stop-button'].dispatch('click');
-  await waitFor(() => first.sent.length === 4, 'sealed abort');
-  assert.deepEqual(await unseal(key, first.sent[3]), {t: 'abort'});
+  await waitFor(() => first.sent.length === 5, 'sealed abort');
+  assert.deepEqual(await unseal(key, first.sent[4]), {t: 'abort'});
 
   // Directive-tagged records grow the client-side filter; selecting a
   // directive hides everything outside it, per guest, no round-trips.
@@ -998,14 +1046,14 @@ async function main() {
   assert.match(textOf(nodes['composer-scope']), /Refactor the parser/);
   nodes['composer-input'].value = 'and this one?';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 5, 'directive-scoped prompt');
-  assert.equal((await unseal(key, first.sent[4])).directive, 'dir-1');
+  await waitFor(() => first.sent.length === 6, 'directive-scoped prompt');
+  assert.equal((await unseal(key, first.sent[5])).directive, 'dir-1');
   nodes.filter.children[1].dispatch('click'); // Main chat
   assert.equal(nodes['composer-scope'].hidden, true);
   nodes['composer-input'].value = 'main chat';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 6, 'unscoped prompt');
-  assert.equal((await unseal(key, first.sent[5])).directive, undefined);
+  await waitFor(() => first.sent.length === 7, 'unscoped prompt');
+  assert.equal((await unseal(key, first.sent[6])).directive, undefined);
 
   // Activity in a thread the guest is not looking at marks its tab with
   // an unseen dot until the tab is selected.
@@ -1041,8 +1089,8 @@ async function main() {
   assert.match(textOf(nodes.attachments), /build\.log/);
   nodes['composer-input'].value = 'see the log';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 7, 'prompt with attachment');
-  const withFile = await unseal(key, first.sent[6]);
+  await waitFor(() => first.sent.length === 8, 'prompt with attachment');
+  const withFile = await unseal(key, first.sent[7]);
   assert.equal(withFile.images.length, 1);
   assert.equal(withFile.images[0].mime, 'text/plain');
   assert.equal(Buffer.from(withFile.images[0].data, 'base64').toString(),
@@ -1672,6 +1720,10 @@ async function main() {
   assert.equal(reconnectedCatalog.t, 'editing');
   await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedCatalog.reqId, offset: 0,
                              total: catalogReply.length, data: catalogReply});
+  await waitFor(() => sockets[1].sent.length === reconnectSent + 2, 'reconnected availability');
+  const reconnectedStatus = await unseal(key, sockets[1].sent[reconnectSent + 1]);
+  await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedStatus.reqId, offset: 0,
+                             total: statusReply.length, data: statusReply});
   await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord]});
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root').open, true);

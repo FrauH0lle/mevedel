@@ -26,7 +26,22 @@ are in the editor's **☰** menu.
 Shared editing requires Node 22.4 or newer on the Emacs host. Set
 `mevedel-shared-editing-node-program` if it is not on PATH. Node stays local
 when the session's execution target is remote; Emacs owns every durable
-read and write on that target. Ordinary chat does not need Node.
+read and write on that target. Ordinary chat, static artifacts, and browser
+viewing do not need Node; browser guests never install it.
+
+Shared editing is optional. On connection the browser loads the saved item
+catalog independently, then asks the host to check the configured runtime,
+document schema, and packaged PNG renderer. This check creates no saved session
+or item. If startup or resource loading fails, creation, import, and opening
+items are disabled with an explanation. Existing items stay listed; open editors
+and locally stored recovery copies remain accessible.
+
+After installing Node, changing `mevedel-shared-editing-node-program`, or repairing
+helper resources, use **Recheck availability** in the Shared section. The host
+starts a fresh helper between queued operations, so repaired resources take
+effect without cancelling an edit or discarding drafts. A successful check
+reenables controls and reconnects an open editor to host state. Read-only links
+can check availability and view items but still cannot edit them.
 
 The minimum includes the switch disabling Node web storage, introduced in
 [Node 22.4](https://nodejs.org/en/blog/release/v22.4.0). The helper uses Yjs,

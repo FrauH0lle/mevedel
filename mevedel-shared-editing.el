@@ -120,8 +120,8 @@ Observers cannot change whether the preceding commit succeeded.")
       (let ((write-region-inhibit-fsync nil))
         (mevedel--write-file-atomically path content 'utf-8-unix #o600)))))
 
-(cl-defun mevedel-shared-editing-stop (&optional runtime)
-  "Stop RUNTIME or this buffer's helper and settle outstanding callbacks."
+(cl-defun mevedel-shared-editing-stop (&optional runtime reason)
+  "Stop RUNTIME or this buffer's helper and settle callbacks with REASON."
   (when-let* ((runtime (or runtime mevedel-shared-editing--runtime)))
     (when (plist-get runtime :committing)
       (plist-put runtime :stop-requested t)
@@ -137,7 +137,7 @@ Observers cannot change whether the preceding commit succeeded.")
       (when job
         (condition-case nil
             (funcall (plist-get job :callback)
-                     '(:error "Shared editing stopped; pending edits were not saved"))
+                     (list :error (or reason "Shared editing stopped; pending edits were not saved")))
           (error nil))))))
 
 (defun mevedel-shared-editing--finish (buffer job reply)
@@ -190,13 +190,23 @@ Observers cannot change whether the preceding commit succeeded.")
               (error (mevedel-shared-editing--finish
                       buffer job (list :error (error-message-string err)))))))))))
 
-(defun mevedel-shared-editing--process (buffer)
-  "Return BUFFER's live private helper process, starting it if needed."
+(defun mevedel-shared-editing--process (buffer &optional restart)
+  "Return BUFFER's private helper, starting it if needed or RESTART is non-nil."
+  ;; Configuration changes take effect between jobs, without cancelling the
+  ;; queue or an operation already sent to the previous helper.
+  (let ((process (plist-get mevedel-shared-editing--runtime :process)))
+    (when (and (process-live-p process)
+               (or restart
+                   (not (equal (process-get process :configuration)
+                               (list mevedel-shared-editing-node-program
+                                     mevedel-shared-editing--directory)))))
+      (set-process-sentinel process #'ignore)
+      (delete-process process)))
   (or (let ((process (plist-get mevedel-shared-editing--runtime :process)))
         (and (process-live-p process) process))
       (let* ((default-directory temporary-file-directory)
              (program (or (executable-find mevedel-shared-editing-node-program)
-                          (user-error "Shared editing requires Node 22.4 or newer")))
+                          (user-error "Install Node 22.4+ on the Emacs host or set mevedel-shared-editing-node-program, then recheck")))
              (process
               (make-process
                :name "mevedel-shared-editing" :buffer nil
@@ -208,7 +218,8 @@ Observers cannot change whether the preceding commit succeeded.")
                            (unless (process-live-p child)
                              (when (buffer-live-p buffer)
                                (with-current-buffer buffer
-                                 (mevedel-shared-editing-stop)))))
+                                 (mevedel-shared-editing-stop
+                                  nil "Shared editing helper exited. Check Node 22.4+ and the installed shared-editing resources on the Emacs host, then recheck")))))
                :filter
                (lambda (child chunk)
                  (let ((text (concat (process-get child :partial) chunk)))
@@ -231,9 +242,16 @@ Observers cannot change whether the preceding commit succeeded.")
                                                      buffer job reply))))
                                    (error
                                     (mevedel-shared-editing--finish
-                                     buffer job (list :error (error-message-string err)))))))))))
+                                     buffer job
+                                     (list :error
+                                           (if (equal (plist-get (plist-get job :args) :action) "status")
+                                               "Shared editing helper could not start. Check Node 22.4+ and the installed helper resources on the Emacs host, then recheck"
+                                             (error-message-string err))))))))))))
                      (process-put child :partial text)))))))
         (plist-put mevedel-shared-editing--runtime :process process)
+        (process-put process :configuration
+                     (list mevedel-shared-editing-node-program
+                           mevedel-shared-editing--directory))
         process)))
 
 (defun mevedel-shared-editing--drain (buffer)
@@ -254,7 +272,7 @@ Observers cannot change whether the preceding commit succeeded.")
             (condition-case err
                 (let* ((args (copy-sequence (plist-get job :args)))
                        (action (plist-get args :action))
-                       (mutation (not (member action '("read" "export" "list")))))
+                       (mutation (not (member action '("read" "export" "list" "status")))))
                   (when (plist-get job :cancelled) (error "Editing operation cancelled"))
                   (when-let* ((authorize (plist-get job :authorize)))
                     (unless (funcall authorize) (error "Editing authority ended")))
@@ -266,7 +284,7 @@ Observers cannot change whether the preceding commit succeeded.")
                   (if (equal action "list")
                       (mevedel-shared-editing--finish
                        buffer job (list :result (vconcat (mevedel-shared-editing-list session))))
-                    (unless (member action '("create" "import"))
+                    (unless (member action '("create" "import" "status"))
                       (setq args (plist-put args :state
                                             (mevedel-shared-editing--read
                                              session (plist-get args :id)))))
@@ -281,7 +299,10 @@ Observers cannot change whether the preceding commit succeeded.")
                             (setq args (plist-put args :state existing)
                                   args (plist-put args :action "update"))))))
                     (setq args (plist-put args :requestId (plist-get job :requestId)))
-                    (process-send-string (mevedel-shared-editing--process buffer)
+                    ;; A check starts fresh so repaired resources and runtime
+                    ;; changes are verified, without discarding queued work.
+                    (process-send-string (mevedel-shared-editing--process
+                                          buffer (equal action "status"))
                                          (concat (mevedel-shared-editing--json args) "\n"))
                     (plist-put mevedel-shared-editing--runtime :timeout
                                (run-at-time

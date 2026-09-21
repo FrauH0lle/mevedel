@@ -20,6 +20,8 @@ window.mevedelEditingView = {
       sequence = 0,
       outbound = Promise.resolve();
     let theme = null, archived = [], conversationTruncated = false, conversationError = null;
+    let available = false, checking = false, availabilityGeneration = 0;
+    let unavailableReason = 'Checking shared editing on the Emacs host…';
     function setTheme(value) {
       theme = value === 'light' || value === 'dark' ? value : null;
       port?.postMessage({ type: 'theme', theme });
@@ -96,6 +98,8 @@ window.mevedelEditingView = {
     }
     function request(args) {
       if (!connected) return Promise.reject(new Error('Disconnected; your edits remain pending'));
+      if (!available && !['list', 'status'].includes(args.action))
+        return Promise.reject(new Error(unavailableReason));
       const reqId = ++sequence,
         data = b64(JSON.stringify(args));
       if (data.length > 24 * 1024 * 1024)
@@ -178,6 +182,11 @@ window.mevedelEditingView = {
     }
     function render() {
       box.hidden = false;
+      document.getElementById('editing-status').textContent = available
+        ? 'Shared editing is ready.' : unavailableReason;
+      const recheck = document.getElementById('editing-recheck');
+      recheck.disabled = !connected || checking;
+      recheck.textContent = checking ? 'Checking…' : 'Recheck availability';
       list.replaceChildren();
       for (const item of catalog.values()) {
         const button = el(
@@ -187,6 +196,9 @@ window.mevedelEditingView = {
         );
         button.dataset.itemId = item.id;
         button.type = 'button';
+        button.disabled = !available && !(current === item.id && frame) && !readDraft(item.id);
+        button.title = button.disabled ? unavailableReason : `Open ${item.title}`;
+        button.setAttribute('aria-describedby', 'editing-status');
         button.onclick = async () => {
           try {
             await launch(item.id);
@@ -198,7 +210,12 @@ window.mevedelEditingView = {
       }
       document
         .querySelectorAll('[data-create-editor],#editing-import')
-        .forEach((button) => (button.hidden = state.readOnly));
+        .forEach((button) => {
+          button.hidden = state.readOnly;
+          button.disabled = !available;
+          button.title = available ? '' : unavailableReason;
+          button.setAttribute('aria-describedby', 'editing-status');
+        });
       summarize('editing', catalog.size ? `${catalog.size} shared` : 'Shared');
     }
     function saveDraft(id, draft) {
@@ -338,20 +355,60 @@ window.mevedelEditingView = {
     }
     async function welcome() {
       connected = true;
+      available = false;
+      checking = true;
+      const generation = ++availabilityGeneration;
+      unavailableReason = 'Checking shared editing on the Emacs host…';
+      render();
       // Room identity contains no bearer credentials. Never send the fragment to the editor.
       room = window.mevedelViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || '';
       try {
         const items = await request({ action: 'list' });
+        if (generation !== availabilityGeneration) return;
         catalog.clear();
         items.forEach((item) => catalog.set(item.id, item));
         recoveryCatalog();
         render();
+      } catch (error) {
+        if (generation !== availabilityGeneration) return;
+        flash(error.message);
+      }
+      checking = false;
+      await recheck();
+    }
+    async function recheck() {
+      if (!connected || checking) return;
+      const generation = ++availabilityGeneration;
+      checking = true;
+      available = false;
+      unavailableReason = 'Checking shared editing on the Emacs host…';
+      render();
+      try {
+        const result = await request({ action: 'status' });
+        if (generation !== availabilityGeneration) return;
+        if (result.available !== true) throw new Error('The host did not confirm shared editing availability.');
+        available = true;
+      } catch (error) {
+        if (generation !== availabilityGeneration) return;
+        unavailableReason = `Shared editing unavailable: ${error.message}`;
+        port?.postMessage({ type: 'offline' });
+        if (requestedItem) box.open = true;
+      } finally {
+        if (generation === availabilityGeneration) {
+          checking = false;
+          render();
+        }
+      }
+      if (generation !== availabilityGeneration) return;
+      try {
         if (requestedItem && !current) {
+          if (!available && !readDraft(requestedItem)) return;
           const id = requestedItem;
           requestedItem = null;
           await open(id);
+          return;
         }
-        if (current) {
+        if (current && available) {
           const result = await request({ action: 'read', id: current });
           setConversationHistory(result);
           if (recovering) await open(current, result);
@@ -370,6 +427,10 @@ window.mevedelEditingView = {
       // The main viewer restores stored credentials after stripping the URL hash.
       room = window.mevedelViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || room;
       connected = false;
+      available = false;
+      checking = false;
+      availabilityGeneration++;
+      unavailableReason = 'Shared editing unavailable while disconnected. Reconnect to check the Emacs host.';
       transfers.clear();
       port?.postMessage({ type: 'offline' });
       conversation();
@@ -379,7 +440,7 @@ window.mevedelEditingView = {
       }
       pending.clear();
       recoveryCatalog();
-      if (catalog.size) render();
+      render();
       if (requestedItem && catalog.has(requestedItem) && !current) {
         const id = requestedItem;
         requestedItem = null;
@@ -470,6 +531,7 @@ window.mevedelEditingView = {
     );
     const input = document.getElementById('editing-file');
     document.getElementById('editing-import').onclick = () => input.click();
+    document.getElementById('editing-recheck').onclick = recheck;
     input.onchange = async () => {
       const file = input.files[0];
       input.value = '';

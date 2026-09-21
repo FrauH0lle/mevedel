@@ -89,10 +89,14 @@
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
           </details>
           <details id="editing-box" class="dock-submenu" hidden><summary>Shared</summary>
+            <div class="editing-availability">
+              <p id="editing-status" role="status">Checking shared editing on the Emacs host…</p>
+              <button id="editing-recheck" class="btn quiet" type="button" disabled>Recheck availability</button>
+            </div>
             <div class="editing-create" role="group" aria-label="Create shared content">
-              <button class="btn" data-create-editor="whiteboard" type="button">＋ Whiteboard</button>
-              <button class="btn" data-create-editor="document" type="button">＋ Document</button>
-              <button id="editing-import" class="btn quiet" type="button">Import</button>
+              <button class="btn" data-create-editor="whiteboard" type="button" disabled>＋ Whiteboard</button>
+              <button class="btn" data-create-editor="document" type="button" disabled>＋ Document</button>
+              <button id="editing-import" class="btn quiet" type="button" disabled>Import</button>
               <input id="editing-file" type="file" accept=".json,.md,.txt,image/png,image/jpeg,image/webp" hidden>
             </div>
             <nav id="editing-items" aria-label="Shared whiteboards and documents"></nav>
