@@ -209,7 +209,8 @@ nested-row machinery."
                            (memq (plist-get call :status) '(error denied)))
                          calls))
            (returned-value
-            (and (not live-p)
+            (and (not (bound-and-true-p mevedel-tool-render-summary-only))
+                 (not live-p)
                  (if (stringp result) result (format "%S" result))))
            (fold-returned-p
             (and returned-value
@@ -246,7 +247,8 @@ nested-row machinery."
                        (not fold-returned-p)
                        (concat (if (eq outcome 'completed) "Returned:\n" "")
                                returned-value))
-            :child-calls (and (not live-p)
+            :child-calls (and (not (bound-and-true-p mevedel-tool-render-summary-only))
+                              (not live-p)
                               (append calls
                                       (when fold-returned-p
                                         (list

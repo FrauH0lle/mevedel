@@ -127,14 +127,14 @@ display."
      'gptel 'mevedel-render-data
      'mevedel-render-data t)))
 
-(defun mevedel-tool-render-data--read-payload (payload)
-  "Read one render-data plist from PAYLOAD or return a failure sentinel."
+(defun mevedel-tool-render-data--read-payload (payload &optional start end)
+  "Read one render-data plist from PAYLOAD or return a failure sentinel.
+Optional START and END bound the payload without copying its contents."
   (condition-case nil
       (let* ((read-eval nil)
-             (parsed (read-from-string payload))
+             (parsed (read-from-string payload start end))
              (data (car parsed))
-             (end (cdr parsed))
-             (rest (substring payload end)))
+             (rest (substring payload (cdr parsed) end)))
         (if (and (consp data)
                  (string-blank-p rest)
                  (proper-list-p data)
@@ -162,11 +162,9 @@ BEGIN and END include the formatter's optional surrounding newlines."
                                string payload-start)))
           (if (not close)
               (setq search-start payload-start)
-            (let* ((payload
-                    (string-trim
-                     (substring string payload-start close)))
-                   (data
-                    (mevedel-tool-render-data--read-payload payload))
+            (let* ((data
+                    (mevedel-tool-render-data--read-payload
+                     string payload-start close))
                    (next-open
                     (string-search mevedel-tool-render-data-open
                                    string payload-start))

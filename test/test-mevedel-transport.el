@@ -167,6 +167,31 @@
           (should-not (memq inner timer-list)))
       (when (timerp inner) (cancel-timer inner))))
 
+  :doc "preserves an idle timer's eligibility during the current idle period"
+  (let (timer)
+    (unwind-protect
+        (progn
+          (mevedel-transport-with-exclusive-connection
+            (mevedel-transport-with-exclusive-connection
+              (setq timer (run-with-idle-timer 60 nil #'ignore))
+              (should-not (timer--triggered timer))))
+          (should (memq timer timer-idle-list))
+          (should-not (timer--triggered timer)))
+      (when timer (cancel-timer timer))))
+
+  :doc "preserves a timer explicitly waiting for the next idle period"
+  (let (timer)
+    (unwind-protect
+        (progn
+          (mevedel-transport-with-exclusive-connection
+            (setq timer (timer-create))
+            (timer-set-function timer #'ignore)
+            (timer-set-idle-time timer 60 nil)
+            (timer-activate-when-idle timer))
+          (should (memq timer timer-idle-list))
+          (should (timer--triggered timer)))
+      (when timer (cancel-timer timer))))
+
   :doc "re-arms a body-scheduled timer even when the body exits non-locally"
   (let ((fired 0) inner)
     (unwind-protect

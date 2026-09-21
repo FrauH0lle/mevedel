@@ -31,7 +31,9 @@ tool policy.
 ToolCall has a static description; ToolSearch returns callable contracts without
 changing the role's native core. A provably direct call returns the underlying
 tool result and supported media, rendered as that tool. A composed program returns
-its final value with a separate child audit. Instruction/interaction tools may
+its final value with a separate child audit. A direct text result retains only
+a bounded preview in the redundant child audit; the outer result carries the
+returned value. Instruction/interaction tools may
 require standalone calls. Required hook context and repair feedback survive even
 when intermediate values are discarded.
 
@@ -51,6 +53,10 @@ Fuel/timer boundaries yield to Emacs even when children complete synchronously.
 
 Root scripts persist an envelope before children start and on settlement;
 intermediate child progress stays in memory for the next ordinary autosave.
+The provider pipeline records settlement after output projection, committing the
+bounded preview and any staged full-output artifact together before delivery.
+An interruption before this boundary restores the last running checkpoint;
+post-use hooks still receive the full result before projection.
 Agent scripts use agent interrupted-turn recovery instead of the parent's root
 checkpoint. The guest machine is never serialized or resumed after restart.
 Runtime-generated prohibited calls fail before their dispatch, but may be
@@ -154,3 +160,25 @@ We retain the language and its existing no-rollback semantics. Static and
 literal-indirect violations fail before execution; computed calls fail before
 the prohibited tool dispatches. Direct classification requires provably pure
 arguments, so an indirect nested call cannot prematurely settle the envelope.
+
+### September 2026: bound redundant direct-call text audits
+
+A saved 9.6 MB tool span contained a direct Eval child audit with a 9.26 million
+character result, although the outer, displayed result was only 2,366 characters.
+The direct-call path had bypassed the existing preview bound. Direct text child
+results now use that bound; the actual return value and outer result are not
+truncated here. Non-text results and underlying renderer metadata stay intact.
+An in-memory transformation retained identical full view text and expanded Eval
+output. The initial serialized benchmark fixture did not retain that equivalence
+after reload, so its latency figures are withdrawn. Original saved sessions are
+not rewritten.
+
+### Large-result checkpoint placement
+
+A 2026-09-21 native 9 MiB tool replay found the driver serializing the full result
+inside its recovery sidecar before the provider pipeline separately persisted
+that output. Moving settlement into the pipeline after projection removes that
+redundant large sidecar and commits the referenced output at the same marker.
+The checkpoint retains the same schema. Recovery displays the saved preview and
+resource reference; it does not reconstruct a multi-megabyte inline tool row.
+The driver still commits the running envelope before any child effects.

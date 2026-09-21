@@ -410,9 +410,9 @@ recorded hash; fixed portable caches are never an authority fallback."
          (expand-file-name logical save-path))
       (if-let* ((source
                  (and (not committed-only)
-                      (mevedel-session-durability-lease-owned-p session)
                       (mevedel-session-publication-uncommitted-artifact
-                       session logical))))
+                       session logical)))
+                ((mevedel-session-durability-lease-owned-p session)))
           (mevedel-session-artifacts-read-file-raw source)
         (mevedel-session-artifacts--read-published-artifact
          (or (mevedel-session-publication session)
@@ -530,8 +530,8 @@ When COMMITTED-ONLY is non-nil, ignore staged portable writes."
         (file-exists-p (expand-file-name logical save-path))
       (or
        (and (not committed-only)
-            (mevedel-session-durability-lease-owned-p session)
-            (mevedel-session-publication-uncommitted-artifact session logical))
+            (mevedel-session-publication-uncommitted-artifact session logical)
+            (mevedel-session-durability-lease-owned-p session))
        (let ((publication
               (or (mevedel-session-publication session)
                   (setf
@@ -1916,17 +1916,29 @@ The sidecar is the commit marker, so callers place it last in a batch."
          (mevedel-session-artifacts-build-sidecar session buffer))
         :commit-marker t))
 
-(defun mevedel-session-artifacts--obsolete-snapshot-artifacts (session)
+(defun mevedel-session-artifacts--obsolete-snapshot-artifacts (session &optional fixed)
   "Return tombstones for backups absent from SESSION's checkpoint index.
-Older published heads keep their own references to their immutable bytes."
+Older published heads keep their own references to their immutable bytes.
+With FIXED, inspect the content-addressed PID store instead of a publication.
+Only apply those tombstones after the replacement sidecar is durable."
   (let ((retained (make-hash-table :test #'equal))
+        (entries (plist-get (mevedel-session-publication session) :artifacts))
         artifacts)
+    (when fixed
+      (let ((directory (file-name-concat (mevedel-session-save-path session)
+                                         "file-history")))
+        (when (file-symlink-p directory)
+          (error "File history directory is a symbolic link: %s" directory))
+        (setq entries
+              (when (file-directory-p directory)
+                (mapcar (lambda (name) (list (file-name-concat "file-history" name)))
+                        (directory-files directory nil "\\`[0-9a-f]\\{64\\}\\'"))))))
     (dolist (turn (mevedel-session-file-snapshots session))
       (dolist (entry (cdr turn))
         (dolist (key '(:backup-name :pre-backup-name))
           (when-let* ((name (plist-get (cdr entry) key)))
             (puthash (file-name-concat "file-history" name) t retained)))))
-    (dolist (entry (plist-get (mevedel-session-publication session) :artifacts))
+    (dolist (entry entries)
       (when (and (string-prefix-p "file-history/" (car entry))
                  (not (gethash (car entry) retained)))
         (push (list :path (file-name-concat (mevedel-session-save-path session)
@@ -2118,6 +2130,18 @@ must materialize a snapshot rather than record a change."
                (mevedel-session-artifacts-sidecar-path
                 (mevedel-session-save-path session))
                (mevedel-session-artifacts-build-sidecar session buffer))
+              ;; Before this commit an older sidecar may still need replaced
+              ;; checkpoints.  PID sessions have no retained publication heads;
+              ;; after commit, only indexed content belongs to their history.
+              (condition-case err
+                  (dolist (artifact
+                           (mevedel-session-artifacts--obsolete-snapshot-artifacts
+                            session t))
+                    (delete-file (plist-get artifact :path)))
+                (error
+                 (mevedel--warn-once
+                  'file-history-cleanup "File history cleanup failed: %s"
+                  (error-message-string err))))
               (mevedel-session-artifacts-save-instructions session buffer)
               (mevedel-session-persistence-notify-session-event
                session 'save-history)
@@ -2190,18 +2214,15 @@ materialized or has no committed sidecar."
 ;;; File-history store
 ;;
 ;; Per-session on-disk backup store at <save-path>/file-history/.
-;; Filename scheme: `<sha256(absolute-filepath)[:16]>@v<N>' where <N>
-;; is the sequential per-file version.  Mapping from (turn, path) to
+;; Files are named by the full SHA-256 of their raw contents, so equal
+;; pre/post images across files and turns share storage.  Per-file versions
+;; belong to the checkpoint index.  Mapping from (turn, path) to
 ;; backup filename lives in `mevedel-session-file-snapshots' (alist
 ;; keyed by turn number; inner alist keyed by absolute path).
 
-(defun mevedel-session-artifacts--file-history-path-hash (path)
-  "Return the first 16 hex chars of SHA-256 of PATH (expanded)."
-  (substring (secure-hash 'sha256 (expand-file-name path)) 0 16))
-
-(defun mevedel-session-artifacts--file-history-backup-name (path version)
-  "Return the backup filename for PATH at VERSION."
-  (format "%s@v%d" (mevedel-session-artifacts--file-history-path-hash path) version))
+(defun mevedel-session-artifacts--file-history-backup-name (content)
+  "Return the content-addressed backup filename for raw CONTENT."
+  (secure-hash 'sha256 content))
 
 (defun mevedel-session-artifacts-backup-path (save-path backup-name)
   "Return the absolute path to BACKUP-NAME under SAVE-PATH's file-history/."
@@ -2281,12 +2302,10 @@ timestamp: another save updates this checkpoint, not the file's turn history."
                       (null pre-content))
               (let* ((backup-name
                       (and current-exists
-                           (mevedel-session-artifacts--file-history-backup-name path version)))
+                           (mevedel-session-artifacts--file-history-backup-name current-content)))
                      (pre-backup-name
                       (and (stringp pre-content)
-                           (concat
-                            (mevedel-session-artifacts--file-history-backup-name path version)
-                            ".pre"))))
+                           (mevedel-session-artifacts--file-history-backup-name pre-content))))
                 (when backup-name
                   (mevedel-session-artifacts--file-history-write-backup
                    (mevedel-session-save-path session)

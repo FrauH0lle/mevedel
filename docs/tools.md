@@ -167,7 +167,10 @@ the agent's own interrupted-turn handling instead.
 
 A syntactically direct expression renders using the underlying tool's normal
 renderer and status, while retaining the ToolCall envelope and child IDs in the
-transcript audit. Its result and supported media reach the model unchanged
+transcript audit. The redundant direct-call text result in that audit is a
+bounded preview; the outer result remains the displayed result. Non-text values,
+arguments, render data, IDs, and supported media retain their ordinary direct-call
+semantics. Its result and supported media reach the model unchanged
 apart from ordinary output limits and pipeline guidance. Ask, Skill, WaitAgent
 and UpdateGoal are standalone-only; unclassified wrapped tools default to that
 route. `mevedel-ptc-composable-tools` admits additional names for composition.
@@ -208,19 +211,39 @@ state is ephemeral: cancellation or restart interrupts it and it is never
 resumed from session storage. Before child effects, the session sidecar records
 the envelope. Child audit changes are journaled in memory and become durable on
 an unrelated autosave or the settlement write, avoiding one full publication
-per child. A restart reconstructs one interrupted ToolCall row from the last
+per child. The provider pipeline commits the settlement checkpoint after result
+projection: an oversized result is stored once as a tool artifact, and the
+checkpoint contains its bounded preview and resource reference. That marker
+commits both before delivery. Post-use hooks still see the full result before
+projection. If the pipeline is interrupted before that commit, recovery uses
+the last running checkpoint. Structured outcome-only callers checkpoint their
+unprojected result at their own completion boundary.
+A restart reconstructs one interrupted ToolCall row from the last
 durable checkpoint and consumes it with the repaired segment. Synchronous child callbacks are admitted
 in bounded timer turns so one batch cannot monopolize Emacs. Provider
 projection records whether the envelope output was inline, truncated, or
 persisted, plus its original character count. A `ptc-script` telemetry span
 records only the outcome, budget category, nested-call count, and duration;
-script text, arguments, and results are never included. See
+script text, arguments, and results are never included. This span ends with
+guest execution, before provider projection and final checkpoint publication;
+`tool-finished` records the pipeline's final outcome. See
 [`0111-run-programmatic-tool-calls-in-a-closed-machine.md`](adr/0111-run-programmatic-tool-calls-in-a-closed-machine.md).
 
 Request teardown cancels the currently active pipeline step. The tool callback
 then receives one canonical error result, `tool-finished` records one error,
 and the open step span records one cancelled terminal outcome. A late async
 continuation from the cancelled primitive is ignored.
+
+Interactive pipeline chains yield between steps after 20 ms of elapsed work
+or when input is pending, using an ordinary timer so Emacs can process input
+before the next step. A due timer checks input again and waits while keystrokes
+are pending, since GC or another callback may have used up its original delay.
+A single step may take longer. The pending step retains its cancellation handler
+and native error boundary; cancelling removes its timer before side effects
+run. A queued successor also checks its cancellation ownership before running,
+so a predecessor's late error cannot leave pending side effects. Short chains
+without pending input and batch callers keep synchronous chaining. This does not
+move tool execution into a Lisp thread.
 
 Tool-result media has one focused boundary in `mevedel-tool-media.el`.
 It validates and sanitizes captured media records, stores their bytes behind
@@ -533,6 +556,15 @@ views in the view buffer. Function contract:
 Pure function — no I/O, no mutation. Nil falls back to
 the generic renderer.
 
+The view binds `mevedel-tool-render-summary-only` while requesting an initially
+collapsed row. Renderers may then omit body and child-row construction, while
+retaining the same header, status, visibility, grouping and disclosure decisions.
+An initially expanded rendering must still supply its body. Expansion and browser
+projection request the full rendering. Bash uses this context to defer output
+cleanup and command-prefix construction; ToolCall defers returned-value formatting,
+line counting and child-row construction. Metadata decoding and status
+classification still happen before the collapsed row is shown.
+
 Alist form dispatches on the visible result status:
 
 ```elisp
@@ -673,6 +705,12 @@ limits. ApplyPatch uses `:kind patch` render-data for one persisted aggregate
 whose body contains structured per-file diff blocks.
 
 ## Tool result persistence
+
+Message normalization checks valid Unicode with a single string scan and returns
+valid text unchanged, including its properties. Raw byte characters, surrogate
+code points and values above the Unicode range still use the repair path. This
+avoids allocating one Lisp object per character on each pass through large tool
+results; normalization still happens before durable output and previews are made.
 
 When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved

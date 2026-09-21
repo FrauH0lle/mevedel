@@ -12,7 +12,9 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'subr-x))
+  (require 'subr-x)
+  ;; Struct setters need their expanders during standalone package compilation.
+  (require 'mevedel-agents))
 
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (backend))
@@ -26,6 +28,12 @@
   "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
 (defvar mevedel--agent-invocation)
+
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-ensure-conversation
+                  "mevedel-agent-persistence"
+                  (session record root-buffer &optional readonly-p))
+(autoload 'mevedel-agent-persistence-ensure-conversation "mevedel-agent-persistence")
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-dispatch
@@ -124,6 +132,7 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session--set-agent-registry
                   "mevedel-structs" (session registry))
@@ -990,10 +999,8 @@ Return rollback and post-commit delivery closures for INVOCATION."
 (defun mevedel-agent-control--dispatch-followup
     (session record message &optional parent-tool-use-id)
   "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
-  (let ((buffer (mevedel-agent-record-conversation-buffer record)))
-    (unless (buffer-live-p buffer)
-      (error "Agent conversation is not live: %s"
-             (mevedel-agent-record-path record)))
+  (let ((buffer (mevedel-agent-persistence-ensure-conversation
+                 session record (mevedel-session-root-buffer session))))
     (let ((configuration (mevedel-agent-record-configuration record)))
       (unless (mevedel-agent-configuration-p configuration)
         (error "Agent has no frozen configuration: %s"

@@ -72,3 +72,51 @@ The fence now retains the cached confinement mode and ignores only its
 `sandbox-unavailable` block for identity observation. It still observes every
 mutation, preserves blocked child-execution readiness, and rejects other target
 failures.
+
+Discovery profiling on 2026-09-21 put manifest path qualification at about
+470 ms while listing 109 saved sessions. Each artifact repeated the same five
+canonical-spelling calls, although target-side reads already prove physical
+containment. Capture now canonicalizes the session root once and accepts only
+normalized artifact names directly inside immutable generations. The three-run
+discovery median fell from 1.16 seconds to 743 ms without caching ownership
+observations or weakening artifact verification.
+
+Resume profiling on 2026-09-21 found 64 lease-clock checks costing 447 ms in
+a complete archive with 28 retained agents. Artifact reads now look for a staged
+candidate before proving lease ownership; without a candidate they read verified
+bytes from the captured immutable publication. Ownership is still required before
+reading staged bytes. Cold restore fell from 5.13 to 4.70 seconds and control
+programs from 112 to 51. This avoids proving authority for a read that does not
+depend on it, without caching or weakening the staged-read proof.
+
+Large tool-result profiling on 2026-09-21 isolated 648 ms of a roughly 794 ms
+PID/file-session completion inside the target control program. Passing a large
+base64 field through shell function arguments repeatedly copied it. Keeping
+operation variables in the decoder reduced the completion to 443 ms; streaming
+oversized required temporary-file writes reduced it to 157 ms in the same
+actual-input fixture. Stdin fields now carry their encoded length and a trailing
+NUL; a truncated frame fails before destination replacement. Small argv requests,
+optional operations, parent descriptor proofs, and result classification retain
+the same semantics. The portable project fixture, which performs additional
+publications, fell from 2.80 seconds to 907 ms before pipeline yielding. These
+measurements changed data transport within the existing authority boundary.
+
+A follow-up 2026-09-21 collection replay found the opposite-direction copy in
+control reads: command substitution retained an entire encoded manifest before
+emitting it. Ordinary operation responses now stream their payload first and
+append the operation identity and status afterward. The receiver consumes bytes
+only after a matching successful completion record; partial failed reads are
+not values, and required failures still skip subsequent operations. The private
+archive cold scan fell from 31.1 to 20.7 seconds without changing
+stored manifests, retention, descriptor proofs, or the batched archive reader.
+
+A second follow-up on 2026-09-21 found that stdin framing concatenated each
+large encoded payload into an operation string and then copied it again into
+the complete request. Framing now joins the fields once. Immutable publication
+also hashes the literal staged bytes already loaded for its write, avoiding a
+second file read. Together with the ASCII normalization fast path, three paired
+9 MiB completion replays reduced median completion from 775 to 726 ms and
+cumulative string allocation from 131 million to 96 million characters. Worst
+input delay remained about 240 ms: synchronous lease checks and publication
+writes still occupy the final pipeline step. The measured benefit justified
+removing copies, but not weakening those proofs or changing the persisted format.

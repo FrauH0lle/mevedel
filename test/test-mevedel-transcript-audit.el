@@ -257,6 +257,15 @@
                              (buffer-string)))))))
       (kill-buffer buffer))))
 
+(mevedel-deftest mevedel--strip-hook-audit-blocks/no-copy
+  (:doc "unmodified large payloads retain their characters and properties without copies")
+  (progn
+    (let ((text (propertize (make-string 262144 ?x) 'example 'kept)))
+      (should (eq text (mevedel--strip-hook-audit-blocks text)))
+      (should (eq 'kept (get-text-property 0 'example text))))
+    (let ((literal "<!-- mevedel-hook-audit -->literal<!-- /mevedel-hook-audit -->"))
+      (should (eq literal (mevedel--strip-hook-audit-blocks literal))))))
+
 (provide 'test-mevedel-transcript-audit)
 
 ;;; test-mevedel-transcript-audit.el ends here

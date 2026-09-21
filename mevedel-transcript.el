@@ -512,15 +512,6 @@ BASE-SEGMENTS supplies the raw property span containing RANGE."
                "^\\*+ "
                (buffer-substring-no-properties (cadr base) start))))))
 
-(defun mevedel-transcript--range-inside-tool-segment-p (range segments)
-  "Return non-nil when RANGE is contained by a raw tool entry in SEGMENTS."
-  (cl-find-if
-   (lambda (seg)
-     (and (eq (car seg) 'tool)
-          (<= (cadr seg) (cadr range))
-          (<= (caddr range) (caddr seg))))
-   segments))
-
 (defun mevedel-transcript--unparseable-tool-ranges
     (start end base-segments tool-ranges)
   "Return stale tool blocks in START..END absent from TOOL-RANGES.
@@ -691,19 +682,18 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                 (< pa pb)))))))
 
 (defun mevedel-transcript--overlay-range (segments range)
-  "Overlay canonical RANGE on role SEGMENTS."
+  "Overlay canonical RANGE on ordered role SEGMENTS.
+Reuse the untouched suffix without modifying SEGMENTS."
   (let ((start (cadr range))
         (end (caddr range))
         (segment (list (car range) (cadr range) (caddr range)))
         out inserted)
-    (dolist (seg segments)
-      (let ((seg-start (cadr seg))
-            (seg-end (caddr seg)))
+    (while (and segments (< (cadr (car segments)) end))
+      (let* ((seg (pop segments))
+             (seg-start (cadr seg))
+             (seg-end (caddr seg)))
         (cond
-         ((or (<= seg-end start) (>= seg-start end))
-          (when (and (not inserted) (>= seg-start end))
-            (push segment out)
-            (setq inserted t))
+         ((<= seg-end start)
           (push seg out))
          (t
           (when (< seg-start start)
@@ -720,7 +710,31 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                   out))))))
     (unless inserted
       (push segment out))
-    (nreverse out)))
+    (nconc (nreverse out) segments)))
+
+(defun mevedel-transcript--overlay-ranges (segments ranges)
+  "Overlay structural RANGES, in precedence order, on ordered SEGMENTS.
+Advance through the unchanged prefix while range starts increase; restart
+when a later precedence class returns to earlier source.  Metadata inside
+a tool remains part of that tool.  Do not modify either input list."
+  (let* ((head (cons nil (copy-sequence segments)))
+         (cursor head)
+         (previous-start 0))
+    (dolist (range ranges)
+      (let ((start (cadr range)))
+        (when (< start previous-start)
+          (setq cursor head))
+        (setq previous-start start)
+        (while (and (cdr cursor) (<= (caddr (cadr cursor)) start))
+          (setq cursor (cdr cursor)))
+        (let ((segment (cadr cursor)))
+          (unless (and (memq (car range) '(render-data ignored))
+                       (eq (car segment) 'tool)
+                       (<= (cadr segment) start)
+                       (<= (caddr range) (caddr segment)))
+            (setcdr cursor
+                    (mevedel-transcript--overlay-range (cdr cursor) range))))))
+    (cdr head)))
 
 (defun mevedel-transcript--property-segments (start end)
   "Return raw `gptel' property segments in START..END."
@@ -761,11 +775,7 @@ runs and incomplete control text remains ordinary transcript text."
          (scan-end (if segments (caddr (car (last segments))) end))
          (ranges (mevedel-transcript--structural-ranges
                   scan-start scan-end segments)))
-    (dolist (range ranges)
-      (unless (and (memq (car range) '(render-data ignored))
-                   (mevedel-transcript--range-inside-tool-segment-p
-                    range segments))
-        (setq segments (mevedel-transcript--overlay-range segments range))))
+    (setq segments (mevedel-transcript--overlay-ranges segments ranges))
     (dolist (span
              (mevedel-transcript-audit-spans
               (buffer-substring scan-start scan-end)

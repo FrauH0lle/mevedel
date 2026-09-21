@@ -295,6 +295,18 @@ With RAW-P, retain the full pipeline result including hidden render data."
     (test-mevedel-ptc-driver--select-probe buffer)
     (should (equal text (test-mevedel-ptc-driver--run buffer "(PTCProbe :value \"x\")"))))
 
+  :doc "direct text results are returned intact without a second full audit copy"
+  (let ((text (make-string 200000 ?x)))
+    (test-mevedel-ptc-driver--register-probe (lambda (_args) (list :result text)))
+    (test-mevedel-ptc-driver--select-probe buffer)
+    (let* ((result (test-mevedel-ptc-driver--run
+                    buffer "(PTCProbe :value \"x\")" t))
+           (parsed (mevedel-tool-render-data-extract result))
+           (child (car (plist-get (cdr parsed) :calls))))
+      (should (equal text (car parsed)))
+      (should (equal (mevedel-ptc-driver--preview text) (plist-get child :result)))
+      (should (equal "PTCProbe" (plist-get child :tool)))))
+
   :doc "direct calls preserve non-text child values through post-tool hooks"
   (dolist (raw '(37 nil (:count 3) [1 2]))
     (let (result done observed)

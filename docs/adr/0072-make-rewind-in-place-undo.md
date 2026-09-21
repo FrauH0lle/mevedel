@@ -55,16 +55,21 @@ excluding the current state and incomplete turns.
 Publication collection is scheduled at turn settlement and lease-acquiring restore.
 It keeps the current head, journal capture pins, settled-turn representatives,
 a recent-generation grace window, and
-the generations containing their referenced artifacts. Deletions are batched
-into one target control program per slice.
+their exact referenced artifact files. A retained artifact does not keep its
+original manifest or unrelated files alive. Marking validates one retained
+manifest per slice; all obsolete heads are retired before payload deletion.
+Deletions are batched into one target control program per slice.
 Ordinary transcript readers have no read-pin protocol: an old non-boundary reader outside the grace
 window can receive an absence or hash failure.
 
 Resume and settlement schedule collection in bounded idle slices. A scan must
 cover all generations before deletion, and a changed head restarts it. Retention
 criteria remain unchanged; deletion reserves ownership and is capped per batch.
-Repeated saves within a turn reuse checkpoint logical names, while immutable
-published heads retain their own file bytes.
+Repeated saves within a turn reuse checkpoint versions and timestamps. Snapshot
+names address raw contents, so equal before/after images across paths and turns
+share stored bytes. Immutable published heads retain their own references. PID
+stores collect unindexed generated content only after sidecar commit, preserving
+the previous durable state when a save fails.
 
 ## Rationale and consequences
 
@@ -132,3 +137,49 @@ its shared chronology and workspace-owned identity constraints remain.
   contained 6,680 file-history entries for 51 files: repeated autosaves minted
   new logical backups for one turn. Checkpoint names now remain stable within
   that turn, and obsolete current-manifest names are removed during saving.
+
+- **Snapshot duplication, 2026-09-21:** a current-writer replay alternating two
+  128 KiB contents over 12 turns stored 24 files (3 MiB), despite correctly
+  reusing versions on repeated saves within each turn. Names now use the full
+  content digest, while the checkpoint index retains every turn, path, and
+  version. This replaces path/version storage names without changing the reader's
+  opaque-name interface or rewriting existing history. PID cleanup follows the
+  sidecar commit so shared bytes and failed-save recovery stay valid.
+
+- **Obsolete-name publication, 2026-09-21:** a complete private copy of the
+  example archive took 97.2 seconds to close and save, issuing 6,470 control
+  programs. Most renewed the lease for tombstones, despite those names causing
+  no fixed writes. Skipping those renewals reduced this to 4.8 seconds and 20
+  programs, retaining the final ownership proof and manifest commit. Portable
+  snapshot writes also omit the unused fixed copy: Rewind and WorktreeFork
+  already read immutable publications. Existing archived caches are untouched.
+  The remaining profile exposed quadratic artifact deduplication and manifest
+  overlay. Hash membership preserves last-write ordering without rescanning
+  prior entries. On the same clone, deduplication fell from 2.47 seconds to
+  3 ms, generation assembly from 1.25 seconds to 162 ms, and close/save to
+  1.16 seconds. All retained checkpoints remain addressable.
+
+- **Collector heap, 2026-09-21:** caching complete manifests for a 335-generation
+  capture retained 1.37 million artifact entries and grew the live Lisp heap by
+  459 MiB. Collection now caches only generation references, the sidecar locator,
+  and transcript size, alongside the existing small sidecar facts. Heap growth
+  fell to 5.5 MiB and a warm scan from 1.72 seconds to 45 ms; cold work fell from
+  37.7 to 33.3 seconds. Full summary hashes and retention decisions matched.
+  These are scan-work measurements, not continuous input stalls: production
+  collection remains sliced. Caller-owned reference lists preserve journal pin
+  release behavior without allowing destructive retention operations to corrupt
+  the cache.
+
+- **File-level collection, 2026-09-21:** whole-directory reference retention
+  kept obsolete manifests and sidecars whenever one artifact in their generation
+  was still needed. On a private copy of the complete example archive after
+  restore, the same head-retention policy needed 11 of 336 heads and 6,794 files.
+  Exact-file marking reduced publication storage from 1,139,941,005 to 404,652,906
+  bytes; every retained file matched its pre-collection digest. The cold scan
+  fell from 31.19 to 1.38 seconds. Collection took 23.92 seconds across 715
+  explicitly advanced idle steps, the largest 172 ms; a single manifest read
+  can still exceed the nominal slice budget. This replaces directory closure,
+  without a manifest format change or rewriting historical artifacts. Retiring
+  every obsolete head before sweeping payloads preserves discoverable history
+  if deletion is interrupted, including references across generations. New
+  journal pins or a changed head invalidate the plan before further deletion.

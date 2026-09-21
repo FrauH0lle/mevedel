@@ -56,7 +56,7 @@
              (buffer-live-p (mevedel-session-root-buffer session))
              (not (gethash session mevedel-session-collection--jobs)))
     (let ((job (list :buffer (mevedel-session-root-buffer session)
-                     :head nil :remaining nil :summaries nil :timer nil)))
+                     :head nil :remaining nil :summaries nil :plan nil :timer nil)))
       (puthash session job mevedel-session-collection--jobs)
       (with-current-buffer (plist-get job :buffer)
         (add-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill nil t))
@@ -76,7 +76,8 @@
                 (not (plist-get (mevedel-session-publication session) :head))
                 (not (eq 'owned (plist-get (mevedel-session-lease session) :state))))
             (mevedel-session-collection-cancel session))
-           ((or (active-minibuffer-window)
+           ((or (input-pending-p)
+                (active-minibuffer-window)
                 (mevedel-transport-busy-p directory)
                 (buffer-local-value 'mevedel--current-request buffer)
                 (mevedel-session-pending-publication session)
@@ -95,6 +96,7 @@
                     (unless (equal head (plist-get job :head))
                       (setf (plist-get job :head) head
                             (plist-get job :summaries) nil
+                            (plist-get job :plan) nil
                             (plist-get job :remaining)
                             (mevedel-session-publication--generation-names directory)))
                     (while (and (plist-get job :remaining)
@@ -106,16 +108,17 @@
                             (plist-get job :summaries))
                       (setf (plist-get job :remaining) (cdr (plist-get job :remaining)))
                       (setq count (1+ count)))
-                    (if (plist-get job :remaining)
+                    (if (or (plist-get job :remaining) (> count 0) (input-pending-p))
                         (mevedel-session-collection--arm session job)
-                      ;; No unscanned directory is eligible for deletion.
-                      ;; A new head invalidates this scan on the next slice.
-                      (let ((deleted
-                             (mevedel-session-publication-collect-generations
-                              session (reverse (plist-get job :summaries)) 8)))
-                        (mevedel-session-collection-cancel session)
-                        (when (and deleted (= deleted 8))
-                          (mevedel-session-collection-schedule session)))))))))))
+                      (unless (plist-get job :plan)
+                        (setf (plist-get job :plan)
+                              (mevedel-session-publication-collection-plan
+                               session (reverse (plist-get job :summaries)))))
+                      (if (mevedel-session-publication-collect-step
+                           session (plist-get job :plan))
+                          (mevedel-session-collection--arm session job)
+                        (mevedel-session-collection-cancel session))))))))))
+
       (error
        (mevedel-session-collection-cancel session)
        (display-warning 'mevedel

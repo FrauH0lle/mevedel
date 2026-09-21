@@ -482,6 +482,9 @@
         (delete-directory root t))))
   :doc "does not leak frozen media when side construction fails"
   (let* ((root (make-temp-file "mevedel-btw-create-failure-" t))
+         ;; Inventory and remove only this fixture's files, not another ERT
+         ;; worker's live context media in the shared temporary directory.
+         (temporary-file-directory (file-name-as-directory root))
          (media-file (file-name-concat root "image.png"))
          (workspace
           (mevedel-workspace--create

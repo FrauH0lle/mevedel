@@ -68,6 +68,49 @@
 ;;
 ;;; Segment extraction
 
+(mevedel-deftest mevedel-transcript--overlay-ranges ()
+  ,test
+  (test)
+  :doc "higher precedence ranges can return to earlier and overlapping source"
+  (let* ((segments '((user 1 101)))
+         (ranges '((render-data 50 60) (ignored 80 90)
+                   (reasoning 20 70) (mailbox 40 85) (tool 25 55)))
+         (original-segments (copy-tree segments))
+         (original-ranges (copy-tree ranges)))
+    (should (equal (mevedel-transcript--overlay-ranges segments ranges)
+                   '((user 1 20) (reasoning 20 25) (tool 25 55)
+                     (mailbox 55 85) (ignored 85 90) (user 90 101))))
+    (should (equal segments original-segments))
+    (should (equal ranges original-ranges)))
+  :doc "metadata contained by a tool stays in it, but crossing metadata does not"
+  (should (equal (mevedel-transcript--overlay-ranges
+                  '((user 1 10) (tool 10 40) (response 40 60))
+                  '((render-data 15 20) (ignored 25 30) (ignored 35 45)))
+                 '((user 1 10) (tool 10 35) (ignored 35 45) (response 45 60))))
+  :doc "a repaired tool leaves the old tool suffix as user text"
+  (should (equal (mevedel-transcript--overlay-ranges
+                  '((tool 1 100)) '((tool 10 30) (tool 50 70)))
+                 '((tool 1 10) (tool 10 30) (user 30 50)
+                   (tool 50 70) (user 70 100)))))
+
+(mevedel-deftest mevedel-transcript--overlay-range ()
+  ,test
+  (test)
+  :doc "ranges outside existing roles preserve source order and role gaps"
+  (dolist (case '((((user 10 20) (response 30 40)) (reasoning 1 5)
+                  ((reasoning 1 5) (user 10 20) (response 30 40)))
+                 (((user 10 20) (response 30 40)) (reasoning 22 28)
+                  ((user 10 20) (reasoning 22 28) (response 30 40)))
+                 (((user 10 20) (response 30 40)) (reasoning 45 50)
+                  ((user 10 20) (response 30 40) (reasoning 45 50)))
+                 (((user 10 20) (response 30 40)) (reasoning 15 35)
+                  ((user 10 15) (reasoning 15 35) (response 35 40)))
+                 (nil (reasoning 1 5) ((reasoning 1 5)))))
+    (let ((original (copy-tree (car case))))
+      (should (equal (mevedel-transcript--overlay-range (car case) (cadr case))
+                     (caddr case)))
+      (should (equal (car case) original)))))
+
 (mevedel-deftest mevedel-transcript--structural-ranges ()
   ,test
   (test)

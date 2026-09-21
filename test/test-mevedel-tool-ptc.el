@@ -61,6 +61,27 @@
   ,test
   (test)
 
+  :doc "summaries retain child failures without processing the returned body"
+  (let* ((value (make-string 100000 ?\n))
+         (data '(:kind ptc :outcome completed :elapsed-seconds 1.25
+                 :calls ((:id "1" :tool "Read" :status error :result "failed"))))
+         (split (symbol-function 'split-string))
+         summary)
+    (let ((mevedel-tool-render-summary-only t))
+      (cl-letf (((symbol-function 'split-string)
+                 (lambda (string &rest args)
+                   (should-not (eq string value))
+                   (apply split string args))))
+        (setq summary (mevedel-tool-ptc--render "ToolCall" nil value data))))
+    (should-not (plist-get summary :body))
+    (should-not (plist-get summary :child-calls))
+    (should (eq 'warning (plist-get summary :status)))
+    (should (string-search "1 failed" (plist-get summary :header)))
+    (let ((full (mevedel-tool-ptc--render "ToolCall" nil value data)))
+      (should (equal (plist-get summary :header) (plist-get full :header)))
+      (should (eq 'warning (plist-get full :status)))
+      (should (equal value (plist-get (car (last (plist-get full :child-calls))) :result)))))
+
   :doc "keeps the returned value in the body and child output in its own row"
   (with-temp-buffer
     (let* ((rendering

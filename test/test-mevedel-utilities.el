@@ -302,6 +302,30 @@
   ,test
   (test)
 
+  :doc "returns ASCII without scanning or copying its text and properties"
+  (let* ((text (propertize (make-string (* 1024 1024) ?x) 'face 'bold))
+         (matcher (symbol-function 'string-match-p))
+         (scans 0))
+    (cl-letf (((symbol-function 'string-match-p)
+               (lambda (regexp string &optional start)
+                 (when (eq string text) (cl-incf scans))
+                 (funcall matcher regexp string start))))
+      (should (eq text (mevedel--normalize-message-text text))))
+    (should (zerop scans))
+    (should (eq 'bold (get-text-property 0 'face text))))
+
+  :doc "leaves valid large Unicode text and its properties without per-character Lisp work"
+  (let* ((text (concat (make-string 100000 ?x)
+                       (string 0 #x7f #x80 #xff #xd7ff #xe000 #x10ffff)))
+         (predicate (symbol-function 'mevedel--invalid-message-char-p))
+         (calls 0))
+    (put-text-property 10 20 'gptel 'response text)
+    (cl-letf (((symbol-function 'mevedel--invalid-message-char-p)
+               (lambda (char) (cl-incf calls) (funcall predicate char))))
+      (should (eq text (mevedel--normalize-message-text text))))
+    (should (eq 'response (get-text-property 15 'gptel text)))
+    (should (< calls 10)))
+
   :doc "decodes raw UTF-8 bytes into normal Unicode"
   (let* ((raw (test-mevedel-utilities--raw-bytes
                #xe2 #x80 #x9c ?x #xe2 #x80 #x9d))
@@ -335,6 +359,8 @@
 
   :doc "escapes surrogate code points"
   (dolist (case '((#xd800 . "\\xED\\xA0\\x80")
+                  (#xdbff . "\\xED\\xAF\\xBF")
+                  (#xdc00 . "\\xED\\xB0\\x80")
                   (#xdfff . "\\xED\\xBF\\xBF")))
     (let ((normalized (mevedel--normalize-message-text
                        (string (car case)))))

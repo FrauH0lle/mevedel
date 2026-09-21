@@ -1441,6 +1441,7 @@
            (list (list :path backup-path :content "published backup")
                  (list :path sidecar :content "sidecar" :commit-marker t)))
           (mevedel-session-durability-lease-release session-dir source)
+          (make-directory (file-name-directory backup-path) t)
           (write-region "poison" nil backup-path nil 'silent)
           (let ((report
                  (mevedel-session-fork--restore-worktree-files

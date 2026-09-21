@@ -1129,7 +1129,7 @@
                          (mevedel-session-rewind--prompt-candidates
                          session))))
                 (let ((backup
-                       (mevedel-session-artifacts--file-history-backup-name path 1)))
+                       (mevedel-session-artifacts--file-history-backup-name "first")))
                   (mevedel-session-artifacts--file-history-write-backup
                    (mevedel-session-save-path session) backup "first")
                   (setf (mevedel-session-file-snapshots session)
@@ -1142,7 +1142,7 @@
                 (setf (mevedel-session-turn-count session) 2)
                 (mevedel-session-artifacts-save session buf t)
                 (let ((backup
-                       (mevedel-session-artifacts--file-history-backup-name path 2)))
+                       (mevedel-session-artifacts--file-history-backup-name "second")))
                   (mevedel-session-artifacts--file-history-write-backup
                    (mevedel-session-save-path session) backup "second")
                   (setf (mevedel-session-file-snapshots session)
@@ -1277,9 +1277,9 @@
                         (mevedel-session-rewind--prompt-candidates
                          session))))
                 (let ((backup-a
-                       (mevedel-session-artifacts--file-history-backup-name path-a 1))
+                       (mevedel-session-artifacts--file-history-backup-name "old-a"))
                       (backup-b
-                       (mevedel-session-artifacts--file-history-backup-name path-b 1)))
+                       (mevedel-session-artifacts--file-history-backup-name "old-b")))
                   (mevedel-session-artifacts--file-history-write-backup
                    (mevedel-session-save-path session) backup-a "old-a")
                   (mevedel-session-artifacts--file-history-write-backup
@@ -1444,10 +1444,8 @@
         (progn
           (make-directory save-path t)
           (write-region "external edit" nil path nil 'silent)
-          (let ((pre (mevedel-session-artifacts--file-history-backup-name
-                      path 0))
-                (post (mevedel-session-artifacts--file-history-backup-name
-                       path 1)))
+          (let ((pre (mevedel-session-artifacts--file-history-backup-name "pre-turn"))
+                (post (mevedel-session-artifacts--file-history-backup-name "post-turn")))
             (mevedel-session-artifacts--file-history-write-backup
              save-path pre "pre-turn")
             (mevedel-session-artifacts--file-history-write-backup
@@ -2587,7 +2585,7 @@
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((path (file-name-concat tempdir "foo.el"))
-               (backup-name (mevedel-session-artifacts--file-history-backup-name path 1)))
+               (backup-name (mevedel-session-artifacts--file-history-backup-name "v1")))
           (write-region "v1" nil path nil 'silent)
           (mevedel-session-artifacts--file-history-write-backup
            (mevedel-session-save-path session) backup-name "v1")
@@ -2602,7 +2600,7 @@
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((path (file-name-concat tempdir "foo.el"))
-               (backup-name (mevedel-session-artifacts--file-history-backup-name path 1)))
+               (backup-name (mevedel-session-artifacts--file-history-backup-name "content")))
           (mevedel-session-artifacts--file-history-write-backup
            (mevedel-session-save-path session) backup-name "content")
           ;; File doesn't currently exist.
@@ -2631,8 +2629,8 @@
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((path (file-name-concat tempdir "foo.el"))
-               (b1   (mevedel-session-artifacts--file-history-backup-name path 1))
-               (b2   (mevedel-session-artifacts--file-history-backup-name path 2)))
+               (b1   (mevedel-session-artifacts--file-history-backup-name "v1"))
+               (b2   (mevedel-session-artifacts--file-history-backup-name "v2")))
           (mevedel-session-artifacts--file-history-write-backup
            (mevedel-session-save-path session) b1 "v1")
           (mevedel-session-artifacts--file-history-write-backup
@@ -2662,9 +2660,9 @@
                (delete-path (file-name-concat tempdir "old.el"))
                (restore-path (file-name-concat tempdir "modified.el"))
                (backup-name-create
-                (mevedel-session-artifacts--file-history-backup-name create-path 1))
+                (mevedel-session-artifacts--file-history-backup-name "newly created"))
                (backup-name-restore
-                (mevedel-session-artifacts--file-history-backup-name restore-path 1)))
+                (mevedel-session-artifacts--file-history-backup-name "original")))
           (mevedel-session-artifacts--file-history-write-backup
            (mevedel-session-save-path session) backup-name-create "newly created")
           (mevedel-session-artifacts--file-history-write-backup
@@ -2697,7 +2695,7 @@
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((path (file-name-concat tempdir "fine.el"))
-               (bn   (mevedel-session-artifacts--file-history-backup-name path 1)))
+               (bn   (mevedel-session-artifacts--file-history-backup-name "ok")))
           (mevedel-session-artifacts--file-history-write-backup
            (mevedel-session-save-path session) bn "ok")
           (let* ((plan

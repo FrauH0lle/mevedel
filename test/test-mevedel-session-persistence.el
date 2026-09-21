@@ -1622,8 +1622,9 @@
                                           session-dir))))
                       (let ((live-session (buffer-local-value 'mevedel--session restored)))
                         (should (gethash live-session mevedel-session-collection--jobs))
-                        (dotimes (_ (1+ before))
-                          (when-let* ((job (gethash live-session mevedel-session-collection--jobs)))
+                        (let ((steps 0))
+                          (while-let ((job (gethash live-session mevedel-session-collection--jobs)))
+                            (should (< (cl-incf steps) 100))
                             (mevedel-session-collection--step live-session job)))
                         (should-not (gethash live-session mevedel-session-collection--jobs)))
                       (let ((after

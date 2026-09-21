@@ -19,7 +19,7 @@
           (session (mevedel-session-create "collection" workspace))
           (buffer (generate-new-buffer " *collection*"))
           (mevedel-session-collection--jobs (make-hash-table :test #'eq))
-          (mevedel-session-publication--manifest-cache (make-hash-table :test #'equal))
+          (mevedel-session-publication--generation-cache (make-hash-table :test #'equal))
           (mevedel-session-publication--facts-cache (make-hash-table :test #'equal))
           (mevedel-session-publication-keep-recent-generations 1))
      (unwind-protect
@@ -100,8 +100,10 @@
         (should (= 1 (length (plist-get job :summaries))))
         (should (= (length before)
                    (length (mevedel-session-publication--generation-names directory))))
-        (dotimes (_ (length before))
-          (mevedel-session-collection--step session job))
+        (let ((steps 0))
+          (while (gethash session mevedel-session-collection--jobs)
+            (mevedel-session-collection--step session job)
+            (should (< (cl-incf steps) 100))))
         (should-not (gethash session mevedel-session-collection--jobs))
         (should (< (length (mevedel-session-publication--generation-names directory))
                    (length before)))
@@ -120,6 +122,18 @@
           (mevedel-session-collection--step session job)
           (should-not (equal old-head (plist-get job :head)))
           (should (= 1 (length (plist-get job :summaries))))))))
+  :doc "pending input prevents all target I/O even after scanning finishes"
+  (test-mevedel-collection--with-session
+    (mevedel-session-collection-schedule session)
+    (let ((job (gethash session mevedel-session-collection--jobs)))
+      (setf (plist-get job :head) (plist-get (mevedel-session-publication session) :head))
+      (cl-letf (((symbol-function 'input-pending-p) (lambda () t))
+                ((symbol-function 'process-file)
+                 (lambda (&rest _) (ert-fail "Collection performed target I/O with pending input"))))
+        (mevedel-session-collection--step session job))
+      (should (eq job (gethash session mevedel-session-collection--jobs)))
+      (should (timerp (plist-get job :timer)))
+      (should-not (plist-get job :plan))))
   :doc "active requests defer collection and obsolete ownership cancels it"
   (test-mevedel-collection--with-session
     (mevedel-session-collection-schedule session)

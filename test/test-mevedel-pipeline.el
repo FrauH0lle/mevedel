@@ -3532,6 +3532,8 @@ cover, so the permission step's warning about it is captured here."
 		       (progn
 			 (mevedel-pipeline-run-tool
 			  tool (lambda (r) (setq result r)) nil)
+                         (with-timeout (2 (ert-fail "Persisted result timed out"))
+                           (while (not result) (accept-process-output nil 0.01)))
 			 (should (string-prefix-p "<persisted-output>" result))
 			 (should (directory-files
 				  (file-name-concat save-path "tool-results")
@@ -4928,6 +4930,103 @@ cover, so the permission step's warning about it is captured here."
           (should (stringp
                    (plist-get (gethash directory snapshots) :gap))))
       (delete-directory directory t))))
+
+(mevedel-deftest mevedel-pipeline--run/yield ()
+  ,test
+  (test)
+  :doc "yields with cancellation installed and preserves ordered context"
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 0)
+        (cell (list nil)) order result)
+    (mevedel-pipeline--run
+     (list (lambda (ctx next _fail)
+             (push 1 order) (funcall next (plist-put ctx :result "retained")))
+           (lambda (ctx next _fail)
+             (push 2 order) (funcall next ctx)))
+     (lambda (settlement) (setq result settlement))
+     (list :cancel-cell cell))
+    (should-not order)
+    (should (functionp (car cell)))
+    (with-timeout (2 (ert-fail "Yielded pipeline timed out"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal order '(2 1)))
+    (should (equal (plist-get result :result) "retained"))
+    (should-not (car cell)))
+  :doc "pending input takes priority even before the time budget expires"
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 60)
+        result)
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () t)))
+      (mevedel-pipeline--run
+       (list (lambda (ctx next _fail) (funcall next (plist-put ctx :result "ready"))))
+       (lambda (settlement) (setq result settlement)) nil)
+      (should-not result))
+    (with-timeout (2 (ert-fail "Input-prioritized step timed out"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal (plist-get result :result) "ready")))
+  :doc "a due timer waits for input and cancellation stops the rearmed timer"
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 0)
+        (cell (list nil)) ran results)
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () t)))
+      (mevedel-pipeline--run
+       (list (lambda (ctx next _fail) (setq ran t) (funcall next ctx)))
+       (lambda (result) (push result results)) (list :cancel-cell cell))
+      (accept-process-output nil 0.03)
+      (should-not ran)
+      (should-not results)
+      (funcall (car cell)))
+    (accept-process-output nil 0.03)
+    (should-not ran)
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :reason) 'cancelled)))
+  :doc "cancellation removes a pending step without running its side effects"
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 0)
+        (cell (list nil)) ran results)
+    (mevedel-pipeline--run
+     (list (lambda (ctx next _fail) (setq ran t) (funcall next ctx)))
+     (lambda (result) (push result results)) (list :cancel-cell cell))
+    (should-not ran)
+    (should (functionp (car cell)))
+    (funcall (car cell))
+    (accept-process-output nil 0.02)
+    (should-not ran)
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :reason) 'cancelled))
+    (should-not (car cell)))
+  :doc "a delayed step error settles once through the native error boundary"
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 0)
+        (cell (list nil)) results)
+    (mevedel-pipeline--run
+     (list (lambda (&rest _) (error "Delayed step failed")))
+     (lambda (result) (push result results)) (list :cancel-cell cell))
+    (should-not results)
+    (with-timeout (2 (ert-fail "Delayed error was not delivered"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (should (= (length results) 1))
+    (should (string-match-p "Delayed step failed" (plist-get (car results) :result)))
+    (should-not (car cell))))
+
+(mevedel-deftest mevedel-pipeline--run/late-error ()
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 0)
+        (cell (list nil)) effects results)
+    (mevedel-pipeline--run
+     (list (lambda (ctx next _fail)
+             (funcall next ctx)
+             (error "Failure after handing off"))
+           (lambda (ctx next _fail)
+             (setq effects t) (funcall next ctx)))
+     (lambda (result) (push result results)) (list :cancel-cell cell))
+    (with-timeout (2 (ert-fail "Late error did not settle"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (accept-process-output nil 0.02)
+    (should-not effects)
+    (should (= (length results) 1))
+    (should (string-match-p "Failure after handing off" (plist-get (car results) :result)))
+    (should-not (car cell))))
 
 (provide 'test-mevedel-pipeline)
 ;;; test-mevedel-pipeline.el ends here

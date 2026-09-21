@@ -1,0 +1,348 @@
+;;; test-mevedel-view-render-batch.el --- Batched history projection -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; Exercise callback ownership and live reader state during complete rebuilds.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'mevedel-view)
+(require 'mevedel-view-render)
+
+(defmacro mevedel-batch-test--with-history (&rest body)
+  "Run BODY with six exchanges and a multiline composer draft."
+  (declare (indent 0))
+  `(mevedel-view-test--with-buffers
+     (dotimes (index 6)
+       (mevedel-view-test--insert-data data-buf (format "*** Prompt %d\n" index) nil)
+       (mevedel-view-test--insert-data data-buf (format "Response %d with target text.\n" index) 'response))
+     (with-current-buffer view-buf
+       (mevedel-view--full-rerender)
+       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+       ,@body)))
+
+(mevedel-deftest mevedel-view-render-batched-full ()
+  ,test
+  (test)
+  :doc "projects current history first and converges to synchronous output"
+  (mevedel-batch-test--with-history
+    (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
+      (mevedel-view-render-batched-full)
+      (should mevedel-view-render--batch)
+      (should (string-search "Response 5" (buffer-string)))
+      (should (string-search "Loading conversation turn" (buffer-string)))
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should (equal expected (buffer-substring-no-properties (point-min) (point-max))))))
+  :doc "new draft edits and selection survive every callback"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (goto-char (point-max)) (insert "\nnew typing")
+    (let ((offset (- (point) (mevedel-view--input-start))))
+      (set-mark (- (point) 6)) (setq mark-active t)
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
+        (should (equal "> draft\nsecond line\nnew typing" (mevedel-view--input-text)))
+        (should (= (- (point) (mevedel-view--input-start)) offset))
+        (should mark-active)
+        (should (= (- (point) (mark)) 6)))))
+  :doc "selected history and its window start are rendered before restoration"
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (set-window-buffer (selected-window) view-buf)
+      (goto-char (point-min)) (search-forward "Response 2 with target text")
+      (set-mark (- (point) 11)) (setq mark-active t)
+      (let ((start (line-beginning-position)))
+        (set-window-start (selected-window) start t))
+      (mevedel-view-render-batched-full)
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (should (equal "target text" (buffer-substring-no-properties (region-beginning) (region-end))))
+        (should (save-excursion (goto-char (window-start)) (looking-at "Response 2")))
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should (equal "target text" (buffer-substring-no-properties (region-beginning) (region-end))))))
+  :doc "in-flight history uses the existing synchronous reconciliation"
+  (mevedel-batch-test--with-history
+    (mevedel-view-stream-begin-turn
+     (mevedel-view--history-insertion-marker)
+     (with-current-buffer data-buf (copy-marker (point-max))))
+    (mevedel-view-render-batched-full)
+    (should-not mevedel-view-render--batch)
+    (should-not (string-search "Loading conversation turn" (buffer-string)))
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+
+(mevedel-deftest mevedel-view-render-batched-full/other-writers ()
+  ,test
+  (test)
+  :doc "a synchronous full projection retires the old batch"
+  (mevedel-batch-test--with-history
+    (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
+      (mevedel-view-render-batched-full)
+      (let ((old mevedel-view-render--batch))
+        (mevedel-view--full-rerender)
+        (should-not mevedel-view-render--batch)
+        (mevedel-view-render--batch-step view-buf old)
+        (should (equal expected (buffer-substring-no-properties (point-min) (point-max)))))))
+  :doc "other writers see a complete projection and retain newer draft edits"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (goto-char (point-max)) (insert " new edit")
+    (mevedel-view-render-mutate
+     'test-reader
+     (lambda ()
+       (should-not mevedel-view-render--batch)
+       (should-not (string-search "Loading conversation turn" (buffer-string)))
+       (should (string-search "Response 0" (buffer-string)))))
+    (should (equal "> draft\nsecond line new edit" (mevedel-view--input-text)))))
+
+(mevedel-deftest mevedel-view--flush-scheduled-render/batched ()
+  ,test
+  (test)
+  :doc "the normal scheduler starts a batch and explicit immediate work finishes"
+  (mevedel-batch-test--with-history
+    (let ((mevedel-view-rerender-debounce 60))
+      (mevedel-view-rerender view-buf)
+      (cancel-timer mevedel-view--render-timer)
+      (mevedel-view--flush-scheduled-render view-buf)
+      (should mevedel-view-render--batch)
+      (mevedel-view--schedule-render 'full data-buf 0)
+      (should-not mevedel-view-render--batch)
+      (should-not (string-search "Loading conversation turn" (buffer-string)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+
+(mevedel-deftest mevedel-view-render--priority-turns ()
+  (mevedel-batch-test--with-history
+    (goto-char (point-min)) (search-forward "Response 2")
+    (let* ((plan (mevedel-view--full-rerender-plan data-buf data-buf view-buf nil))
+           (turns (mevedel-view-render--priority-turns (plist-get plan :turns))))
+      (should (= (length turns) 1))
+      (should (eq (plist-get (car turns) :role) 'assistant))
+      (should (with-current-buffer data-buf
+                (string-search "Response 2" (buffer-substring-no-properties
+                                             (plist-get (car turns) :start)
+                                             (plist-get (car turns) :end))))))))
+
+(mevedel-deftest mevedel-view-render--batch-turn ()
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let* ((job mevedel-view-render--batch)
+           (entry (car (plist-get job :pending))))
+      (mevedel-view-render--batch-turn job entry)
+      (should (< (nth 1 entry) (nth 2 entry)))
+      (should-not (string-search "Loading conversation turn"
+                                (buffer-substring (nth 1 entry) (nth 2 entry)))))))
+
+(mevedel-deftest mevedel-view-render--batch-step ()
+  ,test
+  (test)
+  :doc "one callback consumes exactly one pending turn"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let* ((job mevedel-view-render--batch)
+           (count (length (plist-get job :pending))))
+      (mevedel-view-render--batch-step view-buf job)
+      (should (eq job mevedel-view-render--batch))
+      (should (= (length (plist-get job :pending)) (1- count)))))
+  :doc "obsolete callbacks cannot consume a newer job"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let ((old mevedel-view-render--batch))
+      (mevedel-view-render-batched-full)
+      (let ((current mevedel-view-render--batch)
+            (before (buffer-string)))
+        (mevedel-view-render--batch-step view-buf old)
+        (should (eq current mevedel-view-render--batch))
+        (should (equal before (buffer-string))))))
+  :doc "source changes retire the plan and eventually project current text"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let ((old mevedel-view-render--batch))
+      (with-current-buffer data-buf
+        (goto-char (point-max)) (insert (propertize "Changed source.\n" 'gptel 'response)))
+      (mevedel-view-render--batch-step view-buf old)
+      (should-not (eq old mevedel-view-render--batch))
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should (string-search "Changed source." (buffer-string)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+  :doc "failed batch rolls back its partial insertion and recovers canonically"
+  (mevedel-batch-test--with-history
+    (let ((expected (buffer-substring-no-properties (point-min) (point-max)))
+          (render (symbol-function 'mevedel-view--render-turn)) failed)
+      (mevedel-view-render-batched-full)
+      (cl-letf (((symbol-function 'mevedel-view--render-turn)
+                 (lambda (&rest args)
+                   (if failed (apply render args)
+                     (setq failed t)
+                     (insert "Partial failed turn")
+                     (error "Injected batch failure")))))
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should-not mevedel-view-render--batch)
+      (should (equal expected (buffer-substring-no-properties (point-min) (point-max)))))))
+
+(mevedel-deftest mevedel-view-render-cancel-batch ()
+  ,test
+  (test)
+  :doc "cancellation releases timer and pending source markers"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let* ((job mevedel-view-render--batch)
+           (timer (plist-get job :timer))
+           (start (nth 1 (car (plist-get job :pending)))))
+      (should (memq timer timer-list))
+      (mevedel-view-render-cancel-batch)
+      (should-not mevedel-view-render--batch)
+      (should-not (marker-buffer start))
+      (should-not (memq timer timer-list))))
+  :doc "view death cancels pending callbacks"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let ((timer (plist-get mevedel-view-render--batch :timer)))
+      (kill-buffer view-buf)
+      (should-not (memq timer timer-list)))))
+
+(mevedel-deftest mevedel-view-render-resume-batch ()
+  ,test
+  (test)
+  :doc "focus loss pauses callbacks; focus recovery arms exactly one timer"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let* ((job mevedel-view-render--batch)
+           (pending (length (plist-get job :pending))))
+      (cl-letf (((symbol-function 'mevedel-view--unattended-p) (lambda (&rest _) t)))
+        (mevedel-view-render--batch-step view-buf job)
+        (mevedel-view-render-resume-batch)
+        (should-not (plist-get job :timer))
+        (should (= pending (length (plist-get job :pending)))))
+      (goto-char (point-max)) (insert " while paused")
+      (mevedel-view--resume-render-if-attended view-buf)
+      (let ((timer (plist-get job :timer)))
+        (should (memq timer timer-list))
+        (mevedel-view-render-resume-batch)
+        (should (eq timer (plist-get job :timer))))
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should-not mevedel-view-render--batch)
+      (should (equal "> draft\nsecond line while paused" (mevedel-view--input-text)))))
+  :doc "transport contention postpones a turn without consuming its source"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let* ((job mevedel-view-render--batch)
+           (pending (length (plist-get job :pending))))
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&rest _) t)))
+        (mevedel-view-render--batch-step view-buf job)
+        (should (= pending (length (plist-get job :pending))))
+        (should (memq (plist-get job :timer) timer-list)))
+      (mevedel-view-render--batch-step view-buf job)
+      (should (= (1- pending) (length (plist-get job :pending)))))))
+
+(mevedel-deftest mevedel-view-render--start-batch ()
+  ,test
+  (test)
+  :doc "a nested request installs its plan only after the owning writer exits"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-mutate
+     'outer
+     (lambda ()
+       (mevedel-view-render-batched-full)
+       (should-not mevedel-view-render--batch)
+       (goto-char (point-max)) (insert " latest edit")))
+    (should mevedel-view-render--batch)
+    (cl-loop repeat 30 while mevedel-view-render--batch do
+      (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+    (should-not mevedel-view-render--batch)
+    (should (equal "> draft\nsecond line latest edit" (mevedel-view--input-text))))
+  :doc "a queued writer after batch installation sees complete history"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-mutate
+     'outer
+     (lambda ()
+       (mevedel-view-render-batched-full)
+       (mevedel-view-render-mutate
+        'later
+        (lambda ()
+          (should-not mevedel-view-render--batch)
+          (should-not (string-search "Loading conversation turn" (buffer-string)))
+          (should (string-search "Response 0" (buffer-string)))))))
+    (should-not mevedel-view-render--batch))
+  :doc "failure while installing priority turns releases work and restores the view"
+  (mevedel-batch-test--with-history
+    (let ((before (buffer-substring-no-properties (point-min) (point-max))) job)
+      (cl-letf (((symbol-function 'mevedel-view-render--batch-turn)
+                 (lambda (current _entry)
+                   (setq job current)
+                   (error "Injected initial failure"))))
+        (should-error (mevedel-view-render-batched-full)))
+      (should job)
+      (should-not mevedel-view-render--batch)
+      (dolist (entry (plist-get job :pending))
+        (should-not (marker-buffer (nth 1 entry)))
+        (should-not (marker-buffer (nth 2 entry))))
+      (should (equal before (buffer-substring-no-properties (point-min) (point-max)))))))
+
+(mevedel-deftest mevedel-view-render-batched-full/disclosures ()
+  ,test
+  (test)
+  :doc "expanded tool bodies and manually folded turns survive all callbacks"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Unknown\" :args nil)\nBody retained on expansion.\n" '(tool . "one"))
+    (dotimes (index 4)
+      (mevedel-view-test--insert-data data-buf (format "*** Prompt %d\n" index) nil)
+      (mevedel-view-test--insert-data data-buf (format "Response %d\n" index) 'response))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min)) (search-forward "Unknown")
+      (mevedel-view-toggle-section)
+      (should (string-search "Body retained on expansion" (buffer-string)))
+      (goto-char (point-min)) (search-forward "Response 1")
+      (search-backward "Assistant")
+      (mevedel-view-toggle-section)
+      (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
+        (goto-char (point-max))
+        (mevedel-view-render-batched-full)
+        (cl-loop repeat 30 while mevedel-view-render--batch do
+          (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+        (should-not mevedel-view-render--batch)
+        (should (equal expected (buffer-substring-no-properties (point-min) (point-max))))))))
+
+(mevedel-deftest mevedel-view-render--batch-step/reentry
+  (:doc "a timer queued inside a writer consumes its entry only after ownership transfers")
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (let* ((job mevedel-view-render--batch)
+           (count (length (plist-get job :pending))))
+      (mevedel-view-render-mutate
+       'full-batch
+       (lambda ()
+         (mevedel-view-render--batch-step view-buf job)
+         (should (= count (length (plist-get job :pending))))))
+      (should (= (1- count) (length (plist-get job :pending)))))))
+
+(mevedel-deftest mevedel-view-render--priority-turns/visible-queue
+  (:doc "restores reader anchors immediately and queues other visible turns before offscreen history")
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (set-window-buffer (selected-window) view-buf)
+      (goto-char (point-min)) (search-forward "Response 1")
+      (set-window-start (selected-window) (line-beginning-position) t)
+      (let ((end (save-excursion (search-forward "Response 4") (point))))
+        (cl-letf (((symbol-function 'window-end) (lambda (&rest _) end)))
+          (let* ((plan (mevedel-view--full-rerender-plan data-buf data-buf view-buf nil))
+                 (turns (plist-get plan :turns)))
+            (should (> (length (mevedel-view-render--priority-turns turns))
+                       (length (mevedel-view-render--priority-turns turns t)))))
+          (mevedel-view-render-batched-full)))
+      (should (string-search "Response 1" (buffer-string)))
+      (let ((next (car (car (plist-get mevedel-view-render--batch :pending)))))
+        (should (with-current-buffer data-buf
+                  (string-search "Prompt 2"
+                                 (buffer-substring-no-properties
+                                  (plist-get next :start) (plist-get next :end)))))))))
+
+(provide 'test-mevedel-view-render-batch)
+;;; test-mevedel-view-render-batch.el ends here

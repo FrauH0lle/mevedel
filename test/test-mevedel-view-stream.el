@@ -294,8 +294,9 @@
                     (with-current-buffer data-buf
                       (mevedel-tool-render-data-segment-bounds "call-live")))
                    (rendering
-                    (mevedel-view--compute-segment-rendering
-                     data-buf (car bounds) (cdr bounds))))
+                    (mevedel-view--render-tool-call
+                     (mevedel-view--tool-call-parse data-buf (car bounds) (cdr bounds))
+                     data-buf)))
               (should (equal "$ printf run\n\nline 3\nline 4\nline 5\nline 6\nline 7"
                              (plist-get rendering :body)))
               (should (plist-get rendering :force-expanded-p)))

@@ -105,7 +105,7 @@
                                    fake-timers))))
                      ((symbol-function 'mevedel-view--render-stream-update)
                       (lambda (_data-buffer) (cl-incf incremental-count)))
-                     ((symbol-function 'mevedel-view--full-rerender)
+                     ((symbol-function 'mevedel-view-render-batched-full)
                       (lambda () (cl-incf full-count))))
             (with-current-buffer data-buf
               (mevedel-view-stream-schedule))
@@ -148,7 +148,7 @@
                         (car (push (apply real-run-at-time 3600 nil
                                           function function-args)
                                    fake-timers))))
-                     ((symbol-function 'mevedel-view--full-rerender)
+                     ((symbol-function 'mevedel-view-render-batched-full)
                       (lambda () (cl-incf full-count))))
             (mevedel-view-rerender view-buf)
             ;; A real handler frame, because that is what a render timer lands
@@ -198,7 +198,7 @@
       (cl-letf
           (((symbol-function 'mevedel-view-historical-segment-p)
             (lambda () t))
-           ((symbol-function 'mevedel-view--full-rerender)
+           ((symbol-function 'mevedel-view-render-batched-full)
             (lambda (&rest _) (cl-incf full-count)))
            ((symbol-function 'mevedel-view--render-stream-update)
             (lambda (&rest _) (cl-incf incremental-count)))
@@ -257,7 +257,7 @@
           (setq mevedel-view--pending-render-kind kind
                 mevedel-view--pending-render-data-buffer data-buf
                 mevedel-view--pending-tool-rows '("older" "current")))
-        (cl-letf (((symbol-function 'mevedel-view--full-rerender)
+        (cl-letf (((symbol-function 'mevedel-view-render-batched-full)
                    (lambda (&rest _) (cl-incf full)))
                   ((symbol-function 'mevedel-view--render-stream-update)
                    (lambda (&rest _) (cl-incf incremental)))

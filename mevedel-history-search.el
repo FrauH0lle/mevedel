@@ -19,6 +19,11 @@
                   "mevedel-execution" (owner-context))
 (autoload 'mevedel-execution--owner-admissible-p "mevedel-execution")
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-encode-component "mevedel-resource" (value))
+(declare-function mevedel-resource-error-message
+                  "mevedel-resource" (failure &optional address private-paths))
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-read-batch
                   "mevedel-session-publication" (directories listings))

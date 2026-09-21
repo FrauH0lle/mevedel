@@ -61,6 +61,11 @@
 (declare-function mevedel-hooks-tool-event-plist
                   "mevedel-hooks" (event context &rest extra))
 
+;; `mevedel-ptc-checkpoint'
+(declare-function mevedel-ptc-checkpoint-update
+                  "mevedel-ptc-checkpoint" (session buffer id updates))
+(autoload 'mevedel-ptc-checkpoint-update "mevedel-ptc-checkpoint")
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
@@ -485,6 +490,13 @@ that bypass `mevedel-pipeline-run-tool'."
     (mevedel-resource-discard-attempts attempts)
     (setcar cell nil)))
 
+(defvar mevedel-pipeline--slice-start nil
+  "Start of the current synchronous pipeline chain, dynamically scoped.")
+
+(defvar mevedel-pipeline--slice-seconds 0.02
+  "Time budget before yielding between pipeline steps.
+An individual step may exceed this budget; it is never interrupted midway.")
+
 (defun mevedel-pipeline--run (steps callback context)
   "Run the pipeline, calling CALLBACK with one canonical settlement.
 
@@ -513,126 +525,163 @@ delivered a result before signaling.  Routing through the per-step
 latch instead would deadlock here, since the latch correctly suppresses
 a second outcome on a step that already fired NEXT.
 
+Interactive chains yield between steps after their time budget, keeping
+cancellation and error handling active while a step is pending.  Batch
+callers have no input loop to service and keep synchronous chaining.
+
 CONTEXT is the initial plist."
   ;; Every synchronous step chain -- including a chain resumed by an
   ;; async step's continuation, which re-enters here -- runs with GC
   ;; batched: the pipeline dominated a profiled session's allocation,
   ;; and each collection paid there blocks the whole UI.
-  (mevedel--with-gc-batched
-  (if (null steps)
-      (progn
-        (when-let* ((cancel-cell (plist-get context :cancel-cell)))
-          (setcar cancel-cell nil))
-        (mevedel-pipeline--with-context-default-directory
-         context
-         (lambda ()
-           (funcall callback (mevedel-pipeline--settlement context)))))
-    (let* ((step (car steps))
-           (rest (cdr steps))
-           (step-name (mevedel-pipeline--step-name step))
-           (settled nil)
-           (telemetry-settled nil)
-           (telemetry-span
-            (when (and (plist-get context :session)
-                       (fboundp 'mevedel-telemetry-detailed-p)
-                       (mevedel-telemetry-detailed-p
-                        (plist-get context :session))
-                       (fboundp 'mevedel-telemetry-start))
-              (mevedel-telemetry-start
-               (plist-get context :session) 'tool-pipeline-step
-               :tool-name (mevedel-tool-name (plist-get context :tool))
-               :tool-use-id (plist-get context :tool-use-id)
-               :parent-tool-use-id (plist-get context :parent-tool-use-id)
-               :call-source (plist-get context :call-source)
-               :step step-name)))
-           (finish-telemetry
-            (lambda (outcome &optional error-class)
-              (unless telemetry-settled
-                (setq telemetry-settled t)
-                (when telemetry-span
-                  (mevedel-telemetry-finish
-                   telemetry-span :outcome outcome
-                   :error-class error-class)))))
-           (try-settle
-            (lambda (which)
-              (if settled
-                  (progn
-                    (unless (eq settled 'cancel)
-                      (mevedel--warn-once
-                       (list 'pipeline-duplicate-outcome step-name)
-                       "Pipeline step %s called %s after already %s; \
+  (let ((mevedel-pipeline--slice-start
+         (or mevedel-pipeline--slice-start (float-time))))
+    (mevedel--with-gc-batched
+     (if (null steps)
+         (progn
+           (when-let* ((cancel-cell (plist-get context :cancel-cell)))
+             (setcar cancel-cell nil))
+           (mevedel-pipeline--with-context-default-directory
+            context
+            (lambda ()
+              (funcall callback (mevedel-pipeline--settlement context)))))
+       (let* ((step (car steps))
+              (rest (cdr steps))
+              (step-name (mevedel-pipeline--step-name step))
+              (settled nil)
+              (telemetry-settled nil)
+              (telemetry-span
+               (when (and (plist-get context :session)
+                          (fboundp 'mevedel-telemetry-detailed-p)
+                          (mevedel-telemetry-detailed-p
+                           (plist-get context :session))
+                          (fboundp 'mevedel-telemetry-start))
+                 (mevedel-telemetry-start
+                  (plist-get context :session) 'tool-pipeline-step
+                  :tool-name (mevedel-tool-name (plist-get context :tool))
+                  :tool-use-id (plist-get context :tool-use-id)
+                  :parent-tool-use-id (plist-get context :parent-tool-use-id)
+                  :call-source (plist-get context :call-source)
+                  :step step-name)))
+              (finish-telemetry
+               (lambda (outcome &optional error-class)
+                 (unless telemetry-settled
+                   (setq telemetry-settled t)
+                   (when telemetry-span
+                     (mevedel-telemetry-finish
+                      telemetry-span :outcome outcome
+                      :error-class error-class)))))
+              (try-settle
+               (lambda (which)
+                 (if settled
+                     (progn
+                       (unless (eq settled 'cancel)
+                         (mevedel--warn-once
+                          (list 'pipeline-duplicate-outcome step-name)
+                          "Pipeline step %s called %s after already %s; \
 ignoring duplicate outcome"
-                       step-name which settled))
-                    nil)
-                (setq settled which)
-                t)))
-           (cancel-cell (plist-get context :cancel-cell))
-           (clear-cancel
-            (lambda ()
-              (when cancel-cell (setcar cancel-cell nil))))
-           (next-cont
-            (lambda (updated-ctx)
-              (when (funcall try-settle 'next)
-                (funcall clear-cancel)
-                (funcall finish-telemetry 'next)
-                (mevedel-pipeline--run rest callback updated-ctx))))
-           (fail-cont
-            (lambda (reason &optional updated-context kind)
-              (when (funcall try-settle 'fail)
-                (funcall clear-cancel)
-                (funcall finish-telemetry 'fail)
-                (mevedel-pipeline--with-context-default-directory
-                 (or updated-context context)
-                 (lambda ()
-                   (funcall callback
-                            (mevedel-pipeline--settlement
-                             (or updated-context context)
-                             (or kind 'pipeline-error) reason)))))))
-           (cancel-cont
-            (lambda ()
-              (when (funcall try-settle 'cancel)
-                (funcall clear-cancel)
-                (funcall finish-telemetry 'cancelled 'request-cancelled)
-                (mevedel-pipeline--with-context-default-directory
-                 context
-                 (lambda ()
-                   (funcall callback
-                            (mevedel-pipeline--settlement
-                             context 'cancelled "Request cancelled")))))))
-           (signal-failure
-            (lambda (error-class reason message)
-              (funcall clear-cancel)
-              (funcall finish-telemetry 'error error-class)
-              (mevedel-pipeline--with-context-default-directory
-               context
+                          step-name which settled))
+                       nil)
+                   (setq settled which)
+                   t)))
+              (cancel-cell (plist-get context :cancel-cell))
+              (timer nil)
+              (clear-cancel
                (lambda ()
-                 (funcall callback
-                          (mevedel-pipeline--settlement
-                           context reason message)))))))
-      (when cancel-cell
-        (setcar cancel-cell cancel-cont))
-      (condition-case err
-          (mevedel-pipeline--with-context-default-directory
-           context
-           (lambda ()
-             (funcall step context next-cont fail-cont)))
-        (mevedel-validation-error
-         (funcall signal-failure 'validation 'validation
-                  (or (cadr err) "Validation error")))
-        (mevedel-resource-error
-         (funcall signal-failure 'validation 'invalid-resource
-                  (or (cadr err) "Invalid resource address")))
-        (mevedel-permission-denied
-         (funcall signal-failure 'permission-denied 'permission-denied
-                  (if (cadr err)
-                      (format "Permission denied: %s" (cadr err))
-                    "Permission denied")))
-        (mevedel-pipeline-error
-         (funcall signal-failure 'pipeline 'pipeline-error
-                  (or (cadr err) "Pipeline error")))
-        (error
-         (funcall signal-failure (car-safe err) 'pipeline-error
-                  (mevedel-resource-error-message err))))))))
+                 (when timer (cancel-timer timer) (setq timer nil))
+                 (when cancel-cell (setcar cancel-cell nil))))
+              (next-cont
+               (lambda (updated-ctx)
+                 (when (funcall try-settle 'next)
+                   (funcall clear-cancel)
+                   (funcall finish-telemetry 'next)
+                   (mevedel-pipeline--run rest callback updated-ctx))))
+              (fail-cont
+               (lambda (reason &optional updated-context kind)
+                 (when (funcall try-settle 'fail)
+                   (funcall clear-cancel)
+                   (funcall finish-telemetry 'fail)
+                   (mevedel-pipeline--with-context-default-directory
+                    (or updated-context context)
+                    (lambda ()
+                      (funcall callback
+                               (mevedel-pipeline--settlement
+                                (or updated-context context)
+                                (or kind 'pipeline-error) reason)))))))
+              (cancel-cont
+               (lambda ()
+                 (when (funcall try-settle 'cancel)
+                   (funcall clear-cancel)
+                   (funcall finish-telemetry 'cancelled 'request-cancelled)
+                   (mevedel-pipeline--with-context-default-directory
+                    context
+                    (lambda ()
+                      (funcall callback
+                               (mevedel-pipeline--settlement
+                                context 'cancelled "Request cancelled")))))))
+              (signal-failure
+               (lambda (error-class reason message)
+                 (funcall clear-cancel)
+                 (funcall finish-telemetry 'error error-class)
+                 (mevedel-pipeline--with-context-default-directory
+                  context
+                  (lambda ()
+                    (funcall callback
+                             (mevedel-pipeline--settlement
+                              context reason message)))))))
+         (when cancel-cell
+           (setcar cancel-cell cancel-cont))
+         (let ((execute
+                (lambda ()
+                  (when (and (not settled) cancel-cell
+                             (not (eq (car cancel-cell) cancel-cont)))
+                    ;; A predecessor can fail after handing off to this timer.
+                    ;; Its error clears ownership and settles the whole call.
+                    (setq settled 'cancel)
+                    (funcall finish-telemetry 'cancelled 'request-cancelled))
+                  (unless settled
+                    (condition-case err
+                        (mevedel-pipeline--with-context-default-directory
+                         context
+                         (lambda ()
+                           (funcall step context next-cont fail-cont)))
+                      (mevedel-validation-error
+                       (funcall signal-failure 'validation 'validation
+                                (or (cadr err) "Validation error")))
+                      (mevedel-resource-error
+                       (funcall signal-failure 'validation 'invalid-resource
+                                (or (cadr err) "Invalid resource address")))
+                      (mevedel-permission-denied
+                       (funcall signal-failure 'permission-denied 'permission-denied
+                                (if (cadr err)
+                                    (format "Permission denied: %s" (cadr err))
+                                  "Permission denied")))
+                      (mevedel-pipeline-error
+                       (funcall signal-failure 'pipeline 'pipeline-error
+                                (or (cadr err) "Pipeline error")))
+                      (error
+                       (funcall signal-failure (car-safe err) 'pipeline-error
+                                (mevedel-resource-error-message err))))))))
+           (if (or noninteractive
+                   (and (not (input-pending-p))
+                        (< (- (float-time) mevedel-pipeline--slice-start)
+                           mevedel-pipeline--slice-seconds)))
+               (funcall execute)
+             ;; Cancellation owns this pending step just as it owns a primitive
+             ;; awaiting an async result.  Resume inside the same error boundary.
+             (letrec ((resume
+                       (lambda ()
+                         ;; A timer may become due during GC or another
+                         ;; callback.  Let waiting commands run first, but
+                         ;; always settle a continuation that lost ownership.
+                         (if (and (not settled)
+                                  (or (not cancel-cell)
+                                      (eq (car cancel-cell) cancel-cont))
+                                  (input-pending-p))
+                             (setq timer (run-at-time 0.01 nil resume))
+                           (let ((mevedel-pipeline--slice-start (float-time)))
+                             (funcall execute))))))
+               (setq timer (run-at-time 0.001 nil resume))))))))))
 
 
 ;;
@@ -1105,6 +1154,8 @@ buffer."
                     (when (plist-member raw :result-limit)
                       (setq updated (plist-put updated :result-limit
                                                (plist-get raw :result-limit))))
+                    (setq updated (plist-put updated :ptc-checkpoint-id
+                                             (plist-get raw :ptc-checkpoint-id)))
                     (plist-put updated :media (plist-get raw :media)))))
          (finish
           (lambda (raw)
@@ -1369,6 +1420,35 @@ possibly-updated context."
                        'persisted
                      'truncated))))))))
 
+(defun mevedel-pipeline--step-ptc-checkpoint (context next fail)
+  "Commit CONTEXT's final ToolCall result before delivery.
+For provider output, the sidecar contains the projected preview and references
+the staged full output.  Its marker commits both before NEXT delivers it.
+FAIL receives a durability error; one retry records that honest outcome."
+  (if-let* ((id (plist-get context :ptc-checkpoint-id)))
+      (let ((session (plist-get context :session))
+            (buffer (plist-get context :buffer))
+            (render-data (plist-get context :render-data))
+            failure)
+        (condition-case err
+            (unless (mevedel-ptc-checkpoint-update
+                     session buffer id
+                     (list :state 'settled :result (plist-get context :result)
+                           :render-data render-data))
+              (error "ToolCall final audit could not be persisted"))
+          (error (setq failure (error-message-string err))))
+        (if failure
+            (let ((result (mevedel-pipeline--format-failure failure))
+                  (data (plist-put (copy-sequence render-data)
+                                   :outcome 'script-error)))
+              (ignore-errors
+                (mevedel-ptc-checkpoint-update
+                 session buffer id
+                 (list :state 'settled :result result :render-data data)))
+              (funcall fail failure (plist-put context :render-data data)))
+          (funcall next context)))
+    (funcall next context)))
+
 (defun mevedel-pipeline--step-post-tool-hooks (context next _fail)
   "Run post-tool hooks for CONTEXT, then call NEXT.
 
@@ -1479,7 +1559,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
 Provider projection then appends hook context and repair feedback,
 persists oversized output when declared, adds a Goal warning, and
 attaches render-data and media.  Outcome-only consumers stop at the canonical
-common boundary."
+common boundary.  ToolCall checkpoints settle after the selected projection."
   (let ((common
          (append
           (list #'mevedel-pipeline--step-validate
@@ -1494,13 +1574,17 @@ common boundary."
                 #'mevedel-pipeline--step-render-transform
                 #'mevedel-pipeline--step-post-tool-hooks))))
     (if outcome-only-p
-        common
+        (append common
+                (when (equal (mevedel-tool-name tool) "ToolCall")
+                  (list #'mevedel-pipeline--step-ptc-checkpoint)))
       (append
        common
        (list #'mevedel-pipeline--step-hook-side-channel
              #'mevedel-pipeline--step-repair-reminder)
        (when (mevedel-tool-max-result-size tool)
          (list #'mevedel-pipeline--step-persist))
+       (when (equal (mevedel-tool-name tool) "ToolCall")
+         (list #'mevedel-pipeline--step-ptc-checkpoint))
        (list #'mevedel-pipeline--step-goal-budget-warning
              #'mevedel-pipeline--step-attach-render-data
              #'mevedel-pipeline--step-attach-media-data)))))

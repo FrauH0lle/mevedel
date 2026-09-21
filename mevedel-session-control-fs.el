@@ -142,14 +142,40 @@ before the operation ran."
    "  export TAR_OPTIONS=\n"
    "  exec tar --format=gnu --no-recursion --hard-dereference --absolute-names -cf - -- \"${files[@]}\"\n"
    ")\n"
+   ;; Oversized stdin fields carry their encoded byte length.  Required
+   ;; writes with a temporary destination stream exactly that many bytes;
+   ;; the trailing NUL must be present before rename/link can commit them.
+   ;; Optional writes and plain append decode first, preserving framing if
+   ;; an optional operation fails before consuming input.
+   "read_operation() {\n"
+   "  IFS= read -r -d '' op || return 1\n"
+   "  IFS= read -r -d '' parent || exit 71\n"
+   "  IFS= read -r -d '' leaf || exit 71\n"
+   "  IFS= read -r -d '' optional || exit 71\n"
+   "  IFS= read -r -d '' payload_size || exit 71\n"
+   "  [[ \"$payload_size\" =~ ^[0-9]+$ ]] || exit 71\n"
+   "  payload_stream=0\n"
+   "  payload=\n"
+   "  if test \"$optional\" = 0 && test \"$payload_size\" -gt 65536 && [[ \"$op\" =~ ^(write|write-mode|append-rotating|create)$ ]]; then\n"
+   "    payload_stream=$payload_size\n"
+   "  else\n"
+   "    IFS= read -r -N \"$payload_size\" payload || exit 71\n"
+   "    IFS= read -r -d '' boundary && test -z \"$boundary\" || exit 71\n"
+   "  fi\n"
+   "}\n"
+   "decode_payload() {\n"
+   "  if test \"$payload_stream\" -gt 0; then\n"
+   "    (set -o pipefail; dd bs=65536 iflag=count_bytes count=\"$payload_stream\" status=none | base64 -d) || return 66\n"
+   "    IFS= read -r -d '' boundary && test -z \"$boundary\"\n"
+   "  else\n"
+   "    printf '%s' \"$payload\" | base64 -d\n"
+   "  fi\n"
+   "}\n"
    "run_op() {\n"
-   "  op=$1\n"
-   ;; One parent spelling serves both the open and the proof: it is the
-   ;; physical no-trailing-slash form, which is exactly what `pwd -P'
-   ;; prints, and the root is spelled `/' on both sides.
-   "  parent=$2\n"
-   "  leaf=$3\n"
-   "  payload=$4\n"
+   ;; The decoder owns op/parent/leaf/payload/optional for this operation.
+   ;; Do not pass large payloads through shell function argument lists:
+   ;; each expansion copies the field.  run_op executes in emit's subshell,
+   ;; so its scratch variables cannot alter the next decoded operation.
    "  pin_parent \"$parent\"\n"
    "  case \"$op\" in\n"
    "    read)\n"
@@ -186,12 +212,12 @@ before the operation ran."
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
    "      trap 'rm -f -- \"$temporary\"' EXIT\n"
    "      if test \"$op\" = write-mode; then\n"
-   "        (set -o pipefail; printf '%s' \"$payload\" | base64 -d | {\n"
+   "        (set -o pipefail; decode_payload | {\n"
    "          IFS= read -r mode || exit 66\n"
    "          [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 66\n"
    "          cat >\"$temporary\" && chmod \"$mode\" -- \"$temporary\"; }) || exit 66\n"
    "      else\n"
-   "        printf '%s' \"$payload\" | base64 -d >\"$temporary\" || exit 66\n"
+   "        decode_payload >\"$temporary\" || exit 66\n"
    "      fi\n"
    "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
    "      trap - EXIT\n"
@@ -206,7 +232,7 @@ before the operation ran."
    "      test ! -e \"$leaf.1\" || test -f \"$leaf.1\" || exit 69\n"
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
    "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      printf '%s' \"$payload\" | base64 -d >\"$temporary\" || exit 66\n"
+   "      decode_payload >\"$temporary\" || exit 66\n"
    "      IFS= read -r limit <\"$temporary\" || exit 66\n"
    "      [[ \"$limit\" =~ ^[1-9][0-9]*$ ]] || exit 66\n"
    "      size=$(stat -c %s -- \"$temporary\") || exit 67\n"
@@ -232,13 +258,13 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      exec 8>>\"$leaf\" || exit 67\n"
    "      test ! -L \"$leaf\" || exit 69\n"
-   "      printf '%s' \"$payload\" | base64 -d >&8 || exit 67\n"
+   "      decode_payload >&8 || exit 67\n"
    "      ;;\n"
    "    create)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
    "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      printf '%s' \"$payload\" | base64 -d >\"$temporary\" || exit 66\n"
+   "      decode_payload >\"$temporary\" || exit 66\n"
    "      if test ! -d \"$leaf\" && ln -- \"$temporary\" \"$leaf\"; then\n"
    "        rm -f -- \"$temporary\"\n"
    "        trap - EXIT\n"
@@ -298,7 +324,7 @@ before the operation ran."
    "      rmdir -- \"$leaf\" 2>/dev/null || exit 72\n"
    "      ;;\n"
    "    verify-latest)\n"
-   "      suffix=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
+   "      suffix=$(decode_payload) || exit 71\n"
    "      test -n \"$suffix\" || exit 71\n"
    "      for entry in ./*\"$suffix\"; do\n"
    "        test ! -L \"$entry\" || exit 69\n"
@@ -356,15 +382,16 @@ before the operation ran."
    "emit() {\n"
    "  index=$((index + 1))\n"
    "  status=0\n"
-   ;; The operation never reads the program's own stdin.
-   "  out=$(run_op \"$1\" \"$2\" \"$3\" \"$4\" "
-   "</dev/null) || status=$?\n"
-   "  printf '%s %s\\0%s\\0' \"$index\" \"$status\" \"$out\"\n"
+   ;; A streamed write consumes only its framed field from shared stdin.
+   ;; Stream the encoded payload, then acknowledge its status.  Command
+   ;; substitution would copy large manifests through a shell variable.
+   "  (run_op) || status=$?\n"
+   "  printf '\\0%s %s\\0' \"$index\" \"$status\"\n"
    ;; A failed operation ends the program: a caller expresses a precondition
    ;; as an earlier operation, so later ones must not run.  An
    ;; operation marked optional is one whose failure the caller expects to
    ;; interpret itself, such as ensuring a directory that already exists.
-   "  if test \"$status\" -ne 0 && test \"$5\" != 1; then\n"
+   "  if test \"$status\" -ne 0 && test \"$optional\" != 1; then\n"
    "    exit 0\n"
    "  fi\n"
    "}\n"
@@ -377,10 +404,11 @@ before the operation ran."
    ;; one; payload fields may carry newline-wrapped base64.
    "run_program() {\n"
    "index=0\n"
+   "payload_stream=0\n"
    "if test \"$archive_reads\" = 1; then\n"
    "  if test \"$#\" -eq 0; then\n"
    "    fields=()\n"
-   "    while IFS= read -r -d '' field; do fields+=(\"$field\"); done\n"
+   "    while read_operation; do fields+=(\"$op\" \"$parent\" \"$leaf\" \"$payload\" \"$optional\"); done\n"
    "    set -- \"${fields[@]}\"\n"
    "  fi\n"
    ;; Stream the encoded bytes instead of copying a multi-megabyte archive
@@ -393,18 +421,13 @@ before the operation ran."
    "fi\n"
    "if test \"$#\" -gt 0; then\n"
    "  while test \"$#\" -ge 5; do\n"
-   "    emit \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"\n"
+   "    op=$1; parent=$2; leaf=$3; payload=$4; optional=$5\n"
+   "    emit\n"
    "    shift 5\n"
    "  done\n"
    "  test \"$#\" -eq 0 || exit 71\n"
    "else\n"
-   "  while IFS= read -r -d '' op; do\n"
-   "    IFS= read -r -d '' parent || exit 71\n"
-   "    IFS= read -r -d '' leaf || exit 71\n"
-   "    IFS= read -r -d '' payload || exit 71\n"
-   "    IFS= read -r -d '' optional || exit 71\n"
-   "    emit \"$op\" \"$parent\" \"$leaf\" \"$payload\" \"$optional\"\n"
-   "  done\n"
+   "  while read_operation; do emit; done\n"
    "fi\n"
    "}\n"
    ;; Operation frames bypass the diagnostic pipe through descriptor 3.
@@ -557,12 +580,21 @@ parent must not turn into a `Setting current directory' failure."
           (if (plist-get op :optional) "1" "0"))))
 
 (defun mevedel-session-control-fs--program-request (fields)
-  "Return the NUL-framed target request encoding per-operation FIELDS."
+  "Encode FIELDS for stdin, with a byte length before each payload.
+A trailing NUL proves a complete field before a streamed write commits."
   (mapconcat
-   (lambda (op-fields)
-     (mapconcat #'identity (append op-fields (list "")) "\0"))
-   fields
-   ""))
+   #'identity
+   ;; Flatten the small field lists before joining: joining each operation
+   ;; first would copy every large payload into an intermediate string.
+   (append
+    (mapcan
+     (lambda (row)
+       (let ((payload (nth 3 row)))
+         (list (nth 0 row) (nth 1 row) (nth 2 row) (nth 4 row)
+               (number-to-string (string-bytes payload)) payload)))
+     fields)
+    (list ""))
+   "\0"))
 
 (defconst mevedel-session-control-fs--argument-budget 3072
   "Largest physical line, in bytes, that the argument list may contribute.
@@ -620,6 +652,11 @@ byte-transparent through the file."
         (total 0))
     (catch 'oversized
       (dolist (field fields)
+        ;; Quoting cannot shrink a field.  Large payloads already require the
+        ;; request file, so do not scan and quote megabytes to rediscover it.
+        (when (> (string-bytes field)
+                 mevedel-session-control-fs--argument-field-budget)
+          (throw 'oversized nil))
         (unless (string-match-p "\\`[[:ascii:]]*\\'" field)
           (throw 'oversized nil))
         (let* ((quoted (shell-quote-argument field))
@@ -676,20 +713,28 @@ record's base64 payload.")
 OUTPUT carries the program's diagnostics as a trailing record; it is peeled
 off here and attached to every operation that did not succeed, so a caller can
 report why."
+  (unless (string-suffix-p "\0" output)
+    (error "Incomplete control program response"))
   (let* ((split (mevedel-session-control-fs--take-diagnostic
                  (split-string output "\0")))
          (diagnostic (car split))
          (records (cdr split))
+         (index 0)
          results)
-    ;; Records arrive as a header and a payload per attempted operation; the
-    ;; trailing element after the final separator is empty.
+    ;; Payloads stream first; only a complete trailing status authorizes
+    ;; consuming their bytes.  A failed operation may have emitted a prefix.
     (dolist (op operations)
-      (let ((header (pop records))
-            (payload (pop records)))
+      (cl-incf index)
+      (let ((payload (pop records))
+            (header (pop records)))
         (push
-         (if (or (null header) (string-empty-p header))
+         (if (and (null header) (or (null payload) (string-empty-p payload)))
              (list :op (plist-get op :op) :path (plist-get op :path)
                    :status 'skipped :value nil)
+           (unless (and header
+                        (string-match-p
+                         (format "\\`%d [0-9]+\\'" index) header))
+             (error "Incomplete or misordered control operation result"))
            (let* ((fields (split-string header " " t))
                   (code (string-to-number (or (nth 1 fields) "1")))
                   (status (mevedel-session-control-fs--program-status code))
@@ -705,6 +750,8 @@ report why."
                                 op (or decoded "")))
                    :diagnostic (unless (eq status 'ok) (or diagnostic "")))))
          results)))
+    (unless (or (null records) (equal records '("")))
+      (error "Unexpected control operation result"))
     (nreverse results)))
 
 (defun mevedel-session-control-fs--archive-results (operations bytes)

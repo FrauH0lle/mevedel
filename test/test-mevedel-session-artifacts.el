@@ -24,7 +24,25 @@
                   '(:artifacts (("file-history/post") ("file-history/pre")
                                 ("file-history/stale") ("artifacts/keep"))))))
     (should (equal '((:path "/session/file-history/stale" :delete t))
-                   (mevedel-session-artifacts--obsolete-snapshot-artifacts session)))))
+                   (mevedel-session-artifacts--obsolete-snapshot-artifacts session))))
+  :doc "PID collection selects only unreferenced generated files and rejects a linked store"
+  (let* ((root (make-temp-file "mevedel-history-collection-" t))
+         (directory (file-name-concat root "file-history"))
+         (kept (make-string 64 ?a)) (stale (make-string 64 ?b))
+         (session (mevedel-session--create
+                   :save-path root
+                   :file-snapshots `((1 ("file" :pre-backup-name ,kept))))))
+    (unwind-protect
+        (progn
+          (make-directory directory)
+          (dolist (name (list kept stale "notes"))
+            (write-region "bytes" nil (file-name-concat directory name) nil 'silent))
+          (should (equal (list (list :path (file-name-concat directory stale) :delete t))
+                         (mevedel-session-artifacts--obsolete-snapshot-artifacts session t)))
+          (rename-file directory (file-name-concat root "outside"))
+          (make-symbolic-link (file-name-concat root "outside") directory)
+          (should-error (mevedel-session-artifacts--obsolete-snapshot-artifacts session t)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-artifacts--finalize-segment-file ()
   ,test
@@ -864,13 +882,19 @@
             (mevedel-session-artifacts-save session buffer)
             (should (equal (plist-get first :head)
                            (plist-get (mevedel-session-publication session) :head)))
-            (should (= 2 (length (directory-files
+            (should (= 0 (length (directory-files
                                  (file-name-concat (mevedel-session-save-path session) "file-history")
                                  nil "^[^.]"))))
             (write-region "changed again\n" nil path nil 'silent)
             (mevedel-session-artifacts-save session buffer)
-            (should (equal "changed again\n"
-                           (mevedel-session-artifacts-read-artifact session logical t)))
+            (let* ((updated (cdr (assoc path (cdr (assoc 0 (mevedel-session-file-snapshots session))))))
+                   (new-logical (file-name-concat "file-history" (plist-get updated :backup-name))))
+              (should (= (plist-get entry :version) (plist-get updated :version)))
+              (should (equal (plist-get entry :pre-backup-name) (plist-get updated :pre-backup-name)))
+              (should-not (equal logical new-logical))
+              (should-not (assoc logical (plist-get (mevedel-session-publication session) :artifacts)))
+              (should (equal "changed again\n"
+                             (mevedel-session-artifacts-read-artifact session new-logical t))))
             (should (equal "after\n"
                            (mevedel-session-control-fs-read-file old-bytes)))
             (should (= 2 (cl-count-if
@@ -888,6 +912,36 @@
       (test-mevedel-session-persistence--release-and-kill buffer session)
       (mevedel-workspace-clear-registry)
       (delete-directory root t)))
+  :doc "PID snapshot cleanup follows durable commit and preserves failed-save recovery"
+  (cl-destructuring-bind (session . root)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (with-current-buffer "*test-data-buf*"
+          (let* ((path (file-name-concat root "changing.txt"))
+                 (pre (make-hash-table :test #'equal))
+                 old-backup pre-backup)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request (mevedel-request--create :file-snapshots pre))
+            (puthash path "before" pre)
+            (write-region "first" nil path nil 'silent)
+            (mevedel-session-artifacts-save session (current-buffer))
+            (let ((entry (cdr (assoc path (cdr (assoc 0 (mevedel-session-file-snapshots session)))))))
+              (setq old-backup (mevedel-session-artifacts-backup-path
+                                (mevedel-session-save-path session) (plist-get entry :backup-name))
+                    pre-backup (mevedel-session-artifacts-backup-path
+                                (mevedel-session-save-path session) (plist-get entry :pre-backup-name))))
+            (write-region "second" nil path nil 'silent)
+            (cl-letf (((symbol-function 'mevedel-session-codec-write)
+                       (lambda (&rest _) (error "Injected sidecar failure"))))
+              (should-error (mevedel-session-artifacts-save session (current-buffer))))
+            (should (equal "first" (mevedel-session-artifacts-read-file-raw old-backup)))
+            (should (equal "before" (mevedel-session-artifacts-read-file-raw pre-backup)))
+            (mevedel-session-artifacts-save session (current-buffer))
+            (should-not (file-exists-p old-backup))
+            (should (equal "before" (mevedel-session-artifacts-read-file-raw pre-backup)))
+            (should (= 2 (length (directory-files (file-name-directory old-backup) nil "^[^.]"))))
+            (setq-local mevedel--current-request nil)))
+      (test-mevedel-session-persistence--cleanup root)))
   :doc "assigns stable fork-point identity only to settled responses"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -2260,30 +2314,20 @@
                    (buffer-substring-no-properties (point-min) (point-max))))))
 
 
-(mevedel-deftest mevedel-session-artifacts--file-history-path-hash ()
-  ,test
-  (test)
-  :doc "returns 16 hex chars"
-  (let ((h (mevedel-session-artifacts--file-history-path-hash "/tmp/foo.el")))
-    (should (= 16 (length h)))
-    (should (string-match-p "\\`[0-9a-f]+\\'" h)))
-  :doc "is deterministic for a given path"
-  (should (equal (mevedel-session-artifacts--file-history-path-hash "/tmp/foo.el")
-                 (mevedel-session-artifacts--file-history-path-hash "/tmp/foo.el")))
-  :doc "differs across paths"
-  (should-not (equal (mevedel-session-artifacts--file-history-path-hash "/tmp/foo.el")
-                     (mevedel-session-artifacts--file-history-path-hash "/tmp/bar.el"))))
-
-
 (mevedel-deftest mevedel-session-artifacts--file-history-backup-name ()
   ,test
   (test)
-  :doc "appends @v<N>"
-  (let ((n (mevedel-session-artifacts--file-history-backup-name "/tmp/x.el" 3)))
-    (should (string-match "@v3\\'" n))
-    (should (= 19 (length n)))))
+  :doc "addresses exact raw bytes including empty and non-text contents"
+  (progn
+    (should (equal (mevedel-session-artifacts--file-history-backup-name "")
+                   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"))
+    (should (equal (mevedel-session-artifacts--file-history-backup-name "abc")
+                   "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"))
+    (should-not (equal (mevedel-session-artifacts--file-history-backup-name
+                        (unibyte-string 255))
+                       (mevedel-session-artifacts--file-history-backup-name
+                        (unibyte-string 254))))))
 
-   ; 16 hex + "@v" + "3" = 19
 
 (mevedel-deftest mevedel-session-artifacts--file-history-latest-version ()
   ,test
@@ -2337,6 +2381,41 @@
               (with-temp-buffer
                 (insert-file-contents-literally backup-path)
                 (should (equal "old content" (buffer-string)))))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "shares identical snapshot bytes across files and turns without losing checkpoints"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((paths (list (file-name-concat tempdir "one.bin")
+                            (file-name-concat tempdir "two.bin")))
+               (before (unibyte-string 0 255 10 13))
+               (after (unibyte-string 1 254 13 10))
+               (pre (make-hash-table :test #'equal))
+               (history (file-name-concat (mevedel-session-save-path session)
+                                          "file-history")))
+          (dotimes (turn 6)
+            (dolist (path paths)
+              (puthash path before pre)
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region after nil path nil 'silent)))
+            (dotimes (_ 2)
+              (mevedel-session-artifacts-snapshot-modified session (1+ turn) pre))
+            (cl-rotatef before after))
+          (should (= 6 (length (mevedel-session-file-snapshots session))))
+          (dolist (turn (mevedel-session-file-snapshots session))
+            (should (= 2 (length (cdr turn))))
+            (dolist (entry (cdr turn))
+              (should (= (car turn) (plist-get (cdr entry) :version)))
+              (cl-loop for key in '(:pre-backup-name :backup-name)
+                       for expected in (if (cl-oddp (car turn))
+                                           (list before after) (list after before))
+                       for path = (mevedel-session-artifacts-backup-path
+                                   (mevedel-session-save-path session)
+                                   (plist-get (cdr entry) key))
+                       do (should (equal expected
+                                         (mevedel-session-artifacts-read-file-raw path)))
+                       do (should (= #o600 (file-modes path))))))
+          (should (= 2 (length (directory-files history nil "^[^.].*")))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "records an empty checkpoint when tracked files are unchanged"
   (cl-destructuring-bind (session . tempdir)
@@ -3178,6 +3257,15 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           (list :path sidecar :content "sidecar"
                                 :commit-marker t))))
                   (write-region "stale fixed cache" nil segment nil 'silent)
+                  (let ((checks 0))
+                    (cl-letf (((symbol-function 'mevedel-session-durability-lease-owned-p)
+                               (lambda (_) (cl-incf checks) t)))
+                      (should (mevedel-session-artifacts-artifact-present-p
+                               session "segment-0001.chat.org"))
+                      (should (equal "committed"
+                                     (mevedel-session-artifacts-read-artifact
+                                      session "segment-0001.chat.org"))))
+                    (should (zerop checks)))
                   (should
                    (equal "committed"
                           (mevedel-session-artifacts-read-artifact
@@ -3189,6 +3277,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (equal "staged"
                           (mevedel-session-artifacts-read-artifact
                            session "segment-0001.chat.org")))
+                  (cl-letf (((symbol-function 'mevedel-session-durability-lease-owned-p)
+                             (lambda (_) nil)))
+                    (should (equal "committed"
+                                   (mevedel-session-artifacts-read-artifact
+                                    session "segment-0001.chat.org"))))
                   (should
                    (equal "committed"
                           (mevedel-session-artifacts-read-artifact

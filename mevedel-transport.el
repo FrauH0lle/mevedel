@@ -193,7 +193,11 @@ charged for the section."
       (dolist (timer scheduled)
         (ignore-errors (timer-activate timer)))
       (dolist (timer scheduled-idle)
-        (ignore-errors (timer-activate-when-idle timer))))))
+        ;; `run-with-idle-timer' allows this idle period.  Reactivating with
+        ;; the default marks it triggered and stalls an idle continuation
+        ;; until another user command starts a new idle period.
+        (ignore-errors
+          (timer-activate-when-idle timer (not (timer--triggered timer))))))))
 
 (defmacro mevedel-transport-with-exclusive-connection (&rest body)
   "Run BODY without letting a timer start another remote operation.

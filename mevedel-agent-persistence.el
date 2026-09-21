@@ -489,9 +489,69 @@ Malformed identities are diagnosed and dropped independently.  Unexpected
                    (file-truename resolved)
                   (file-truename agents-dir)))))))
 
+(defun mevedel-agent-persistence-ensure-conversation
+    (session record root-buffer &optional readonly-p)
+  "Return RECORD's conversation in SESSION, loading it on first access.
+ROOT-BUFFER supplies the live request context.  READONLY-P opens an inspection
+without save authority.  Publish the resident buffer only after successful
+hydration."
+  (let ((resident (mevedel-agent-record-conversation-buffer record)))
+    (if (and (buffer-live-p resident)
+             (or readonly-p
+                 (not (with-current-buffer resident
+                        (bound-and-true-p mevedel-session--inspection-buffer-p)))))
+        resident
+      (unless (and (buffer-live-p root-buffer)
+                   (eq session (buffer-local-value 'mevedel--session root-buffer)))
+        (error "Agent conversation has no root session context"))
+      (let* ((path (mevedel-agent-record-path record))
+             (relative (mevedel-agent-record-conversation-location record))
+             (configuration (mevedel-agent-record-configuration record)))
+        (unless (and (mevedel-agent-configuration-p configuration)
+                     (mevedel-agent-request-locals-p
+                      (mevedel-agent-configuration-request-locals configuration))
+                     (mevedel-agent-persistence-transcript-path-p
+                      relative (mevedel-session-save-path session)))
+          (signal 'mevedel-agent-persistence-invalid-data
+                  (list (format "Invalid retained agent conversation: %s" path))))
+        (let* ((agent (mevedel-agent-configuration-agent configuration))
+               (invocation (mevedel-agent-invocation-create agent)))
+          (setf (mevedel-agent-invocation-agent-id invocation)
+                (mevedel-agent-record-id record)
+                (mevedel-agent-invocation-path invocation) path
+                (mevedel-agent-invocation-description invocation)
+                (mevedel-agent-record-role record)
+                (mevedel-agent-invocation-parent-session invocation)
+                session
+                (mevedel-agent-invocation-parent-data-buffer invocation)
+                root-buffer
+                (mevedel-agent-invocation-transcript-relative-path
+                 invocation)
+                relative
+                (mevedel-agent-invocation-transcript-status invocation)
+                (cond
+                 ((eq (mevedel-agent-record-activity record) 'idle)
+                  ;; The durable outcome is what this turn reported;
+                  ;; deriving the label from activity alone tells the
+                  ;; user a failed or interrupted agent finished.
+                  (pcase (mevedel-agent-record-settled-outcome record)
+                    ('errored 'error)
+                    ('interrupted 'aborted)
+                    ('completed 'completed)
+                    (_ 'incomplete)))
+                 (readonly-p 'running)
+                 (t 'aborted))
+                (mevedel-agent-invocation-frozen-configuration invocation)
+                configuration)
+          (let ((buffer (mevedel-agent-conversation-hydrate
+                         invocation root-buffer relative readonly-p)))
+            (setf (mevedel-agent-record-conversation-buffer record) buffer)
+            buffer))))))
+
 (defun mevedel-agent-persistence-restore-tree
     (session root-buffer readonly-p)
-  "Hydrate SESSION's retained conversations below ROOT-BUFFER.
+  "Restore SESSION's retained identities below ROOT-BUFFER.
+Idle conversations remain on disk until their first access.
 
 Invalid or missing conversation files reject only their own identity and its
 descendants.  When READONLY-P is nil, active persisted turns recover as
@@ -523,41 +583,18 @@ dropped or recovered records."
                 (signal 'mevedel-agent-persistence-invalid-data
                         (list (format "Invalid retained agent conversation: %s"
                                       path))))
-              (let* ((configuration
-                      (mevedel-agent-record-configuration record))
-                     (agent
-                      (mevedel-agent-configuration-agent configuration))
-                     (invocation (mevedel-agent-invocation-create agent)))
-                (setf (mevedel-agent-invocation-agent-id invocation)
-                      (mevedel-agent-record-id record)
-                      (mevedel-agent-invocation-path invocation) path
-                      (mevedel-agent-invocation-description invocation)
-                      (mevedel-agent-record-role record)
-                      (mevedel-agent-invocation-parent-session invocation)
-                      session
-                      (mevedel-agent-invocation-parent-data-buffer invocation)
-                      root-buffer
-                      (mevedel-agent-invocation-transcript-relative-path
-                       invocation)
-                      relative
-                      (mevedel-agent-invocation-transcript-status invocation)
-                      (cond
-                       ((eq (mevedel-agent-record-activity record) 'idle)
-                        ;; The durable outcome is what this turn reported;
-                        ;; deriving the label from activity alone tells the
-                        ;; user a failed or interrupted agent finished.
-                        (pcase (mevedel-agent-record-settled-outcome record)
-                          ('errored 'error)
-                          ('interrupted 'aborted)
-                          ('completed 'completed)
-                          (_ 'incomplete)))
-                       (readonly-p 'running)
-                       (t 'aborted))
-                      (mevedel-agent-invocation-frozen-configuration invocation)
-                      configuration)
-                (setq buffer
-                      (mevedel-agent-conversation-hydrate
-                       invocation root-buffer relative readonly-p))
+              (let ((configuration (mevedel-agent-record-configuration record)))
+                (unless (and (mevedel-agent-configuration-p configuration)
+                             (mevedel-agent-request-locals-p
+                              (mevedel-agent-configuration-request-locals configuration)))
+                  (signal 'mevedel-agent-persistence-invalid-data
+                          (list (format "Invalid retained agent configuration: %s" path))))
+                ;; Recovery needs partial responses from abandoned active turns.
+                ;; Settled identities need only their durable registry until access.
+                (unless (eq (mevedel-agent-record-activity record) 'idle)
+                  (setq buffer
+                        (mevedel-agent-persistence-ensure-conversation
+                         session record root-buffer readonly-p)))
                 (when (and (not readonly-p)
                            (not (eq (mevedel-agent-record-activity record)
                                     'idle)))

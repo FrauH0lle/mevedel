@@ -188,6 +188,20 @@
     (should (null (car extract)))
     (should (null (cdr extract)))))
 
+(mevedel-deftest mevedel-tool-render-data--read-payload
+  (:doc "bounded reads reject incomplete or trailing forms without reading outside the block")
+  (progn
+    (should (equal '(:kind read)
+                   (mevedel-tool-render-data--read-payload
+                    "prefix \n (:kind read) \t\nsuffix" 6 24)))
+    (dolist (payload '("(:kind read" "(:kind \"unfinished" "(:kind read) nil"
+                       "(:kind read) ; trailing comment" "(:kind)"
+                       "(kind read)" "(:kind read . tail)"))
+      (let ((source (concat "prefix" payload ")\"\n(:kind read)")))
+        (should (eq :mevedel-parse-failed
+                    (mevedel-tool-render-data--read-payload
+                     source 6 (+ 6 (length payload)))))))))
+
 (mevedel-deftest mevedel-tool-render-data-blocks ()
   ,test
   (test)
@@ -204,7 +218,26 @@
     (should (equal data (caddr (car blocks))))
     (should (equal valid
                    (substring raw (caar blocks)
-                              (cadar blocks))))))
+                              (cadar blocks)))))
+  :doc "large valid metadata is read in place without intermediate payload copies"
+  (let* ((data (list :kind 'read :text (make-string 100000 ?x)))
+         (raw (mevedel-tool-render-data-format data))
+         (copy (symbol-function 'substring))
+         blocks)
+    (cl-letf (((symbol-function 'substring)
+               (lambda (string start &optional end)
+                 (when (eq string raw)
+                   (should (< (- (or end (length string)) start) 100)))
+                 (funcall copy string start end))))
+      (setq blocks (mevedel-tool-render-data-blocks raw)))
+    (should (equal data (caddr (car blocks)))))
+  :doc "an unterminated outer payload does not hide a later valid block"
+  (let* ((data '(:kind read :path "/tmp/file"))
+         (raw (concat mevedel-tool-render-data-open "\n(:kind \"unfinished\n"
+                      (mevedel-tool-render-data-format data)))
+         (blocks (mevedel-tool-render-data-blocks raw)))
+    (should (= 1 (length blocks)))
+    (should (equal data (caddr (car blocks))))))
 
 (mevedel-deftest mevedel-tool-render-data-strip ()
   ,test

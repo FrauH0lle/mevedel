@@ -45,6 +45,13 @@ Resolved through symlinks so data files (prompts/tools/, etc.) are reachable.")
 ;;
 ;;; Tool struct
 
+(defvar mevedel-tool-render-summary-only nil
+  "Non-nil while the view requests an initially collapsed tool rendering.
+Renderers may omit body and child-row construction in this context, but must
+preserve the complete header, status, visibility and disclosure decisions.
+Renderers that expand initially must still supply their body.  Expansion and
+other consumers invoke renderers with this variable nil.")
+
 (cl-defstruct (mevedel-tool (:constructor mevedel-tool--create))
   "A mevedel tool with behavioral metadata.
 

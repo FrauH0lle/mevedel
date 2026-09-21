@@ -7,11 +7,39 @@
 ;;; Code:
 
 (require 'mevedel-session-control-fs)
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+
+(mevedel-deftest mevedel-session-control-fs--program-request ()
+  ,test
+  (test)
+  (let* ((payload (make-string (* 1024 1024) ?x))
+         (fields (list (list "write" "/tmp" "first" payload "0")
+                       (list "read" "/tmp" "second" "" "1")))
+         (before (nth 4 (memory-use-counts)))
+         (request (mevedel-session-control-fs--program-request fields))
+         (allocated (- (nth 4 (memory-use-counts)) before)))
+    ;; Large payloads need one request-sized string, not one per nesting level.
+    (should (< allocated (+ (length payload) 4096)))
+    (should (equal request
+                   (mapconcat #'identity
+                              (list "write" "/tmp" "first" "0" "1048576" payload
+                                    "read" "/tmp" "second" "1" "0" "" "") "\0")))
+    (should (equal payload (nth 3 (car fields)))))
+  (should (equal "" (mevedel-session-control-fs--program-request nil))))
+
+(mevedel-deftest mevedel-session-control-fs--program-arguments/large-field ()
+  (let* ((field (make-string (1+ mevedel-session-control-fs--argument-field-budget) ?x))
+         (quote (symbol-function 'shell-quote-argument))
+         (quoted 0))
+    (cl-letf (((symbol-function 'shell-quote-argument)
+               (lambda (&rest args) (cl-incf quoted) (apply quote args))))
+      (should-not (mevedel-session-control-fs--program-arguments (list (list field)))))
+    (should (zerop quoted))))
 
 (mevedel-deftest mevedel-session-control-fs-append-rotating ()
   (let* ((root (make-temp-file "mevedel-control-fs-" t))
@@ -234,6 +262,33 @@
       (clrhash mevedel-session-control-fs--programs)
       (when (file-directory-p root)
         (delete-directory root t)))))
+
+(mevedel-deftest mevedel-session-control-fs--program-results ()
+  ,test
+  (test)
+  :doc "accepts streamed bytes only with their successful trailing status"
+  (let* ((ops (list (list :op 'read :path "/tmp/read" :coding 'no-conversion)
+                    (list :op 'write :path "/tmp/write")))
+         (bytes (unibyte-string 0 128 255))
+         (encoded (base64-encode-string bytes t))
+         (results (mevedel-session-control-fs--program-results
+                   ops (concat encoded "\0" "1 0\0\0" "2 0\0"))))
+    (should (equal bytes (plist-get (car results) :value)))
+    (should (eq 'ok (plist-get (cadr results) :status))))
+  :doc "a partial failed read discards bytes and leaves later writes skipped"
+  (let* ((ops (list (list :op 'read :path "/tmp/read")
+                    (list :op 'write :path "/tmp/write")))
+         (results (mevedel-session-control-fs--program-results
+                   ops (concat "partial-base64\0" "1 67\0"))))
+    (should (eq 'failed (plist-get (car results) :status)))
+    (should-not (plist-get (car results) :value))
+    (should (eq 'skipped (plist-get (cadr results) :status))))
+  :doc "rejects absent completion status and misordered operation identities"
+  (let ((ops (list (list :op 'read :path "/tmp/read"))))
+    (dolist (output (list "eA==\0" (concat "eA==\0" "1 0")
+                          (concat "eA==\0" "2 0\0")
+                          (concat "eA==\0" "1 0\0extra\0" "2 0\0")))
+      (should-error (mevedel-session-control-fs--program-results ops output)))))
 
 (mevedel-deftest mevedel-session-control-fs--archive-results
   (:doc "decodes native binary members and long UTF-8 names while rejecting mismatched or corrupt archives")
@@ -590,6 +645,80 @@
                            (mevedel-session-control-fs-read-file large)))))
       (when (file-directory-p root)
         (delete-directory root t))))
+
+  :doc "keeps operation fields independent across large mixed stdin requests"
+  (let* ((root (make-temp-file "mevedel-control-mixed-fields-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (binary (concat (make-string (* 128 1024) ?x) (unibyte-string 0 128 255)))
+         (text "Unicode: λ\nsecond line\0"))
+    (unwind-protect
+        (let ((results (mevedel-session-control-fs-run-program
+                        (list (list :op 'read :path first :optional t)
+                              (list :op 'write :path first :content binary)
+                              (list :op 'write :path second :content text)
+                              (list :op 'verify :path first :content binary)
+                              (list :op 'read :path second)
+                              (list :op 'verify :path second :content "mismatch")
+                              (list :op 'delete-file :path first)))))
+          (should (equal '(absent ok ok ok ok mismatch skipped)
+                         (mapcar (lambda (result) (plist-get result :status)) results)))
+          (should (equal text (decode-coding-string (plist-get (nth 4 results) :value) 'utf-8-unix)))
+          (should (equal binary (mevedel-session-control-fs-read-file first 'no-conversion))))
+      (delete-directory root t)))
+
+  :doc "a truncated streamed field cannot replace or create a destination"
+  (let* ((root (make-temp-file "mevedel-control-truncated-stream-" t))
+         (path (file-name-concat root "target"))
+         (process (symbol-function 'process-file)))
+    (unwind-protect
+        (dolist (operation '(write create))
+          (when (eq operation 'write) (with-temp-file path (insert "original")))
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (program input &rest arguments)
+                       (should input)
+                       (with-temp-buffer
+                         (set-buffer-multibyte nil)
+                         (insert-file-contents-literally input)
+                         ;; Keep every encoded payload byte but remove its
+                         ;; final framing byte, simulating a torn transfer.
+                         (delete-region (1- (point-max)) (point-max))
+                         (let ((coding-system-for-write 'no-conversion))
+                           (write-region (point-min) (point-max) input nil 'silent)))
+                       (apply process program input arguments))))
+            (should (eq 'failed
+                        (plist-get
+                         (car (mevedel-session-control-fs-run-program
+                               (list (list :op operation :path path
+                                           :content (make-string (* 128 1024) ?x))))) :status))))
+          (if (eq operation 'write)
+              (progn
+                (should (equal "original" (mevedel-session-control-fs-read-file path)))
+                (delete-file path))
+            (should-not (file-exists-p path)))
+          (should-not (directory-files root nil "\\`\\.mevedel-control")))
+      (delete-directory root t)))
+
+  :doc "stdin framing preserves the batched read archive path"
+  (let* ((root (make-temp-file "mevedel-control-stdin-archive-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (process (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "one"))
+          (with-temp-file second (insert "two"))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs--program-arguments) #'ignore)
+                    ((symbol-function 'process-file)
+                     (lambda (&rest args) (cl-incf calls) (apply process args))))
+            (should (equal '("one" "two")
+                           (mapcar (lambda (result) (plist-get result :value))
+                                   (mevedel-session-control-fs-run-program
+                                    (list (list :op 'read :path first)
+                                          (list :op 'read :path second)))))))
+          (should (= calls 1)))
+      (delete-directory root t)))
 
   :doc "stops at the first operation that does not succeed"
   (let* ((root (make-temp-file "mevedel-control-fs-program-" t))
@@ -1029,7 +1158,7 @@
   (let* ((root (make-temp-file "mevedel-control-fs-forge-" t))
          (forged "1 0\0Zm9yZ2Vk\0")
          (records (split-string
-                   (concat "1 0\0" (base64-encode-string "real" t) "\0"
+                   (concat (base64-encode-string "real" t) "\0" "1 0\0"
                            "diagnostic 0\0"
                            (base64-encode-string forged t) "\0")
                    "\0"))
@@ -1038,7 +1167,7 @@
         (progn
           ;; The forged text arrives as diagnostic text, never as a record.
           (should (equal forged (car split)))
-          (should (equal (list "1 0" (base64-encode-string "real" t) "")
+          (should (equal (list (base64-encode-string "real" t) "1 0" "")
                          (cdr split))))
       (when (file-directory-p root)
         (delete-directory root t))))
@@ -1074,9 +1203,9 @@
 
   :doc "reports no diagnostic when the target sent no record"
   (let ((split (mevedel-session-control-fs--take-diagnostic
-                (list "1 0" "" ""))))
+                (list "" "1 0" ""))))
     (should (equal "" (car split)))
-    (should (equal (list "1 0" "" "") (cdr split)))))
+    (should (equal (list "" "1 0" "") (cdr split)))))
 
 (mevedel-deftest mevedel-session-control-fs-parent-swap
   (:doc "keeps a write in the opened directory when its pathname is swapped")

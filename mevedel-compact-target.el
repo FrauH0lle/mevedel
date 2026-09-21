@@ -45,6 +45,16 @@
 ;; `mevedel-chat'
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
+;; `mevedel-compact'
+(declare-function mevedel--compact-agent-terminal-failure
+                  "mevedel-compact" (target fsm err))
+(declare-function mevedel--compact-main-failure
+                  "mevedel-compact" (target fsm err))
+(declare-function mevedel--compact-main-resume-status
+                  "mevedel-compact" (target))
+(declare-function mevedel--compact-target-resume
+                  "mevedel-compact" (target fsm))
+
 ;; `mevedel-compact-evidence'
 (declare-function mevedel-compact-evidence-agent-summary-bounds
                   "mevedel-compact-evidence" (&optional invocation))

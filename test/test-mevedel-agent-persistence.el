@@ -579,7 +579,7 @@
 (mevedel-deftest mevedel-agent-persistence-restore-tree ()
   ,test
   (test)
-  :doc "hydrates a retained conversation and drops only an escaping identity"
+  :doc "retains an idle identity without loading its conversation and drops an escaping identity"
   (let* ((root-dir (make-temp-file "mevedel-agent-tree-" t))
          (session (mevedel-agent-persistence-test--session root-dir))
          (root-buffer (generate-new-buffer " *agent-tree-root*"))
@@ -619,9 +619,8 @@
           (should (equal '("/root/valid")
                          (mapcar #'car
                                  (mevedel-session-agent-registry session))))
-          (should
-           (buffer-live-p
-            (mevedel-agent-record-conversation-buffer valid))))
+          (should-not (mevedel-agent-record-conversation-buffer valid))
+          (should (eq configuration (mevedel-agent-record-configuration valid))))
       (mevedel-agent-control-teardown-session session)
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
@@ -675,7 +674,8 @@
             (let* ((record (cdr (assoc (car expected)
                                       (mevedel-session-agent-registry
                                        session))))
-                   (buffer (mevedel-agent-record-conversation-buffer record)))
+                   (buffer (mevedel-agent-persistence-ensure-conversation
+                            session record root-buffer)))
               (should (buffer-live-p buffer))
               (should
                (eq (cdr expected)
@@ -728,7 +728,9 @@
                        hydrated-buffer)))
             (mevedel-test--with-captured-messages nil
               (should (= 0 (mevedel-agent-persistence-restore-tree
-                            session root-buffer nil)))))
+                            session root-buffer nil)))
+              (should-not seen)
+              (mevedel-agent-persistence-ensure-conversation session record root-buffer)))
           (should (equal relative (nth 2 seen)))
           (should-not (nth 3 seen))
           (should (eq hydrated-buffer
@@ -780,6 +782,74 @@
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
       (delete-directory root-dir t))))
+
+(mevedel-deftest mevedel-agent-persistence-ensure-conversation ()
+  (let* ((root (make-temp-file "mevedel-agent-lazy-" t))
+         (session (mevedel-agent-persistence-test--session root))
+         (parent (generate-new-buffer " *lazy-agent-root*"))
+         (configuration (mevedel-agent-persistence-test--configuration))
+         (relative "agents/lazy.chat.org")
+         (file (file-name-concat root relative))
+         (record (mevedel-agent-record--create
+                  :id "lazy" :path "/root/lazy" :parent-path "/root"
+                  :role "default" :activity 'idle :settled-outcome 'completed
+                  :configuration configuration :conversation-location relative))
+         (sibling (mevedel-agent-record--create :path "/root/sibling" :activity 'running))
+         inspected resident dispatched)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (write-region "* Agent Task: original\nRetained decision.\n" nil file nil 'silent)
+          (setf (mevedel-session-save-path session) root
+                (mevedel-session-root-buffer session) parent
+                (mevedel-session-agent-registry session)
+                (list (cons "/root/lazy" record) (cons "/root/sibling" sibling)))
+          (with-current-buffer parent
+            (setq-local mevedel--session session
+                        mevedel--workspace (mevedel-session-workspace session)))
+          ;; Read-only observation can be reused, and does not touch another agent.
+          (setq inspected (mevedel-agent-persistence-ensure-conversation
+                           session record parent t))
+          (should (buffer-local-value 'buffer-read-only inspected))
+          (should (buffer-local-value 'mevedel-session--inspection-buffer-p inspected))
+          (should-not (buffer-local-value 'buffer-offer-save inspected))
+          (should (eq inspected (mevedel-agent-persistence-ensure-conversation
+                                 session record parent t)))
+          (should (eq 'running (mevedel-agent-record-activity sibling)))
+          (should-not (mevedel-agent-record-conversation-buffer sibling))
+          ;; A follow-up needs owned writable bytes, not the inspection buffer.
+          (with-current-buffer parent
+            (let ((mevedel-agent-control-suppress-persistence t))
+              (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+                         (lambda (_agent _description _message &rest options)
+                           (setq resident (plist-get options :retained-buffer)
+                                 dispatched t)
+                           (should-not (buffer-local-value 'buffer-read-only resident))
+                           (should (with-current-buffer resident
+                                     (string-search "Retained decision." (buffer-string))))
+                           (should (eq configuration (plist-get options :frozen-configuration)))
+                           t)))
+                (mevedel-agent-control-followup session "/root/lazy" "Continue"))))
+          (should dispatched)
+          (should-not (eq inspected resident))
+          (should (eq resident (mevedel-agent-persistence-ensure-conversation
+                                session record parent)))
+          (setf (mevedel-agent-record-activity record) 'idle)
+          (kill-buffer resident)
+          (setf (mevedel-agent-record-conversation-buffer record) nil)
+          ;; Missing durable bytes fail before any provider dispatch and can retry.
+          (delete-file file)
+          (should-error (mevedel-agent-persistence-ensure-conversation session record parent))
+          (should-not (mevedel-agent-record-conversation-buffer record))
+          (write-region "Recovered transcript\n" nil file nil 'silent)
+          (setq resident (mevedel-agent-persistence-ensure-conversation session record parent))
+          (should (with-current-buffer resident (string-search "Recovered transcript" (buffer-string)))))
+      (mevedel-agent-control-teardown-session session)
+      (dolist (buffer (list inspected resident parent))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-agent-persistence)
 

@@ -189,8 +189,10 @@ render allocation."
                   text (plist-get span :end))))
         (push (substring text cursor start) parts)
         (setq cursor end)))
-    (push (substring text cursor) parts)
-    (apply #'concat (nreverse parts))))
+    (if (null parts)
+        text
+      (push (substring text cursor) parts)
+      (apply #'concat (nreverse parts)))))
 
 (defun mevedel-transcript-directive-ranges (text &optional allow-open)
   "Return directive turn ranges parsed from TEXT.
