@@ -141,10 +141,15 @@ repository-relative path; prepending one to an absolute path spells it
     (original modified filepath &optional labels-real)
   "Generate unified diff between ORIGINAL and MODIFIED for FILEPATH.
 When LABELS-REAL is nil, empty content is labelled `/dev/null'.  Otherwise
-both sides carry FILEPATH, prefixed `a/' and `b/' when it is relative."
+both sides carry FILEPATH, prefixed `a/' and `b/' when it is relative.
+Spool Unicode as UTF-8 while preserving literal cache bytes, without
+interactive coding-system selection."
   (with-temp-buffer
     (let ((orig-file (make-temp-file "mevedel-orig-"))
-          (mod-file (make-temp-file "mevedel-mod-")))
+          (mod-file (make-temp-file "mevedel-mod-"))
+          ;; Cached literal reads contain eight-bit characters.  Explicit
+          ;; UTF-8 writes preserve those bytes and encode decoded text.
+          (coding-system-for-write 'utf-8-unix))
       (unwind-protect
           (progn
             (with-temp-file orig-file (when original (insert original)))

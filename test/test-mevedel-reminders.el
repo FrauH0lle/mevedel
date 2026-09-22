@@ -1604,7 +1604,7 @@ this collapses both shapes to the delivered text."
           (should-not (mevedel-reminders--should-fire-p r 0 session)))
       (delete-directory tmp-root t)))
 
-  :doc "fires and formats a diff for modified cached file"
+  :doc "formats a Unicode cached-file diff without an interactive encoding prompt"
   (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
          (file (expand-file-name "foo.txt" tmp-root))
          (ws (mevedel-workspace-get-or-create
@@ -1613,20 +1613,24 @@ this collapses both shapes to the delivered text."
          (r (mevedel-reminders-make-edited-file)))
     (unwind-protect
         (progn
-          (with-temp-file file (insert "hello\n"))
+          (with-temp-file file (insert "hello \u03bb\n"))
           (mevedel-file-cache-put
            (mevedel-workspace-file-cache ws)
            (mevedel-file-state-from-file file))
           (let ((future (time-add (current-time) 2)))
-            (with-temp-file file (insert "goodbye\n"))
+            (with-temp-file file (insert "goodbye \u2192\n"))
             (set-file-times file future))
           (should (mevedel-reminders--should-fire-p r 0 session))
-          (let ((content (test-mevedel-reminders--content r session)))
-            (should (string-match-p "MODIFIED:" content))
-            (should (string-match-p (regexp-quote (expand-file-name file))
-                                    content))
-            (should (string-match-p "^-hello" content))
-            (should (string-match-p "^\\+goodbye" content))))
+          (cl-letf (((symbol-function 'select-safe-coding-system-interactively)
+                     (lambda (&rest _) (ert-fail "Unexpected encoding prompt"))))
+            (let* ((noninteractive nil)
+                   (coding-system-for-write nil)
+                   (content (test-mevedel-reminders--content r session)))
+              (should (string-match-p "MODIFIED:" content))
+              (should (string-match-p (regexp-quote (expand-file-name file))
+                                      content))
+              (should (string-match-p "^-hello \u03bb" content))
+              (should (string-match-p "^\\+goodbye \u2192" content)))))
       (delete-directory tmp-root t)))
 
   :doc "fires for deleted cached file and labels it"

@@ -957,6 +957,40 @@ rejects trailing binary operators"
                              "--label" (nth 2 case))
                        (seq-take command 6))))))
 
+  :doc "spools Unicode and literal cache bytes without asking for a coding system"
+  (let* ((old "Old \u03bb \u2192\n")
+         (new "New \u03bb \u2014\n")
+         (old-bytes (encode-coding-string old 'utf-8-unix))
+         (new-bytes (encode-coding-string new 'utf-8-unix)))
+    (dolist (inputs (list (list old new)
+                          (list old-bytes new-bytes)
+                          (list (string-to-multibyte old-bytes)
+                                (string-to-multibyte new-bytes))
+                          (list old (string-to-multibyte new-bytes))))
+      (let ((coding-system-for-write nil)
+            spools)
+        (cl-letf (((symbol-function 'select-safe-coding-system-interactively)
+                   (lambda (&rest _) (ert-fail "Unexpected encoding prompt")))
+                  ((symbol-function 'mevedel-execution-run-helper)
+                   (lambda (&rest args)
+                     (setq spools (nth 2 args))
+                     (should
+                      (equal (list old-bytes new-bytes)
+                             (mapcar
+                              (lambda (path)
+                                (with-temp-buffer
+                                  (set-buffer-multibyte nil)
+                                  (insert-file-contents-literally path)
+                                  (buffer-string)))
+                              spools)))
+                     '(:exit-code 1 :output "diff"))))
+          (let ((noninteractive nil))
+            (should (equal "diff\n"
+                           (mevedel-generate-diff
+                            (car inputs) (cadr inputs) "unicode.md")))))
+        (should (= 2 (length spools)))
+        (dolist (path spools) (should-not (file-exists-p path))))))
+
   :doc "preserves a trailing blank context line in unified output"
   (cl-letf (((symbol-function 'mevedel-execution-run-helper)
              (lambda (&rest _)
