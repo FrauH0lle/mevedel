@@ -267,6 +267,10 @@ of the `mevedel-file-cache-max-bytes` budget. Content past
 `mevedel-reminders-edited-file-max-diff-lines` lines that survive. Both cases
 report the change and its size and tell the model to re-read the file.
 
+Diff spooling explicitly uses UTF-8, encoding decoded text while preserving
+literal bytes from the file cache. It never asks the user to choose a coding
+system during prompt preparation, even when cached files contain non-ASCII text.
+
 ### PDF and large-attachment guidance
 
 Large PDFs read without a `pages` selector receive an appended
