@@ -285,7 +285,51 @@
            (mevedel-sandbox--writable-symlink-component
             (file-name-concat link "secret") (list outside))))
       (delete-directory root t)
-      (delete-directory outside t))))
+      (delete-directory outside t)))
+  :doc "writable symlink crossing: root boundaries, earliest crossing and fresh checks"
+  (let* ((root (make-temp-file "mevedel-sandbox-crossings-" t))
+         (target (file-name-concat root "target"))
+         (link (file-name-concat root "link"))
+         (nested (file-name-concat target "nested")))
+    (unwind-protect
+        (progn
+          (make-directory target)
+          (make-symbolic-link target link)
+          (make-symbolic-link target nested)
+          (should (equal link
+                         (mevedel-sandbox--writable-symlink-component
+                          (file-name-concat link "nested" "missing")
+                          (list link root))))
+          (should (equal link
+                         (mevedel-sandbox--writable-symlink-component
+                          (file-name-as-directory link) (list link))))
+          (should-not (mevedel-sandbox--writable-symlink-component
+                       link (list (concat root "-other"))))
+          (delete-file link)
+          (make-directory link)
+          (should-not (mevedel-sandbox--writable-symlink-component
+                       (file-name-concat link "missing") (list root)))
+          (delete-directory link)
+          (make-symbolic-link target link)
+          (should (equal link
+                         (mevedel-sandbox--writable-symlink-component
+                          (file-name-concat link "missing") (list root)))))
+      (delete-directory root t)))
+  :doc "writable symlink checks preserve the remote path domain"
+  (let* ((root (make-temp-file "mevedel-sandbox-remote-link-" t))
+         (target (file-name-concat root "target"))
+         (link (file-name-concat root "link"))
+         (prefix "/mevedelmock:sandbox-check:"))
+    (unwind-protect
+        (progn
+          (make-directory target)
+          (make-symbolic-link target link)
+          (mevedel-test--with-local-shell-tramp '("sandbox-check")
+            (should (equal (concat prefix link)
+                           (mevedel-sandbox--writable-symlink-component
+                            (concat prefix link "/missing")
+                            (list (concat prefix root)))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--git-pointer-targets ()
   ,test
@@ -310,7 +354,61 @@
           (should
            (equal (mevedel-sandbox--git-pointer-targets pointer)
                   (list metadata root))))
+      (delete-directory root t)))
+  :doc "Git pointer filenames retain Unicode without editor coding hooks"
+  (let* ((root (make-temp-file "mevedel-sandbox-git-coding-" t))
+         (metadata (file-name-concat root (string #xe9)))
+         (pointer (file-name-concat root ".git"))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (make-directory metadata)
+          (let ((coding-system-for-write 'utf-8-unix))
+            (with-temp-file pointer (insert "gitdir: " (string #xe9) "\n"))
+            (with-temp-file (file-name-concat metadata "commondir") (insert "..\n")))
+          (let ((auto-coding-functions (list (lambda (_) (cl-incf calls) nil))))
+            (should (equal (mevedel-sandbox--git-pointer-targets pointer)
+                           (list metadata root))))
+          (should (zerop calls)))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--find-protected-directory ()
+  (progn
+    (skip-unless (and (eq system-type 'gnu/linux) (executable-find "find")))
+    (let* ((root (make-temp-file "mevedel-native-discovery-" t))
+           (outside (make-temp-file "mevedel-native-outside-" t))
+           (nested (file-name-concat root "space and\nnewline" ".git"))
+           (worktree (file-name-concat root "worktree" ".git"))
+           (blocked (file-name-concat root "unreadable")))
+      (unwind-protect
+          (progn
+            (make-directory (file-name-concat nested "hidden" ".git") t)
+            (make-directory (file-name-directory worktree) t)
+            (with-temp-file worktree (insert "gitdir: elsewhere\n"))
+            (make-directory (file-name-concat outside "nested" ".git") t)
+            (make-symbolic-link outside (file-name-concat root "alias"))
+            (make-directory blocked)
+            (set-file-modes blocked #o000)
+            (let ((rows (mevedel-sandbox--find-protected-directory root ".git" (executable-find "find"))))
+              (should (assoc nested rows))
+              (should (assoc worktree rows))
+              (should-not (assoc (file-name-concat nested "hidden" ".git") rows))
+              (should-not (assoc (file-name-concat root "alias" "nested" ".git") rows))
+              (unless (file-readable-p blocked) (should (cdr (assoc blocked rows)))))
+            (make-symbolic-link root (file-name-concat outside "root-link"))
+            (should (assoc (file-name-concat outside "root-link" "space and\nnewline" ".git")
+                           (mevedel-sandbox--find-protected-directory
+                            (file-name-concat outside "root-link") ".git" (executable-find "find"))))
+            (let ((literal (file-name-concat root "back\\slash")))
+              (make-directory literal)
+              (should (assoc literal (mevedel-sandbox--find-protected-directory
+                                      root "back\\slash" (executable-find "find")))))
+            (when (executable-find "false")
+              (should-error (mevedel-sandbox--find-protected-directory root ".git" (executable-find "false"))
+                            :type 'mevedel-sandbox-policy-error)))
+        (set-file-modes blocked #o700)
+        (delete-directory root t)
+        (delete-directory outside t)))))
 
 (mevedel-deftest mevedel-sandbox--protected-candidates ()
   ,test
@@ -1586,7 +1684,29 @@ the real grant refusal does not claim that the requested command started"
       '(:marker "private-start-marker")
       '(:exit-code 0 :output "notice\nprivate-start-marker\ncommand\n"))
      :output)
-    "notice\ncommand\n")))
+    "notice\ncommand\n"))
+  :doc "exact marker lines preserve separators, quoted lookalikes, and result metadata"
+  (let* ((marker "private.[start]*")
+         (preparation (list :state 'confined :marker marker))
+         (lines (list "" marker (upcase marker) "ordinary" (concat "prefix " marker) (concat marker " suffix") "unicode: \u754c")))
+    (dolist (a lines)
+      (dolist (b lines)
+        (dolist (c lines)
+          (let* ((output (mapconcat #'identity (list a b c) "\n"))
+                 (expected (mapconcat #'identity (delete marker (split-string output "\n" nil)) "\n"))
+                 (result (list :output output :exit-code 7 :extra 'preserved))
+                 (cleaned (mevedel-sandbox-strip-marker preparation result)))
+            (should (equal expected (plist-get cleaned :output)))
+            (should (= 7 (plist-get cleaned :exit-code)))
+            (should (eq 'preserved (plist-get cleaned :extra)))
+            (should (equal output (plist-get result :output)))
+            (should (eq (not (member marker (split-string output "\n" nil)))
+                        (and (mevedel-sandbox-launch-failed-p preparation result) t)))))))
+    (dolist (output (list marker (concat marker "\n") "ordinary" ""
+                          (concat "prefix\n" (apply #'concat (make-list 2000 (concat marker "\n"))) "tail\n")
+                          (concat "prefix\n" (apply #'concat (make-list 2000 (concat marker "\n"))) marker)))
+      (should (equal (mapconcat #'identity (delete marker (split-string output "\n" nil)) "\n")
+                     (plist-get (mevedel-sandbox-strip-marker preparation (list :output output)) :output))))))
 
 (mevedel-deftest mevedel-sandbox-status-text ()
   ,test

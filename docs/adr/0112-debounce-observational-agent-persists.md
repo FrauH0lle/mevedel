@@ -10,6 +10,18 @@ commits. They refuse reentrant queueing. Observational activity changes and
 mailbox consumption schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
+New retained transcript text and dirty transcript metadata share a strict
+publication when the portable sidecar already exists. The session root supplies
+that sidecar even for nested agents. Provider setup reuses the transcript saved
+after frozen configuration was installed, without forcing another write.
+Registry admission still commits before spawn acknowledgement.
+
+Once terminal settlement has committed the answer, gptel's post-response hooks
+run and their extra transcript checkpoint uses the existing conversation-save
+debounce. A crash in that window can lose only post-commit hook changes, not the
+acknowledged answer. Pending settlement still checkpoints synchronously, and
+explicit saves and teardown flush deferred text normally.
+
 The registry save does not save the root transcript, rebuild its prompt index,
 scan snapshots, or read the artifact folder. Portable publication overlays the
 sidecar while retaining other committed artifacts. A session without a committed
@@ -36,6 +48,16 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-09-22 agent transition capture:** a 565-ms graphical heartbeat delay
+  coincided with three publications and GC at agent completion. Startup had a
+  similar burst. Five alternating real-storage lifecycle replays reduced startup
+  publications from four to two and median time from 457 to 239 ms. Completion
+  changed from two immediate publications to one, reducing its median from 245
+  to 145 ms; the remaining post-hook checkpoint took about 100 ms separately.
+  These measurements cover the agent lifecycle, not the entire parent tool
+  pipeline or graphical input latency. The change combines initial text and
+  metadata, removes forced re-saving of already configured text, and defers
+  only changes after a successful terminal commit.
 - **2026-08-25 profile:** 434 publication generations occupied 227 MB, peaking at
   21/minute. Publication accounted for roughly 30% of 8.6 GB allocations in a
   31-minute window; GC took 60% of CPU samples. The session had 763 permission

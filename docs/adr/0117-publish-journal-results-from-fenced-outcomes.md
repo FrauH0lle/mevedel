@@ -26,7 +26,9 @@ pre-clear checkpoints, preserving their evidence and captured session title.
 Capture, seal, and public metadata admit the same closed trigger vocabulary;
 repeated sealing preserves the first trigger. Stable fork-point identities define
 coverage, so Rewind's repeated turn numbers cannot alias old work. Capture coverage
-survives public digest expiry. Digest inference uses frozen model policy without a
+survives public digest expiry. Discovery batches fresh expiry probes and bounded
+public-entry reads in groups of 16; coverage reads are similarly batched and
+still fail closed. No observation survives its inspection call. Digest inference uses frozen model policy without a
 live session or tools; accepted output is published before source pins are released.
 
 Consolidation captures bounded memory, instructions, source observations, and
@@ -41,13 +43,21 @@ Completed, durably saved root turns provide automatic opportunities for journal
 recovery/cleanup and memory review/reconciliation. Publication and explicit
 memory operations retain their existing opportunities. Opening a conversation
 or the session chooser does not launch workspace-wide maintenance. For local
-Linux workspaces, scheduled journal recovery and retention execute in short-lived
-batch Emacs workers. Local consolidation scope preparation and accepted-result
-publication use the same boundary, with resolved roots and original client
-identity supplied by the editor. They load no user init or serialized provider
+Linux workspaces, deferred root-turn checkpoint preparation, scheduled journal
+recovery, digest discovery/admission and retention execute in short-lived batch
+Emacs workers. Checkpoint preparation reads a frozen committed publication without
+source mutation authority; the editor checks its live request and unchanged head
+before publishing and pinning under its own lease. Admission remains held through
+this continuation, with cancellation and a bounded preparation deadline. Explicit
+checkpointing and non-portable sessions remain synchronous. Scheduled memory publication recovery and local consolidation
+recovery, admission, scope preparation and accepted-result publication use the same
+boundary, with resolved roots, thresholds and original client identity supplied by
+the editor. Marked-write reconciliation retains live-buffer checks in the editor;
+root-turn consolidation is offered after that recovery finishes. They load no user init or serialized provider
 configuration. They reuse the same claims, validation, and publication
-paths. Recovery completion resumes the editor's ordinary digest opportunity;
-model requests retain the configured native backend. Remote scheduling remains
+paths. Digest preparation returns only the capture identity and fenced claims; the
+editor rechecks ownership before inference. Model requests retain the configured
+native backend. Remote scheduling remains
 in the editor. Live-buffer artifact cleanup also remains there because its
 retention proof includes active buffers and gptel context. Worker failure leaves
 fenced claims and retained evidence, rather than inferring completion.
@@ -397,3 +407,75 @@ That storage phase now uses the same isolated child. Cancellation may stop an
 unaccepted result; a completed claim remains durable recovery authority even
 if its child dies before returning publication. Checked proposal application
 remains in the editor. Remote roots keep their target-native path.
+
+### 2026-09-22: include recovery and admission in the worker boundary
+
+The shared graphical replay still paused for roughly 4.6 and 4.5 seconds at
+completion. A copied store reproduced two publication-recovery scans at about
+4.5 seconds and 884 control programs each, including automatic opportunities
+that never started inference. Offloading scope capture alone left this work in
+the editor. Scheduled recovery now owns a cancellable child, and consolidation's
+existing preparation child also performs recovery, selection and automatic
+admission. Its deadline starts before those operations. Skipped admission
+returns a scheduling observation without a provider call.
+
+The editor rechecks ownership, reconciles marked writes using live buffers and
+only then offers root-turn consolidation. It releases ownership for that phase,
+so the later preparation claim still recovers fresh state; the two scans are not
+replaced with an unsafe completed-recovery cache. The first implementation still listed retained writes synchronously (about
+250 ms in the copied-store probe); the follow-up below divides that editor phase.
+Explicit recovery and remote workspaces keep their existing target-native path.
+
+A 20-digest, 90-KB memory fixture measured 2.47 seconds maximum timer delay on
+the synchronous path versus 36 ms with real preparation/publication children.
+End-to-end time increased from 2.67 to 3.28 seconds. These isolated measurements
+exclude provider inference and do not establish graphical typing latency.
+
+### 2026-09-22: bound remaining completion inspections
+
+The rebuilt graphical run confirmed that the 3.95-second recovery scan ran in a
+child. Its remaining editor costs included a 681-ms checkpoint, 593-ms journal
+admission and 224-ms retained-write inspection. A copied store showed 32 control
+programs for 31 coverage records and 71 for 35 public entries. Fresh bounded
+batching reduced these to three and seven programs, with median times falling
+from 157 to 90 ms and 306 to 152 ms respectively. Existing path proofs, byte
+limits, expiry checks and schema validation remain in force.
+
+Scheduled recovery now checks one retained write per callback after settling the
+publication claim. Every record still gets fresh original-root and live-buffer
+checks; no child classifies unsaved editor state. The job retains cancellation
+ownership and its deadline until inspections finish. Quit and late replies cannot
+strand or restart it. Explicit synchronous recovery remains synchronous. The
+individual marked-write reconciliation can still be expensive; splitting records
+does not preempt an operation already in progress.
+
+The same capture exposed a queued journal-recovery offer colliding with memory
+recovery's claim. The busy return retained a ten-minute placeholder cooldown,
+which then suppressed the root-turn post-recovery offer. A busy opportunity now
+clears only its own placeholder; a fresh admission observation remains cached.
+A regression holds a real claim for the first offer, releases it, and verifies
+that the next activity opportunity admits exactly one review.
+
+In six alternating copied-store trials, inspecting the retained writes together
+produced a median 242-ms maximum timer delay; one record per callback reduced it
+to 44 ms. Total child recovery and inspection rose from 4.00 to 4.05 seconds.
+These are headless timer measurements, not graphical input-to-paint latency.
+
+### 2026-09-22: prepare root checkpoints and digest admission outside the editor
+
+The rebuilt graphical request still measured a 636-ms checkpoint and 558-ms
+journal processing callback, with 251 and 181 ms of GC respectively. Deferring
+those whole functions to timers did not divide their blocking work. Deferred
+portable root settlement now suspends while a child prepares immutable evidence;
+only the owner publishes and pins it. Scheduled digest opportunities also perform
+discovery, accepted-outcome recovery and claim admission in the child. Live request
+identity, current publication and source authority remain editor-side checks.
+
+A three-trial replay of the captured 825,335-character transcript and copied public
+journal entries produced identical 301,157-character evidence on both paths.
+Median 20-ms timer delay fell from 182 to 110 ms, while warm editor allocation fell
+from 30.4 to 14.5 MB. End-to-end checkpoint time increased from 202 to 561 ms;
+publication and lease handling still run synchronously. A separate unsealed-capture
+digest-opportunity replay reduced median timer delay from 175 ms to below 1 ms,
+and editor allocation from 5.0 to 0.28 MB, while total time rose from 195 to 369 ms.
+These are isolated storage replays, not a new graphical typing measurement.

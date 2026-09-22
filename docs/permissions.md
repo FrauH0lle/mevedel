@@ -219,6 +219,17 @@ workspace or additional root beneath it is still searched when independently
 listed. Other repositories placed only in temporary scratch do not receive
 glob-discovered protection.
 
+On local Linux, literal directory globs such as `**/.git/**` use GNU `find`
+when available. Discovery still runs before each launch: it follows a symlink
+only at the supplied root, prunes matched and unreadable directories, and includes
+Git worktree pointer files. NUL framing preserves spaces and newlines in names.
+Managed Bash and one-shot helpers run native scans asynchronously under their
+execution owner. Cancellation, owner teardown or changed launch authority prevents
+the pending command from starting. Results are never reused across launches.
+A failed or truncated native scan refuses preparation; it does not discard missing protection.
+Other patterns and targets retain the Lisp walker. Canonical target checks and
+final confinement validation remain unchanged.
+
 The three canonical modes are `ask`, `edits`, and `full-auto`:
 
 | Mode | Native tools | Bash and Eval | Confinement |
@@ -763,6 +774,9 @@ Access deliberately selects direct execution. Once
 confined preparation begins, a failure is returned without an unrestricted
 replacement. A private marker emitted immediately before `exec` distinguishes
 launch refusal from a started command; grant refusals do not emit that marker.
+Detection and removal match complete, case-sensitive marker lines without
+splitting the command's entire output. Lookalikes embedded in ordinary output
+remain intact.
 Signals, timeouts, and ordinary command failures are returned once and never
 replayed. `required` refuses an unavailable backend, while `off` selects direct
 execution deliberately. Direct execution reports `filesystem: unrestricted`

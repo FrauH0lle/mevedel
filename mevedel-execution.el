@@ -104,6 +104,14 @@
                   "mevedel-permission-mode" (&optional session data-buffer surface-buffer))
 (autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
 
+;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-persistent-authority
+                  "mevedel-permission-persistence" (workspace scope))
+(autoload 'mevedel-permission-persistent-authority "mevedel-permission-persistence")
+
+;; `mevedel-permission-rules'
+(defvar mevedel-permission-rules)
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-artifact-address
                   "mevedel-resource" (path session))
@@ -121,7 +129,12 @@
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
                            additional-permissions sandbox-permissions mode
-                           temporary-root))
+                           temporary-root candidates))
+(declare-function mevedel-sandbox-prepare-start
+                  "mevedel-sandbox"
+                  (callback start-process command workdir writable-roots
+                            &optional additional-permissions sandbox-permissions
+                            mode temporary-root))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
 (autoload 'mevedel-sandbox--record-launch-failure "mevedel-sandbox")
@@ -129,6 +142,7 @@
 (autoload 'mevedel-sandbox-launch-failed-p "mevedel-sandbox")
 (autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
 (autoload 'mevedel-sandbox-prepare "mevedel-sandbox")
+(autoload 'mevedel-sandbox-prepare-start "mevedel-sandbox")
 (autoload 'mevedel-sandbox-strip-marker "mevedel-sandbox")
 
 ;; `mevedel-session-artifacts'
@@ -163,8 +177,14 @@
 (declare-function mevedel-session-execution-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+
+;; `mevedel-system'
+(defvar mevedel-memory-dirs)
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
@@ -182,6 +202,9 @@
                   (head tail total-length &optional preview-size))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+
+;; `mevedel-workspace'
+(defvar mevedel-workspace-additional-roots)
 
 (require 'mevedel-execution-process)
 (require 'mevedel-execution-scheduler)
@@ -271,6 +294,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   recoverable-output-bytes
   recoverable-output-path
   output-tail
+  preparation-cancel
   progress-timer
   read-offset
   retained-p
@@ -631,6 +655,9 @@ The process spool remains owned by RECORD until registry cleanup."
         (mevedel-execution--record-progress-timer record) nil
         (mevedel-execution--record-retire-timer record) nil
         (mevedel-execution--record-yield-timer record) nil)
+  (when-let* ((cancel (mevedel-execution--record-preparation-cancel record)))
+    (setf (mevedel-execution--record-preparation-cancel record) nil)
+    (funcall cancel))
   (when-let* ((child (mevedel-execution--record-child record)))
     (mevedel-execution-process-release child t)))
 
@@ -711,6 +738,86 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
           child :name name :command command :coding 'no-conversion
           :timeout timeout)
          child)))
+
+
+(defun mevedel-execution--preparation-authority (session roots)
+  "Snapshot mutable launch authority for SESSION and local discovery ROOTS.
+Only scalar policy and path facts are serialized, never live runtime objects."
+  (let* ((authority (and session (mevedel-execution--mutation-target session)))
+         (workspace (and authority (mevedel-session-workspace authority)))
+         (print-length nil)
+         (print-level nil))
+    (prin1-to-string
+     (list
+      (mevedel-permission-mode-effective session)
+      (mevedel-sandbox-mode-effective session)
+      (and (boundp 'mevedel-memory-dirs) mevedel-memory-dirs)
+      (and (boundp 'mevedel-workspace-additional-roots)
+           mevedel-workspace-additional-roots)
+      temporary-file-directory
+      (and (boundp 'mevedel-permission-rules) mevedel-permission-rules)
+      (and authority (mevedel-session-permission-rules authority))
+      (and authority (mevedel-session-resource-grants authority))
+      (and workspace (mevedel-permission-persistent-authority workspace 'global))
+      (and workspace (mevedel-permission-persistent-authority workspace 'workspace))
+      (mapcar (lambda (root)
+                (let ((attributes (file-attributes root)))
+                  (list (file-truename root)
+                        (file-attribute-inode-number attributes)
+                        (file-attribute-device-number attributes))))
+              roots)))))
+
+(defun mevedel-execution--prepare
+    (callback command workdir roots additional permissions session owner
+              &optional temporary-root teardown)
+  "Prepare COMMAND under owned, cancellable discovery for SESSION and OWNER.
+CALLBACK receives preparation facts.  ROOTS, ADDITIONAL, PERMISSIONS and
+TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
+  (let ((buffer (current-buffer))
+        (invocation (and (boundp 'mevedel--agent-invocation)
+                         mevedel--agent-invocation))
+        (target (and session (mevedel-session-execution-target session)))
+        snapshot abandoned)
+    (cl-labels
+        ((valid-p ()
+           (condition-case nil
+               (and (buffer-live-p buffer)
+                    (mevedel-execution--owner-admissible-p invocation)
+                    (eq target (and session (mevedel-session-execution-target session)))
+                    (equal snapshot
+                           (with-current-buffer buffer
+                             (mevedel-execution--preparation-authority
+                              session (cons workdir roots)))))
+             (error nil))))
+      (mevedel-sandbox-prepare-start
+       (lambda (preparation)
+         (unless abandoned
+           (if (and snapshot (not (valid-p)))
+               (progn
+                 (mevedel-sandbox-cleanup preparation)
+                 (funcall callback
+                          '(:state refused :error "Execution authority changed during preparation; submit the operation again"
+                            :facts (:sandbox refused :refused t))))
+             (with-current-buffer buffer (funcall callback preparation)))))
+       (lambda (argv receive)
+         (unless snapshot
+           (setq snapshot (mevedel-execution--preparation-authority
+                           session (cons workdir roots))))
+         (let ((child (mevedel-execution--start-process
+                       (lambda (result)
+                         (if (valid-p)
+                             (with-current-buffer buffer (funcall receive result))
+                           (funcall receive
+                                    '(:exit-code -1 :error (error "Execution authority changed")))))
+                       "mevedel-protected-discovery" argv workdir 30
+                       session owner
+                       (lambda ()
+                         (setq abandoned t)
+                         (when teardown (funcall teardown))))))
+           (lambda ()
+             (when child (mevedel-execution-process-stop child 'aborted)))))
+       command workdir roots additional permissions
+       (mevedel-sandbox-mode-effective session) temporary-root))))
 
 
 ;;
@@ -1497,8 +1604,12 @@ process-filter appends use the published path."
               (mevedel-execution--record-stop-p record))
     (setf (mevedel-execution--record-stop-p record) t
           (mevedel-execution--record-termination record) reason)
-    (mevedel-execution-process-stop
-     (mevedel-execution--record-child record) reason)))
+    (if (mevedel-execution--record-preparation-cancel record)
+        (progn
+          (setf (mevedel-execution--record-exit-code record) -1)
+          (mevedel-execution--finish-managed record))
+      (mevedel-execution-process-stop
+       (mevedel-execution--record-child record) reason))))
 
 (defun mevedel-execution--abort-request-record (record)
   "Abort queued or foreground RECORD for its originating request."
@@ -1628,18 +1739,33 @@ terminal settlement."
                 (setf (mevedel-execution--record-scheduler-lease record)
                       admitted-lease)
                 (condition-case err
-                    (mevedel-execution--start-admitted
-                     record
-                     (with-current-buffer (or data-buffer (current-buffer))
-                       (unless (eq permission-mode
-                                   (mevedel-permission-mode-effective session data-buffer))
-                         (signal 'mevedel-execution-error
-                                 '("Permission mode changed while execution was queued; submit the operation again")))
-                       (mevedel-sandbox-prepare
-                        command workdir writable-roots additional-permissions
-                        sandbox-permissions
-                        (mevedel-sandbox-mode-effective session)
-                        temporary-root)))
+                    (with-current-buffer (or data-buffer (current-buffer))
+                      (unless (eq permission-mode
+                                  (mevedel-permission-mode-effective session data-buffer))
+                        (signal 'mevedel-execution-error
+                                '("Permission mode changed while execution was queued; submit the operation again")))
+                      (let ((cancel
+                             (mevedel-execution--prepare
+                              (lambda (preparation)
+                                (unless (mevedel-execution--record-finished-p record)
+                                  (setf (mevedel-execution--record-preparation-cancel record) nil)
+                                  (condition-case failure
+                                      (progn
+                                        (unless (mevedel-execution--owner-admissible-p owner-context)
+                                          (error "Execution owner is terminal"))
+                                        (mevedel-execution--start-admitted record preparation))
+                                    (error
+                                     (mevedel-sandbox-cleanup preparation)
+                                     (setf (mevedel-execution--record-error-data record) failure
+                                           (mevedel-execution--record-exit-code record) -1
+                                           (mevedel-execution--record-termination record) 'spawn-failed)
+                                     (mevedel-execution--finish-managed record)))))
+                              command workdir writable-roots additional-permissions
+                              sandbox-permissions session owner temporary-root)))
+                        (unless (or (mevedel-execution--record-finished-p record)
+                                    (mevedel-execution-process-launch-attempted-p
+                                     (mevedel-execution--record-child record)))
+                          (setf (mevedel-execution--record-preparation-cancel record) cancel))))
                   (error
                    (setf (mevedel-execution--record-error-data record) err
                          (mevedel-execution--record-exit-code record) -1
@@ -2095,21 +2221,54 @@ foreground state.  Yielded terminal output still goes to its owner mailbox."
 ;;; Confined one-shot interface
 
 (cl-defun mevedel-execution-start-one-shot
-    (callback &key name command workdir writable-roots temporary-root timeout
-              additional-permissions sandbox-permissions session owner
-              teardown-function)
+    (callback &key name command workdir writable-roots
+              temporary-root timeout additional-permissions sandbox-permissions
+              session owner teardown-function)
   "Start one confined COMMAND and call CALLBACK with terminal facts.
-Return an idempotent cancellation function. Cancellation stops this call's
-child and delivers its ordinary terminal callback and cleanup.
+Return an idempotent cancellation function covering discovery and execution.
+NAME, WORKDIR, WRITABLE-ROOTS, TEMPORARY-ROOT, TIMEOUT, ADDITIONAL-PERMISSIONS,
+SANDBOX-PERMISSIONS, SESSION and OWNER describe the authorized child.
+TEARDOWN-FUNCTION releases caller resources on lifecycle destruction."
+  (let (preparation-cancel child-cancel settled preparing)
+    (setq preparing t)
+    (cl-labels ((discard ()
+                  (unless settled
+                    (setq settled t)
+                    (when teardown-function (funcall teardown-function)))))
+      (setq preparation-cancel
+            (mevedel-execution--prepare
+             (lambda (preparation)
+               (unless settled
+                 (setq preparing nil
+                       child-cancel
+                       (mevedel-execution--start-prepared-one-shot
+                              (lambda (result)
+                                (unless settled
+                                  (setq settled t)
+                                  (funcall callback result)))
+                              preparation :name name :command command
+                              :workdir workdir :timeout timeout :session session
+                              :owner owner :teardown-function #'discard))))
+             command workdir writable-roots additional-permissions
+             sandbox-permissions session owner temporary-root #'discard))
+      (lambda ()
+        (unless settled
+          (if preparing
+              (progn
+                (setq settled t)
+                (when preparation-cancel (funcall preparation-cancel))
+                (funcall callback
+                         '(:exit-code -1 :output "" :output-bytes 0
+                           :termination aborted :timed-out-p nil
+                           :output-limit-p nil :wall-time-seconds 0.0)))
+            (when child-cancel (funcall child-cancel))))))))
 
-NAME identifies the operating-system process.  WORKDIR and WRITABLE-ROOTS
-describe its filesystem boundary; TEMPORARY-ROOT is the writable temporary
-directory that protected-path discovery skips.  TIMEOUT is nil or a
-positive number of seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS
-are already-authorized
-confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
-TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
-discards the process without invoking CALLBACK."
+(cl-defun mevedel-execution--start-prepared-one-shot
+    (callback preparation &key name command workdir timeout session owner
+              teardown-function)
+  "Launch PREPARATION and deliver terminal facts through CALLBACK.
+NAME, COMMAND, WORKDIR, TIMEOUT, SESSION and OWNER describe the child and
+its telemetry.  TEARDOWN-FUNCTION handles owner destruction without delivery."
   (let* ((invocation
           (and (boundp 'mevedel--agent-invocation)
                mevedel--agent-invocation))
@@ -2126,12 +2285,6 @@ discards the process without invoking CALLBACK."
          (started-p nil)
          child
          (current-facts nil)
-         (preparation
-          (mevedel-sandbox-prepare
-           command workdir writable-roots additional-permissions
-           sandbox-permissions
-           (mevedel-sandbox-mode-effective session)
-           temporary-root))
          (_
           (when (and (eq (plist-get preparation :state) 'unrestricted)
                      (eq (plist-get (plist-get preparation :facts) :sandbox)

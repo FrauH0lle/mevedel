@@ -70,7 +70,10 @@
 
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
+(declare-function mevedel-journal-capture-checkpoint-start "mevedel-journal-capture" (session buffer callback))
+(defvar mevedel-journal-enabled)
 (autoload 'mevedel-journal-capture-checkpoint "mevedel-journal-capture")
+(autoload 'mevedel-journal-capture-checkpoint-start "mevedel-journal-capture")
 
 ;; `mevedel-journal-cleanup'
 (declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace &optional force))
@@ -81,7 +84,7 @@
 (autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
 
 ;; `mevedel-memory-decision'
-(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
+(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace &optional callback))
 (autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
 
 ;; `mevedel-memory-pass'
@@ -136,6 +139,9 @@
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
+
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
 
 ;; `mevedel-session-collection'
 (declare-function mevedel-session-collection-schedule
@@ -565,31 +571,60 @@ Signal when the request is missing or its reservation is not the next turn."
              (setq-local mevedel-session--save-failed t)
              (force-mode-line-update))))))))
 
+(defvar mevedel--turn-resume nil
+  "Continuation for a deferred turn step returning `mevedel-turn-pending'.")
+
 (defun mevedel--turn-checkpoint (fsm)
   "Checkpoint FSM's saved turn, offer maintenance and refresh its view.
 The terminal admission hold stays live between publication and this phase."
-  (when-let* ((info (gptel-fsm-info fsm))
-              ((plist-get info :mevedel-turn-saved))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (let* ((workspace (mevedel-session-workspace mevedel--session))
-             (root-p (and (eq chat-buffer (mevedel-session-root-buffer mevedel--session))
-                          (not (bound-and-true-p mevedel--agent-invocation)))))
-        (condition-case err
-            (progn
-              (mevedel-journal-capture-checkpoint mevedel--session chat-buffer)
-              (mevedel-journal-process-schedule workspace root-p))
-          (error
-           (mevedel--warn-once 'journal-capture "Journal capture checkpoint failed: %s"
-                              (error-message-string err))))
-        (when root-p
-          (mevedel-journal-cleanup-schedule workspace)
-          (mevedel-memory-decision-schedule-recovery workspace)
-          (mevedel-memory-pass-schedule workspace))
-        (mevedel-session-collection-schedule mevedel--session)
-        (when (buffer-live-p mevedel--view-buffer)
-          (mevedel-view-rerender mevedel--view-buffer))))))
+  (catch 'waiting
+    (when-let* ((info (gptel-fsm-info fsm))
+                ((plist-get info :mevedel-turn-saved))
+                (chat-buffer (plist-get info :buffer))
+                ((buffer-live-p chat-buffer)))
+      (with-current-buffer chat-buffer
+        (let* ((workspace (mevedel-session-workspace mevedel--session))
+               (root-p (and (eq chat-buffer (mevedel-session-root-buffer mevedel--session))
+                            (not (bound-and-true-p mevedel--agent-invocation)))))
+          (condition-case err
+              (progn
+                (require 'mevedel-journal-capture)
+                (if (and mevedel--turn-resume root-p mevedel-journal-enabled
+                         (eq system-type 'gnu/linux)
+                         (not (file-remote-p (mevedel-workspace-root workspace)))
+                         (mevedel-session-codec-portable-authority-p mevedel--session))
+                    (let ((resume mevedel--turn-resume))
+                      (unless (plist-get info :mevedel-checkpoint-state)
+                        (setf (gptel-fsm-info fsm)
+                              (plist-put (gptel-fsm-info fsm) :mevedel-checkpoint-state 'waiting))
+                        (let ((cancel
+                               (mevedel-journal-capture-checkpoint-start
+                                mevedel--session chat-buffer
+                                (lambda (result)
+                                  (let ((current (gptel-fsm-info fsm)))
+                                    (setq current (plist-put current :mevedel-checkpoint-error (plist-get result :error))
+                                          current (plist-put current :mevedel-checkpoint-state 'done))
+                                    (setf (gptel-fsm-info fsm) current))
+                                  (funcall resume)))))
+                          (setf (gptel-fsm-info fsm)
+                                (plist-put (gptel-fsm-info fsm) :mevedel-checkpoint-cancel cancel))))
+                      (when (eq (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-state) 'waiting)
+                        (throw 'waiting 'mevedel-turn-pending))
+                      (when-let* ((failure (plist-get (gptel-fsm-info fsm)
+                                                      :mevedel-checkpoint-error)))
+                        (error "%s" failure)))
+                  (mevedel-journal-capture-checkpoint mevedel--session chat-buffer))
+                (mevedel-journal-process-schedule workspace root-p))
+            (error
+             (mevedel--warn-once 'journal-capture "Journal capture checkpoint failed: %s"
+                                 (error-message-string err))))
+          (when root-p
+            (mevedel-journal-cleanup-schedule workspace)
+            (mevedel-memory-decision-schedule-recovery
+             workspace (lambda () (mevedel-memory-pass-schedule workspace))))
+          (mevedel-session-collection-schedule mevedel--session)
+          (when (buffer-live-p mevedel--view-buffer)
+            (mevedel-view-rerender mevedel--view-buffer)))))))
 
 (defun mevedel--turn-restore-permission-mode (fsm)
   "Restore any temporary permission mode for FSM's request buffer."
@@ -639,9 +674,10 @@ The terminal admission hold stays live between publication and this phase."
 (defun mevedel--run-turn-steps (fsm steps)
   "Run FSM through STEPS while it still owns the buffer's terminal work.
 Recheck between steps: publication and hooks can dispatch other callbacks."
-  (dolist (step steps)
-    (when (mevedel--turn-current-p fsm)
-      (funcall (mevedel--safe-fsm-handler step) fsm))))
+  (let (result)
+    (dolist (step steps result)
+      (when (mevedel--turn-current-p fsm)
+        (setq result (funcall (mevedel--safe-fsm-handler step) fsm))))))
 
 (defun mevedel--turn-buffer (fsm)
   "Return FSM's live chat buffer, or nil."
@@ -699,7 +735,9 @@ Holds nest across final-patch generation and deferred durable settlement."
   "Run FSM through STEPS with transport ownership and event-loop breaks.
 Keep admission fenced through publication, even when abort stops the provider.
 ON-CANCEL runs on transport cancellation; otherwise perform local teardown.
-Cheap steps share five milliseconds; an expensive step ends that callback."
+Cheap steps share five milliseconds; an expensive step ends that callback.
+A step returning `mevedel-turn-pending' stays at the front and calls
+`mevedel--turn-resume' when ready.  No timer polls while its child is working."
   (let* ((info (gptel-fsm-info fsm))
          (request-id (plist-get info :mevedel-request-id))
          (buffer (mevedel--turn-buffer fsm))
@@ -707,47 +745,59 @@ Cheap steps share five milliseconds; an expensive step ends that callback."
     (unless request-id (error "Cannot defer turn without a request identity"))
     (mevedel--turn-hold fsm)
     (cl-labels
-        ((release ()
-           (when (buffer-live-p buffer)
-             (with-current-buffer buffer (remove-hook 'kill-buffer-hook #'teardown t)))
-           (mevedel--turn-release fsm))
-         (teardown ()
-           (mevedel-transport-cancel-pending (list 'turn-settlement request-id))
-           (cancel))
-         (cancel ()
-           (unless finished
-             (setq finished t)
-             (unwind-protect
-                 (when (mevedel--turn-current-p fsm)
-                   (if on-cancel (funcall on-cancel)
-                     (mevedel--run-turn-steps fsm '(mevedel--turn-restore-permission-mode
-                                                    mevedel--turn-end-request))))
-               (setf (gptel-fsm-info fsm)
-                     (plist-put (gptel-fsm-info fsm) :mevedel-turn-settled nil))
-               (release))))
-         (advance ()
-           (unless finished
-             (condition-case err
-                 (let ((deadline (+ (float-time) .005)))
-                   (while (and (not finished) steps (mevedel--turn-current-p fsm) (< (float-time) deadline))
-                     (mevedel--run-turn-steps fsm (list (pop steps))))
-                   (unless finished
-                     (if (and steps (mevedel--turn-current-p fsm))
-                         (enqueue .001)
-                       (setq finished t)
-                       (release))))
-               ((error quit) (cancel) (signal (car err) (cdr err))))))
-         (enqueue (&optional delay)
-           (condition-case err
-               (unless (mevedel-transport-run-when-idle
-                        (list 'turn-settlement request-id)
-                        (and (buffer-live-p buffer) (buffer-local-value 'default-directory buffer))
-                        #'advance #'cancel delay)
-                 (cancel))
-             ((error quit) (cancel) (signal (car err) (cdr err))))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer (add-hook 'kill-buffer-hook #'teardown nil t)))
-      (enqueue))))
+     ((cancel-checkpoint ()
+        (when-let* ((cancel-checkpoint (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-cancel)))
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm) :mevedel-checkpoint-cancel nil))
+          (funcall cancel-checkpoint)))
+      (release ()
+        (cancel-checkpoint)
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (remove-hook 'kill-buffer-hook #'teardown t)))
+        (mevedel--turn-release fsm))
+      (teardown ()
+        (mevedel-transport-cancel-pending (list 'turn-settlement request-id))
+        (cancel))
+      (cancel ()
+        (unless finished
+          (setq finished t)
+          (cancel-checkpoint)
+          (unwind-protect
+              (when (mevedel--turn-current-p fsm)
+                (if on-cancel (funcall on-cancel)
+                  (mevedel--run-turn-steps fsm '(mevedel--turn-restore-permission-mode
+                                                 mevedel--turn-end-request))))
+            (setf (gptel-fsm-info fsm)
+                  (plist-put (gptel-fsm-info fsm) :mevedel-turn-settled nil))
+            (release))))
+      (advance ()
+        (unless finished
+          (condition-case err
+              (let ((deadline (+ (float-time) .005)) waiting
+                    (mevedel--turn-resume (lambda () (unless finished (enqueue .001)))))
+                (while (and (not finished) (not waiting) steps
+                            (mevedel--turn-current-p fsm) (< (float-time) deadline))
+                  (if (eq (mevedel--run-turn-steps fsm (list (car steps))) 'mevedel-turn-pending)
+                      (setq waiting t)
+                    (pop steps)))
+                (unless finished
+                  (cond
+                   ((not (and steps (mevedel--turn-current-p fsm)))
+                    (setq finished t)
+                    (release))
+                   ((not waiting) (enqueue .001)))))
+            ((error quit) (cancel) (signal (car err) (cdr err))))))
+      (enqueue (&optional delay)
+        (condition-case err
+            (unless (mevedel-transport-run-when-idle
+                     (list 'turn-settlement request-id)
+                     (and (buffer-live-p buffer) (buffer-local-value 'default-directory buffer))
+                     #'advance #'cancel delay)
+              (cancel))
+          ((error quit) (cancel) (signal (car err) (cdr err))))))
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer (add-hook 'kill-buffer-hook #'teardown nil t)))
+     (enqueue))))
 
 (defun mevedel--turn-publication-pending-p (fsm)
   "Return non-nil when FSM's session has failed critical publication."
@@ -919,7 +969,7 @@ also autosaves, and it reaches here from the same process sentinel."
    ((mevedel--turn-lost-p fsm)
     (mevedel--turn-settle-lost fsm))
    (t
-   (mevedel--turn-commit fsm)
+    (mevedel--turn-commit fsm)
     (mevedel--turn-stamp-settled fsm)
     (let ((admission-cleanup
            (list #'mevedel--turn-restore-permission-mode

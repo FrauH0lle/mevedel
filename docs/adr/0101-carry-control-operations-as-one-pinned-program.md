@@ -60,6 +60,10 @@ A steady-state renewal can carry verification, writes, listing, and an optional
 clock observation together. Cold, contested, or stale-clock renewal still needs
 a preceding observation. Publication continues to prove ownership before every
 artifact write and after the last, even when those operations share a process.
+Identical lease bytes need verification and listing but no replacement write.
+Renewals omit the trailing clock operation while the transaction's existing
+reading is fresh, without refreshing its age. Once that reading expires, the
+ordinary target-clock observation is required again.
 
 The argument bounds address different limits. TRAMP's canonical PTY line can
 truncate above 4 KiB and wedge `process-send-string`; ordinary timeout handling
@@ -75,6 +79,16 @@ an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Repeated renewals still performed redundant target work.** A September 22
+  captured-transcript replay spent 142 ms in publication and 211 ms in a small
+  save. Five alternating comparisons of the old and new renewal programs reduced
+  those medians to 101 and 164 ms. Program count stayed at 13, while median lease
+  and artifact writes fell from nine to five and clock-marker operations from
+  eight to one. The change removes redundant operations inside existing programs;
+  it does not introduce a new batching protocol or relax ownership checks. Editor
+  allocation stayed around 30.4 MB per save. These are isolated local replay
+  measurements, not graphical input-latency measurements.
 
 - **The original ADR 0101 claimed a program removed the race window and provided
   compare-and-set.** Tracing a concurrent exclusive creation of the next lease

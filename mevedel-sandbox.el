@@ -335,24 +335,21 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 
 (defun mevedel-sandbox--writable-symlink-component (path writable-roots)
   "Return the first symlink crossing in PATH under WRITABLE-ROOTS."
-  (let* ((path (expand-file-name path))
-         (target-prefix (file-remote-p path))
-         (current (if target-prefix (concat target-prefix "/") "/"))
-         found)
-    (dolist (component
-             (split-string
-              (or (file-remote-p path 'localname 'never) path) "/" t))
-      (unless found
-        (setq current (file-name-concat current component))
-        (when (and (file-symlink-p current)
-                   (cl-some
-                    (lambda (root)
-                      (let ((root (file-name-as-directory
-                                   (expand-file-name root))))
-                        (or (string-equal (directory-file-name root) current)
-                            (string-prefix-p root current))))
-                    writable-roots))
-          (setq found current))))
+  (let* ((path (directory-file-name (expand-file-name path)))
+         (path-length (length path))
+         start found)
+    ;; Only a crossing inside a writable root can change the boundary.
+    ;; Find the shallowest covering root, then inspect its path prefixes.
+    (dolist (root writable-roots)
+      (let ((root (directory-file-name (expand-file-name root))))
+        (when (or (string-equal root path)
+                  (string-prefix-p (file-name-as-directory root) path))
+          (setq start (min (or start (length root)) (length root))))))
+    (while (and start (not found))
+      (let ((prefix (substring path 0 start)))
+        (when (file-symlink-p prefix) (setq found prefix)))
+      (setq start (and (< start path-length)
+                       (or (string-match "/" path (1+ start)) path-length))))
     found))
 
 (defun mevedel-sandbox--git-pointer-targets (path)
@@ -360,37 +357,59 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 Resolve the `.git' pointer and its `commondir' file on PATH's target."
   (when (and (string-equal (file-name-nondirectory path) ".git")
              (file-regular-p path))
-    (with-temp-buffer
-      (insert-file-contents path nil 0 4096)
-      (goto-char (point-min))
-      (when (looking-at "gitdir:[[:space:]]*\\(.+\\)$")
-        (let* ((target (string-trim (match-string 1)))
-               (target-prefix (file-remote-p path))
-               (directory
-                (if (and target-prefix (file-name-absolute-p target))
-                    (concat target-prefix target)
-                  (expand-file-name target (file-name-directory path))))
-               (common-file (file-name-concat directory "commondir")))
-          (cons directory
-                (when (file-regular-p common-file)
-                  (erase-buffer)
-                  (insert-file-contents common-file nil 0 4096)
-                  (let ((common (string-trim (buffer-string))))
-                    (unless (string-empty-p common)
-                      (list
-                       (if (and target-prefix (file-name-absolute-p common))
-                           (concat target-prefix common)
-                         (expand-file-name common directory))))))))))))
+    ;; Git control files are protocol data, not editor-configured text.
+    (let ((auto-coding-functions nil))
+      (with-temp-buffer
+        (insert-file-contents path nil 0 4096)
+        (goto-char (point-min))
+        (when (looking-at "gitdir:[[:space:]]*\\(.+\\)$")
+          (let* ((target (string-trim (match-string 1)))
+                 (target-prefix (file-remote-p path))
+                 (directory
+                  (if (and target-prefix (file-name-absolute-p target))
+                      (concat target-prefix target)
+                    (expand-file-name target (file-name-directory path))))
+                 (common-file (file-name-concat directory "commondir")))
+            (cons directory
+                  (when (file-regular-p common-file)
+                    (erase-buffer)
+                    (insert-file-contents common-file nil 0 4096)
+                    (let ((common (string-trim (buffer-string))))
+                      (unless (string-empty-p common)
+                        (list
+                         (if (and target-prefix (file-name-absolute-p common))
+                             (concat target-prefix common)
+                           (expand-file-name common directory)))))))))))))
+
+(defun mevedel-sandbox--find-protected-directory (root name executable)
+  "Find literal protected NAME below local ROOT with GNU find EXECUTABLE.
+Return (PATH . BLOCKED) pairs, stopping at matches and unreadable directories.
+Do not follow interior symlinks. NUL framing preserves arbitrary file names."
+  (with-temp-buffer
+    (let* ((coding-system-for-read (or file-name-coding-system default-file-name-coding-system))
+           (status (process-file executable nil t nil
+                                 "-H" (expand-file-name root)
+                                 "-type" "d" "!" "-readable" "-printf" "I%p\\0" "-prune"
+                                 "-o" "-name" (replace-regexp-in-string
+                                               (regexp-quote "\\") "\\\\" name t t)
+                                 "-printf" "P%p\\0" "-prune")))
+      (unless (eq status 0)
+        (signal 'mevedel-sandbox-policy-error
+                (list "Protected directory discovery failed")))
+      (mapcar (lambda (row) (cons (substring row 1) (eq (aref row 0) ?I)))
+              (split-string (buffer-string) "\0" t)))))
 
 (defun mevedel-sandbox--protected-candidates
-    (workdir writable-roots &optional temporary-root)
+    (workdir writable-roots &optional temporary-root scan-function)
   "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS.
 
 Glob patterns are discovered by walking the writable roots.  TEMPORARY-ROOT,
 the execution target's temporary directory, is exempt from that walk: it is
 scratch the child already owns, a repository placed there is not protected,
 and walking all of it on every launch cost more than the protection was
-worth while surfacing transient trees that vanished before launch."
+worth while surfacing transient trees that vanished before launch.
+SCAN-FUNCTION, when non-nil, receives ROOT, NAME, EXECUTABLE and MODE for
+each native directory scan and returns (PATH . BLOCKED) pairs."
   (let* ((target-prefix (file-remote-p workdir))
          (exempt (and temporary-root
                       (mevedel-sandbox--canonical-directories
@@ -445,34 +464,41 @@ worth while surfacing transient trees that vanished before launch."
                 (when (mevedel-permission-rules-match-path-p path pattern)
                   (add-candidate path mode directory-p))))))
          (search-literal-directory
-          (root name mode)
-          (when (file-directory-p root)
-            (if (not (file-readable-p root))
-                (add-candidate root 'inaccessible t)
-              (when (string-equal
-                     (file-name-nondirectory (directory-file-name root))
-                     name)
-                (add-candidate root mode t))
-              (dolist
-                  (path
-                   (directory-files-recursively
-                    root
-                    (concat "\\`" (regexp-quote name) "\\'")
-                    t
-                    (lambda (directory)
-                      (cond
-                       ((not (file-readable-p directory))
-                        (add-candidate directory 'inaccessible t)
-                        nil)
-                       ((string-equal
-                         (file-name-nondirectory
-                          (directory-file-name directory))
-                         name)
-                        (add-candidate directory mode t)
-                        nil)
-                       (t t)))
-                    nil))
-                (add-candidate path mode t))))))
+           (root name mode)
+           (when (file-directory-p root)
+             (if-let* (((eq system-type 'gnu/linux))
+                       ((not (file-remote-p root)))
+                       (find (executable-find "find")))
+                 (dolist (row (if scan-function
+                                  (funcall scan-function root name find mode)
+                                (mevedel-sandbox--find-protected-directory root name find)))
+                   (add-candidate (car row) (if (cdr row) 'inaccessible mode) t))
+               (if (not (file-readable-p root))
+                   (add-candidate root 'inaccessible t)
+                 (when (string-equal
+                        (file-name-nondirectory (directory-file-name root))
+                        name)
+                   (add-candidate root mode t))
+                 (dolist
+                     (path
+                      (directory-files-recursively
+                       root
+                       (concat "\\`" (regexp-quote name) "\\'")
+                       t
+                       (lambda (directory)
+                         (cond
+                          ((not (file-readable-p directory))
+                           (add-candidate directory 'inaccessible t)
+                           nil)
+                          ((string-equal
+                            (file-name-nondirectory
+                             (directory-file-name directory))
+                            name)
+                           (add-candidate directory mode t)
+                           nil)
+                          (t t)))
+                       nil))
+                   (add-candidate path mode t)))))))
       (dolist (entry (mevedel-permission-protected-path-policy))
         (let* ((pattern (car entry))
                (mode (cdr entry))
@@ -592,19 +618,22 @@ the targets behind."
             :warning)))))))
 
 (defun mevedel-sandbox--protected-restrictions
-    (workdir writable-roots &optional temporary-root)
+    (workdir writable-roots &optional temporary-root candidates)
   "Resolve protected restrictions for WORKDIR and WRITABLE-ROOTS.
 TEMPORARY-ROOT is exempt from glob discovery; see
 `mevedel-sandbox--protected-candidates'.  Return `:restrictions', each a
 `(:path :mode :directory-p)' plist ordered shallow to deep with one entry per
 path, plus the shared Git metadata directories and synthetic mount targets
-created for missing protected directories."
+created for missing protected directories.
+CANDIDATES, when supplied, wraps the invocation's discovered candidates in
+a one-element list; path and symlink checks still happen here."
   (let (restrictions cleanup-paths git-common-directories)
     (condition-case err
         (progn
           (dolist (candidate
-                   (mevedel-sandbox--protected-candidates
-                    workdir writable-roots temporary-root))
+                   (if candidates (car candidates)
+                     (mevedel-sandbox--protected-candidates
+                      workdir writable-roots temporary-root)))
             (let* ((path (plist-get candidate :path))
                    (mode (plist-get candidate :mode))
                    (directory-p (plist-get candidate :directory-p))
@@ -679,9 +708,9 @@ created for missing protected directories."
             (list :restrictions
                   (mapcar #'cdr
                           (sort resolved
-                                (lambda (left right)
-                                  (< (length (split-string (car left) "/" t))
-                                     (length (split-string (car right) "/" t))))))
+                                :key (lambda (entry)
+                                       (length (split-string (car entry) "/" t)))
+                                :lessp #'<))
                   :git-common-directories (delete-dups git-common-directories)
                   :cleanup-paths (nreverse cleanup-paths))))
       (error
@@ -760,12 +789,12 @@ WORKDIR identifies the execution target that the pending child will use."
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
-             additional-permissions &optional temporary-root)
+             additional-permissions &optional temporary-root candidates)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 TEMPORARY-ROOT is the writable temporary directory exempt from
-protected-path glob discovery."
+protected-path glob discovery.  CANDIDATES wraps already discovered paths."
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
@@ -784,7 +813,7 @@ protected-path glob discovery."
     (let* ((marker (make-temp-name "MEVEDEL_SANDBOX_STARTED_"))
            (protected
             (mevedel-sandbox--protected-restrictions
-             canonical-workdir roots temporary-root))
+             canonical-workdir roots temporary-root candidates))
            (restrictions (plist-get protected :restrictions)))
       (condition-case err
           (let* ((filesystem-permissions
@@ -863,7 +892,7 @@ protected-path glob discovery."
 (defun mevedel-sandbox-prepare
     (command workdir writable-roots
              &optional additional-permissions sandbox-permissions mode
-             temporary-root)
+             temporary-root candidates)
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
@@ -872,7 +901,9 @@ returns :state `refused' and :error without a command.
 ADDITIONAL-PERMISSIONS is a validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
 MODE defaults to the global sandbox mode.  TEMPORARY-ROOT names the
-writable temporary directory that protected-path glob discovery skips."
+writable temporary directory that protected-path glob discovery skips.
+CANDIDATES is the private, single-invocation discovery result used by
+`mevedel-sandbox-prepare-start'; it never survives a launch attempt."
   (setq mode (mevedel-sandbox-mode-normalize
               (or mode mevedel-sandbox-mode)))
   (if (and (eq sandbox-permissions 'require-escalated)
@@ -906,7 +937,7 @@ writable temporary directory that protected-path glob discovery skips."
                   command workdir writable-roots
                   (plist-get availability :executable)
                   (plist-get availability :mount-proc)
-                  additional-permissions temporary-root)
+                  additional-permissions temporary-root candidates)
                (error
                 (mevedel-sandbox--refused-preparation
                  'refused (error-message-string err))))
@@ -918,24 +949,150 @@ writable temporary directory that protected-path glob discovery skips."
                 command 'unavailable reason))))))
       (_ (error "Unknown sandbox mode: %s" mode)))))
 
+(defun mevedel-sandbox-prepare-start
+    (callback start-process command workdir writable-roots
+              &optional additional-permissions sandbox-permissions mode
+              temporary-root)
+  "Prepare COMMAND, yielding during native protected-directory discovery.
+Arguments after START-PROCESS follow `mevedel-sandbox-prepare'.
+START-PROCESS receives an argv and a terminal callback, owns the discovery
+child, and returns an idempotent cancellation function.  Its result uses
+the execution facade's :output, :exit-code, :error and limit facts.
+CALLBACK receives one preparation.  Return a cancellation function that
+suppresses delivery and cancels only this preparation's child.
+Remote and non-native pattern discovery keep their synchronous behavior."
+  (let (policy jobs candidates cancel pending done)
+    (cl-labels
+        ((deliver (value)
+           (unless done
+             (setq done t pending nil cancel nil)
+             (funcall callback value)))
+         (refuse (reason)
+           (deliver (mevedel-sandbox--refused-preparation 'refused reason)))
+         (advance ()
+           (unless done
+             (condition-case err
+                 (if-let* ((job (pop jobs)))
+                     (let* ((token (gensym "discovery-"))
+                            (root (nth 0 job)) (name (nth 1 job))
+                            (executable (nth 2 job)) (protection (nth 3 job))
+                            (argv (list executable "-H" (expand-file-name root)
+                                        "-type" "d" "!" "-readable"
+                                        "-printf" "I%p\\0" "-prune" "-o" "-name"
+                                        (replace-regexp-in-string
+                                         (regexp-quote "\\") "\\\\" name t t)
+                                        "-printf" "P%p\\0" "-prune")))
+                       (setq pending token)
+                       (let ((stop
+                              (funcall
+                               start-process argv
+                               (lambda (result)
+                                 (when (and (not done) (eq pending token))
+                                   (setq pending nil cancel nil)
+                                   (if (or (not (eq 0 (plist-get result :exit-code)))
+                                           (plist-get result :error)
+                                           (plist-get result :timed-out-p)
+                                           (plist-get result :output-limit-p))
+                                       (refuse "Protected directory discovery failed")
+                                     (let ((output (decode-coding-string
+                                                    ;; The execution facade
+                                                    ;; decoded UTF-8 text.
+                                                    ;; Restore its bytes
+                                                    ;; before filename decoding.
+                                                    (encode-coding-string
+                                                     (or (plist-get result :output) "")
+                                                     'utf-8-unix t)
+                                                    (or file-name-coding-system
+                                                        default-file-name-coding-system))))
+                                       (if (and (not (string-empty-p output))
+                                                (not (string-suffix-p "\0" output)))
+                                           (refuse "Incomplete protected directory discovery")
+                                         (dolist (row (split-string output "\0" t))
+                                           (if (not (and (> (length row) 1)
+                                                         (memq (aref row 0) '(?I ?P))
+                                                         (file-name-absolute-p (substring row 1))))
+                                               (refuse "Invalid protected directory discovery")
+                                             (push (list :path (substring row 1)
+                                                         :mode (if (eq (aref row 0) ?I)
+                                                                   'inaccessible protection)
+                                                         :directory-p t)
+                                                   candidates)))
+                                         (advance)))))))))
+                         ;; A process may settle before its starter returns.
+                         (when (eq pending token) (setq cancel stop))))
+                   (if (not (equal policy
+                                   (let ((print-length nil) (print-level nil))
+                                     (prin1-to-string
+                                      (mevedel-permission-protected-path-policy)))))
+                       (refuse "Protected path policy changed during preparation; retry the operation")
+                     (deliver
+                      (mevedel-sandbox-prepare
+                       command workdir writable-roots additional-permissions
+                       sandbox-permissions mode temporary-root
+                       (list candidates)))))
+               (error (refuse (error-message-string err)))))))
+      (if (and (eq system-type 'gnu/linux)
+               (not (file-remote-p workdir))
+               (eq 'bubblewrap
+                   (plist-get (mevedel-sandbox-pending-facts
+                               additional-permissions sandbox-permissions mode workdir)
+                              :sandbox)))
+          (condition-case err
+              (progn
+                (setq policy (let ((print-length nil) (print-level nil))
+                               (prin1-to-string (mevedel-permission-protected-path-policy)))
+                      candidates
+                      (mevedel-sandbox--protected-candidates
+                       (file-name-as-directory (file-truename workdir))
+                       (mevedel-sandbox--canonical-directories writable-roots)
+                       temporary-root
+                       (lambda (root name executable protection)
+                         (push (list root name executable protection) jobs)
+                         nil))
+                      jobs (nreverse jobs))
+                (advance))
+            (error (refuse (error-message-string err))))
+        (deliver (mevedel-sandbox-prepare
+                  command workdir writable-roots additional-permissions
+                  sandbox-permissions mode temporary-root)))
+      (lambda ()
+        (unless done
+          (setq done t pending nil)
+          (when cancel (funcall cancel)))))))
+
 (defun mevedel-sandbox-launch-failed-p (preparation child-result)
   "Return non-nil when PREPARATION failed before CHILD-RESULT ran the command."
-  (and (eq (plist-get preparation :state) 'confined)
-       (not (plist-get child-result :timed-out-p))
-       (not (eq (plist-get child-result :termination) 'signaled))
-       (not (member (plist-get preparation :marker)
-                    (split-string (or (plist-get child-result :output) "")
-                                  "\n" nil)))
-       (or (plist-get child-result :error)
-           (not (zerop (or (plist-get child-result :exit-code) -1))))))
+  (let ((case-fold-search nil))
+    (and (eq (plist-get preparation :state) 'confined)
+         (not (plist-get child-result :timed-out-p))
+         (not (eq (plist-get child-result :termination) 'signaled))
+         (not (and (stringp (plist-get preparation :marker))
+                   (not (string-search "\n" (plist-get preparation :marker)))
+                   (string-match-p (concat "^" (regexp-quote (plist-get preparation :marker)) "$")
+                                   (or (plist-get child-result :output) ""))))
+         (or (plist-get child-result :error)
+             (not (zerop (or (plist-get child-result :exit-code) -1)))))))
 
 (defun mevedel-sandbox-strip-marker (preparation child-result)
-  "Return CHILD-RESULT without PREPARATION's private start marker line."
-  (let* ((marker (plist-get preparation :marker))
+  "Return CHILD-RESULT without PREPARATION's private start marker line.
+Scan for exact lines without splitting and rebuilding all command output."
+  (let* ((case-fold-search nil)
+         (marker (plist-get preparation :marker))
          (output (or (plist-get child-result :output) ""))
-         (lines (split-string output "\n" nil))
-         (cleaned (mapconcat #'identity (delete marker lines) "\n")))
-    (plist-put (copy-sequence child-result) :output cleaned)))
+         (pattern (and (stringp marker) (not (string-search "\n" marker))
+                       (concat "^" (regexp-quote marker) "\\(?:\n\\|\\'\\)")))
+         (final-marker (and pattern (string-suffix-p marker output)
+                            (let ((start (- (length output) (length marker))))
+                              (or (zerop start) (eq (aref output (1- start)) ?\n)))))
+         (cleaned (if (and pattern (string-match-p pattern output))
+                      (replace-regexp-in-string pattern "" output t t)
+                    output)))
+    ;; A final marker without a newline also removes the separator after the
+    ;; last retained line. Check that once, avoiding backtracking over runs.
+    (plist-put (copy-sequence child-result) :output
+               (if (and final-marker (string-suffix-p "\n" cleaned))
+                   (substring cleaned 0 -1)
+                 cleaned))))
 
 (defun mevedel-sandbox-status-text (facts)
   "Return one persistent human-readable status line for FACTS."

@@ -255,8 +255,10 @@
   (should (equal "/tmp/workspace/.mevedel/journal"
                  (mevedel-journal-store-directory "/tmp/workspace/"))))
 
-(mevedel-deftest mevedel-journal-store-entries
-  (:doc "discovers only valid public entries, newest first, without timestamp collisions")
+(mevedel-deftest mevedel-journal-store-entries ()
+  ,test
+  (test)
+  :doc "discovers only valid public entries, newest first, without timestamp collisions"
   (let ((root (make-temp-file "mevedel-journal-" t)))
     (unwind-protect
         (let* ((directory (mevedel-journal-store-directory root))
@@ -291,6 +293,32 @@
                           (file-name-concat directory (plist-get first :file)) nil 'silent)
             (delete-file (file-name-concat directory (plist-get second :file)))
             (should (equal (list third) (mevedel-journal-store-entries root)))))
+      (delete-directory root t)))
+  :doc "batches fresh expiry checks and bounded reads while rejecting unsafe storage"
+  (let* ((root (make-temp-file "mevedel-journal-batch-" t))
+         (directory (mevedel-journal-store-directory root))
+         (program (symbol-function 'mevedel-session-control-fs-run-program))
+         (calls 0) files)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (dotimes (n 17)
+            (let* ((metadata (plist-put (copy-tree mevedel-test-journal--metadata) :capture-id (secure-hash 'sha256 (number-to-string n))))
+                   (file (mevedel-journal-store--filename metadata 'digest)))
+              (write-region (mevedel-journal-store--encode metadata mevedel-test-journal--body) nil
+                            (file-name-concat directory file) nil 'silent)
+              (push file files)))
+          (let ((marker (mevedel-journal-store-expired-marker directory (car files))))
+            (make-directory (file-name-directory marker) t)
+            (write-region "expired" nil marker nil 'silent))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args) (cl-incf calls) (apply program args))))
+            (should (= 16 (length (mevedel-journal-store-entries root)))))
+          (should (<= calls 5))
+          (let ((path (file-name-concat directory (cadr files))))
+            (delete-file path)
+            (make-symbolic-link (file-name-concat directory (caddr files)) path)
+            (should-error (mevedel-journal-store-entries root))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-store-read
@@ -399,6 +427,27 @@
           (should-error (mevedel-journal-store-covered-turns root))
           (should-error (mevedel-journal-store-publish-digest
                          root mevedel-test-journal--metadata mevedel-test-journal--body)))
+      (delete-directory root t)))
+  :doc "batches immutable coverage reads without retaining stale or corrupt observations"
+  (let* ((root (make-temp-file "mevedel-coverage-batch-" t))
+         (directory (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage"))
+         (program (symbol-function 'mevedel-session-control-fs-run-program))
+         (calls 0) ids)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (dotimes (n 35)
+            (let ((id (secure-hash 'sha256 (number-to-string n))))
+              (write-region (json-serialize (list :capture-id id :turn-ids (vector id))) nil
+                            (file-name-concat directory (concat id ".json")) nil 'silent)
+              (push id ids)))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args) (cl-incf calls) (apply program args))))
+            (should (equal (sort (copy-sequence ids) #'string<)
+                           (sort (mevedel-journal-store-covered-turns root) #'string<))))
+          (should (<= calls 4))
+          (write-region "{}" nil (file-name-concat directory (concat (car ids) ".json")) nil 'silent)
+          (should-error (mevedel-journal-store-covered-turns root)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-store-publish-decision ()

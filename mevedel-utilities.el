@@ -62,6 +62,7 @@
 ;; `org'
 (declare-function org-mode "org" ())
 (autoload 'org-mode "org")
+(defvar org-element-cache-persistent)
 (defvar org-inhibit-startup)
 (defvar org-mode-hook)
 
@@ -400,6 +401,7 @@ The known Org derived-mode hook chain and the global after-mode hooks are
 dynamically empty, so the same boundary also applies when FUNCTION creates and
 visits a new buffer.  Local Variables are disabled at that visit boundary.
 
+Persistent Org element-cache loading is disabled for generated storage.
 `org-inhibit-startup\' covers what remains, because Org\'s startup block
 runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
 `org-indent-mode\'."
@@ -412,6 +414,7 @@ runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
         (enable-local-variables nil)
         (find-file-hook nil)
         (font-lock-mode-hook nil)
+        (org-element-cache-persistent nil)
         (org-inhibit-startup t)
         (org-mode-hook nil)
         (outline-mode-hook nil)
@@ -421,7 +424,8 @@ runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
 (defun mevedel--transcript-org-mode ()
   "Enable bare Org mode in a generated transcript buffer."
   (setq-local change-major-mode-hook nil)
-  (mevedel--call-with-bare-transcript-mode #'org-mode))
+  (mevedel--call-with-bare-transcript-mode #'org-mode)
+  (setq-local org-element-cache-persistent nil))
 
 (defun mevedel--optimize-transcript-buffer ()
   "Apply buffer-local performance settings for generated transcript buffers."

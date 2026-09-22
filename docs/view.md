@@ -295,6 +295,8 @@ may indent further to express their hierarchy. Ordinary response prose and
 whole-turn headers or folds remain flush-left. Body insets are display-only,
 including on wrapped continuation lines, so copied disclosure content retains
 its authoritative text without presentation padding.
+Restoring an expanded system-reminder audit uses its ordinary disclosure renderer:
+one summary header and the same audit face survive both full and live redraws.
 Agent paths in launch handles and delivery cards use link highlighting.
 Delivery headers use `mevedel-view-mailbox-header`, a keyword face with no
 added bold weight. Completion checkmarks use the same success face as tool rows.
@@ -979,7 +981,9 @@ user major-mode hooks and local variables. Use
 `mevedel-view--with-render-temp-buffer` rather than raw
 `with-temp-buffer` plus mode activation. The shared mode setup and Markdown
 fontification buffer live in `mevedel-view-fontify.el`; response cache policy
-and invalidation remain in `mevedel-view-render.el`.
+and invalidation remain in `mevedel-view-render.el`. Generated transcript mode
+setup also suppresses persistent Org element-cache loading; ordinary user Org
+buffers keep their configuration.
 
 Assistant response text is rendered as Markdown in the view. The data
 buffer remains org-mode for gptel state, tool parsing, and persistence,
@@ -1075,7 +1079,10 @@ text properties. The existing Markdown realignment timer formats one visible
 pending or width-stale table after 250 ms idle. Off-screen and folded tables wait until
 scrolling or unfolding makes them visible. A partially visible table is still rendered
 as a whole; one very large table can exceed the idle delay. There is no
-background queue sorted by cursor distance.
+background queue sorted by cursor distance. Interactive visibility uses Emacs's
+current window end, reusing completed redisplay and accounting for variable-height
+rows. Changed window contents or scroll positions request an updated boundary;
+batch rendering, which has no glyph matrices, uses its line-motion approximation.
 
 `mevedel-view-mode` schedules that job from decoration, window size/buffer
 changes, scrolling, and commands. Each buffer owns one cancellable timer;
@@ -1112,6 +1119,10 @@ Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
 `mevedel-view-render.el` retains the surrounding turn projection. Each
 tool-attached hook audit uses its own transcript span, so audits attached to
 one tool retain independent collapse state across rerenders.
+
+Read-tool syntax selection keeps a bounded per-buffer path cache. Its rule
+snapshot includes copied regular expressions, so replacing or mutating
+`auto-mode-alist` invalidates cached selections, including misses.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
@@ -1557,9 +1568,12 @@ rerendered transcript exposes it through the same disclosure; it does not run
 the prompt hook again.
 
 The renderer builds hook audit surfaces from visible hook audit records.
-Buffer directive discovery scans trusted audit blocks directly, without copying
-the whole transcript. A buffer-local bounded memo reuses pure decoding for exact
-payload bytes; every scan still checks current provenance and positions. The
+Buffer directive discovery and fork-point classification scan trusted audit
+blocks directly, without copying the whole transcript. Range-limited scans omit
+partial records at either boundary and preserve the caller's narrowing. All audit
+readers share bounded pure decoding within the current buffer across projections,
+in addition to sharing decoding within one projection. Every scan still checks
+current provenance and positions. The
 memo retains at most 128 encoded payloads totaling 4 MiB, and does not retain an
 individual encoded payload larger than 1 MiB. It does not grant trust to quoted
 or edited audit-looking text.

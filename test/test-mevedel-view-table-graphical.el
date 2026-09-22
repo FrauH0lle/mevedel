@@ -8,6 +8,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-view)
 (require 'mevedel-view-markdown)
 (require 'mevedel-view-render)
 (require 'mevedel-view-table)
@@ -70,6 +71,35 @@
                                 (get-text-property (point-min) 'mevedel-view-table-source))))
                 (should (text-property-not-all (point-min) (point-max) 'mevedel-view-url nil)))))
         (set-frame-font original-font nil t)))))
+
+(mevedel-deftest mevedel-view-table--visible-stale ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (mevedel-test--with-displayed-buffer
+      (mevedel-view-mode)
+      (let ((inhibit-read-only t)
+            (source "| A | B |\n|---|---|\n| visible | table |\n"))
+        (unwind-protect
+            (progn
+              (insert (propertize " " 'display
+                                  `(space :height (,(+ 100 (window-pixel-height))))))
+              (insert "\n")
+              (let ((table (point)))
+                (insert source)
+                (mevedel-view--decorate-markdown-in-range table (point-max))
+                (goto-char (point-min))
+                (set-window-start (selected-window) (point-min))
+                (redisplay t)
+                ;; One tall display row fills the window; counting text rows
+                ;; would incorrectly classify the table below it as visible.
+                (should-not (mevedel-view-table--visible-stale (selected-window)))
+                (goto-char table)
+                (set-window-start (selected-window) table)
+                ;; Discover changed window start without waiting for redisplay.
+                (should (= table (car (mevedel-view-table--visible-stale (selected-window)))))
+                (redisplay t)
+                (should (= table (car (mevedel-view-table--visible-stale (selected-window)))))))
+          (mevedel-view--cancel-realign-timer))))))
 
 (provide 'test-mevedel-view-table-graphical)
 ;;; test-mevedel-view-table-graphical.el ends here

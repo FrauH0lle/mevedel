@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib))
+
 ;; `mevedel-utilities'
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
@@ -62,16 +64,37 @@ OBJECT is a string or buffer and defaults to the current buffer."
 (defvar mevedel-transcript-audit--decode-cache nil
   "Pure decoded records shared within one projection, or nil outside it.")
 
+(defvar-local mevedel-transcript-audit--buffer-records nil
+  "Bounded pure decoding memo for this buffer; never a provenance cache.")
+
+(defvar-local mevedel-transcript-audit--buffer-record-bytes 0
+  "Encoded bytes retained in the buffer decoding memo.")
+
 (defun mevedel--read-hook-audit-record (text)
   "Read one encoded hook audit record from TEXT, or nil.
-Reuse pure decoding within a projection.  Trust checks belong to callers."
-  (if (not mevedel-transcript-audit--decode-cache)
-      (mevedel-transcript-audit--decode text)
-    (if-let* ((entry (gethash text mevedel-transcript-audit--decode-cache)))
-        (cdr entry)
-      (let ((record (mevedel-transcript-audit--decode text)))
-        (puthash text (cons t record) mevedel-transcript-audit--decode-cache)
-        record))))
+Reuse pure decoding within a projection and across calls in this buffer.
+Keep at most 128 payloads totaling 4 MiB, with a 1 MiB per-payload limit.
+Trust checks always belong to callers; cached records convey no authority."
+  (unless mevedel-transcript-audit--buffer-records
+    (setq mevedel-transcript-audit--buffer-records (make-hash-table :test #'equal)))
+  (let* ((memo mevedel-transcript-audit--buffer-records)
+         (entry (or (and mevedel-transcript-audit--decode-cache
+                         (gethash text mevedel-transcript-audit--decode-cache))
+                    (gethash text memo))))
+    (unless entry
+      (setq entry (cons t (mevedel-transcript-audit--decode text)))
+      (let ((bytes (string-bytes (or text ""))))
+        (when (<= bytes (* 1024 1024))
+          (when (or (>= (hash-table-count memo) 128)
+                    (> (+ mevedel-transcript-audit--buffer-record-bytes bytes)
+                       (* 4 1024 1024)))
+            (clrhash memo)
+            (setq mevedel-transcript-audit--buffer-record-bytes 0))
+          (cl-incf mevedel-transcript-audit--buffer-record-bytes bytes)
+          (puthash text entry memo))))
+    (when mevedel-transcript-audit--decode-cache
+      (puthash text entry mevedel-transcript-audit--decode-cache))
+    (cdr entry)))
 
 (defun mevedel-transcript-audit--decode (text)
   "Read one encoded hook audit record from TEXT, or nil."
@@ -180,47 +203,28 @@ render allocation."
               (setq search end)))))
       (nreverse spans))))
 
-(defvar-local mevedel-transcript-audit--buffer-records nil
-  "Bounded pure decoding memo for this buffer; never a provenance cache.")
-
-(defvar-local mevedel-transcript-audit--buffer-record-bytes 0
-  "Encoded bytes retained in the buffer decoding memo.")
-
-(defun mevedel-transcript-audit-buffer-spans (&optional type)
+(defun mevedel-transcript-audit-buffer-spans (&optional type start end)
   "Return current buffer audit spans, optionally restricted to TYPE.
-Positions are absolute.  Check current provenance and exact payload bytes on
-every scan, reusing only pure decoding.  Never copy the whole transcript.
-Keep at most 128 payloads totaling 4 MiB, with a 1 MiB per-payload limit."
-  (unless mevedel-transcript-audit--buffer-records
-    (setq mevedel-transcript-audit--buffer-records (make-hash-table :test #'equal)))
+Positions are absolute.  START and END bound the scan, defaulting to the
+whole widened buffer.  Partial records at either bound are excluded.
+Check current provenance and exact payload bytes on every scan, reusing
+only pure decoding.  Never copy the whole transcript."
   (save-excursion
     (save-restriction
       (widen)
+      (narrow-to-region (or start (point-min)) (or end (point-max)))
       (goto-char (point-min))
       (let (spans)
         (while (search-forward mevedel--hook-audit-open nil t)
-          (let ((start (match-beginning 0)) (body (point)))
-            (when (and (mevedel-transcript-audit-trusted-range-p start body)
+          (let ((open (match-beginning 0)) (body (point)))
+            (when (and (mevedel-transcript-audit-trusted-range-p open body)
                        (search-forward mevedel--hook-audit-close nil t))
-              (let ((end (point)) (close (match-beginning 0)))
-                (when (mevedel-transcript-audit-trusted-range-p start end)
-                  (let* ((text (buffer-substring-no-properties body close))
-                         (memo mevedel-transcript-audit--buffer-records)
-                         (entry (gethash text memo)))
-                    (unless entry
-                      (setq entry (cons t (mevedel--read-hook-audit-record text)))
-                      (when (<= (string-bytes text) (* 1024 1024))
-                        (when (or (>= (hash-table-count memo) 128)
-                                  (> (+ mevedel-transcript-audit--buffer-record-bytes
-                                        (string-bytes text)) (* 4 1024 1024)))
-                          (clrhash memo)
-                          (setq mevedel-transcript-audit--buffer-record-bytes 0))
-                        (setq mevedel-transcript-audit--buffer-record-bytes
-                              (+ mevedel-transcript-audit--buffer-record-bytes (string-bytes text)))
-                        (puthash text entry memo)))
-                    (when (and (cdr entry)
-                               (or (null type) (eq (plist-get (cdr entry) :type) type)))
-                      (push (list :record (cdr entry) :start start :end end) spans))))))))
+              (let ((close (match-beginning 0)) (finish (point)))
+                (when-let* (((mevedel-transcript-audit-trusted-range-p open finish))
+                            (record (mevedel--read-hook-audit-record
+                                     (buffer-substring-no-properties body close)))
+                            ((or (null type) (eq (plist-get record :type) type))))
+                  (push (list :record record :start open :end finish) spans))))))
         (nreverse spans)))))
 
 (defun mevedel-transcript-audit-records (text &optional type)

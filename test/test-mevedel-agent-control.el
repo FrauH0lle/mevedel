@@ -1451,15 +1451,15 @@
               (should (stringp
                        (mevedel-agent-record-conversation-location record)))))
             (let* ((parent-invocation (car invocations))
-                   (mevedel--agent-invocation parent-invocation)
                    outcome)
               (cl-letf (((symbol-function
                           'mevedel-session-persistence-save-agent-state)
                          (lambda (&rest _) t)))
-                (mevedel-agent-control-spawn
-                 session "research" "Investigate first."
-                 (lambda (value) (setq outcome value))
-                 :role "explorer"))
+                (with-current-buffer (mevedel-agent-invocation-buffer parent-invocation)
+                  (mevedel-agent-control-spawn
+                   session "research" "Investigate first."
+                   (lambda (value) (setq outcome value))
+                   :role "explorer")))
               (should-not (plist-get outcome :error))
               (let ((nested (plist-get outcome :record)))
               (should (equal "/root/worker/research"

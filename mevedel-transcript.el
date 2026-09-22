@@ -32,8 +32,8 @@
                   "mevedel-tool-render-data" (start end &optional object))
 
 ;; `mevedel-transcript-audit'
-(declare-function mevedel-transcript-audit-spans
-                  "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-audit-buffer-spans
+                  "mevedel-transcript-audit" (&optional type start end))
 (declare-function mevedel-transcript-audit-trusted-range-p
                   "mevedel-transcript-audit" (start end &optional object))
 
@@ -777,10 +777,8 @@ runs and incomplete control text remains ordinary transcript text."
                   scan-start scan-end segments)))
     (setq segments (mevedel-transcript--overlay-ranges segments ranges))
     (dolist (span
-             (mevedel-transcript-audit-spans
-              (buffer-substring scan-start scan-end)
-              'fork-point))
-      (let ((prompt-start (+ scan-start (plist-get span :end)))
+             (mevedel-transcript-audit-buffer-spans 'fork-point scan-start scan-end))
+      (let ((prompt-start (plist-get span :end))
             prompt-end)
         (dolist (segment segments)
           (when (and (>= (cadr segment) prompt-start)

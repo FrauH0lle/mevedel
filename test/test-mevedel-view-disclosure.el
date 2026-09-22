@@ -1034,7 +1034,37 @@ the preceding header."
         (should (string-match-p
                  "restorable body"
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker)))))))
+                  (point-min) mevedel-view--input-marker))))))
+  :doc "restores expanded reminders without duplicate headings or lost faces"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Continue\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel--format-hook-audit-record
+      '(:type injected-reminders :phase turn-start
+        :items ((:type agent-roster :body "Child agent is running.")
+                (:type context-resources :body "Read shared working files."))))
+     'mevedel-hook-audit)
+    (mevedel-view-test--insert-data data-buf "Continuing.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "2 system reminders")
+      (mevedel-view-toggle-section)
+      (goto-char (mevedel-view--input-start))
+      (insert "> quoted draft\nsecond line")
+      (goto-char (+ (mevedel-view--input-start) 4))
+      (dotimes (_ 2)
+        (mevedel-view--full-rerender)
+        (should (equal "> quoted draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "2 system reminders" (buffer-string))))
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "Child agent is running.")
+          (should (eq (get-text-property (1- (point)) 'font-lock-face)
+                      'mevedel-view-hook-audit)))))))
 
 (mevedel-deftest mevedel-view-toggle-section/live-tail ()
   ,test

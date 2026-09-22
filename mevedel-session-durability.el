@@ -582,22 +582,28 @@ Return the record names observed after the write, or nil when the proof
 failed."
   (let* ((path (mevedel-session-durability--generation-path
                 directory generation))
+         (bytes (mevedel-session-durability--record-bytes record))
+         (changed (not (equal expected bytes)))
+         (refresh-time (not (mevedel-session-durability--target-time-cached-p directory)))
          ;; `verify' stays first: the takeover race tests key on the commit
-         ;; program by its opening operation.  The clock rides last so a
-         ;; successful renewal refreshes the transaction clock's reuse
-         ;; window and the next renewal can assume instead of observing.
+         ;; program by its opening operation.  A fresh transaction clock
+         ;; needs no new marker here.  Never extend its reuse window without
+         ;; reading the target again; a slow operation expires it naturally.
          (results
           (mevedel-session-control-fs-run-program
-           (list (list :op 'verify :path path :content expected)
-                 (list :op 'write :path path
-                       :content (mevedel-session-durability--record-bytes
-                                 record))
-                 (list :op 'list-directory :path directory)
-                 (list :op 'target-time :path directory :optional t))))
+           (append
+            (list (list :op 'verify :path path :content expected))
+            ;; Several renewals can share one target-clock second.  Prove
+            ;; the unchanged bytes without replacing them with themselves;
+            ;; the head observation and clock refresh still follow.
+            (when changed (list (list :op 'write :path path :content bytes)))
+            (list (list :op 'list-directory :path directory))
+            (when refresh-time
+              (list (list :op 'target-time :path directory :optional t))))))
          (proof (nth 0 results))
-         (write (nth 1 results))
-         (listing (nth 2 results))
-         (clock (nth 3 results)))
+         (write (and changed (nth 1 results)))
+         (listing (nth (if changed 2 1) results))
+         (clock (and refresh-time (nth (if changed 3 2) results))))
     (when (eq 'ok (plist-get clock :status))
       (mevedel-session-durability--note-target-time
        directory (plist-get clock :value)))
@@ -605,7 +611,7 @@ failed."
      ((memq (plist-get proof :status) '(mismatch absent)) nil)
      ((not (eq 'ok (plist-get proof :status)))
       (mevedel-session-control-fs-program-value proof))
-     ((not (eq 'ok (plist-get write :status)))
+     ((and changed (not (eq 'ok (plist-get write :status))))
       (mevedel-session-control-fs-program-value write))
      (t (or (plist-get listing :value) t)))))
 

@@ -338,16 +338,21 @@ The caller must have accepted the decision before releasing this write fence."
                 (plist-get target :directory)))
         (mevedel-session-control-fs-program-value result)))))
 
-(defun mevedel-memory-write-list (workspace)
+(defun mevedel-memory-write-list (workspace &optional ids)
   "Inspect retained write records in WORKSPACE without mutating targets.
 Each row has :id, and readable rows have :hash and :intent. Check original root
 authority before reporting :marked. Preserve unreadable or unavailable records
 with :error instead of dropping them or rebinding their target. Private intent
-bodies require a separate original-root authority check before presentation."
+bodies require a separate original-root authority check before presentation.
+IDS restricts inspection to those write identities, still reading each afresh."
   (let (records)
-    (dolist (path (mevedel-session-control-fs-list-directory
-                   (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))
-      (let ((row (list :id (file-name-sans-extension (file-name-nondirectory path)))))
+    (dolist (id (or ids
+                    (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
+                            (mevedel-session-control-fs-list-directory
+                             (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))))
+      (unless (mevedel-journal-store-id-p id) (error "Invalid memory write identity"))
+      (let ((row (list :id id))
+            (path (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el"))))
         (condition-case err
             (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes)))
                    (hash (secure-hash 'sha256 text))

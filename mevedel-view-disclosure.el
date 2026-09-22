@@ -441,6 +441,8 @@ knows the freshly rendered span was rewritten after insertion."
                         (mevedel-view-render-toggle-turn collapsed))
                        ((eq vtype 'mailbox-delivery)
                         (mevedel-view-disclosure--toggle-mailbox))
+                       ((eq vtype 'hook-audit)
+                        (mevedel-view-audit-toggle-hook-audit))
                        ((eq vtype 'tool-child)
                         (mevedel-view-render-toggle-child-call))
                        ((eq vtype 'user-input-summary)

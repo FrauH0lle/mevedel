@@ -365,7 +365,7 @@
          (workspace (test-mevedel-session-persistence--make-workspace root))
          (mevedel-history-search--cache (make-hash-table :test #'equal))
          (mevedel-history-search--cache-bytes 0)
-         (native (symbol-function 'process-file))
+         (native (symbol-function 'mevedel-session-control-fs-run-program))
          (programs 0)
          pairs)
     (unwind-protect
@@ -375,7 +375,7 @@
                    workspace (format "source-%d" index)
                    (format "Batch evidence canary-%d\n" index)) pairs))
           (let ((result
-                 (cl-letf (((symbol-function 'process-file)
+                 (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
                             (lambda (&rest args)
                               (cl-incf programs)
                               (apply native args))))
@@ -385,8 +385,8 @@
             (dotimes (index 6)
               (should (string-search (format "canary-%d" index) (plist-get result :result))))
             ;; Two discovery programs, three publication stages, one pinned
-            ;; transcript batch and at most one search-binary availability probe.
-            (should (<= programs 7))))
+            ;; transcript batch. Helper admission and binary probes are separate.
+            (should (<= programs 6))))
       (dolist (pair pairs)
         (when (buffer-live-p (cdr pair))
           (with-current-buffer (cdr pair) (set-buffer-modified-p nil))
@@ -479,6 +479,11 @@
                        (let ((handle (apply native-helper callback name
                                             (append '("sh" "-c" "sleep 2; exec \"$@\"" "history-test") command)
                                             paths roots keys)))
+                         ;; Preparation can yield before the actual helper
+                         ;; exists.  This case closes the owner at launch;
+                         ;; discovery cancellation has separate coverage.
+                         (with-timeout (5 (ert-fail "History helper did not start"))
+                           (while (not child) (accept-process-output nil 0.01)))
                          (setq reached t)
                          (if (eq kind 'buffer) (kill-buffer owner)
                            (mevedel-request-drain-cancellers request))
@@ -646,7 +651,7 @@
          (workspace (test-mevedel-session-persistence--make-file-workspace root))
          (mevedel-history-search--cache (make-hash-table :test #'equal))
          (mevedel-history-search--cache-bytes 0)
-         (native (symbol-function 'process-file))
+         (native (symbol-function 'mevedel-session-control-fs-run-program))
          (programs 0)
          sources)
     (unwind-protect
@@ -657,7 +662,7 @@
                    (format "Batch evidence canary-%d\n" index)) sources))
           (let ((text
                  (plist-get
-                  (cl-letf (((symbol-function 'process-file)
+                  (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
                              (lambda (&rest args)
                                (cl-incf programs)
                                (apply native args))))
@@ -666,8 +671,8 @@
                                                     :output_mode "content"))) :result)))
             (dotimes (index 6)
               (should (string-search (format "canary-%d" index) text)))
-            ;; Control probes, sidecars, transcripts, optional binary probe.
-            (should (<= programs 4)))
+            ;; Control probes, sidecars and transcripts; helper admission is separate.
+            (should (<= programs 3)))
           (let* ((path (file-name-concat (mevedel-session-save-path (caar sources))
                                          "session.meta.el"))
                  (attributes (file-attributes path))
