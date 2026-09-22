@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-session-publication)
+(require 'mevedel-journal-worker)
 (require 'mevedel-structs)
 (require 'mevedel-transport)
 
@@ -33,6 +34,8 @@
   (when-let* ((job (gethash session mevedel-session-collection--jobs)))
     (when-let* ((timer (plist-get job :timer))) (cancel-timer timer))
     (remhash session mevedel-session-collection--jobs)
+    (when-let* ((worker (plist-get job :worker)))
+      (when (process-live-p worker) (delete-process worker)))
     (when (buffer-live-p (plist-get job :buffer))
       (with-current-buffer (plist-get job :buffer)
         (remove-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill t)))))
@@ -62,6 +65,36 @@
         (add-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill nil t))
       (mevedel-session-collection--arm session job))))
 
+(defun mevedel-session-collection--observed (session job directory head generations result)
+  "Accept JOB's immutable observations for HEAD and GENERATIONS from RESULT.
+Cache observations only; the editor still checks authority and pins at deletion."
+  (when mevedel-journal-worker--stopping
+    (mevedel-session-collection-cancel session))
+  (when (eq job (gethash session mevedel-session-collection--jobs))
+    (plist-put job :worker nil)
+    (condition-case err
+        (let ((observations (plist-get result :observations))
+              (current-directory (mevedel-session-save-path session)))
+          (unless (equal directory current-directory)
+            (error "Collection source directory changed"))
+          (when (plist-get result :error) (error "%s" (plist-get result :error)))
+          (unless (equal (mapcar #'car observations)
+                         (mapcar (lambda (generation) (plist-get generation :head)) generations))
+            (error "Collection observations name another generation set"))
+          (dolist (observation observations)
+            (let ((key (mevedel-session-publication--publication-path directory (car observation))))
+              (when (nth 1 observation)
+                (puthash key (nth 1 observation) mevedel-session-publication--generation-cache))
+              (when (nth 2 observation)
+                (puthash key (nth 2 observation) mevedel-session-publication--facts-cache))))
+          (plist-put job :worker-scanned head)
+          (mevedel-session-collection--arm session job))
+      (error
+       (mevedel-session-collection-cancel session)
+       (display-warning 'mevedel
+                        (format "Could not prepare publication collection: %s" (error-message-string err))
+                        :warning)))))
+
 (defun mevedel-session-collection--step (session job)
   "Advance JOB by a bounded slice, preserving SESSION's live ownership."
   (when (eq job (gethash session mevedel-session-collection--jobs))
@@ -85,39 +118,59 @@
                 (mevedel-session-publication-queue session)
                 (mevedel-session-publication-active-p session))
             (mevedel-session-collection--arm session job))
+           ((plist-get job :worker) nil)
            (t
             (mevedel-transport-with-exclusive-connection
-              (mevedel-session-durability-with-transaction
-                (if (not (mevedel-session-durability-lease-owned-p session))
-                    (mevedel-session-collection-cancel session)
-                  (let ((head (plist-get (mevedel-session-publication session) :head))
-                        (deadline (+ (float-time) mevedel-session-collection--slice-seconds))
-                        (count 0))
-                    (unless (equal head (plist-get job :head))
-                      (setf (plist-get job :head) head
-                            (plist-get job :summaries) nil
-                            (plist-get job :plan) nil
-                            (plist-get job :remaining)
-                            (mevedel-session-publication--generation-names directory)))
-                    (while (and (plist-get job :remaining)
-                                (< count 8)
-                                (or (zerop count) (< (float-time) deadline))
-                                (not (input-pending-p)))
-                      (push (mevedel-session-publication-generation-summary
-                             directory (car (plist-get job :remaining)) t)
-                            (plist-get job :summaries))
-                      (setf (plist-get job :remaining) (cdr (plist-get job :remaining)))
-                      (setq count (1+ count)))
-                    (if (or (plist-get job :remaining) (> count 0) (input-pending-p))
+             (mevedel-session-durability-with-transaction
+              (if (not (mevedel-session-durability-lease-owned-p session))
+                  (mevedel-session-collection-cancel session)
+                (let ((head (plist-get (mevedel-session-publication session) :head))
+                      (deadline (+ (float-time) mevedel-session-collection--slice-seconds))
+                      (count 0))
+                  (unless (equal head (plist-get job :head))
+                    (setf (plist-get job :head) head
+                          (plist-get job :summaries) nil
+                          (plist-get job :plan) nil
+                          (plist-get job :remaining)
+                          (mevedel-session-publication--generation-names directory)))
+                  (when (and (not (equal head (plist-get job :worker-scanned)))
+                             (not (file-remote-p directory))
+                             (mevedel-session-workspace session)
+                             (mevedel-journal-worker-supported-p (mevedel-session-workspace session)))
+                    (let ((cold
+                           (seq-filter
+                            (lambda (generation)
+                              (let ((key (mevedel-session-publication--publication-path directory (plist-get generation :head))))
+                                (not (and (gethash key mevedel-session-publication--generation-cache)
+                                          (gethash key mevedel-session-publication--facts-cache)))))
+                            (plist-get job :remaining))))
+                      (when (> (length cold) 16)
+                        (plist-put job :worker
+                                   (mevedel-journal-worker-start
+                                    (mevedel-session-workspace session) 'generation-observations
+                                    (lambda (result) (mevedel-session-collection--observed session job directory head cold result))
+                                    nil (list :directory directory :generations cold))))))
+                  (while (and (not (plist-get job :worker))
+                              (plist-get job :remaining)
+                              (< count 8)
+                              (or (zerop count) (< (float-time) deadline))
+                              (not (input-pending-p)))
+                    (push (mevedel-session-publication-generation-summary
+                           directory (car (plist-get job :remaining)) t)
+                          (plist-get job :summaries))
+                    (setf (plist-get job :remaining) (cdr (plist-get job :remaining)))
+                    (setq count (1+ count)))
+                  (if (or (plist-get job :remaining) (> count 0) (input-pending-p))
+                      (unless (plist-get job :worker)
+                        (mevedel-session-collection--arm session job))
+                    (unless (plist-get job :plan)
+                      (setf (plist-get job :plan)
+                            (mevedel-session-publication-collection-plan
+                             session (reverse (plist-get job :summaries)))))
+                    (if (mevedel-session-publication-collect-step
+                         session (plist-get job :plan))
                         (mevedel-session-collection--arm session job)
-                      (unless (plist-get job :plan)
-                        (setf (plist-get job :plan)
-                              (mevedel-session-publication-collection-plan
-                               session (reverse (plist-get job :summaries)))))
-                      (if (mevedel-session-publication-collect-step
-                           session (plist-get job :plan))
-                          (mevedel-session-collection--arm session job)
-                        (mevedel-session-collection-cancel session))))))))))
+                      (mevedel-session-collection-cancel session))))))))))
 
       (error
        (mevedel-session-collection-cancel session)

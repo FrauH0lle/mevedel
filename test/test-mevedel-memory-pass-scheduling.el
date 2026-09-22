@@ -31,7 +31,8 @@
                           (calls 0) callback selected state result
                           (none "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes."))
                          :after-each ((mevedel-memory-pass-stop-all) (delete-directory root t)))
-                 (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
+                 (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
+                           ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
                            ((symbol-function 'mevedel-memory-review-request)
                             (lambda (_scope entries cb &rest _)
                               (cl-incf calls)

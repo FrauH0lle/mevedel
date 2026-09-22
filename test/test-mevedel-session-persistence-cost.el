@@ -247,6 +247,20 @@ directories -- the existence probes and the lease listings."
 (mevedel-deftest mevedel-session-persistence-choose-entry/cost ()
   ,test
   (test)
+  :doc "opening a project chooser never drains journal retention"
+  (let* ((root (make-temp-file "mevedel-chooser-retention-" t))
+         (workspace (mevedel-workspace--create :root root :id root :type 'project))
+         (directory (file-name-concat root ".mevedel/state/journal/captures")))
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (cl-letf (((symbol-function 'mevedel-journal-cleanup-expired)
+                     (lambda (&rest _) (ert-fail "Chooser ran journal retention")))
+                    ((symbol-function 'mevedel-journal-cleanup-schedule)
+                     (lambda (&rest _) (ert-fail "Chooser queued journal retention"))))
+            (should-not (mevedel-session-persistence-choose-entry workspace))))
+      (delete-directory root t)))
+
   :doc "sizes every incompatible row in one target program"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-incompatible-cost-" t)))

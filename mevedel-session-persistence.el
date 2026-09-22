@@ -64,9 +64,6 @@
                   (session buffer trigger &optional captures))
 (autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
 
-;; `mevedel-journal-cleanup'
-(declare-function mevedel-journal-cleanup-expired "mevedel-journal-cleanup" (workspace &optional force))
-(autoload 'mevedel-journal-cleanup-expired "mevedel-journal-cleanup")
 
 ;; `mevedel-journal-pins'
 (declare-function mevedel-journal-pins-present-p "mevedel-journal-pins" (session-dir))
@@ -2643,7 +2640,6 @@ non-nil the throttle is bypassed.
 
 Returns the number of sessions deleted, or nil when the cap is nil, WORKSPACE
 uses portable authority, or the throttle has already fired."
-  (mevedel-journal-cleanup-expired workspace force)
   (let ((sessions-dir
          (mevedel-session-artifacts-sessions-dir workspace)))
     (when (and mevedel-session-max-age-days

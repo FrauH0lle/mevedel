@@ -155,6 +155,59 @@
     (should-not (mevedel-transcript-directive-ranges
                  (concat start "ordinary text" end)))))
 
+(mevedel-deftest mevedel-transcript-audit-buffer-spans ()
+  ,test
+  (test)
+  :doc "matches string parsing, widens safely, and bounds retained decode keys"
+  (with-temp-buffer
+    (insert "literal <!-- mevedel-hook-audit -->\n")
+    (dotimes (n 140)
+      (insert (mevedel--format-hook-audit-record (list :type 'tool-context :number n))))
+    (let ((expected (mevedel-transcript-audit-spans (buffer-string))) actual)
+      (save-restriction
+        (narrow-to-region 1 2)
+        (setq actual (mevedel-transcript-audit-buffer-spans 'tool-context))
+        (should (= 2 (point-max))))
+      (should (= 140 (length actual)))
+      (cl-mapc (lambda (string-span buffer-span)
+                 (should (equal (plist-get string-span :record) (plist-get buffer-span :record)))
+                 (should (= (1+ (plist-get string-span :start)) (plist-get buffer-span :start)))
+                 (should (= (1+ (plist-get string-span :end)) (plist-get buffer-span :end))))
+               expected actual)
+      (should (<= (hash-table-count mevedel-transcript-audit--buffer-records) 128))
+      (should (<= mevedel-transcript-audit--buffer-record-bytes (* 4 1024 1024))))))
+
+(mevedel-deftest mevedel-transcript-buffer-directive-ranges ()
+  ,test
+  (test)
+  :doc "stream appends reuse audit decoding while edits and trust changes remain visible"
+  (with-temp-buffer
+    (let* ((start (mevedel--format-hook-audit-record
+                   '(:type directive-turn-boundary :edge start :directive-id "d" :turn 1)))
+           (end (mevedel--format-hook-audit-record
+                 '(:type directive-turn-boundary :edge end :directive-id "d" :turn 1)))
+           (decode (symbol-function 'mevedel-transcript-audit--decode))
+           (calls 0))
+      (insert start "body" end)
+      (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
+                 (lambda (text) (cl-incf calls) (funcall decode text))))
+        (let ((expected (mevedel-transcript-buffer-directive-ranges)))
+          (should (= 1 (length expected)))
+          (dotimes (_ 5)
+            (goto-char (point-max)) (insert "stream")
+            (should (equal expected (mevedel-transcript-buffer-directive-ranges))))
+          (should (= 2 calls)))
+        ;; Identical bytes without provenance must never reuse trusted ranges.
+        (remove-text-properties (point-min) (point-max)
+                                '(gptel nil mevedel-hook-audit nil))
+        (should-not (mevedel-transcript-buffer-directive-ranges))
+        (erase-buffer)
+        (insert start "changed body")
+        (should-error (mevedel-transcript-buffer-directive-ranges))
+        (let ((range (car (mevedel-transcript-buffer-directive-ranges t))))
+          (should (= (point-max) (plist-get range :end)))
+          (should (eq 'running (plist-get range :outcome))))))))
+
 (mevedel-deftest mevedel-transcript-exclude-directive-turns ()
   ,test
   (test)

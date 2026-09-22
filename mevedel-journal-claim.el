@@ -72,7 +72,8 @@ it must never be retained between operations."
   "Observe whether TOKEN and additional TOKENS are live, unsettled owners.
 Every call takes a fresh pinned target observation. This is a precondition,
 not atomic admission; settlement still uses its exclusive outcome election.
-All tokens must address the same execution target."
+All tokens must address the same execution target.  Newest-generation proof
+stays on the target instead of transferring and sorting its full history."
   (let* ((tokens (cons token tokens))
          (results
           (mevedel-session-control-fs-run-program
@@ -80,7 +81,8 @@ All tokens must address the same execution target."
             (lambda (owner)
               (let ((directory (mevedel-session-control-fs-physical-path
                                 (plist-get owner :directory))))
-                (list (list :op 'list-directory :path directory)
+                (list (list :op 'verify-latest :path (mevedel-journal-claim--path owner nil)
+                            :content ".claim")
                       (list :op 'read :path (mevedel-journal-claim--path owner nil))
                       (list :op 'absent :path (mevedel-journal-claim--path owner t))
                       (list :op 'target-time :path directory))))
@@ -90,10 +92,6 @@ All tokens must address the same execution target."
                   for observed on results by #'cddddr
                   always
                   (and
-                   (equal (file-name-nondirectory (mevedel-journal-claim--path owner nil))
-                          (car (sort (seq-filter
-                                      (lambda (name) (string-match-p mevedel-journal-claim--name-regexp name))
-                                      (plist-get (car observed) :value)) #'string>)))
                    (equal owner
                           (append (list :directory (mevedel-session-control-fs-physical-path
                                                     (plist-get owner :directory)))
@@ -225,33 +223,34 @@ Return the deletion count when the iterator completes."
                  directory "\\`[0-9]\\{20\\}\\.\\(?:claim\\|outcome\\)\\'"))
          (generations (sort (delete-dups (mapcar (lambda (path) (string-to-number (file-name-base path))) names)) #'<))
          (deleted 0))
-    (dolist (generation generations)
-      (iter-yield nil)
-      (when (and (< deleted limit) (< generation head) (not (memq generation protected)))
-        (let* ((token (list :directory directory :generation generation))
-               (claim-path (mevedel-journal-claim--path token nil))
-               (outcome-path (mevedel-journal-claim--path token t))
-               (claim (mevedel-journal-claim--read claim-path nil))
-               (outcome (mevedel-journal-claim--read outcome-path t)))
-          (when (and outcome (= generation (plist-get outcome :generation))
-                     (<= (plist-get outcome :expires-at) now)
-                     (or (null claim) (equal claim (mevedel-journal-claim--record outcome))))
-            (let ((results
-                   (mevedel-session-control-fs-run-program
-                    (append
-                     (list (list :op 'verify :path outcome-path
-                                 :content (json-serialize
-                                           (plist-put (copy-sequence outcome) :status
-                                                      (symbol-name (plist-get outcome :status))))))
-                     (if claim
-                         (list (list :op 'verify :path claim-path :content (json-serialize claim))
-                               (list :op 'delete-file :path claim-path))
-                       (list (list :op 'absent :path claim-path)))
-                     (list (list :op 'delete-file :path outcome-path)))
-                    directory)))
-              (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch absent))) results)
-                (mapc #'mevedel-session-control-fs-program-value results)
-                (cl-incf deleted)))))))
+    (while (and generations (< deleted limit))
+      (let ((generation (pop generations)))
+        (iter-yield nil)
+        (when (and (< generation head) (not (memq generation protected)))
+          (let* ((token (list :directory directory :generation generation))
+                 (claim-path (mevedel-journal-claim--path token nil))
+                 (outcome-path (mevedel-journal-claim--path token t))
+                 (claim (mevedel-journal-claim--read claim-path nil))
+                 (outcome (mevedel-journal-claim--read outcome-path t)))
+            (when (and outcome (= generation (plist-get outcome :generation))
+                       (<= (plist-get outcome :expires-at) now)
+                       (or (null claim) (equal claim (mevedel-journal-claim--record outcome))))
+              (let ((results
+                     (mevedel-session-control-fs-run-program
+                      (append
+                       (list (list :op 'verify :path outcome-path
+                                   :content (json-serialize
+                                             (plist-put (copy-sequence outcome) :status
+                                                        (symbol-name (plist-get outcome :status))))))
+                       (if claim
+                           (list (list :op 'verify :path claim-path :content (json-serialize claim))
+                                 (list :op 'delete-file :path claim-path))
+                         (list (list :op 'absent :path claim-path)))
+                       (list (list :op 'delete-file :path outcome-path)))
+                      directory)))
+                (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch absent))) results)
+                  (mapc #'mevedel-session-control-fs-program-value results)
+                  (cl-incf deleted))))))))
     deleted))
 
 (provide 'mevedel-journal-claim)

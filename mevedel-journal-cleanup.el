@@ -16,6 +16,7 @@
 (require 'mevedel-journal-index)
 (require 'mevedel-journal-store)
 (require 'mevedel-structs)
+(require 'mevedel-journal-worker)
 
 (autoload 'mevedel-journal-gc "mevedel-journal-gc")
 
@@ -239,6 +240,12 @@ Select at most LIMIT content groups (default 50), including recovery."
                    (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))))))
     deleted))
 
+(defvar mevedel-journal-cleanup--journal-only nil
+  "Non-nil in a worker whose editor already handled live artifact retention.")
+
+(defvar mevedel-journal-cleanup--more nil
+  "Non-nil when this batch made progress and another opportunity is useful.")
+
 (iter-defun mevedel-journal-cleanup--steps (workspace force)
   "Yield between WORKSPACE cleanup phases, bypassing its throttle with FORCE.
 Claims remain held across yields.  Closing the iterator settles acquired
@@ -247,7 +254,7 @@ claims.  Live-buffer artifact retention remains an indivisible phase."
              (or force (null (mevedel-workspace-journal-cleanup-at workspace))
                  (>= (- (float-time) (mevedel-workspace-journal-cleanup-at workspace)) 3600)))
     (setf (mevedel-workspace-journal-cleanup-at workspace) (float-time))
-    (mevedel-state-cleanup workspace)
+    (unless mevedel-journal-cleanup--journal-only (mevedel-state-cleanup workspace))
     (iter-yield nil)
     (condition-case err
         (let* ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
@@ -286,6 +293,7 @@ claims.  Live-buffer artifact retention remains an indivisible phase."
                            (_ (iter-yield nil))
                            (deleted (mevedel-journal-cleanup--owned workspace claim (plist-get collected :remaining))))
                       (when (> (+ (plist-get collected :progress) deleted) 0)
+                        (setq mevedel-journal-cleanup--more t)
                         (mevedel-journal-cleanup-schedule workspace t))
                       deleted)
                   (when present (setf (mevedel-workspace-journal-cleanup-at workspace) nil))
@@ -296,8 +304,10 @@ claims.  Live-buffer artifact retention remains an indivisible phase."
             (when digest (ignore-errors (mevedel-journal-claim-settle digest 'completed "")))
             (when claim (ignore-errors (mevedel-journal-claim-settle claim 'completed "")))))
       (error
-       (message "mevedel: journal cleanup failed: %s" (error-message-string err))
-       nil))))
+       (if mevedel-journal-worker--child-p
+           (signal (car err) (cdr err))
+         (message "mevedel: journal cleanup failed: %s" (error-message-string err))
+         nil)))))
 
 ;;;###autoload
 (defun mevedel-journal-cleanup-expired (workspace &optional force)
@@ -305,7 +315,10 @@ claims.  Live-buffer artifact retention remains an indivisible phase."
 Throttle opportunities to once an hour unless FORCE is non-nil.  Live mutation
 or digest owners postpone cleanup.  No inference runs.  Return a deletion count
 or nil when busy, throttled, or unavailable."
-  (iter-do (_ (mevedel-journal-cleanup--steps workspace force))))
+  (let (guard)
+    (iter-do (value (mevedel-journal-cleanup--steps workspace force))
+      (when (functionp value) (setq guard value))
+      (when guard (funcall guard)))))
 
 (defvar mevedel-journal-cleanup--inhibit-scheduling nil
   "Non-nil suppresses idle cleanup during exit or isolated tests.")
@@ -323,11 +336,12 @@ coalesce; a forced request received during cleanup runs after that batch."
            (old (gethash root mevedel-journal-cleanup--pending)))
       (if old
           (setcdr old (or force (cdr old)))
-        (let ((job (cons nil force)) iterator guard)
+        (let ((job (cons nil force)) iterator guard worker)
           (cl-labels
               ((finish ()
                  (when iterator (iter-close iterator) (setq iterator nil))
                  (remhash root mevedel-journal-cleanup--pending)
+                 (when (and worker (process-live-p worker)) (delete-process worker))
                  (when (cdr job) (mevedel-journal-cleanup-schedule workspace t)))
                (cancel ()
                  (setcdr job nil)
@@ -341,13 +355,36 @@ coalesce; a forced request received during cleanup runs after that batch."
                               (condition-case err
                                   (if mevedel-journal-cleanup--inhibit-scheduling
                                       (finish)
-                                    (unless iterator
-                                      (setq iterator (mevedel-journal-cleanup--steps workspace (cdr job)))
-                                      (setcdr job nil))
-                                    (when guard (funcall guard))
-                                    (when-let* ((value (iter-next iterator)))
-                                      (when (functionp value) (setq guard value)))
-                                    (setcar job (run-at-time .001 nil #'step)))
+                                    (if (mevedel-journal-worker-supported-p workspace)
+                                        (let ((force (cdr job)))
+                                          (setcdr job nil)
+                                          (if (and (not force)
+                                                   (mevedel-workspace-journal-cleanup-at workspace)
+                                                   (< (- (float-time) (mevedel-workspace-journal-cleanup-at workspace)) 3600))
+                                              (finish)
+                                            (mevedel-state-cleanup workspace)
+                                            (setq worker
+                                                  (mevedel-journal-worker-start
+                                                   workspace 'cleanup
+                                                   (lambda (result)
+                                                     (when (eq job (gethash root mevedel-journal-cleanup--pending))
+                                                       (setf (mevedel-workspace-journal-observation workspace) nil
+                                                             (mevedel-workspace-memory-observation workspace) nil
+                                                             (mevedel-workspace-journal-cleanup-at workspace)
+                                                             (plist-get result :cleanup-at))
+                                                       (when (plist-get result :more) (setcdr job t))
+                                                       (when (and (plist-get result :error)
+                                                                  (not mevedel-journal-cleanup--inhibit-scheduling))
+                                                         (message "mevedel: journal cleanup failed: %s" (plist-get result :error)))
+                                                       (finish)))
+                                                   force))))
+                                      (unless iterator
+                                        (setq iterator (mevedel-journal-cleanup--steps workspace (cdr job)))
+                                        (setcdr job nil))
+                                      (when guard (funcall guard))
+                                      (when-let* ((value (iter-next iterator)))
+                                        (when (functionp value) (setq guard value)))
+                                      (setcar job (run-at-time .001 nil #'step))))
                                 (iter-end-of-sequence (finish))
                                 ((error quit)
                                  (finish)

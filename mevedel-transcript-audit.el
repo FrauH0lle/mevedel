@@ -180,20 +180,69 @@ render allocation."
               (setq search end)))))
       (nreverse spans))))
 
+(defvar-local mevedel-transcript-audit--buffer-records nil
+  "Bounded pure decoding memo for this buffer; never a provenance cache.")
+
+(defvar-local mevedel-transcript-audit--buffer-record-bytes 0
+  "Encoded bytes retained in the buffer decoding memo.")
+
+(defun mevedel-transcript-audit-buffer-spans (&optional type)
+  "Return current buffer audit spans, optionally restricted to TYPE.
+Positions are absolute.  Check current provenance and exact payload bytes on
+every scan, reusing only pure decoding.  Never copy the whole transcript.
+Keep at most 128 payloads totaling 4 MiB, with a 1 MiB per-payload limit."
+  (unless mevedel-transcript-audit--buffer-records
+    (setq mevedel-transcript-audit--buffer-records (make-hash-table :test #'equal)))
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (let (spans)
+        (while (search-forward mevedel--hook-audit-open nil t)
+          (let ((start (match-beginning 0)) (body (point)))
+            (when (and (mevedel-transcript-audit-trusted-range-p start body)
+                       (search-forward mevedel--hook-audit-close nil t))
+              (let ((end (point)) (close (match-beginning 0)))
+                (when (mevedel-transcript-audit-trusted-range-p start end)
+                  (let* ((text (buffer-substring-no-properties body close))
+                         (memo mevedel-transcript-audit--buffer-records)
+                         (entry (gethash text memo)))
+                    (unless entry
+                      (setq entry (cons t (mevedel--read-hook-audit-record text)))
+                      (when (<= (string-bytes text) (* 1024 1024))
+                        (when (or (>= (hash-table-count memo) 128)
+                                  (> (+ mevedel-transcript-audit--buffer-record-bytes
+                                        (string-bytes text)) (* 4 1024 1024)))
+                          (clrhash memo)
+                          (setq mevedel-transcript-audit--buffer-record-bytes 0))
+                        (setq mevedel-transcript-audit--buffer-record-bytes
+                              (+ mevedel-transcript-audit--buffer-record-bytes (string-bytes text)))
+                        (puthash text entry memo)))
+                    (when (and (cdr entry)
+                               (or (null type) (eq (plist-get (cdr entry) :type) type)))
+                      (push (list :record (cdr entry) :start start :end end) spans))))))))
+        (nreverse spans)))))
+
 (defun mevedel-transcript-audit-records (text &optional type)
   "Return audit records parsed from TEXT, optionally restricted to TYPE."
   (mapcar (lambda (span) (plist-get span :record))
           (mevedel-transcript-audit-spans text type)))
 
 (defun mevedel-transcript--audit-block-start (text start)
-  "Return START including TEXT's generated leading newline when present."
-  (if (and (> start 0) (eq (aref text (1- start)) ?\n))
+  "Return START including TEXT's generated leading newline when present.
+TEXT may also be the current buffer."
+  (if (if (bufferp text)
+          (eq (char-before start) ?\n)
+        (and (> start 0) (eq (aref text (1- start)) ?\n)))
       (1- start)
     start))
 
 (defun mevedel-transcript--audit-block-end (text end)
-  "Return END including TEXT's generated trailing newline when present."
-  (if (and (< end (length text)) (eq (aref text end) ?\n))
+  "Return END including TEXT's generated trailing newline when present.
+TEXT may also be the current buffer."
+  (if (if (bufferp text)
+          (eq (char-after end) ?\n)
+        (and (< end (length text)) (eq (aref text end) ?\n)))
       (1+ end)
     end))
 
@@ -215,12 +264,13 @@ render allocation."
       (apply #'concat (nreverse parts)))))
 
 (defun mevedel-transcript-directive-ranges (text &optional allow-open)
-  "Return directive turn ranges parsed from TEXT.
+  "Return directive turn ranges parsed from TEXT or the current buffer.
 Signal when directive boundaries are unmatched, nested, or disagree on
 directive identity or reserved turn.  When ALLOW-OPEN is non-nil, include
 one unmatched final start as a running range through the end of TEXT."
-  (let ((spans (mevedel-transcript-audit-spans
-                text 'directive-turn-boundary))
+  (let ((spans (if (bufferp text)
+                   (mevedel-transcript-audit-buffer-spans 'directive-turn-boundary)
+                 (mevedel-transcript-audit-spans text 'directive-turn-boundary)))
         open
         ranges)
     (dolist (span spans)
@@ -271,8 +321,8 @@ one unmatched final start as a running range through the end of TEXT."
                       text (plist-get open :start))
               :body-start (mevedel-transcript--audit-block-end
                            text (plist-get open :end))
-              :body-end (length text)
-              :end (length text)
+              :body-end (if (bufferp text) (point-max) (length text))
+              :end (if (bufferp text) (point-max) (length text))
               :directive-id (plist-get record :directive-id)
               :action (plist-get record :action)
               :turn (plist-get record :turn)
@@ -287,15 +337,7 @@ one unmatched final start as a running range through the end of TEXT."
 ALLOW-OPEN is forwarded to `mevedel-transcript-directive-ranges'."
   (save-restriction
     (widen)
-    (let ((base (point-min)))
-      (mapcar
-       (lambda (range)
-         (dolist (key '(:start :body-start :body-end :end))
-           (plist-put range key (+ base (plist-get range key))))
-         range)
-       (mevedel-transcript-directive-ranges
-        (buffer-substring (point-min) (point-max))
-        allow-open)))))
+    (mevedel-transcript-directive-ranges (current-buffer) allow-open)))
 
 (defun mevedel-transcript-exclude-directive-turns (&optional _fsm)
   "Mark directive bodies ignored in the current request-copy buffer."

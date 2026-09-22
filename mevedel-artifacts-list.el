@@ -89,7 +89,11 @@
 
 (defun mevedel-artifacts-list-count (session)
   "Return how many artifact files SESSION has, best effort."
-  (length (ignore-errors (mevedel-artifacts-list--files session))))
+  (or (ignore-errors
+        (when-let* ((directory (mevedel-artifacts-list--directory session))
+                    ((file-directory-p directory)))
+          (length (directory-files-recursively directory ".*"))))
+      0))
 
 (defun mevedel-artifacts-list--collect (context)
   "Collect artifact rows for CONTEXT."

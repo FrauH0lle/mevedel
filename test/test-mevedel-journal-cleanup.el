@@ -77,6 +77,7 @@
         (let ((old (mevedel-test-journal-cleanup--entry root "old"))
               (fresh (mevedel-test-journal-cleanup--entry root "fresh" t)))
           (mevedel-session-persistence-cleanup-expired workspace)
+          (mevedel-journal-cleanup-expired workspace)
           (should (equal (list fresh) (mevedel-test-journal-cleanup--digests root)))
           (should-not (file-exists-p (file-name-concat (mevedel-journal-store-directory root) (plist-get old :file))))
           (should (member (car (plist-get old :turn-ids)) (mevedel-journal-store-covered-turns root)))
@@ -150,6 +151,7 @@
                  (workspace (mevedel-workspace--create :type 'project :id remote :root remote))
                  (entry (mevedel-test-journal-cleanup--entry remote "remote-old")))
             (mevedel-session-persistence-cleanup-expired workspace)
+          (mevedel-journal-cleanup-expired workspace)
             (should-not (mevedel-test-journal-cleanup--digests remote))
             (should (equal (plist-get entry :turn-ids) (mevedel-journal-store-covered-turns remote)))))
       (delete-directory root t)))
@@ -298,7 +300,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup-schedule ()
-  ,test
+  (let ((mevedel-journal-worker--child-p t)) ,test)
   (test)
   :doc "coalesces idle requests and preserves an earlier forced cleanup"
   (let* ((workspace (mevedel-workspace--create :root temporary-file-directory))
@@ -325,7 +327,7 @@
       (when (timerp current) (cancel-timer current)))))
 
 (mevedel-deftest mevedel-journal-cleanup-schedule/responsiveness ()
-  ,test
+  (let ((mevedel-journal-worker--child-p t)) ,test)
   (test)
   :doc "services another event before claiming cleanup and retains fresh evidence"
   (let* ((root (make-temp-file "mevedel-cleanup-responsive-" t))
@@ -360,7 +362,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup--steps ()
-  ,test
+  (let ((mevedel-journal-worker--child-p t)) ,test)
   (test)
   :doc "closing between phases settles every acquired claim"
   (let* ((root (make-temp-file "mevedel-cleanup-cancel-" t))
@@ -388,7 +390,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup-schedule/ownership ()
-  ,test
+  (let ((mevedel-journal-worker--child-p t)) ,test)
   (test)
   :doc "fenced ownership between callbacks stops cleanup before deletion"
   (let* ((root (make-temp-file "mevedel-cleanup-fenced-" t))
@@ -426,7 +428,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup-schedule/cancellation ()
-  ,test
+  (let ((mevedel-journal-worker--child-p t)) ,test)
   (test)
   :doc "transport cancellation and disabled dispatch close acquired claims"
   (dolist (disabled '(nil t))

@@ -104,6 +104,9 @@
       (unwind-protect
           (progn
             (mevedel-memory-pass-start workspace #'ignore :memory-only t)
+            (let ((deadline (+ (float-time) 10)))
+              (while (and (not sent) (< (float-time) deadline))
+                (accept-process-output nil .01)))
             (should (string-match-p "Abandoned-choice-sentinel" sent))
             (should (string-match-p "PRIVATE PROPOSED TOPIC" sent)))
         (mevedel-memory-pass-cancel workspace))))

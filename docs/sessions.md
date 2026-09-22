@@ -847,7 +847,12 @@ artifacts.
 Turn settlement and lease-acquiring restore schedule publication collection
 without scanning history on the foreground path. The coalesced job reads at
 most eight generations per idle slice, yielding after 50 ms between reads.
-A single target read can exceed that budget. Finishing the scan yields before
+A single target read can exceed that budget. For local Linux sessions with more
+than sixteen uncached generations, a batch Emacs child prepares the compact
+immutable generation and sidecar observations. The editor caches those answers
+and resumes its ordinary scan; subsequent scans reuse them. The child performs
+no deletion and needs no session lease. Cancellation stops it, and late replies
+cannot revive a cancelled job. Finishing the scan yields before
 marking retained files. Pending input prevents all collection target I/O,
 including ownership checks and deletion after a completed scan. Active root requests,
 busy transport and pending publications defer work; closing the root or losing
@@ -1609,6 +1614,10 @@ Chooser cleanup still runs before incompatibility discovery. Consequently an
 expired file-workspace session may be deleted before it can appear as an
 `Inspect` row; portable project sessions remain exempt. Inspection itself never
 archives, deletes, or modifies persisted session files.
+
+This file-session retention pass does not run journal maintenance. Journal
+retention uses its own scheduled lifecycle opportunities; neither the chooser
+nor the exit retention pass drains it synchronously.
 
 ## Defcustoms
 

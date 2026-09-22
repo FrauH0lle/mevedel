@@ -10,6 +10,7 @@ Data model
   mevedel-turn.el             request admission/cancellation and terminal settlement
   mevedel-workspace.el        workspace detection, registry, and state lookup
   mevedel-workspace-identity.el project-owned durable workspace identity
+  mevedel-journal-worker.el   isolated maintenance, consolidation storage and cold publication observations
   mevedel-journal-store.el     immutable workspace digest, review, and decision publication
   mevedel-journal-index.el     disposable journal discovery and bounded main prompt map
   mevedel-journal-claim.el     bounded journal work ownership and durable outcomes

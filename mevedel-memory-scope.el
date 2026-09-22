@@ -52,11 +52,17 @@ Include directory and symlink names but never descend through symlinks."
     (list :existing (sort names #'string<) :directories (sort directories #'string<)
           :complete (and complete (not pending)))))
 
-(defun mevedel-memory-scope--snapshot (path limit)
+(defun mevedel-memory-scope--snapshot (path limit &optional result)
   "Capture complete literal PATH bytes, bounded by LIMIT, or expected absence.
-Use the pinned target read so a changed parent cannot redirect the read."
+Use the pinned target read so a changed parent cannot redirect the read.
+RESULT, when supplied, is the pinned read result for PATH from a bounded batch."
   (condition-case nil
-      (let* ((bytes (mevedel-session-control-fs-read-file path 'no-conversion (1+ limit)))
+      (let* ((bytes (if result
+                        (progn
+                          (unless (equal path (plist-get result :path))
+                            (error "Snapshot result names another path"))
+                          (mevedel-session-control-fs-program-value result))
+                      (mevedel-session-control-fs-read-file path 'no-conversion (1+ limit))))
              (text (decode-coding-string bytes 'utf-8-unix)))
         (unless (and (<= (length bytes) limit)
                      (not (string-search "\0" bytes))
@@ -67,10 +73,11 @@ Use the pinned target read so a changed parent cannot redirect the read."
               :mode (file-modes path)))
     (mevedel-session-control-fs-absent (list :path path :exists nil))))
 
-(defun mevedel-memory-scope-capture (workspace &optional selection)
+(defun mevedel-memory-scope-capture (workspace &optional selection configuration)
   "Capture WORKSPACE's memory and root instruction scopes without writes.
 Optional SELECTION is (CONFIGURED-ROOT . TOPIC) for a direct user operation;
 only that topic and its index are captured from the configured root.
+CONFIGURATION optionally freezes :roots and :instructions for a storage worker.
 Return :roots, an alist usable by `mevedel-memory-proposal-parse', together
 with the original workspace path and identity. Each root retains :dir,
 :configured-dir, :client (for local paths), and :before snapshots keyed by
@@ -85,7 +92,8 @@ The request owner must account for these snapshots in context admission."
                           (file-truename (mevedel-workspace-root workspace))))
          (client (mevedel-workspace-identity-client))
          (remaining mevedel-memory-scope--max-bytes)
-         (memory-roots (mevedel-system--memory-roots workspace))
+         (memory-roots (if configuration (plist-get configuration :roots)
+                         (mevedel-system--memory-roots workspace)))
          roots omissions excluded-roots)
     (when (> (length memory-roots) 16)
       (error "Too many configured memory roots for one review"))
@@ -118,33 +126,48 @@ The request owner must account for these snapshots in context admission."
                       (if (eq kind 'memory)
                           (cons "MEMORY.md" (cl-remove-if-not
                                              (lambda (name) (and (string-suffix-p ".md" name)
-                                                                (not (equal name "MEMORY.md"))))
+                                                                 (not (equal name "MEMORY.md"))))
                                              (plist-get inventory :existing)))
                         (delete-dups
                          (append '("AGENTS.md" "AGENTS.local.md")
                                  (mapcar (lambda (path) (file-relative-name path directory))
-                                         (mevedel-system-workspace-config-files workspace)))))))
+                                         (if configuration (plist-get configuration :instructions)
+                                           (mevedel-system-workspace-config-files workspace))))))))
                 (when selection (setq candidates (list "MEMORY.md" (cdr selection))))
                 (setq root (append root inventory))
                 (when (and inventory (not (plist-get inventory :complete)))
                   (push (list :root id :reason "Directory inventory reached its entry limit") omissions))
-                (dolist (file candidates)
-                  (condition-case failure
-                      (let* ((path (file-name-concat directory file))
-                             (snapshot (mevedel-memory-scope--snapshot
-                                        path (min remaining mevedel-memory-scope--max-file-bytes))))
-                        ;; A name observed and then removed is not an admitted
-                        ;; existing topic, nor proof of absence at capture time.
-                        (when (and (eq kind 'memory) (not (equal file "MEMORY.md"))
-                                   (not (plist-get snapshot :exists)))
-                          (error "Memory file disappeared during capture"))
-                        (cl-decf remaining (length (plist-get snapshot :bytes)))
-                        (push (cons file snapshot) before)
-                        (unless (and (eq kind 'memory) (equal file "MEMORY.md"))
-                          (push file files)))
-                    (error
-                     (push (list :root id :file file :reason (error-message-string failure)) omissions)
-                     (when (equal file "MEMORY.md") (setq unavailable t)))))
+                (let (results)
+                  (while candidates
+                    ;; Cap transfer/allocation independently of the admitted
+                    ;; scope.  Each file still gets the shrinking byte limit.
+                    (unless results
+                      (setq results
+                            (mevedel-session-control-fs-run-program
+                             (mapcar
+                              (lambda (file)
+                                (list :op 'read :optional t
+                                      :path (file-name-concat directory file)
+                                      :coding 'no-conversion
+                                      :max-bytes (1+ (min remaining mevedel-memory-scope--max-file-bytes))))
+                              (seq-take candidates 8)))))
+                    (let ((file (pop candidates)) (result (pop results)))
+                      (condition-case failure
+                          (let* ((path (file-name-concat directory file))
+                                 (snapshot (mevedel-memory-scope--snapshot
+                                            path (min remaining mevedel-memory-scope--max-file-bytes) result)))
+                            ;; A name observed and then removed is not an admitted
+                            ;; existing topic, nor proof of absence at capture time.
+                            (when (and (eq kind 'memory) (not (equal file "MEMORY.md"))
+                                       (not (plist-get snapshot :exists)))
+                              (error "Memory file disappeared during capture"))
+                            (cl-decf remaining (length (plist-get snapshot :bytes)))
+                            (push (cons file snapshot) before)
+                            (unless (and (eq kind 'memory) (equal file "MEMORY.md"))
+                              (push file files)))
+                        (error
+                         (push (list :root id :file file :reason (error-message-string failure)) omissions)
+                         (when (equal file "MEMORY.md") (setq unavailable t)))))))
                 (unless unavailable
                   (push (cons id (append root (list :files (nreverse files) :before (nreverse before)))) roots)))
             (error (push (list :root id :reason (error-message-string err)) omissions))))))
@@ -177,10 +200,10 @@ Symlinks, traversal, other targets, and another local client are rejected."
       (signal 'mevedel-memory-scope-unavailable '("Original workspace target changed")))
     (let ((path (expand-file-name relative root)))
       (unless (and (not (cl-some
-                        (lambda (memory)
-                          (or (equal (directory-file-name memory) (directory-file-name path))
-                              (string-prefix-p memory path)))
-                        (plist-get scope :excluded-roots)))
+                         (lambda (memory)
+                           (or (equal (directory-file-name memory) (directory-file-name path))
+                               (string-prefix-p memory path)))
+                         (plist-get scope :excluded-roots)))
                    (mevedel-resource-within-root-p path root))
         (error "Path is outside the captured workspace source scope"))
       path)))
