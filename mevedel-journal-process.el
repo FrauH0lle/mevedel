@@ -12,6 +12,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-context-summary)
+(require 'mevedel-journal-worker)
 (require 'mevedel-journal-capture)
 (require 'mevedel-journal-claim)
 (require 'mevedel-journal-discard)
@@ -54,6 +55,9 @@
   "Return WORKSPACE's physical journal directory and local request key."
   (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
 
+(defvar mevedel-journal-process--workers (make-hash-table :test #'equal)
+  "Local recovery children keyed by workspace journal directory.")
+
 (defun mevedel-journal-process-schedule (workspace &optional recover)
   "Schedule one digest opportunity for WORKSPACE after the caller returns.
 Repeated lifecycle events coalesce; busy requests wait for a later opportunity
@@ -62,7 +66,8 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
   (when (and mevedel-journal-enabled (not mevedel-journal-process--inhibit-scheduling))
     (let ((key (mevedel-journal-process--key workspace)))
       (when recover (puthash key t mevedel-journal-process--recover-requested))
-      (unless (gethash key mevedel-journal-process--running)
+      (unless (or (gethash key mevedel-journal-process--running)
+                  (gethash key mevedel-journal-process--workers))
         (mevedel-transport-schedule-idle
          mevedel-journal-process--pending key 'journal-process key
          (lambda ()
@@ -70,7 +75,21 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
              (remhash key mevedel-journal-process--recover-requested)
              (unless mevedel-journal-process--inhibit-scheduling
                (condition-case err
-                   (progn
+                   (if (and recover (mevedel-journal-worker-supported-p workspace))
+                       (let (worker)
+                         (setq worker
+                               (mevedel-journal-worker-start
+                                workspace 'recovery
+                                (lambda (result)
+                                  (when (eq worker (gethash key mevedel-journal-process--workers))
+                                    (remhash key mevedel-journal-process--workers)
+                                    (if (plist-get result :error)
+                                        (unless mevedel-journal-process--inhibit-scheduling
+                                          (display-warning 'mevedel (plist-get result :error) :warning))
+                                      (setf (mevedel-workspace-journal-observation workspace) nil)
+                                      (mevedel-memory-pass-schedule workspace)
+                                      (mevedel-journal-process-schedule workspace))))))
+                         (puthash key worker mevedel-journal-process--workers))
                      (when recover (mevedel-journal-recovery-run workspace))
                      (mevedel-journal-process-next workspace))
                  (error
@@ -82,6 +101,11 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
   "Cancel this client's queued and active digest work without awaiting a model."
   (mevedel-transport-cancel-idle mevedel-journal-process--pending 'journal-process)
   (clrhash mevedel-journal-process--recover-requested)
+  (let (workers)
+    (maphash (lambda (_key process) (push process workers)) mevedel-journal-process--workers)
+    (clrhash mevedel-journal-process--workers)
+    (dolist (process workers)
+      (when (process-live-p process) (delete-process process))))
   (maphash (lambda (_key state) (mevedel-journal-process-cancel (plist-get state :workspace)))
            mevedel-journal-process--running))
 

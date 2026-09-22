@@ -85,6 +85,22 @@
                                                 :save-path save-path)))
         (delete-directory save-path t)))))
 
+(mevedel-deftest mevedel-artifacts-list-count ()
+  (let* ((directory (make-temp-file "mevedel-artifact-count-" t))
+         (session (mevedel-session--create :save-path directory))
+         (artifacts (mevedel-session-artifacts-artifacts-dir directory)))
+    (unwind-protect
+        (progn
+          (should (= 0 (mevedel-artifacts-list-count nil)))
+          (should (= 0 (mevedel-artifacts-list-count session)))
+          (make-directory (file-name-concat artifacts "nested") t)
+          (with-temp-file (file-name-concat artifacts "one.txt") (insert "one"))
+          (with-temp-file (file-name-concat artifacts "nested/two.txt") (insert "two"))
+          (cl-letf (((symbol-function 'mevedel-artifacts-list--files)
+                     (lambda (&rest _) (ert-fail "Count constructed sorted presentation rows"))))
+            (should (= 2 (mevedel-artifacts-list-count session)))))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-artifacts-list-open-browser ()
   ,test
   (test)

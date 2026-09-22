@@ -40,8 +40,19 @@ checked application, while instruction changes always await approval.
 Completed, durably saved root turns provide automatic opportunities for journal
 recovery/cleanup and memory review/reconciliation. Publication and explicit
 memory operations retain their existing opportunities. Opening a conversation
-or the session chooser does not launch workspace-wide maintenance. The main
-session menu only renders cached memory observations, explicitly marking missing
+or the session chooser does not launch workspace-wide maintenance. For local
+Linux workspaces, scheduled journal recovery and retention execute in short-lived
+batch Emacs workers. Local consolidation scope preparation and accepted-result
+publication use the same boundary, with resolved roots and original client
+identity supplied by the editor. They load no user init or serialized provider
+configuration. They reuse the same claims, validation, and publication
+paths. Recovery completion resumes the editor's ordinary digest opportunity;
+model requests retain the configured native backend. Remote scheduling remains
+in the editor. Live-buffer artifact cleanup also remains there because its
+retention proof includes active buffers and gptel context. Worker failure leaves
+fenced claims and retained evidence, rather than inferring completion.
+
+The main session menu only renders cached memory observations, explicitly marking missing
 or old counts. Opening or refreshing the Memory table collects current evidence.
 
 Application holds both workspace and original target-root claims. It persists
@@ -110,6 +121,19 @@ limit is not an erasure guarantee.
 The amendments to **ADR 0117** are consolidated below. These are the failures,
 measurements, and constraints that explain the current boundaries; the manual
 contains the corresponding operational details.
+
+### Graphical responsiveness
+
+A shared graphical capture on 2026-09-22 measured an 891 ms journal checkpoint,
+1.30 s recovery, and 668 ms processing admission after a request. Merely scheduling
+work later still occupied the editor when callbacks ran. Isolated subprocess
+experiments kept the parent event loop responsive during multi-second maintenance.
+Local recovery and retention now run in separate Emacs processes, while native
+provider configuration and live-buffer retention remain with their existing owner.
+Batched marker discovery avoids per-marker process dispatch, and fully retired
+capture tombstones no longer enter recovery. Ownership checks use the existing
+target-side newest-generation proof rather than shipping full histories; claim
+pruning stops at its budget instead of checking the rest of an already-full batch.
 
 ### Ownership and safe application
 
@@ -324,6 +348,11 @@ root turns. Explicit memory operations retain checked recovery, and publication
 still schedules its existing processing and cleanup. Merely opening a session
 no longer launches consolidation or workspace recovery scans.
 
+The 2026-09-22 follow-up found a remaining synchronous journal-retention call
+inside file-session expiry, also reached by project choosers and exit. A chooser
+with 56 retired captures spent 4.27 seconds there. Removing that unrelated call
+keeps file-session expiry intact and leaves journal retention to its own owner.
+
 ### 2026-09-21: yield during scheduled cleanup
 
 A real configured-provider patch request spent 272 ms in journal cleanup after
@@ -353,3 +382,18 @@ retire the continuation. The existing durable publication and capture APIs keep
 their atomicity and authority checks; this changes the sequencing of their calls.
 Already-due journal and memory opportunities also yield between jobs instead of
 running in one consecutive timer batch.
+
+### 2026-09-22: isolate consolidation storage from the editor
+
+Capturing 100 memory topics required 103 storage programs and 478 ms. Batching
+reduced this to 14 programs and 263 ms, still too long for foreground work.
+Local consolidation now hands explicitly resolved roots and instruction paths
+to the maintenance child for scope capture, immutable preparation and rejection
+history. The editor retains the originating buffer, configured provider and
+claim deadline and checks ownership again before inference.
+
+A 20-digest review then spent 930 ms accepting and publishing its result.
+That storage phase now uses the same isolated child. Cancellation may stop an
+unaccepted result; a completed claim remains durable recovery authority even
+if its child dies before returning publication. Checked proposal application
+remains in the editor. Remote roots keep their target-native path.

@@ -17,6 +17,32 @@
 (mevedel-deftest mevedel-memory-scope-capture ()
   ,test
   (test)
+  :doc "batches bounded reads without dropping siblings after an unreadable topic"
+  (let* ((directory (make-temp-file "mevedel-memory-batch-" t))
+         (workspace (mevedel-workspace--create :root directory))
+         (memory (file-name-concat directory "memory"))
+         (mevedel-memory-dirs '("memory"))
+         (run (symbol-function 'mevedel-session-control-fs-run-program))
+         (reads 0))
+    (unwind-protect
+        (progn
+          (make-directory memory)
+          (make-symbolic-link "/missing-memory-topic" (file-name-concat memory "bad.md"))
+          (dotimes (index 20)
+            (with-temp-file (file-name-concat memory (format "topic-%02d.md" index))
+              (insert "Fact\n")))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations &rest args)
+                       (when (cl-some (lambda (op) (eq (plist-get op :op) 'read)) operations)
+                         (cl-incf reads))
+                       (apply run operations args))))
+            (let* ((scope (mevedel-memory-scope-capture workspace))
+                   (root (car (plist-get scope :roots))))
+              (should (= 20 (length (plist-get (cdr root) :files))))
+              (should (plist-get scope :omissions))
+              (should (< reads 10)))))
+      (delete-directory directory t)))
+
   :doc "captures exact topic/index bytes and applicable instruction absence without writes"
   (let* ((directory (make-temp-file "mevedel-memory-scope-" t))
          (workspace (mevedel-workspace--create :root directory))

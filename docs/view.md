@@ -1557,6 +1557,13 @@ rerendered transcript exposes it through the same disclosure; it does not run
 the prompt hook again.
 
 The renderer builds hook audit surfaces from visible hook audit records.
+Buffer directive discovery scans trusted audit blocks directly, without copying
+the whole transcript. A buffer-local bounded memo reuses pure decoding for exact
+payload bytes; every scan still checks current provenance and positions. The
+memo retains at most 128 encoded payloads totaling 4 MiB, and does not retain an
+individual encoded payload larger than 1 MiB. It does not grant trust to quoted
+or edited audit-looking text.
+
 User and assistant turns share the same visibility filter: provider-history
 boundaries and fork-point bookkeeping stay hidden, while system-reminder
 disclosures retain their exact source spans. For

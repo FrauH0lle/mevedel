@@ -416,8 +416,27 @@ selected entries when pinning them; a change between those operations fails
 without consuming coverage. Each request checks current target ownership, and
 the coordinator's timer includes selection and preparation in its deadline.
 
-The returned state contains the running read-only request buffer, available
-through `mevedel-memory-pass-running`. `mevedel-memory-pass-cancel`, or closing
+For local Linux workspaces whose configured memory roots are also local,
+scope capture, immutable preparation and rejection-history reading run in a
+short-lived batch Emacs child. The editor supplies the resolved memory roots,
+instruction paths and original client identity; the child does not rediscover
+user configuration. Scope reads transfer in bounded batches of eight while
+each admitted file still obeys the remaining total byte budget. The editor
+rechecks the claim before starting the configured review from the originating
+buffer. Cancellation stops preparation, fences the pass, and ignores late
+replies. Remote roots retain target-native preparation in the editor.
+
+Local accepted-result storage and review publication also run in the child.
+Only immutable review inputs cross that boundary; automatic proposal application
+and its original-target checks stay in the editor. The pass remains running
+until publication returns. Cancellation fences an unaccepted reply; an already
+accepted outcome retains its bundle and pins for publication recovery. Provider
+usage and errors remain visible through the ordinary pass callback.
+
+The returned state is available through `mevedel-memory-pass-running`. Its
+`:request` is populated after preparation and contains the read-only review
+buffer; the pass remains registered while its result is being published.
+`mevedel-memory-pass-cancel`, or closing
 that buffer, retires only this client's attempt. Failure and expired callbacks
 cannot publish fresh results or change a successor's claim or pins. Success
 returns the immutable public review, usage, and remaining frozen backlog count;
@@ -724,6 +743,23 @@ work, and session close schedule one
 background processing opportunity. Scheduling waits until the caller returns
 and the target transport is idle. Already-due journal and memory opportunities
 leave an event-loop interval between jobs rather than executing back-to-back.
+On local Linux workspaces, scheduled abandoned-capture recovery and journal
+retention run in short-lived batch Emacs children using the same pinned storage
+operations and fenced claims. Children load package dependencies without user
+init, receive only workspace paths and retention settings, and return bounded
+completion records. Provider requests keep the editor's configured gptel backend;
+no backend or authentication objects are serialized to maintenance children. Recovery completes before its
+processing opportunity resumes. Remote workspaces retain transport-aware editor
+scheduling. Live-buffer artifact retention remains in the editor, where active
+buffers and gptel context can protect references. Interrupted workers leave durable
+claims and evidence for later recovery; exit stops this client's children.
+
+Capture discovery observes marker directories in batches and omits fully retired
+records whose evidence descriptor has already been removed. Retired records with
+remaining descriptors stay visible to recovery. Claim ownership verifies the
+latest generation on the target without transferring the full claim listing;
+pruning stops when its deletion budget is exhausted.
+
 Duplicate events coalesce, and completion
 does not recursively drain the backlog. Only sealed captures run. A dedicated
 workspace admission claim permits one digest request at a time; the capture's

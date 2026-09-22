@@ -566,5 +566,30 @@
           (should (string-match-p "Journal capture sealing failed: Frozen evidence is unreadable" captured)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-journal-capture-list ()
+  ,test
+  (test)
+  :doc "batches retired marker inspection and retains interrupted recovery"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Question" "Answer")
+     (let* ((workspace (mevedel-session-workspace session))
+            (capture (car (mevedel-journal-capture-list workspace)))
+            (id (plist-get capture :id))
+            (run (symbol-function 'mevedel-session-control-fs-run-program))
+            (calls 0))
+       (dotimes (n 40)
+         (let ((directory (mevedel-journal-capture--directory workspace (secure-hash 'sha256 (format "retired-%s" n)))))
+           (make-directory directory t)
+           (with-temp-file (file-name-concat directory "retired") (insert "published\n"))))
+       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (&rest args) (cl-incf calls) (apply run args))))
+         (should (= 1 (length (mevedel-journal-capture-list workspace t))))
+         (should (< calls 10)))
+       ;; A retirement with retained bytes still needs pin-release recovery.
+       (mevedel-session-control-fs-create-file (mevedel-journal-capture--file workspace id "retired") "interrupted")
+       (should-not (mevedel-journal-capture-list workspace))
+       (should (= 1 (length (mevedel-journal-capture-list workspace t))))))))
+
 (provide 'test-mevedel-journal-capture)
 ;;; test-mevedel-journal-capture.el ends here

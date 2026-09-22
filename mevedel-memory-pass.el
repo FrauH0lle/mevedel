@@ -10,6 +10,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-journal-index)
+(require 'mevedel-journal-worker)
 (require 'mevedel-memory-decision)
 (require 'mevedel-memory-review)
 (require 'mevedel-memory-store)
@@ -63,8 +64,8 @@ malformed retirement marker stops automatic admission for inspection."
                  (string-empty-p (plist-get entry :focus)))
         (setq latest (max (or latest 0) (float-time (date-to-time (plist-get entry :created)))))))
     (dolist (path (mevedel-session-control-fs-list-directory
-                  (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "retired-passes")
-                  mevedel-journal-store-id-regexp))
+                   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "retired-passes")
+                   mevedel-journal-store-id-regexp))
       (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix 513))
              (record (json-parse-string text))
              (scope (and (hash-table-p record) (gethash "scope" record)))
@@ -104,7 +105,7 @@ Cache only the next client-side opportunity, never coverage or write authority."
                        (integerp mevedel-journal-max-age-days)
                        (>= mevedel-journal-max-age-days 0)
                        (>= (- now (float-time (date-to-time
-                                              (plist-get (car (plist-get selection :entries)) :created))))
+                                               (plist-get (car (plist-get selection :entries)) :created))))
                            (* (max 0 (1- mevedel-journal-max-age-days)) 86400))))
           selection)))))
 
@@ -197,92 +198,136 @@ Count distinct files only through this call's confirmed-write notification."
     (list :updated-files (length (delete-dups files)) :applied-count applied
           :held-count held :unapplied-count unapplied)))
 
-(defun mevedel-memory-pass--finish (state result)
-  "Settle STATE once from RESULT and publish only its accepted immutable reply."
-  (unless (plist-get state :settled)
-    (plist-put state :settled t)
-    (let* ((workspace (plist-get state :workspace))
-           (claim (plist-get state :claim))
-           (id (plist-get claim :owner))
-           (status (if (eq (plist-get result :outcome) 'aborted) 'cancelled 'failed))
-           (reported (if-let* ((read-usage (plist-get (plist-get state :request) :usage)))
-                         (funcall read-usage) result))
-           ;; Freeze diagnostics before storage can replace RESULT with an error.
-           ;; Cancellation has no review callback result, so use its live snapshot.
-           (usage (cl-loop for key in '(:input-tokens :cached-tokens :output-tokens
-                                       :output-bytes :output-estimated-tokens :result-bytes
-                                       :reasoning-bytes :reply-bytes :tool-call-bytes
-                                       :tool-call-count :rounds
-                                       :budget-kind :output-limit)
-                           append (list key (if (plist-member result key)
-                                                (plist-get result key)
-                                              (or (plist-get reported key)
-                                                  (unless (memq key '(:budget-kind :output-limit)) 0))))))
-           (model (when (plist-get result :policy) (mevedel-model--provider-label (plist-get result :policy))))
-           (failure-class (if (plist-get usage :budget-kind) 'output-limit 'review))
-           accepted entry recovery-error applied)
-      (when (timerp (plist-get state :timer)) (cancel-timer (plist-get state :timer)))
-      (plist-put state :timer nil)
-      (condition-case err
-          (when (eq (plist-get result :outcome) 'success)
-            (setq failure-class 'publication)
-            (setq accepted
-                  (mevedel-memory-store-accept
-                   workspace (plist-get state :prepared) (plist-get result :reply)
-                   (plist-get result :entries) (mevedel-model--provider-label (plist-get result :policy))
-                   (plist-get (plist-get result :references) :references)))
-            (unless accepted (error "Memory pass lost ownership before accepting its result"))
-            (setq entry (mevedel-memory-store-publish workspace id))
-            (when (string-empty-p (plist-get entry :focus))
-              (setf (mevedel-workspace-memory-schedule workspace) nil)))
-        (error (setq result (list :outcome 'error :error (error-message-string err)))))
-      (unless entry
-        (condition-case err
-            (progn
-              (mevedel-journal-claim-settle claim status "")
-              ;; A timeout cannot settle as the now-expired owner. Compete for
-              ;; the same immutable expiry outcome used by target-side takeover.
-              (when (and (not (mevedel-journal-claim-outcome claim))
-                         (>= (mevedel-session-control-fs-target-time (plist-get claim :directory))
-                             (plist-get claim :expires-at)))
-                (mevedel-journal-claim--finish claim 'expired ""))
-              (when (and (plist-get state :prepared)
-                         (memq (plist-get (mevedel-journal-claim-outcome claim) :status)
-                               '(failed cancelled expired)))
-                (mevedel-memory-store-release workspace id)))
-          (error (setq recovery-error (error-message-string err)))))
-      (when entry
-        (when (eq 'auto (plist-get (plist-get state :telemetry) :mode))
-          (setq applied (mevedel-memory-pass--apply state accepted)))
-        (setf (mevedel-workspace-memory-observation workspace) nil))
-      (plist-put state :result
-                 (append (list :outcome (if entry 'success (plist-get result :outcome))
-                               :id id :entry entry :error (plist-get result :error)
-                               :mode (plist-get (plist-get state :telemetry) :mode)
-                               :recovery-required (or recovery-error (and accepted (not entry)))
-                               :remaining (if entry
-                                              (+ (or (plist-get (plist-get state :selection) :remaining) 0)
-                                                 (or (plist-get result :omitted-digests) 0))
-                                            (or (plist-get (plist-get state :selection) :eligible) 0)))
-                         applied usage))
-      (when (eq state (mevedel-memory-pass-running workspace))
-        (remhash (plist-get claim :directory) mevedel-memory-pass--running))
-      (apply #'mevedel-telemetry-record-workspace workspace
-             (cond (entry 'memory-consolidation-completed)
-                   ((eq status 'cancelled) 'memory-consolidation-killed)
-                   (t 'memory-consolidation-failed))
-             (append (plist-get state :telemetry) usage
-                     (list :model model :outcome (plist-get (plist-get state :result) :outcome)
-                           :duration-ms (round (* 1000 (max 0 (- (float-time) (or (plist-get state :started-at) (float-time))))))
-                           :failure-class (and (not entry) (not (eq status 'cancelled)) failure-class)
-                           :reviewed-count (length (plist-get entry :digests))
-                           :covered-count (if (eq 'general (plist-get (plist-get state :telemetry) :scope))
-                                              (length (plist-get entry :digests)) 0)
-                           :proposed-count (length (plist-get entry :proposals))
-                           :updated-file-count (plist-get applied :updated-files)
-                           :remaining-count (plist-get (plist-get state :result) :remaining))))
-      (when-let* ((callback (plist-get state :callback)))
-        (funcall callback (plist-get state :result))))))
+(cl-defun mevedel-memory-pass--finish (state result)
+          "Settle STATE once from RESULT and publish only its accepted immutable reply."
+          (unless (plist-get state :settled)
+            (when (and (eq (plist-get result :outcome) 'success)
+                       (not (plist-get state :publication-finished))
+                       (mevedel-journal-worker-supported-p (plist-get state :workspace))
+                       (not (cl-some (lambda (root) (file-remote-p (plist-get (cdr root) :dir)))
+                                     (plist-get (plist-get (plist-get state :prepared) :scope) :roots))))
+              (unless (plist-get state :publishing)
+                (plist-put state :publishing t)
+                (condition-case err
+                    (plist-put state :worker
+                               (mevedel-journal-worker-start
+                                (plist-get state :workspace) 'memory-publish
+                                (lambda (reply)
+                                  (unless (plist-get state :settled)
+                                    (plist-put state :worker nil)
+                                    (plist-put state :publication-finished t)
+                                    (plist-put state :accepted (plist-get reply :accepted))
+                                    (plist-put state :entry (plist-get reply :entry))
+                                    (mevedel-memory-pass--finish
+                                     state (if (plist-get reply :entry) result
+                                             (append (list :outcome 'error :error
+                                                           (or (plist-get reply :error) "Memory publication returned no entry")) result)))))
+                                nil (list :prepared (plist-get state :prepared)
+                                          :reply (plist-get result :reply) :entries (plist-get result :entries)
+                                          :model (mevedel-model--provider-label (plist-get result :policy))
+                                          :references (plist-get (plist-get result :references) :references))))
+                  (error
+                   (plist-put state :publication-finished t)
+                   (mevedel-memory-pass--finish
+                    state (append (list :outcome 'error :error (error-message-string err)) result)))))
+              (cl-return-from mevedel-memory-pass--finish nil))
+            (plist-put state :settled t)
+            (let* ((workspace (plist-get state :workspace))
+                   (claim (plist-get state :claim))
+                   (id (plist-get claim :owner))
+                   (status (if (eq (plist-get result :outcome) 'aborted) 'cancelled 'failed))
+                   (reported (if-let* ((read-usage (plist-get (plist-get state :request) :usage)))
+                                 (funcall read-usage) result))
+                   ;; Freeze diagnostics before storage can replace RESULT with an error.
+                   ;; Cancellation has no review callback result, so use its live snapshot.
+                   (usage (cl-loop for key in '(:input-tokens :cached-tokens :output-tokens
+                                                              :output-bytes :output-estimated-tokens :result-bytes
+                                                              :reasoning-bytes :reply-bytes :tool-call-bytes
+                                                              :tool-call-count :rounds
+                                                              :budget-kind :output-limit)
+                                   append (list key (if (plist-member result key)
+                                                        (plist-get result key)
+                                                      (or (plist-get reported key)
+                                                          (unless (memq key '(:budget-kind :output-limit)) 0))))))
+                   (model (when (plist-get result :policy) (mevedel-model--provider-label (plist-get result :policy))))
+                   (failure-class (cond ((plist-get usage :budget-kind) 'output-limit)
+                                        ((plist-get state :publishing) 'publication)
+                                        (t 'review)))
+                   (accepted (plist-get state :accepted))
+                   (entry (plist-get state :entry))
+                   recovery-error applied)
+              (when (timerp (plist-get state :timer)) (cancel-timer (plist-get state :timer)))
+              (plist-put state :timer nil)
+              (when-let* ((worker (plist-get state :worker)))
+                (plist-put state :worker nil)
+                (when (process-live-p worker) (delete-process worker)))
+              (condition-case err
+                  (when (eq (plist-get result :outcome) 'success)
+                    (setq failure-class 'publication)
+                    (unless (plist-get state :publication-finished)
+                      (setq accepted
+                            (mevedel-memory-store-accept
+                             workspace (plist-get state :prepared) (plist-get result :reply)
+                             (plist-get result :entries) (mevedel-model--provider-label (plist-get result :policy))
+                             (plist-get (plist-get result :references) :references)))
+                      (unless accepted (error "Memory pass lost ownership before accepting its result"))
+                      (setq entry (mevedel-memory-store-publish workspace id)))
+                    (when (string-empty-p (plist-get entry :focus))
+                      (setf (mevedel-workspace-memory-schedule workspace) nil)))
+                (error (setq result (list :outcome 'error :error (error-message-string err)))))
+              (unless entry
+                (condition-case err
+                    (progn
+                      (mevedel-journal-claim-settle claim status "")
+                      (when (eq 'completed (plist-get (mevedel-journal-claim-outcome claim) :status))
+                        (setq recovery-error "Accepted memory result requires publication verification"))
+                      ;; A timeout cannot settle as the now-expired owner. Compete for
+                      ;; the same immutable expiry outcome used by target-side takeover.
+                      (when (and (not (mevedel-journal-claim-outcome claim))
+                                 (>= (mevedel-session-control-fs-target-time (plist-get claim :directory))
+                                     (plist-get claim :expires-at)))
+                        (mevedel-journal-claim--finish claim 'expired ""))
+                      (when (and (plist-get state :prepared)
+                                 (memq (plist-get (mevedel-journal-claim-outcome claim) :status)
+                                       '(failed cancelled expired)))
+                        (mevedel-memory-store-release workspace id)))
+                  (error (setq recovery-error (error-message-string err)))))
+              (when (plist-get state :publishing)
+                (setf (mevedel-workspace-journal-observation workspace) nil))
+              (when entry
+                (when (plist-get state :publication-finished)
+                  (mevedel-journal-cleanup-schedule workspace t))
+                (when (eq 'auto (plist-get (plist-get state :telemetry) :mode))
+                  (setq applied (mevedel-memory-pass--apply state accepted)))
+                (setf (mevedel-workspace-memory-observation workspace) nil))
+              (plist-put state :result
+                         (append (list :outcome (if entry 'success (plist-get result :outcome))
+                                       :id id :entry entry :error (plist-get result :error)
+                                       :mode (plist-get (plist-get state :telemetry) :mode)
+                                       :recovery-required (or recovery-error (and accepted (not entry)))
+                                       :remaining (if entry
+                                                      (+ (or (plist-get (plist-get state :selection) :remaining) 0)
+                                                         (or (plist-get result :omitted-digests) 0))
+                                                    (or (plist-get (plist-get state :selection) :eligible) 0)))
+                                 applied usage))
+              (when (eq state (mevedel-memory-pass-running workspace))
+                (remhash (plist-get claim :directory) mevedel-memory-pass--running))
+              (apply #'mevedel-telemetry-record-workspace workspace
+                     (cond (entry 'memory-consolidation-completed)
+                           ((eq status 'cancelled) 'memory-consolidation-killed)
+                           (t 'memory-consolidation-failed))
+                     (append (plist-get state :telemetry) usage
+                             (list :model model :outcome (plist-get (plist-get state :result) :outcome)
+                                   :duration-ms (round (* 1000 (max 0 (- (float-time) (or (plist-get state :started-at) (float-time))))))
+                                   :failure-class (and (not entry) (not (eq status 'cancelled)) failure-class)
+                                   :reviewed-count (length (plist-get entry :digests))
+                                   :covered-count (if (eq 'general (plist-get (plist-get state :telemetry) :scope))
+                                                      (length (plist-get entry :digests)) 0)
+                                   :proposed-count (length (plist-get entry :proposals))
+                                   :updated-file-count (plist-get applied :updated-files)
+                                   :remaining-count (plist-get (plist-get state :result) :remaining))))
+              (when-let* ((callback (plist-get state :callback)))
+                (funcall callback (plist-get state :result))))))
 
 (defun mevedel-memory-pass-cancel (workspace)
   "Cancel only this client's running consolidation for WORKSPACE.
@@ -293,6 +338,68 @@ Fence its outcome before aborting transport, making late callbacks harmless."
         (mevedel-memory-pass--finish state '(:outcome aborted))
       (when-let* ((cancel (plist-get (plist-get state :request) :cancel))) (funcall cancel)))
     t))
+
+(defun mevedel-memory-pass--publish (workspace payload)
+  "Accept and publish a validated review in WORKSPACE from frozen PAYLOAD.
+The accepted bundle survives a publication failure for checked recovery."
+  (let (accepted)
+    (condition-case err
+        (progn
+          (setq accepted
+                (mevedel-memory-store-accept
+                 workspace (plist-get payload :prepared) (plist-get payload :reply)
+                 (plist-get payload :entries) (plist-get payload :model)
+                 (plist-get payload :references)))
+          (unless accepted (error "Memory pass lost ownership before accepting its result"))
+          (list :ok t :accepted accepted
+                :entry (mevedel-memory-store-publish
+                        workspace (plist-get (plist-get payload :prepared) :id))))
+      (error (list :error (error-message-string err) :accepted accepted)))))
+
+(defun mevedel-memory-pass--prepare (workspace payload)
+  "Prepare immutable consolidation inputs in WORKSPACE from frozen PAYLOAD.
+This may run in a storage child; no provider configuration is needed."
+  (unless (equal (plist-get payload :client) (mevedel-workspace-identity-client))
+    (error "Memory preparation belongs to another client"))
+  (let* ((claim (plist-get payload :claim))
+         (_ (mevedel-memory-store--assert-owned claim))
+         (scope (mevedel-memory-scope-capture
+                 workspace nil (plist-get payload :configuration)))
+         (prepared (mevedel-memory-store-prepare
+                    workspace claim scope (plist-get payload :entries)
+                    (plist-get payload :focus))))
+    (list :record prepared :rejections (mevedel-memory-decision-rejections workspace))))
+
+(defun mevedel-memory-pass--prepared (state result focus memory-only)
+  "Start STATE's configured review from prepared RESULT, FOCUS and MEMORY-ONLY.
+Cancelled or expired storage replies never start a model request."
+  (unless (plist-get state :settled)
+    (plist-put state :worker nil)
+    (condition-case err
+        (let* ((claim (plist-get state :claim))
+               (bundle (plist-get result :prepared))
+               (prepared (plist-get bundle :record)))
+          (when (plist-get result :error) (error "%s" (plist-get result :error)))
+          (unless (and prepared (equal claim (plist-get prepared :claim)))
+            (error "Memory preparation returned another claim"))
+          (plist-put state :prepared prepared)
+          (mevedel-memory-store--assert-owned claim)
+          (unless (buffer-live-p (plist-get state :origin-buffer))
+            (error "Memory review caller buffer was closed"))
+          (plist-put state :request
+                     (with-current-buffer (plist-get state :origin-buffer)
+                       (mevedel-memory-review-request
+                        (plist-get prepared :scope) (plist-get prepared :entries)
+                        (lambda (reply) (mevedel-memory-pass--finish state reply))
+                        :focus focus :memory-only memory-only
+                        :rejections (plist-get bundle :rejections)
+                        :currentp (lambda ()
+                                    (and (not (plist-get state :settled))
+                                         (condition-case nil
+                                             (progn (mevedel-memory-store--assert-owned claim) t)
+                                           (error nil))))))))
+      (error (mevedel-memory-pass--finish
+              state (list :outcome 'error :error (error-message-string err)))))))
 
 (cl-defun mevedel-memory-pass-start (workspace callback &key (focus "") memory-only automatic)
           "Start one sessionless consolidation in WORKSPACE and return its state.
@@ -321,6 +428,7 @@ No request recursively drains a remaining backlog."
                             (if automatic (cl-return-from mevedel-memory-pass-start nil)
                               (error "Memory consolidation is busy"))))
                  (state (list :workspace workspace :claim claim :callback callback :settled nil
+                              :origin-buffer (current-buffer)
                               :started-at (float-time)
                               :telemetry (list :pass-id (plist-get claim :owner)
                                                :attempt-generation (plist-get claim :generation)
@@ -353,26 +461,29 @@ No request recursively drains a remaining backlog."
                              (plist-get state :telemetry)))
                     (plist-put state :selection selection)
                     (unless (or entries memory-only) (error "No eligible digests for consolidation"))
-                    (let ((scope (mevedel-memory-scope-capture workspace)))
-                      (plist-put state :prepared (mevedel-memory-store-prepare workspace claim scope entries focus))
-                      (plist-put state :timer
-                                 (run-at-time
-                                  (max 0 (- (plist-get claim :expires-at)
-                                            (mevedel-session-control-fs-target-time (plist-get claim :directory)))) nil
-                                  (lambda ()
-                                    (unwind-protect
-                                        (mevedel-memory-pass--finish state '(:outcome error :error "Memory pass timed out"))
-                                      (when-let* ((cancel (plist-get (plist-get state :request) :cancel))) (funcall cancel))))))
-                      (plist-put state :request
-                                 (mevedel-memory-review-request
-                                  scope entries (lambda (result) (mevedel-memory-pass--finish state result))
-                                  :focus focus :memory-only memory-only
-                                  :rejections (mevedel-memory-decision-rejections workspace)
-                                  :currentp (lambda ()
-                                              (and (not (plist-get state :settled))
-                                                   (condition-case nil
-                                                       (progn (mevedel-memory-store--assert-owned claim) t)
-                                                     (error nil)))))))))
+                    (plist-put state :timer
+                               (run-at-time
+                                (max 0 (- (plist-get claim :expires-at)
+                                          (mevedel-session-control-fs-target-time (plist-get claim :directory)))) nil
+                                (lambda ()
+                                  (unwind-protect
+                                      (mevedel-memory-pass--finish state '(:outcome error :error "Memory pass timed out"))
+                                    (when-let* ((cancel (plist-get (plist-get state :request) :cancel))) (funcall cancel))))))
+                    (let* ((roots (mevedel-system--memory-roots workspace))
+                           (payload
+                            (list :claim claim :entries entries :focus focus
+                                  :client (mevedel-workspace-identity-client)
+                                  :configuration
+                                  (list :roots roots :instructions
+                                        (mevedel-system-workspace-config-files workspace))))
+                           (ready (lambda (result)
+                                    (mevedel-memory-pass--prepared state result focus memory-only))))
+                      (if (and (mevedel-journal-worker-supported-p workspace)
+                               (not (cl-some (lambda (root) (file-remote-p (plist-get root :dir))) roots)))
+                          (plist-put state :worker
+                                     (mevedel-journal-worker-start workspace 'memory-prepare ready nil payload))
+                        (funcall ready (list :ok t :prepared
+                                             (mevedel-memory-pass--prepare workspace payload)))))))
               (error (mevedel-memory-pass--finish state (list :outcome 'error :error (error-message-string err)))))
             state))
 

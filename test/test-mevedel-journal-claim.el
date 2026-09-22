@@ -282,6 +282,27 @@
           (should-not (mevedel-journal-claim-owned-p next)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-journal-claim-prune/budget ()
+  ,test
+  (test)
+  :doc "stops yielding after its deletion budget while preserving the newest claim"
+  (let ((directory (make-temp-file "mevedel-claim-budget-" t)))
+    (unwind-protect
+        (progn
+          (dotimes (n 8)
+            (let* ((token (list :directory directory :generation (1+ n)
+                                :owner (make-string 64 ?a) :expires-at 1))
+                   (record (mevedel-journal-claim--record token)))
+              (with-temp-file (mevedel-journal-claim--path token nil) (insert (json-serialize record)))
+              (with-temp-file (mevedel-journal-claim--path token t)
+                (insert (json-serialize (append record (list :status "completed" :payload "")))))))
+          (let ((steps 0))
+            (iter-do (_ (mevedel-journal-claim-prune directory nil 2)) (cl-incf steps))
+            (should (= 2 steps)))
+          (should (= 8 (plist-get (mevedel-journal-claim-current directory) :generation)))
+          (should (= 12 (length (directory-files directory nil "^[0-9]")))))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-journal-claim-current
   (:doc "reports no claim without creating state and fails closed on corrupt state")
   (let* ((root (make-temp-file "mevedel-journal-current-" t))

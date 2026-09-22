@@ -183,3 +183,11 @@ its shared chronology and workspace-owned identity constraints remain.
   every obsolete head before sweeping payloads preserves discoverable history
   if deletion is interrupted, including references across generations. New
   journal pins or a changed head invalidate the plan before further deletion.
+
+- **Cold scan isolation, 2026-09-22:** a 335-generation cold observation scan
+  still required 17.6 seconds of total work and substantial temporary allocation.
+  A read-only batch child took 17.7 seconds with 11 ms maximum editor timer delay.
+  Local scans with more than sixteen uncached generations now prepare compact
+  immutable observations in that child and warm the existing editor caches.
+  Small/warm scans keep their idle slices. The child does not collect files;
+  the parent still checks current head, pins and lease before every mutation.

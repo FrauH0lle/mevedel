@@ -184,19 +184,37 @@ evidence bundle; accepted output is never deleted here."
 (defun mevedel-journal-capture-list (workspace &optional include-inactive)
   "Return WORKSPACE's ready, unretired capture descriptors.
 This inspection remains available when journaling is disabled.
-INCLUDE-INACTIVE includes unready and retired records for storage recovery."
-  (let (records)
-    (dolist (directory
-             (mevedel-session-control-fs-list-directory
-              (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "captures")
-              mevedel-journal-store-id-regexp))
-      (let ((id (file-name-nondirectory (directory-file-name directory))))
-        (when (or include-inactive (mevedel-journal-capture--pending-p workspace id))
-          (push (condition-case err
-                    (or (mevedel-journal-capture--read workspace id)
-                        (error "Ready journal capture has no descriptor"))
-                  (error (list :id id :unreadable t :error (error-message-string err))))
-                records))))
+INCLUDE-INACTIVE includes unready and interrupted retired records for recovery.
+Fully retired tombstones with no descriptor need no further recovery.
+Observe directory markers in bounded pinned batches, not separate processes
+for every marker.  Observations belong only to this call."
+  (let ((directories
+         (mevedel-session-control-fs-list-directory
+          (file-name-concat (mevedel-journal-store-state-directory
+                             (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+                            "captures")
+          mevedel-journal-store-id-regexp))
+        records)
+    (while directories
+      (let* ((batch (seq-take directories 16))
+             (observations
+              (mevedel-session-control-fs-run-program
+               (mapcar (lambda (directory)
+                         (list :op 'list-directory :path directory :optional t)) batch))))
+        (setq directories (nthcdr (length batch) directories))
+        (dolist (observed observations)
+          (unless (eq (plist-get observed :status) 'absent)
+            (let* ((names (mevedel-session-control-fs-program-value observed))
+                   (id (file-name-nondirectory (plist-get observed :path)))
+                   (retired (member "retired" names)))
+              (when (if include-inactive
+                        (not (and retired (not (member "capture.json" names))))
+                      (and (member "ready" names) (not retired)))
+                (push (condition-case err
+                          (or (mevedel-journal-capture--read workspace id)
+                              (error "Ready journal capture has no descriptor"))
+                        (error (list :id id :unreadable t :error (error-message-string err))))
+                      records)))))))
     (sort records (lambda (left right)
                     (string< (or (plist-get (plist-get left :metadata) :created) "")
                              (or (plist-get (plist-get right :metadata) :created) ""))))))
