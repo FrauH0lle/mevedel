@@ -75,11 +75,11 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
              (remhash key mevedel-journal-process--recover-requested)
              (unless mevedel-journal-process--inhibit-scheduling
                (condition-case err
-                   (if (and recover (mevedel-journal-worker-supported-p workspace))
+                   (if (mevedel-journal-worker-supported-p workspace)
                        (let (worker)
                          (setq worker
                                (mevedel-journal-worker-start
-                                workspace 'recovery
+                                workspace 'digest-prepare
                                 (lambda (result)
                                   (when (eq worker (gethash key mevedel-journal-process--workers))
                                     (remhash key mevedel-journal-process--workers)
@@ -87,8 +87,13 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
                                         (unless mevedel-journal-process--inhibit-scheduling
                                           (display-warning 'mevedel (plist-get result :error) :warning))
                                       (setf (mevedel-workspace-journal-observation workspace) nil)
-                                      (mevedel-memory-pass-schedule workspace)
-                                      (mevedel-journal-process-schedule workspace))))))
+                                      (when recover (mevedel-memory-pass-schedule workspace))
+                                      (condition-case failure
+                                          (mevedel-journal-process--prepared
+                                           workspace (plist-get result :prepared))
+                                        (error
+                                         (display-warning 'mevedel (error-message-string failure) :warning))))))
+                                nil (list :recover recover)))
                          (puthash key worker mevedel-journal-process--workers))
                      (when recover (mevedel-journal-recovery-run workspace))
                      (mevedel-journal-process-next workspace))
@@ -175,7 +180,7 @@ WORKSPACE is used to verify that client-owned evidence remains available."
     (let* ((policy (mevedel-model-resolve-provider provider))
            (name (plist-get frozen :effort))
            (effort (and name (or (intern-soft name)
-                                (error "Captured reasoning effort is unavailable: %s" name)))))
+                                 (error "Captured reasoning effort is unavailable: %s" name)))))
       (mevedel-model-validate-effort (plist-get policy :model) effort)
       (append policy (list :effort effort
                            :max-tokens (plist-get frozen :max-tokens)
@@ -192,17 +197,17 @@ Use the generator's exact prompt accounting, retaining explicit omissions."
                   (<= (mevedel-context-summary--estimated-tokens
                        system (mevedel-context-summary--input text 'digest nil nil nil))
                       usable)))
-      (cond
-       ((fits source) source)
-       ((not (fits marker)) (error "Digest prompt cannot fit the captured model budget"))
-       (t
-        (let ((low 0) (high (length source)))
-          (while (< low high)
-            (let ((middle (/ (+ low high 1) 2)))
-              (if (fits (concat (substring source 0 middle) marker))
-                  (setq low middle)
-                (setq high (1- middle)))))
-          (concat (substring source 0 low) marker)))))))
+               (cond
+                ((fits source) source)
+                ((not (fits marker)) (error "Digest prompt cannot fit the captured model budget"))
+                (t
+                 (let ((low 0) (high (length source)))
+                   (while (< low high)
+                     (let ((middle (/ (+ low high 1) 2)))
+                       (if (fits (concat (substring source 0 middle) marker))
+                           (setq low middle)
+                         (setq high (1- middle)))))
+                   (concat (substring source 0 low) marker)))))))
 
 (defun mevedel-journal-process--finish (state result)
   "Settle STATE once with generator RESULT, then publish only an accepted body."
@@ -274,6 +279,9 @@ Use the generator's exact prompt accounting, retaining explicit omissions."
                 (mevedel-journal-process--finish
                  state '(:outcome error :error-class timeout :error "Digest request timed out"))
                 (when cancel (funcall cancel))))))
+          (unless (mevedel-journal-claim-owned-p
+                   (plist-get state :admission) (plist-get state :claim))
+            (error "Digest preparation expired before inference"))
           ;; The generator snapshots configuration in its own request buffer.
           ;; This temporary caller supplies streaming policy, not a session.
           (with-temp-buffer
@@ -341,15 +349,10 @@ This never resets the durable automatic-attempt count or changes model policy."
     (or (mevedel-journal-process-next workspace id)
         (user-error "Journal processing is busy; retry when its current claim settles"))))
 
-(defun mevedel-journal-process-next (workspace &optional retry-id)
-  "Recover accepted results and start at most one digest in WORKSPACE.
-This is one processing opportunity: failures never trigger a tight retry loop.
-Only sealed jobs run; three automatic attempts exhaust a job.  Return the new
-request state or nil when disabled, busy, or no eligible work remains.
-An unavailable recovery is retained without blocking unrelated captures.
-RETRY-ID selects an explicitly requested additional attempt; recovery of its
-accepted result returns the public entry without starting another request.
-Explicit retry reports recovery errors to the caller."
+(defun mevedel-journal-process--prepare (workspace &optional retry-id)
+  "Recover and select one fenced capture in WORKSPACE without model access.
+Return compact claims and a capture ID, an :entry for recovered RETRY-ID,
+or nil.  The selected capture and admission share their original deadline."
   (when mevedel-journal-enabled
     (let* ((key (mevedel-journal-process--key workspace))
            (admission (and (not (gethash key mevedel-journal-process--running))
@@ -376,10 +379,8 @@ Explicit retry reports recovery errors to the caller."
                                                 directory mevedel-journal-process--timeout-seconds
                                                 (plist-get admission :expires-at)))))
                               (when claim
-                                (setq state (list :key key :workspace workspace :capture capture
-                                                  :claim claim :admission admission :settled nil))
-                                (puthash key state mevedel-journal-process--running)
-                                (mevedel-journal-process--start state))))))
+                                (setq state (list :capture-id (plist-get capture :id)
+                                                  :claim claim :admission admission)))))))
                     (error
                      (if (or retry-id state)
                          (signal (car err) (cdr err))
@@ -387,7 +388,43 @@ Explicit retry reports recovery errors to the caller."
                         workspace 'journal-digest-failed :capture-id (plist-get capture :id)
                         :outcome 'retained :error-class 'recovery)))))))
           (unless state (mevedel-journal-claim-settle admission 'completed ""))))
-      (or state recovered))))
+      (or state (and recovered (list :entry recovered))))))
+
+(defun mevedel-journal-process--prepared (workspace prepared)
+  "Start WORKSPACE's request from compact PREPARED claims in the editor.
+Freshly read the selected capture and recheck both claims before inference.
+A failed handoff releases admission while retaining the capture for retry."
+  (if (plist-get prepared :entry)
+      (plist-get prepared :entry)
+    (when prepared
+      (let* ((key (mevedel-journal-process--key workspace))
+             (claim (plist-get prepared :claim))
+             (admission (plist-get prepared :admission))
+             state)
+        (unwind-protect
+            (when mevedel-journal-enabled
+              (unless (and (not (gethash key mevedel-journal-process--running))
+                           (mevedel-journal-claim-owned-p admission claim))
+                (error "Digest preparation no longer owns its claims"))
+              (let ((capture (or (mevedel-journal-capture--read
+                                  workspace (plist-get prepared :capture-id))
+                                 (error "Prepared journal capture is missing"))))
+                (setq state (list :key key :workspace workspace :capture capture
+                                  :claim claim :admission admission :settled nil))
+                (puthash key state mevedel-journal-process--running)
+                (mevedel-journal-process--start state)))
+          (unless state
+            (ignore-errors (mevedel-journal-claim-settle claim 'cancelled ""))
+            (ignore-errors (mevedel-journal-claim-settle admission 'cancelled ""))))))))
+
+(defun mevedel-journal-process-next (workspace &optional retry-id)
+  "Recover accepted results and start at most one digest in WORKSPACE.
+Only sealed jobs run; three automatic attempts exhaust a job.  Return the new
+request state or nil when disabled, busy, or no eligible work remains.
+RETRY-ID selects an explicit additional attempt; a recovered accepted result
+returns its public entry.  Explicit retry reports recovery errors."
+  (mevedel-journal-process--prepared
+   workspace (mevedel-journal-process--prepare workspace retry-id)))
 
 (provide 'mevedel-journal-process)
 ;;; mevedel-journal-process.el ends here

@@ -55,5 +55,17 @@
     (cl-incf (mevedel-session-turn-count session))
     (mevedel--run-turn-steps (gptel-make-fsm :info (list :buffer buffer)) '(mevedel--turn-save mevedel--turn-checkpoint))))
 
+(defun mevedel-test-journal-capture--with-portable-session (function)
+  "Call FUNCTION with an isolated portable session and its root buffer."
+  (let ((kill-emacs-hook kill-emacs-hook)
+        (mevedel-session-durability--disclosed-targets (make-hash-table :test #'equal)))
+    (mevedel-test-journal-capture--with-session
+     (lambda (session buffer)
+       (setf (mevedel-workspace-type (mevedel-session-workspace session)) 'project
+             (mevedel-session-authority-mode session) 'portable)
+       (puthash (mevedel-execution-target-identity (mevedel-session-execution-target session))
+                t mevedel-session-durability--disclosed-targets)
+       (funcall function session buffer)))))
+
 (provide 'mevedel-journal-test-support)
 ;;; mevedel-journal-test-support.el ends here

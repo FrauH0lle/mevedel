@@ -47,9 +47,15 @@ Projection ownership also inhibits redisplay through queued work. Disclosure
 expansion rolls back failed replacement. Reader preservation includes both
 selection endpoints, neighboring managed zones, and table cells across wrapping.
 Views defer table formatting until visible and idle, processing one complete
-table per callback. Semantic marker relocation replaces whole-table text diffing.
+table per callback. Interactive visibility reuses Emacs's current window boundary,
+including variable-height rows; changed display state requests recomputation.
+Semantic marker relocation replaces whole-table text diffing. Restored expanded
+audit disclosures use their ordinary toggle renderer, preserving the single
+summary and audit styling.
 A full or live-turn projection shares disposable boundary indexes and pure audit-decoding
-results; callers still establish trust independently. Boundary misses search only
+results. Audit readers also reuse bounded pure decoding in the current buffer
+across projections; callers still establish trust independently. Fork-point
+classification scans the requested buffer range without copying the transcript. Boundary misses search only
 after the preceding validated block. Whole-buffer normalization is reused until
 text or properties change. Complete tool cache entries use source-buffer character revisions and explicit
 provenance intervals. Observed appends retain preceding tools; suffix edits,
@@ -637,3 +643,34 @@ threads or timers; post-collection Lisp object accounting rose by about 18 KB,
 with RSS settling near 206 MiB. These limited observations are not a leak bound.
 Stale-source recovery also respects focus and transport gates; a regression caught
 recovery redrawing an unattended view before that ordering was corrected.
+
+### 2026-09-22: reuse display boundaries and ordinary audit expansion
+
+The graphical capture exposed a reminder redraw that inserted its summary twice
+and lost its audit face. Generic disclosure restoration retained the summary
+while rendering a complete audit block below it. Restoration now uses the audit's
+ordinary toggle path. Repeated redraw coverage retains the heading, face, draft
+and cursor.
+
+Scrolling profiles also showed table visibility walking display lines on every
+idle check. `window-end` with an update request reuses completed redisplay and
+handles variable-height rows; batch Emacs retains the line-motion fallback
+because it has no glyph matrices. In a separate graphical replay, one check per
+scroll fell from about 0.21 ms to 0.008 ms. Whole-scroll timings overlapped after
+warm-up, so this is a local improvement, not evidence that all scrolling lag is
+fixed. A graphical regression verifies that a tall display row keeps a table
+outside the visible range and that scrolling exposes it without another redisplay.
+
+### 2026-09-22: reuse pure audit decoding across projections
+
+The rebuilt graphical capture still allocated about 291 MB in audit decoding.
+The projection-local memo expired every redraw, while the existing buffer memo
+covered only directive discovery. All audit readers now reuse the same bounded
+buffer memo, after current provenance checks. Fork-point classification also uses
+the buffer scanner with explicit bounds rather than copying a whole range.
+
+On the captured 574-KB transcript, ten repeated classifications fell from about
+40 MB to 7.5 MB of profiler-reported allocation; ten complete redraws fell from
+154 MB to 120 MB. Median redraw time fell from 325 to 289 ms for all ten combined.
+Rendered text and draft checks matched. These are isolated headless replays,
+not a claim that graphical GC pauses or redisplay costs have disappeared.

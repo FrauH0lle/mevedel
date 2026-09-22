@@ -191,6 +191,9 @@ lifecycle. Background generation and accepted-result recovery run from
 lifecycle opportunities; completed, saved root turns recover abandoned checkpoints.
 Public entries live in `.mevedel/journal/`; private bookkeeping and recovery
 evidence live in `.mevedel/state/journal/`.
+Public-entry discovery batches fresh expiry-marker checks and bounded reads in
+groups of 16. Completed-turn coverage uses the same bounded read batching;
+malformed coverage fails closed. These observations are not cached across calls.
 `memory://journal/` supports ordinary Read, Glob, and Grep over validated published
 records, with cached composer completion and request-time roster availability.
 The main conversation receives a bounded recent-digest map as retained context.
@@ -417,10 +420,14 @@ without consuming coverage. Each request checks current target ownership, and
 the coordinator's timer includes selection and preparation in its deadline.
 
 For local Linux workspaces whose configured memory roots are also local,
-scope capture, immutable preparation and rejection-history reading run in a
-short-lived batch Emacs child. The editor supplies the resolved memory roots,
-instruction paths and original client identity; the child does not rediscover
-user configuration. Scope reads transfer in bounded batches of eight while
+publication recovery, evidence selection, automatic admission, scope capture,
+immutable preparation and rejection-history reading run in a short-lived batch
+Emacs child. The editor supplies the resolved memory roots, instruction paths,
+automatic thresholds and original client identity; the child does not rediscover
+user configuration. The claim deadline covers admission as well as preparation.
+An automatic opportunity that is not due settles its state as `:skipped`, updates
+the next-opportunity observation, and starts neither inference nor a completion
+callback. Scope reads transfer in bounded batches of eight while
 each admitted file still obeys the remaining total byte budget. The editor
 rechecks the claim before starting the configured review from the originating
 buffer. Cancellation stops preparation, fences the pass, and ignores late
@@ -591,11 +598,23 @@ ownership. Unmarked intents are not classified as applications, even if an
 external edit happens to match their proposed bytes. Unreadable or unavailable
 records stay inspectable. Completed, durably saved root turns schedule this
 recovery independently of journaling being enabled. Repeated opportunities
-coalesce and wait for idle transport. A live workspace owner leaves recovery
-for a later opportunity. Session selection and conversation setup do not start
-workspace maintenance;
-exit cancels queued recovery. Recovery neither requests a model nor repeats or
-rolls back memory writes.
+coalesce and wait for idle transport. On local Linux workspaces, accepted
+publication recovery runs in a batch child under the workspace claim. The editor
+then inspects one retained write per event-loop callback and reconciles marked
+attempts against current target authority and live buffers; unsaved edits cannot
+be classified by the child. Each record is read afresh. Cancellation stops the
+remaining checks, and the original deadline also bounds this inspection phase.
+Root-turn automatic consolidation is offered after recovery finishes, so it does
+not race that recovery claim. A queued offer refused by a busy claim does not
+consume the scheduling cooldown; a fresh admission observation still does.
+Consolidation still recovers under its own claim
+before selecting evidence; the intervening live-write phase releases ownership.
+A live workspace owner leaves recovery for a later opportunity. Session selection
+and conversation setup do not start workspace maintenance. Exit cancels queued
+recovery, fences this client's active claims and stops its children. A 180-second
+deadline bounds scheduled recovery, and late replies cannot continue it. Remote
+workspaces and explicit synchronous recovery retain the target-native path.
+Recovery neither requests a model nor repeats or rolls back memory writes.
 
 ## Memory cockpit
 
@@ -705,6 +724,17 @@ Published and sealed turns stay outside later checkpoints; replacement
 branches use distinct persisted fork-point identities even when turn numbers
 repeat. Storage failure reports a warning without failing the conversation save.
 
+For deferred root-turn settlement on local Linux portable sessions, a batch
+Emacs child prepares that checkpoint from the committed publication and frozen
+turn index, model policy and client identity. It receives no source mutation
+lease or provider object. The editor retains request admission while allowing
+input, then checks the same live root, request, saved head and source authority
+before publishing and pinning. Changed or cancelled sources cannot publish late
+results; preparation has a 120-second timeout. Terminal hooks and queued requests
+wait for settlement, and collection is offered afterward. Explicit checkpointing,
+compaction/close, PID-lock sessions and remote roots use the same preparation
+and publication operations synchronously.
+
 Publication retains capture and completed-turn IDs in private immutable coverage
 records. These contain no transcript or digest text and survive deletion or
 expiry of public digests. A later checkpoint therefore excludes previously
@@ -743,11 +773,13 @@ work, and session close schedule one
 background processing opportunity. Scheduling waits until the caller returns
 and the target transport is idle. Already-due journal and memory opportunities
 leave an event-loop interval between jobs rather than executing back-to-back.
-On local Linux workspaces, scheduled abandoned-capture recovery and journal
-retention run in short-lived batch Emacs children using the same pinned storage
+On local Linux workspaces, scheduled abandoned-capture recovery, digest discovery
+and claim admission, and journal retention run in short-lived batch Emacs children using the same pinned storage
 operations and fenced claims. Children load package dependencies without user
-init, receive only workspace paths and retention settings, and return bounded
-completion records. Provider requests keep the editor's configured gptel backend;
+init, receive frozen storage inputs and retention settings, and return bounded
+completion records. Digest preparation returns a capture identity and fenced
+claims; the editor freshly reads the selected capture and rechecks both claims
+before starting inference. Provider requests keep the editor's configured gptel backend;
 no backend or authentication objects are serialized to maintenance children. Recovery completes before its
 processing opportunity resumes. Remote workspaces retain transport-aware editor
 scheduling. Live-buffer artifact retention remains in the editor, where active

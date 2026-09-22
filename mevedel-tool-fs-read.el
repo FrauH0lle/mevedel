@@ -112,6 +112,9 @@
   "Return PATH in the current Read operation's visible domain."
   (mevedel-tool-fs-visible-path path mevedel-tool-fs-read--resource-address))
 
+(defvar-local mevedel-tool-fs-read--mode-cache nil
+  "Display mode memo: copied `auto-mode-alist' and a bounded path table.")
+
 (defun mevedel-tool-fs-read--mode-for-file (path)
   "Return the major-mode symbol `auto-mode-alist' would select for PATH, or nil.
 The returned mode is only used to fontify a temp buffer for read-only
@@ -121,13 +124,23 @@ via `mevedel-view--fontify-as'."
              (stringp path)
              (not (string-empty-p path))
              (not (mevedel-tool-fs-read-media-mime-type path)))
-    (let ((mode (assoc-default path auto-mode-alist #'string-match)))
-      (cond
-       ((null mode) nil)
-       ((symbolp mode) mode)
-       ;; `auto-mode-alist' entries may be `(MODE . t)' pairs
-       ((and (consp mode) (symbolp (car mode))) (car mode))
-       (t nil)))))
+    (unless (and mevedel-tool-fs-read--mode-cache
+                 (equal auto-mode-alist (car mevedel-tool-fs-read--mode-cache)))
+      (setq mevedel-tool-fs-read--mode-cache
+            (cons (mapcar (lambda (entry)
+                            (cons (if (stringp (car entry)) (copy-sequence (car entry)) (car entry))
+                                  (copy-tree (cdr entry))))
+                          auto-mode-alist)
+                  (make-hash-table :test #'equal))))
+    (let* ((table (cdr mevedel-tool-fs-read--mode-cache))
+           (cached (gethash path table)))
+      (if cached (car cached)
+        (let* ((mode (assoc-default path auto-mode-alist #'string-match-p))
+               (result (cond ((symbolp mode) mode)
+                             ((and (consp mode) (symbolp (car mode))) (car mode)))))
+          (when (>= (hash-table-count table) 128) (clrhash table))
+          (puthash (copy-sequence path) (list result) table)
+          result)))))
 
 (defun mevedel-tool-fs-read--line-count (text)
   "Return the display line count for TEXT without allocating line strings."

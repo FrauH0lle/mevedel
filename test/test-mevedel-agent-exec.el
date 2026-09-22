@@ -577,54 +577,6 @@ fire-count and payload."
     (should (equal prompt (mevedel-agent-system-prompt frozen-agent)))))
 
 
-(mevedel-deftest mevedel-agent-exec--refresh-initial-transcript-state ()
-  ,test
-  (test)
-
-  :doc "marks persisted transcript buffers dirty and saves them"
-  (let* ((buf (generate-new-buffer " *mev-agent-refresh-transcript*"))
-         (inv (mevedel-agent-invocation--create
-               :path "/root/test_agent"
-               :buffer buf
-               :transcript-relative-path "agents/verifier.chat.org"))
-         saved)
-    (unwind-protect
-        (progn
-          (with-current-buffer buf
-            (insert "prompt")
-            (set-buffer-modified-p nil))
-          (cl-letf (((symbol-function
-                     'mevedel-agent-conversation-save)
-                     (lambda (arg)
-                       (setq saved
-                             (list arg
-                                   (with-current-buffer buf
-                                     (buffer-modified-p))))
-                       t)))
-            (mevedel-agent-exec--refresh-initial-transcript-state inv))
-          (should (equal (car saved) inv))
-          (should (cadr saved)))
-      (when (buffer-live-p buf) (kill-buffer buf))))
-
-  :doc "skips ephemeral agent buffers without a transcript path"
-  (let* ((buf (generate-new-buffer " *mev-agent-refresh-ephemeral*"))
-         (inv (mevedel-agent-invocation--create :buffer buf))
-         saved)
-    (unwind-protect
-        (progn
-          (with-current-buffer buf
-            (insert "prompt")
-            (set-buffer-modified-p nil))
-          (cl-letf (((symbol-function
-                      'mevedel-agent-conversation-save)
-                     (lambda (_arg) (setq saved t))))
-            (mevedel-agent-exec--refresh-initial-transcript-state inv))
-          (should-not saved)
-          (with-current-buffer buf
-            (should-not (buffer-modified-p))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
-
-
 (mevedel-deftest mevedel-agent-exec-run ()
 		 ,test
 		 (test)

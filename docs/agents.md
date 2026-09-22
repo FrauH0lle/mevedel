@@ -355,6 +355,17 @@ bounded delivery preview rather than the source of truth for an agent result.
 The frozen configuration is authoritative for the agent's request setup, so
 agent transcripts omit all of gptel's request-config Org properties
 while retaining `GPTEL_BOUNDS`.
+Initial task text is saved after installing the frozen configuration; provider
+setup does not force a second save of the same transcript. In materialized
+portable sessions, a new transcript and its dirty metadata share one strict
+publication through the session's root buffer, including for nested agents.
+Registry admission remains a separate acknowledged commit.
+
+Terminal settlement publishes the result before delivery. After that commit,
+gptel's post-response hooks may add transcript text; their extra checkpoint uses
+the existing debounced conversation save instead of extending the terminal
+callback. If settlement is still pending, that checkpoint remains synchronous.
+Explicit saves and teardown flush the pending checkpoint normally.
 Generated task background is ordinary persisted conversation context with its
 own structural type. Follow-ups and agent compaction therefore absorb it
 naturally without replaying or regenerating it.

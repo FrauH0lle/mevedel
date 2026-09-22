@@ -1,6 +1,6 @@
 ;;; test-mevedel-transcript-cache.el --- Projection cache contracts -*- lexical-binding: t -*-
 ;;; Commentary:
-;; Caches retain pure values and canonical boundaries only within one projection.
+;; Caches retain pure decoding separately from current provenance and geometry.
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-transcript)
@@ -10,24 +10,47 @@
                  ,test
                  (test)
                  :doc "reuses valid and invalid decoding, without granting provenance to raw text"
-                 (let* ((record '(:type tool-context :event "PostToolUse"))
-                        (text (mevedel--hook-audit-record-payload record))
-                        (decode (symbol-function 'mevedel-transcript-audit--decode))
-                        (calls 0))
-                   (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
-                              (lambda (value) (cl-incf calls) (funcall decode value))))
-                     (let ((mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal)))
-                       (dotimes (_ 2)
-                         (should (equal record (mevedel--read-hook-audit-record text)))
-                         (should-not (mevedel--read-hook-audit-record "bad base64")))
-                       (should (= calls 2))
-                       (let* ((block (mevedel--format-hook-audit-record record))
-                              (plain (substring-no-properties block)))
-                         (should (mevedel-transcript-audit-spans block))
-                         (should-not (mevedel-transcript-audit-spans plain))))
-                     (let ((before calls))
-                       (dotimes (_ 2) (should (equal record (mevedel--read-hook-audit-record text))))
-                       (should (= calls (+ before 2)))))))
+                 (with-temp-buffer
+                   (let* ((record '(:type tool-context :event "PostToolUse"))
+                          (text (mevedel--hook-audit-record-payload record))
+                          (decode (symbol-function 'mevedel-transcript-audit--decode))
+                          (calls 0))
+                     (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
+                                (lambda (value) (cl-incf calls) (funcall decode value))))
+                              (let ((mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal)))
+                                (dotimes (_ 2)
+                                  (should (equal record (mevedel--read-hook-audit-record text)))
+                                  (should-not (mevedel--read-hook-audit-record "bad base64")))
+                                (should (= calls 2))
+                                (let* ((block (mevedel--format-hook-audit-record record))
+                                       (plain (substring-no-properties block)))
+                                  (should (mevedel-transcript-audit-spans block))
+                                  (should-not (mevedel-transcript-audit-spans plain))))
+                              (let ((before calls))
+                                (dotimes (_ 2) (should (equal record (mevedel--read-hook-audit-record text))))
+                                (should (= calls before))))))
+                 :doc "reuses bounded decoding across projections while trust and changed bytes stay current"
+                 (with-temp-buffer
+                   (let* ((block (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "a")))
+                          (decode (symbol-function 'mevedel-transcript-audit--decode))
+                          (calls 0))
+                     (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
+                                (lambda (text) (cl-incf calls) (funcall decode text))))
+                              (dotimes (_ 3)
+                                (let ((mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal)))
+                                  (should (equal "a" (plist-get (plist-get (car (mevedel-transcript-audit-spans block)) :record) :fork-point-id)))))
+                              (should (= calls 1))
+                              (should-not (mevedel-transcript-audit-spans (substring-no-properties block)))
+                              (setq block (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "b")))
+                              (should (equal "b" (plist-get (plist-get (car (mevedel-transcript-audit-spans block)) :record) :fork-point-id)))
+                              (should (= calls 2))
+                              (dotimes (n 140)
+                                (mevedel--read-hook-audit-record (mevedel--hook-audit-record-payload (list :type 'tool-context :number n))))
+                              (should (<= (hash-table-count mevedel-transcript-audit--buffer-records) 128))
+                              (should (<= mevedel-transcript-audit--buffer-record-bytes (* 4 1024 1024)))
+                              (let ((large (make-string (1+ (* 1024 1024)) ?x)))
+                                (mevedel--read-hook-audit-record large)
+                                (should-not (gethash large mevedel-transcript-audit--buffer-records)))))))
 
 (mevedel-deftest mevedel-transcript--tool-block-bounds-for-run ()
                  ,test

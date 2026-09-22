@@ -13,6 +13,7 @@
 (require 'mevedel-structs)
 
 ;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture--prepare "mevedel-journal-capture" (session policy client))
 (defvar mevedel-journal-enabled)
 
 ;; `mevedel-journal-cleanup'
@@ -22,6 +23,7 @@
 (defvar mevedel-journal-cleanup--more)
 
 ;; `mevedel-journal-process'
+(declare-function mevedel-journal-process--prepare "mevedel-journal-process" (workspace &optional retry-id))
 (defvar mevedel-journal-process--inhibit-scheduling)
 
 ;; `mevedel-journal-recovery'
@@ -31,10 +33,17 @@
 (defvar mevedel-journal-max-age-days)
 (defvar mevedel-memory-history-max-age-days)
 
+;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision-recover "mevedel-memory-decision" (workspace))
+
 ;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass--prepare "mevedel-memory-pass" (workspace payload))
 (declare-function mevedel-memory-pass--publish "mevedel-memory-pass" (workspace payload))
 (defvar mevedel-memory-pass--inhibit-scheduling)
+
+;; `mevedel-memory-store'
+(declare-function mevedel-memory-store--assert-owned "mevedel-memory-store" (claim))
+(declare-function mevedel-memory-store-recover "mevedel-memory-store" (workspace))
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication--cached-generation "mevedel-session-publication" (session-dir head))
@@ -60,15 +69,16 @@
 
 (defun mevedel-journal-worker-start (workspace operation callback &optional force payload)
   "Run WORKSPACE OPERATION in a child and call CALLBACK with its result.
-OPERATION is `recovery', `cleanup', `memory-prepare', `memory-publish', or
+OPERATION is `capture-prepare', `digest-prepare', `recovery', `cleanup',
+`memory-recover', `memory-prepare', `memory-publish', or
 `generation-observations'.
 FORCE bypasses cleanup throttling.  PAYLOAD freezes consolidation inputs.
 Return the child process.  CALLBACK receives (:ok t :count N :more BOOL
 :cleanup-at TIME), operation-specific :prepared/:accepted/:entry/:observations,
-or (:error MESSAGE). It receives no transcript bodies.
+or (:error MESSAGE). Capture preparation returns bounded frozen evidence.
 Deleting the process cancels work; durable claims fence interrupted attempts."
   (unless (and (mevedel-journal-worker-supported-p workspace)
-               (memq operation '(recovery cleanup memory-prepare memory-publish generation-observations)))
+               (memq operation '(capture-prepare digest-prepare recovery cleanup memory-recover memory-prepare memory-publish generation-observations)))
     (error "Unsupported journal worker operation"))
   (let* ((directory (make-temp-file "mevedel-journal-worker-" t))
          (request (file-name-concat directory "request.el"))
@@ -109,7 +119,7 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                                   (unless (and (zerop (process-exit-status child))
                                                (file-exists-p reply)
                                                (<= (file-attribute-size (file-attributes reply))
-                                                   (if (memq operation '(memory-prepare memory-publish generation-observations)) (* 8 1024 1024) 4096)))
+                                                   (if (memq operation '(capture-prepare memory-prepare memory-publish generation-observations)) (* 8 1024 1024) 4096)))
                                     (error "Journal worker exited with status %s" (process-exit-status child)))
                                   (with-temp-buffer
                                     (insert-file-contents reply)
@@ -160,6 +170,31 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                   (error "Journal worker needs a local absolute workspace"))
                 (setf (mevedel-workspace-journal-cleanup-at workspace) (plist-get options :cleanup-at))
                 (pcase (plist-get options :operation)
+                  ('capture-prepare
+                   (let* ((payload (plist-get options :payload))
+                          (session (mevedel-session--create
+                                    :workspace workspace :authority-mode 'portable
+                                    :session-id (plist-get payload :session-id)
+                                    :name (plist-get payload :name)
+                                    :save-path (plist-get payload :save-path)
+                                    :publication (plist-get payload :publication)
+                                    :turn-count (plist-get payload :turn-count)
+                                    :current-segment (plist-get payload :current-segment)
+                                    :prompt-index (plist-get payload :prompt-index))))
+                     (list :ok t :prepared
+                           (mevedel-journal-capture--prepare
+                            session (plist-get payload :policy) (plist-get payload :client)))))
+                  ('digest-prepare
+                   (require 'mevedel-journal-process)
+                   (when (plist-get (plist-get options :payload) :recover)
+                     (mevedel-journal-recovery-run workspace))
+                   (list :ok t :prepared (mevedel-journal-process--prepare workspace)))
+                  ('memory-recover
+                   (require 'mevedel-memory-decision)
+                   (mevedel-memory-store--assert-owned (plist-get (plist-get options :payload) :claim))
+                   (mevedel-memory-decision-recover workspace)
+                   (mevedel-memory-store-recover workspace)
+                   (list :ok t))
                   ((or 'memory-prepare 'memory-publish)
                    (require 'mevedel-memory-pass)
                    (if (eq (plist-get options :operation) 'memory-prepare)

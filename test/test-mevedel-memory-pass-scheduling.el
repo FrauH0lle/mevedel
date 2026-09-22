@@ -25,12 +25,15 @@
                           (mevedel-memory-consolidation-min-hours 24)
                           (mevedel-memory-consolidation-min-digests 5)
                           (mevedel-memory-pass--inhibit-scheduling nil)
+                          (mevedel-memory-decision--inhibit-recovery nil)
                           (gptel--known-backends nil)
                           (backend (gptel-make-openai "schedule-test" :key "test-only" :models '(test-model)))
                           (now 1800000000)
                           (calls 0) callback selected state result
                           (none "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes."))
-                         :after-each ((mevedel-memory-pass-stop-all) (delete-directory root t)))
+                         :after-each ((mevedel-memory-pass-stop-all)
+                                      (mevedel-memory-decision-stop-recovery)
+                                      (delete-directory root t)))
                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
                            ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
                            ((symbol-function 'mevedel-memory-review-request)
@@ -75,7 +78,9 @@
                                           memory))
                                       (drain ()
                                         (let ((deadline (+ (float-time) 10)))
-                                          (while (and (> (hash-table-count mevedel-memory-pass--pending) 0)
+                                          (while (and (or (> (hash-table-count mevedel-memory-pass--pending) 0)
+                                                           (> (hash-table-count mevedel-memory-decision--recovery-pending) 0)
+                                                           (> (hash-table-count mevedel-memory-decision--recovery-workers) 0))
                                                       (< (float-time) deadline))
                                             (accept-process-output nil 0.01))
                                           (should (= 0 (hash-table-count mevedel-memory-pass--pending))))))
@@ -164,6 +169,20 @@
                          (should-not (start :automatic t))
                          (should-not (mevedel-journal-claim-outcome claim))
                          (should (= 0 calls)))
+                     (mevedel-journal-claim-settle claim 'cancelled "")))
+                 :doc "a busy queued opportunity does not suppress the post-recovery offer"
+                 (let ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
+                   (unwind-protect
+                       (progn
+                         (dotimes (n 5) (digest (1+ n)))
+                         (mevedel-memory-pass-schedule workspace)
+                         (drain)
+                         (should (= 0 calls))
+                         (mevedel-journal-claim-settle claim 'cancelled "")
+                         (mevedel-memory-pass-schedule workspace)
+                         (drain)
+                         (should (= 1 calls))
+                         (finish))
                      (mevedel-journal-claim-settle claim 'cancelled "")))
                  :doc "manual and cached count failures perform no filesystem work at turn completion"
                  (progn

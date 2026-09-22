@@ -99,6 +99,8 @@
     (should (eq 'identity (alist-get 'display-sort-function metadata)))
     (should (eq 'identity (alist-get 'cycle-sort-function metadata)))))
 
+(defvar org-element-cache-persistent)
+
 (mevedel-deftest mevedel--transcript-org-mode ()
   ,test
   (test)
@@ -144,6 +146,22 @@
           (should-not hook-localization-warning))
         (should (equal "" (buffer-string)))
         (should (equal 0 status)))))
+
+  :doc "transcript startup skips persistent Org cache without changing user settings"
+  (progn
+    (require 'org)
+    (require 'org-element)
+    (require 'org-persist)
+    (let ((org-element-cache-persistent t) (reads 0))
+      (cl-letf (((symbol-function 'org-persist-load)
+                 (lambda (&rest _) (cl-incf reads))))
+        (with-temp-buffer
+          (insert "* Saved transcript\nAnswer\n")
+          (mevedel--transcript-org-mode)
+          (should (derived-mode-p 'org-mode))
+          (should-not org-element-cache-persistent)))
+      (should (= 0 reads))
+      (should org-element-cache-persistent)))
 
   :doc "suppresses org-indent-mode while transcript Org hooks run"
   (progn

@@ -164,12 +164,42 @@
           (should (= 1 (hash-table-count mevedel-memory-decision--recovery-pending)))
           (should-not (mevedel-memory-decision-status workspace (plist-get item :id)))
           (let ((deadline (+ (float-time) 5)))
-            (while (and (> (hash-table-count mevedel-memory-decision--recovery-pending) 0)
+            (while (and (or (> (hash-table-count mevedel-memory-decision--recovery-pending) 0)
+                                 (> (hash-table-count mevedel-memory-decision--recovery-workers) 0))
                         (< (float-time) deadline))
               (accept-process-output nil 0.05)))
           (should (= 0 (hash-table-count mevedel-memory-decision--recovery-pending)))
           (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get item :id)) :status)))
           (should-not (file-exists-p (mevedel-memory-write--pin intent))))
+      (mevedel-memory-decision-stop-recovery)))
+  :doc "async recovery checks unsaved editor buffers before settling marked writes"
+  (let ((mevedel-memory-decision--inhibit-recovery nil) intent buffer completed)
+    (unwind-protect
+        (progn
+          (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+          (mevedel-memory-write-call
+           scope root-id
+           (lambda (target)
+             (setq intent (mevedel-memory-write-prepare workspace claim target accepted item))
+             (mevedel-memory-write-run workspace claim target intent)))
+          (mevedel-journal-claim-settle claim 'cancelled "")
+          (setq buffer (find-file-noselect (file-name-concat memory "topic.md")))
+          (with-current-buffer buffer
+            (goto-char (point-max)) (insert "Unsaved correction.\n"))
+          (mevedel-memory-decision-schedule-recovery workspace (lambda () (setq completed t)))
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (not completed) (< (float-time) deadline))
+              (accept-process-output nil .01)))
+          (should completed)
+          (should (eq 'recovery-required
+                      (plist-get (mevedel-memory-decision-status workspace (plist-get item :id)) :status)))
+          (should (file-exists-p (mevedel-memory-write--pin intent)))
+          (with-current-buffer buffer
+            (should (buffer-modified-p))
+            (should (string-suffix-p "Unsaved correction.\n" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
       (mevedel-memory-decision-stop-recovery)))
   :doc "an unmarked orphan cannot claim a coincidentally matching external edit"
   (let (intent)

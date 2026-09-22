@@ -373,26 +373,45 @@ Reject private state, traversal, symbolic links, and malformed entries."
 
 (defun mevedel-journal-store-entries (root)
   "Return valid published entries in workspace ROOT, newest first.
-Ignore incomplete or malformed public records.  Private state is never
-read.  Storage errors, including symlink substitution, remain errors."
-  (let ((paths (sort (mevedel-session-control-fs-list-directory
-                      (mevedel-journal-store-directory root)
-                      mevedel-journal-store-file-regexp)
-                     #'string>))
-        entries)
-    (dolist (path paths (nreverse entries))
-      (condition-case nil
-          (push (mevedel-journal-store-read root (file-name-nondirectory path))
-                entries)
-        (mevedel-session-control-fs-absent nil)
-        (mevedel-journal-store-invalid nil)))))
+Ignore incomplete or malformed public records.  Private evidence is never
+read.  Storage errors, including symlink substitution, remain errors.
+Batch fresh expiry checks and bounded reads.
+Retain no observations across calls."
+  (let* ((directory (mevedel-journal-store-directory root))
+         (paths (sort (mevedel-session-control-fs-list-directory
+                       directory mevedel-journal-store-file-regexp) #'string>))
+         entries)
+    (while paths
+      (let* ((batch (seq-take paths 16))
+             (markers
+              (mevedel-session-control-fs-run-program
+               (mapcar (lambda (path)
+                         (list :op 'path-exists-p :optional t
+                               :path (mevedel-journal-store-expired-marker
+                                      directory (file-name-nondirectory path)))) batch)))
+             reads)
+        (setq paths (nthcdr (length batch) paths))
+        (cl-mapc (lambda (path marker)
+                   (if (eq (plist-get marker :status) 'absent)
+                       (push (list :op 'read :path path :optional t :coding 'utf-8-unix
+                                   :max-bytes (1+ mevedel-journal-store--entry-max-bytes)) reads)
+                     (mevedel-session-control-fs-program-value marker)))
+                 batch markers)
+        (dolist (read (mevedel-session-control-fs-run-program (nreverse reads)))
+          (condition-case nil
+              (push (mevedel-journal-store--decode
+                     (mevedel-session-control-fs-program-value read)
+                     (file-name-nondirectory (plist-get read :path))) entries)
+            (mevedel-session-control-fs-absent nil)
+            (mevedel-journal-store-invalid nil)))))
+    (nreverse entries)))
 
-(defun mevedel-journal-store--read-coverage (path)
-  "Return the published turn identities recorded at private coverage PATH.
+(defun mevedel-journal-store--read-coverage (path text)
+  "Return published turn identities from coverage PATH's freshly read TEXT.
 Malformed records fail closed so completed work cannot become eligible again."
-  (let* ((object (json-parse-string
-                  (mevedel-session-control-fs-read-file
-                   path 'utf-8-unix (1+ mevedel-journal-store--entry-max-bytes))))
+  (when (> (string-bytes text) mevedel-journal-store--entry-max-bytes)
+    (signal 'mevedel-journal-store-invalid '("Capture coverage exceeds its byte limit")))
+  (let* ((object (json-parse-string text))
          (id (and (hash-table-p object) (gethash "capture-id" object)))
          (turns (and (hash-table-p object) (gethash "turn-ids" object))))
     (unless (and (hash-table-p object) (= 2 (hash-table-count object))
@@ -422,12 +441,23 @@ Malformed records fail closed so completed work cannot become eligible again."
 (defun mevedel-journal-store-covered-turns (root)
   "Return IDs of all turns already published in workspace ROOT.
 These private identity records outlive public entry expiry.  They contain no
-evidence text and are independent of consolidation review coverage."
-  (delete-dups
-   (mapcan #'mevedel-journal-store--read-coverage
-           (mevedel-session-control-fs-list-directory
-            (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage")
-            (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))))
+evidence text and are independent of consolidation review coverage.
+Read bounded batches afresh; malformed or unavailable coverage fails closed."
+  (let ((paths (mevedel-session-control-fs-list-directory
+                (file-name-concat (mevedel-journal-store-state-directory
+                                   (mevedel-journal-store-directory root)) "coverage")
+                (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))
+        turns)
+    (while paths
+      (let ((batch (seq-take paths 16)))
+        (setq paths (nthcdr (length batch) paths))
+        (dolist (read (mevedel-session-control-fs-run-program
+                       (mapcar (lambda (path)
+                                 (list :op 'read :path path :coding 'utf-8-unix
+                                       :max-bytes (1+ mevedel-journal-store--entry-max-bytes))) batch)))
+          (push (mevedel-journal-store--read-coverage
+                 (plist-get read :path) (mevedel-session-control-fs-program-value read)) turns))))
+    (delete-dups (apply #'append (nreverse turns)))))
 
 (defun mevedel-journal-store-publish-digest (root metadata body)
   "Publish a digest from frozen capture METADATA and BODY in workspace ROOT.

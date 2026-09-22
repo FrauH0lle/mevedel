@@ -1500,8 +1500,11 @@
                              programs)
                        (funcall program-function operations))))
             (should (mevedel-session-durability-lease-renew session)))
-          (should (equal '((verify write list-directory target-time))
-                         programs))
+          (should (member programs
+                          '(((verify write list-directory target-time))
+                            ((verify list-directory target-time))
+                            ((verify write list-directory))
+                            ((verify list-directory)))))
           (mevedel-session-persistence-lock-release session-dir session))
       (when (file-directory-p local-root)
         (delete-directory local-root t))))

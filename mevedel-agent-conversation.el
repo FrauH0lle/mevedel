@@ -35,19 +35,28 @@
 (defvar gptel-org-convert-response)
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection))
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
+(declare-function mevedel-session-artifacts-publish-transcript-state
+                  "mevedel-session-artifacts"
+                  (session root-buffer transcript-path content &optional coding))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-find-artifact-noselect
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-transcript-state
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
   "mevedel-session-artifacts")
@@ -76,6 +85,7 @@
 (autoload 'mevedel-skills-install-activation-hook "mevedel-skills-prompt")
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
@@ -765,6 +775,10 @@ Return nil when INVOCATION has no live conversation buffer."
                        relative (mevedel-session-save-path session))))
             (condition-case err
                 (progn
+                  (mevedel-session-persistence-update-transcript-entry
+                   session
+                   (mevedel-agent-invocation-agent-id invocation)
+                   (list :updated-at (format-time-string "%FT%H-%M-%S")))
                   (when (buffer-modified-p)
                     (when (bound-and-true-p gptel-mode)
                       (gptel--save-state))
@@ -784,19 +798,23 @@ Return nil when INVOCATION has no live conversation buffer."
                       (if (mevedel-session-codec-portable-authority-p session)
                           (progn
                             (run-hooks 'before-save-hook)
-                            (mevedel-session-artifacts-publish-text
-                             session buffer-file-name
-                             (buffer-substring-no-properties
-                              (point-min) (point-max))
-                             'utf-8-unix)
+                            (let ((content (buffer-substring-no-properties
+                                            (point-min) (point-max)))
+                                  (root (or (mevedel-session-root-buffer session) parent)))
+                              (if (and (mevedel-agent-invocation-sidecar-dirty invocation)
+                                       (buffer-live-p root)
+                                       (mevedel-session-artifacts-artifact-present-p
+                                        session "session.meta.el" t))
+                                  (progn
+                                    (mevedel-session-artifacts-publish-transcript-state
+                                     session root buffer-file-name content 'utf-8-unix)
+                                    (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
+                                (mevedel-session-artifacts-publish-text
+                                 session buffer-file-name content 'utf-8-unix)))
                             (set-visited-file-modtime)
                             (set-buffer-modified-p nil)
                             (run-hooks 'after-save-hook))
                         (basic-save-buffer))))
-                  (mevedel-session-persistence-update-transcript-entry
-                   session
-                   (mevedel-agent-invocation-agent-id invocation)
-                   (list :updated-at (format-time-string "%FT%H-%M-%S")))
                   (when (and
                          (mevedel-agent-invocation-sidecar-dirty invocation)
                          (buffer-live-p parent)

@@ -25,6 +25,11 @@
 (declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
 (autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
 
+;; `mevedel-journal-worker'
+(declare-function mevedel-journal-worker-start "mevedel-journal-worker"
+                  (workspace operation callback &optional force payload))
+(declare-function mevedel-journal-worker-supported-p "mevedel-journal-worker" (workspace))
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
                   "mevedel-session-artifacts" (session &optional buffer))
@@ -112,8 +117,8 @@ evidence bundle; accepted output is never deleted here."
   "Read and validate WORKSPACE's immutable capture ID, or nil if absent."
   (condition-case nil
       (let* ((text (mevedel-session-control-fs-read-file
-                (mevedel-journal-capture--file workspace id "capture.json")
-                'utf-8-unix (1+ mevedel-journal-store--entry-max-bytes)))
+                    (mevedel-journal-capture--file workspace id "capture.json")
+                    'utf-8-unix (1+ mevedel-journal-store--entry-max-bytes)))
              (record
               (progn
                 (when (> (string-bytes text) mevedel-journal-store--entry-max-bytes)
@@ -125,8 +130,8 @@ evidence bundle; accepted output is never deleted here."
         (unless (and (proper-list-p record) (= (length record) 24)
                      (cl-every (lambda (key) (plist-member record key))
                                '(:id :metadata :policy :source-directory
-                                 :source-client :source-kind :head :sources
-                                 :evidence :notes :evidence-sha256 :notes-sha256))
+                                     :source-client :source-kind :head :sources
+                                     :evidence :notes :evidence-sha256 :notes-sha256))
                      (equal id (plist-get record :id))
                      (equal id (plist-get metadata :capture-id))
                      (equal id (mevedel-journal-capture--identity
@@ -383,8 +388,10 @@ settlement.  This performs no inference and does not seal the capture."
              session (lambda () (mevedel-journal-capture--checkpoint-owned session)))
           (mevedel-journal-capture--checkpoint-owned session))))))
 
-(defun mevedel-journal-capture--checkpoint-owned (session)
-  "Freeze and pin completed SESSION work while its source authority is held."
+(defun mevedel-journal-capture--prepare (session policy client)
+  "Prepare SESSION's frozen checkpoint without publishing or pinning it.
+POLICY and CLIENT are captured by the owning editor.  Only committed artifacts
+are read, so a worker needs no source mutation authority."
   (let* ((workspace (mevedel-session-workspace session))
          (root (mevedel-workspace-root workspace))
          (pending (mevedel-journal-capture-list workspace))
@@ -401,82 +408,163 @@ settlement.  This performs no inference and does not seal the capture."
                  (mevedel-journal-capture--turns session))))
     (when turns
       (let* ((ids (mapcar (lambda (turn) (plist-get turn :id)) turns))
-             (id (mevedel-journal-capture--identity (mevedel-session-session-id session) ids))
-             (retired (or (mevedel-journal-capture--marked-p workspace id "retired")
-                          (mevedel-journal-capture--marked-p workspace id "discard.json")))
-             (capture (and (not retired) (mevedel-journal-capture--read workspace id))))
-        (unless retired
-          (unless capture
-            (let* ((projection (mevedel-journal-evidence-turns session turns))
-                   (evidence (encode-coding-string (plist-get projection :text) 'utf-8-unix))
-                   (notes (encode-coding-string
-                           (mevedel-journal-evidence-notes session)
-                           'utf-8-unix))
-                   (head (and (mevedel-session-codec-portable-authority-p session)
-                              (plist-get (mevedel-session-publication session) :head)))
-                   (policy (mevedel-journal-capture--freeze-policy))
-                   (metadata
-                    (list :capture-id id :session (mevedel-session-session-id session)
-                          :session-name (mevedel-session-name session)
-                          :workspace (mevedel-workspace-identity-ensure root)
-                          :trigger 'session-end :segment (or (mevedel-session-current-segment session) 1)
-                          :source-revision (mevedel-journal-capture--source-revision
-                                            head (plist-get projection :sources))
-                          :turns (mapcar (lambda (turn) (plist-get turn :number)) turns)
-                          :turn-ids ids
-                          :created (mevedel-journal-store-timestamp
-                                    (mevedel-session-control-fs-target-time root))
-                          :model (or (plist-get policy :provider) "unavailable"))))
-              (mevedel-journal-store--validate-metadata metadata)
-              (plist-put metadata :trigger "session-end")
-              (plist-put metadata :turns (vconcat (plist-get metadata :turns)))
-              (plist-put metadata :turn-ids (vconcat ids))
-              (setq capture
-                    (list :id id :metadata metadata :policy policy
-                          :source-directory (file-local-name (mevedel-session-save-path session))
-                          :source-client (mevedel-workspace-identity-client)
-                          :source-kind (if (and (mevedel-session-codec-portable-authority-p session)
-                                                (equal (file-remote-p root)
-                                                       (file-remote-p (mevedel-session-save-path session))))
-                                           "target" "client")
-                          :head head :sources (vconcat (plist-get projection :sources))
-                          :evidence (decode-coding-string evidence 'utf-8-unix)
-                          :notes (decode-coding-string notes 'utf-8-unix)
-                          :evidence-sha256 (secure-hash 'sha256 evidence)
-                          :notes-sha256 (secure-hash 'sha256 notes)))
-              ;; One exclusive file publishes the descriptor AND its
-              ;; source snapshot, so a crash cannot separate the notes
-              ;; from the metadata needed to recover them.
-              (let ((text (json-serialize capture)))
-                (when (> (string-bytes text) mevedel-journal-store--entry-max-bytes)
-                  (error "Capture exceeds its storage limit"))
-                (mevedel-session-control-fs-make-directory (mevedel-journal-capture--directory workspace id) t)
-                (mevedel-session-control-fs-create-file
-                 (mevedel-journal-capture--file workspace id "capture.json") text))
-              (setq capture (mevedel-journal-capture--read workspace id))))
-          (when (mevedel-journal-capture--ready workspace capture (mevedel-session-save-path session))
-            (mevedel-telemetry-record
-             session 'journal-capture-queued :capture-id id :trigger 'checkpoint
-             :input-bytes (+ (string-bytes (plist-get capture :evidence))
-                             (string-bytes (plist-get capture :notes)))))
-          (dolist (old pending)
-            (when (and (not (equal id (plist-get old :id)))
-                       (equal (plist-get (plist-get old :metadata) :session)
-                              (mevedel-session-session-id session))
-                       (equal (mevedel-session-control-fs-physical-path
-                               (mevedel-journal-capture--source-directory workspace old))
-                              (mevedel-session-control-fs-physical-path
-                               (mevedel-session-save-path session)))
-                       (cl-every (lambda (turn-id) (member turn-id ids))
-                                 (plist-get (plist-get old :metadata) :turn-ids))
-                       (not (mevedel-session-control-fs-path-exists-p
-                             (mevedel-journal-capture--file workspace (plist-get old :id) "seal.json"))))
-              (mevedel-session-control-fs-create-file
-               (mevedel-journal-capture--file workspace (plist-get old :id) "retired")
-               (format "superseded by %s\n" id))
-              (mevedel-journal-pins-release
-               (mevedel-journal-capture--source-directory workspace old) (plist-get old :id))))
-          capture)))))
+             (id (mevedel-journal-capture--identity (mevedel-session-session-id session) ids)))
+        (unless (or (mevedel-journal-capture--marked-p workspace id "retired")
+                    (mevedel-journal-capture--marked-p workspace id "discard.json"))
+          (let* ((capture (mevedel-journal-capture--read workspace id))
+                 (new (null capture)))
+            (unless capture
+              (let* ((projection (mevedel-journal-evidence-turns session turns))
+                     (evidence (encode-coding-string (plist-get projection :text) 'utf-8-unix))
+                     (notes (encode-coding-string
+                             (mevedel-journal-evidence-notes session)
+                             'utf-8-unix))
+                     (head (and (mevedel-session-codec-portable-authority-p session)
+                                (plist-get (mevedel-session-publication session) :head)))
+                     (metadata
+                      (list :capture-id id :session (mevedel-session-session-id session)
+                            :session-name (mevedel-session-name session)
+                            :workspace (mevedel-workspace-identity-ensure root)
+                            :trigger 'session-end :segment (or (mevedel-session-current-segment session) 1)
+                            :source-revision (mevedel-journal-capture--source-revision
+                                              head (plist-get projection :sources))
+                            :turns (mapcar (lambda (turn) (plist-get turn :number)) turns)
+                            :turn-ids ids
+                            :created (mevedel-journal-store-timestamp
+                                      (mevedel-session-control-fs-target-time root))
+                            :model (or (plist-get policy :provider) "unavailable"))))
+                (mevedel-journal-store--validate-metadata metadata)
+                (plist-put metadata :trigger "session-end")
+                (plist-put metadata :turns (vconcat (plist-get metadata :turns)))
+                (plist-put metadata :turn-ids (vconcat ids))
+                (setq capture
+                      (list :id id :metadata metadata :policy policy
+                            :source-directory (file-local-name (mevedel-session-save-path session))
+                            :source-client client
+                            :source-kind (if (and (mevedel-session-codec-portable-authority-p session)
+                                                  (equal (file-remote-p root)
+                                                         (file-remote-p (mevedel-session-save-path session))))
+                                             "target" "client")
+                            :head head :sources (vconcat (plist-get projection :sources))
+                            :evidence (decode-coding-string evidence 'utf-8-unix)
+                            :notes (decode-coding-string notes 'utf-8-unix)
+                            :evidence-sha256 (secure-hash 'sha256 evidence)
+                            :notes-sha256 (secure-hash 'sha256 notes)))))
+            (list :capture capture :new new
+                  :pending
+                  (mapcar (lambda (record)
+                            (list :id (plist-get record :id) :metadata (plist-get record :metadata)
+                                  :source-kind (plist-get record :source-kind)
+                                  :source-client (plist-get record :source-client)
+                                  :source-directory (plist-get record :source-directory)))
+                          pending))))))))
+
+(defun mevedel-journal-capture--publish (session prepared)
+  "Publish and pin PREPARED while SESSION's source mutation authority is held."
+  (when prepared
+    (let* ((workspace (mevedel-session-workspace session))
+           (capture (plist-get prepared :capture))
+           (id (plist-get capture :id))
+           (pending (plist-get prepared :pending))
+           (ids (append (plist-get (plist-get capture :metadata) :turn-ids) nil)))
+      (unless (or (mevedel-journal-capture--marked-p workspace id "retired")
+                  (mevedel-journal-capture--marked-p workspace id "discard.json"))
+        (when (plist-get prepared :new)
+          ;; Descriptor and evidence still share one exclusive publication.
+          (let ((text (json-serialize capture)))
+            (when (> (string-bytes text) mevedel-journal-store--entry-max-bytes)
+              (error "Capture exceeds its storage limit"))
+            (mevedel-session-control-fs-make-directory (mevedel-journal-capture--directory workspace id) t)
+            (mevedel-session-control-fs-create-file
+             (mevedel-journal-capture--file workspace id "capture.json") text))
+          (setq capture (mevedel-journal-capture--read workspace id)))
+        (when (mevedel-journal-capture--ready workspace capture (mevedel-session-save-path session))
+          (mevedel-telemetry-record
+           session 'journal-capture-queued :capture-id id :trigger 'checkpoint
+           :input-bytes (+ (string-bytes (plist-get capture :evidence))
+                           (string-bytes (plist-get capture :notes)))))
+        (dolist (old pending)
+          (when (and (not (equal id (plist-get old :id)))
+                     (equal (plist-get (plist-get old :metadata) :session)
+                            (mevedel-session-session-id session))
+                     (equal (mevedel-session-control-fs-physical-path
+                             (mevedel-journal-capture--source-directory workspace old))
+                            (mevedel-session-control-fs-physical-path
+                             (mevedel-session-save-path session)))
+                     (cl-every (lambda (turn-id) (member turn-id ids))
+                               (plist-get (plist-get old :metadata) :turn-ids))
+                     (not (mevedel-session-control-fs-path-exists-p
+                           (mevedel-journal-capture--file workspace (plist-get old :id) "seal.json"))))
+            (mevedel-session-control-fs-create-file
+             (mevedel-journal-capture--file workspace (plist-get old :id) "retired")
+             (format "superseded by %s\n" id))
+            (mevedel-journal-pins-release
+             (mevedel-journal-capture--source-directory workspace old) (plist-get old :id))))
+        capture))))
+
+(defun mevedel-journal-capture--checkpoint-owned (session)
+  "Freeze and pin completed SESSION work while its source authority is held."
+  (mevedel-journal-capture--publish
+   session (mevedel-journal-capture--prepare
+            session (mevedel-journal-capture--freeze-policy) (mevedel-workspace-identity-client))))
+
+;;;###autoload
+(defun mevedel-journal-capture-checkpoint-start (session buffer callback)
+  "Prepare a local portable SESSION checkpoint outside the editor.
+BUFFER must remain SESSION's root and its committed head must remain current.
+CALLBACK receives the published capture, nil, or (:error MESSAGE).  Return a
+cancellation function; cancellation never publishes or calls CALLBACK."
+  (require 'mevedel-journal-worker)
+  (unless (and (mevedel-journal-worker-supported-p (mevedel-session-workspace session))
+               (mevedel-session-codec-portable-authority-p session)
+               (buffer-live-p buffer)
+               (eq buffer (mevedel-session-root-buffer session)))
+    (error "Checkpoint preparation requires a local portable root session"))
+  (let* ((head (plist-get (mevedel-session-publication session) :head))
+         (directory (mevedel-session-save-path session))
+         (request (buffer-local-value 'mevedel--current-request buffer))
+         (payload (with-current-buffer buffer
+                    (list :session-id (mevedel-session-session-id session)
+                          :name (mevedel-session-name session) :save-path directory
+                          :publication (copy-tree (mevedel-session-publication session))
+                          :turn-count (mevedel-session-turn-count session)
+                          :current-segment (mevedel-session-current-segment session)
+                          :prompt-index (copy-tree (mevedel-session-prompt-index session))
+                          :client (mevedel-workspace-identity-client)
+                          :policy (mevedel-journal-capture--freeze-policy))))
+         process timer settled)
+    (cl-labels
+     ((cancel ()
+        (setq settled t)
+        (when timer (cancel-timer timer))
+        (when (and process (process-live-p process)) (delete-process process)))
+      (finish (result)
+        (unless settled
+          (cancel)
+          (funcall
+           callback
+           (condition-case err
+               (progn
+                 (when (plist-get result :error) (error "%s" (plist-get result :error)))
+                 (unless (and mevedel-journal-enabled (buffer-live-p buffer)
+                              (eq buffer (mevedel-session-root-buffer session))
+                              (eq session (buffer-local-value 'mevedel--session buffer))
+                              (eq request (buffer-local-value 'mevedel--current-request buffer))
+                              (equal directory (mevedel-session-save-path session))
+                              (equal head (plist-get (mevedel-session-publication session) :head))
+                              (not (mevedel-session-pending-publication session))
+                              (not (mevedel-session-publication-active-p session))
+                              (null (mevedel-session-publication-queue session)))
+                   (error "Checkpoint source changed during preparation"))
+                 (mevedel-session-artifacts-assert-mutation-authority session buffer)
+                 (mevedel-session-durability-call-with-reserved-lease
+                  session (lambda () (mevedel-journal-capture--publish session (plist-get result :prepared)))))
+             (error (list :error (error-message-string err))))))))
+     (setq process (mevedel-journal-worker-start
+                    (mevedel-session-workspace session) 'capture-prepare #'finish nil payload))
+     (unless settled
+       (setq timer (run-at-time 120 nil (lambda () (finish '(:error "Checkpoint preparation timed out"))))))
+     #'cancel)))
 
 (provide 'mevedel-journal-capture)
 ;;; mevedel-journal-capture.el ends here

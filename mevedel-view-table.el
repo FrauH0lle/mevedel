@@ -975,10 +975,13 @@ Include the complete table even when only its middle is visible.  Retained
 source with a nil width is a table awaiting its first prettification."
   (let* ((width (window-body-width window t))
          (pos (window-start window))
-         (end (save-excursion
-                (goto-char pos)
-                (vertical-motion (window-body-height window) window)
-                (point)))
+         ;; Reuse completed redisplay; `window-end' also handles variable-height
+         ;; rows. Batch Emacs has no glyph matrices, so retain its approximation.
+         (end (or (and (not noninteractive) (window-end window t))
+                  (save-excursion
+                    (goto-char pos)
+                    (vertical-motion (window-body-height window) window)
+                    (point))))
          found)
     (while (and (< pos end) (not found))
       (let ((source (get-text-property pos 'mevedel-view-table-source))

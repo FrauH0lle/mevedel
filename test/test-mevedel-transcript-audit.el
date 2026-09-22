@@ -175,7 +175,27 @@
                  (should (= (1+ (plist-get string-span :end)) (plist-get buffer-span :end))))
                expected actual)
       (should (<= (hash-table-count mevedel-transcript-audit--buffer-records) 128))
-      (should (<= mevedel-transcript-audit--buffer-record-bytes (* 4 1024 1024))))))
+      (should (<= mevedel-transcript-audit--buffer-record-bytes (* 4 1024 1024)))))
+  :doc "bounded scans match string positions and ignore records outside or crossing bounds"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "outside")))
+    (let ((start (point)))
+      (insert "literal <!-- mevedel-hook-audit -->\n")
+      (insert (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "inside")))
+      (let* ((end (point))
+             (expected (mevedel-transcript-audit-spans (buffer-substring start end) 'fork-point)))
+        (insert (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "after")))
+        (save-restriction
+          (narrow-to-region 1 2)
+          (let* ((actual (mevedel-transcript-audit-buffer-spans 'fork-point start end))
+                 (span (car actual)))
+            (should (= 1 (length actual)))
+            (should (equal (plist-get (car expected) :record) (plist-get span :record)))
+            (should (= (+ start (plist-get (car expected) :start)) (plist-get span :start)))
+            (should (= (+ start (plist-get (car expected) :end)) (plist-get span :end)))
+            (should (= 2 (point-max)))
+            (should-not (mevedel-transcript-audit-buffer-spans nil (1+ (plist-get span :start)) end))
+            (should-not (mevedel-transcript-audit-buffer-spans nil start (1- (plist-get span :end))))))))))
 
 (mevedel-deftest mevedel-transcript-buffer-directive-ranges ()
   ,test

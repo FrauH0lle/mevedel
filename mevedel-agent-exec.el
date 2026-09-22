@@ -168,11 +168,14 @@ running Org save machinery synchronously on every tool boundary."
        inv '(:type waiting :summary "waiting")))))
 
 (defun mevedel-agent-exec--handle-done-save (fsm)
-  "Run gptel's post-response hooks for FSM, then save the transcript."
+  "Run gptel's post-response hooks for FSM and checkpoint their changes.
+Once terminal publication has committed the answer, defer this extra save.
+If settlement is still pending, save immediately to retain recoverable text."
   (when (fboundp 'gptel--handle-post-insert)
     (condition-case _ (gptel--handle-post-insert fsm) (error nil)))
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
-    (mevedel-agent-conversation-save inv)))
+    (mevedel-agent-conversation-save
+     inv (mevedel-agent-invocation-runtime-settled-p inv))))
 
 (defun mevedel-agent-exec--handle-abort-save (fsm)
   "Drive gptel's abort path for FSM."
@@ -249,16 +252,6 @@ Additions:
 
 ;;
 ;;; Request buffer configuration
-
-(defun mevedel-agent-exec--refresh-initial-transcript-state (invocation)
-  "Persist INVOCATION after agent request locals have been installed."
-  (when (and (mevedel-agent-invocation-p invocation)
-             (mevedel-agent-invocation-transcript-relative-path invocation))
-    (let ((buf (mevedel-agent-invocation-buffer invocation)))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (set-buffer-modified-p t))
-        (mevedel-agent-conversation-save invocation)))))
 
 (defun mevedel-agent-exec--policy-for-invocation (agent-type invocation)
   "Return resolved model policy for AGENT-TYPE and INVOCATION.
@@ -388,7 +381,6 @@ Returns the spawned FSM."
       ;; Install one dispatch-local copy of the frozen request state before
       ;; gptel reads it from the agent buffer or copies it to a prompt buffer.
       (mevedel-agent-conversation-configure invocation agent-buffer)
-      (mevedel-agent-exec--refresh-initial-transcript-state invocation)
       (with-current-buffer agent-buffer
         (goto-char (point-max))
         (gptel-request nil

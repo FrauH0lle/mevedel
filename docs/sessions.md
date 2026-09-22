@@ -831,6 +831,11 @@ Critical publication changes the owned generation to `publishing` and reserves
 a one-hour ownership window before each fixed artifact write. Timer callbacks perform no
 target I/O while publication is active, avoiding reentrant TRAMP calls; the
 serialized publisher renews before each such write and after the final write.
+When a renewal would reproduce identical lease bytes, it verifies the target
+bytes and observes the generation listing without rewriting the record. A fresh
+transaction clock reading also avoids another target clock marker; reuse never
+extends that reading's one-second lifetime. Ownership proof cadence, takeover
+checks and the authoritative manifest commit are unchanged.
 Tombstones and immutable-only file-history artifacts do not cause fixed writes
 or per-entry renewals. The final proof and the immutable manifest commit still
 check ownership. If one uninterrupted target filesystem operation exceeds that
@@ -1579,7 +1584,10 @@ pinned head and every artifact file referenced by its manifest. Pins survive
 independently of a live buffer; publication or explicit discard must release
 them. An unreadable pin blocks generation collection, and even a malformed
 pin keeps its session from expiring. Completed root-turn autosave creates
-these pins before generation collection. A checkpoint containing all of an
+these pins before generation collection. Local portable root-turn settlement
+prepares evidence in a child and retains admission until the editor validates the
+unchanged source and publishes the pin; explicit checkpoints remain synchronous.
+A checkpoint containing all of an
 unsealed predecessor's turns replaces that predecessor's pin only after its
 own pin and ready marker are durable. Compaction success, root-buffer close,
 and Emacs exit seal completed checkpoints. Turn completion, successful root

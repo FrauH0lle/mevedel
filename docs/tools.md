@@ -782,6 +782,15 @@ execution. Once confined preparation begins, preparation and launcher failures
 return without retrying the helper. `required` refuses an unavailable backend
 and `off` runs directly.
 
+Local Linux protected-directory scans yield through owned native `find` children
+before managed Bash or a one-shot helper launches. The execution scheduler keeps
+its admission slot during preparation. Cancellation and owner teardown stop the
+discovery child; changed authority, a dead source buffer or replaced discovery
+root refuses launch. Results belong only to that attempt. Path resolution and
+mount planning still run in the editor; custom glob walks and remote discovery
+retain their synchronous path. Discovery has a 30-second child timeout and the
+ordinary output bound; a failed or incomplete scan never permits direct execution.
+
 Bubblewrap capability probes are cached independently per execution target.
 Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use
 `mevedel-sandbox-remote-probe-timeout` (10 seconds by default) so transport
