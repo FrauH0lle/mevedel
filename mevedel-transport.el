@@ -17,6 +17,10 @@
 
 ;;; Code:
 
+(eval-when-compile
+  (require 'cl-lib)
+  (require 'tramp-cache))
+
 (require 'mevedel-utilities)
 
 ;; `tramp'
@@ -26,6 +30,8 @@
                   "tramp-cache" (key property &optional default))
 (autoload 'tramp-dissect-file-name "tramp")
 (autoload 'tramp-get-connection-process "tramp")
+(declare-function tramp-set-connection-property
+                  "tramp-cache" (key property value))
 (autoload 'tramp-get-connection-property "tramp-cache")
 
 
@@ -39,6 +45,12 @@ Nesting is always transient: the operation already in flight completes and
 releases the stack.  The interval only decides how promptly deferred work
 notices, so it trades a little latency against idle polling."
   :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-transport-remote-direct-async t
+  "When non-nil, eligible remote spawns use a private TRAMP channel.
+This covers remote Bash children and oversized control programs."
+  :type 'boolean
   :group 'mevedel)
 
 
@@ -59,19 +71,54 @@ control check does during redisplay.")
 (defvar mevedel-transport--enabled-p nil
   "Whether transport integration should return when TRAMP reloads.")
 
-(defun mevedel-transport--handler-advice (original &rest args)
-  "Count one TRAMP handler frame around ORIGINAL applied to ARGS.
+(defun mevedel-transport-call-as-remote-operation (thunk)
+  "Call THUNK counted as one remote operation in flight.
 
-The frame is counted with a dynamic binding, so a handler that exits through
+The frame is counted with a dynamic binding, so a THUNK that exits through
 `throw', `keyboard-quit', or any signal still uncounts itself.  After the
 outermost frame restores TRAMP's suspended timer lists, re-arm any transport
-retry timer that was created inside and discarded with the temporary list."
+retry timer that was created inside and discarded with the temporary list,
+and arm the continuation timers held meanwhile.  Remote I/O that bypasses
+TRAMP's file-name handler, such as a direct process pipe, uses this so that
+`mevedel-transport-busy-p' sees it exactly as it sees a handler call."
   (let ((outermost (zerop mevedel-transport--depth))
         (mevedel-transport--depth (1+ mevedel-transport--depth)))
-    (unwind-protect (apply original args)
+    (unwind-protect (funcall thunk)
       (when outermost
         (mevedel-transport--rearm-pending-timers)
         (mevedel-transport--release-held-timers)))))
+
+(defun mevedel-transport--handler-advice (original &rest args)
+  "Count one TRAMP handler frame around ORIGINAL applied to ARGS."
+  (mevedel-transport-call-as-remote-operation
+   (lambda () (apply original args))))
+
+(defun mevedel-transport-call-with-spawn-channel (remote direct-async thunk)
+  "Call THUNK, which spawns a process, through REMOTE's selected channel.
+
+With DIRECT-ASYNC, TRAMP starts the process on its own ssh channel instead
+of through the connection's shell, which costs no command on the shared
+connection; without it the classic spawn is forced even where direct-async
+is the default."
+  (if (and remote (fboundp 'tramp-direct-async-process-p))
+      (let ((shim (and direct-async
+                       (not (fboundp 'tramp-ssh-controlmaster-options))
+                       (fboundp 'tramp-ssh-or-plink-options))))
+        (cl-letf (((symbol-function 'tramp-direct-async-process-p)
+                   (if direct-async
+                       (lambda (&rest _) t)
+                     (lambda (&rest _) nil)))
+                  ((symbol-function 'tramp-ssh-controlmaster-options)
+                   (if shim
+                       (symbol-function 'tramp-ssh-or-plink-options)
+                     (symbol-function 'tramp-ssh-controlmaster-options))))
+          (if direct-async
+              (let ((vec (tramp-dissect-file-name remote)))
+                (with-tramp-saved-connection-property vec "direct-async"
+                  (tramp-set-connection-property vec "direct-async" t)
+                  (funcall thunk)))
+            (funcall thunk))))
+    (funcall thunk)))
 
 (defun mevedel-transport-install ()
   "Begin counting TRAMP handler frames."

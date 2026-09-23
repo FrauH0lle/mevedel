@@ -36,6 +36,37 @@
             (should (mevedel-journal-claim-settle second 'failed "provider unavailable"))))
       (delete-directory directory t)))
 
+  :doc "admits in three programs and reads a settlement with its claim"
+  (let ((directory (file-name-concat (make-temp-file "mevedel-journal-cost-" t)
+                                     "missing" "scope"))
+        (original (symbol-function 'mevedel-session-control-fs-run-program))
+        (calls 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                   (lambda (&rest args)
+                     (cl-incf calls)
+                     (apply original args))))
+          ;; Missing parents cost their creation and a second observation;
+          ;; no claim exists yet to read.
+          (let ((first (mevedel-journal-claim-acquire directory 120)))
+            (should first)
+            (should (= calls 5))
+            (should (equal (cons first nil)
+                           (mevedel-journal-claim-current-settlement directory)))
+            (mevedel-journal-claim-settle first 'completed "done")
+            (setq calls 0)
+            (let ((settlement (mevedel-journal-claim-current-settlement directory)))
+              (should (equal first (car settlement)))
+              (should (equal "done" (plist-get (cdr settlement) :payload)))
+              (should (= calls 2)))
+            ;; Observation, claim with outcome, election.
+            (setq calls 0)
+            (should (mevedel-journal-claim-acquire directory 120))
+            (should (= calls 3))))
+      (delete-directory (file-name-directory (directory-file-name
+                                              (file-name-directory directory)))
+                        t)))
+
   :doc "nested work uses the admission deadline without extending it"
   (let ((root (make-temp-file "mevedel-journal-deadline-" t)))
     (unwind-protect
@@ -133,9 +164,11 @@
                          (cl-incf calls)
                          (apply original args))))
               (should (mevedel-journal-claim-settle claim 'cancelled "user cancelled")))
-            ;; The final target-side deadline guard owns admission. A separate
-            ;; earlier clock probe adds no protection against expiry here.
-            (should (= calls 2)))
+            ;; The election proves ownership and the deadline itself: its
+            ;; `verify' of the claim bytes and its target-side deadline guard
+            ;; share the create's program, so no earlier read or clock probe
+            ;; adds protection.
+            (should (= calls 1)))
           (should-not (mevedel-journal-claim-settle claim 'completed "after cancel"))
           (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status))))
       (delete-directory directory t))))

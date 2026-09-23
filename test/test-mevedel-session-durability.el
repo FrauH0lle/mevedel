@@ -546,6 +546,58 @@
           ;; Observation, fencing create with predecessor reads, and the
           ;; settling write with its prunes: one program each.
           (should (<= programs 3)))
+      (delete-directory root t)))
+
+  :doc "an observed live predecessor is proved by bytes in the claim's program"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-claim-proof-" t)))
+         (directory (file-name-as-directory
+                     (file-name-concat root ".lease")))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program)))
+    (make-directory directory t)
+    (unwind-protect
+        (let* ((first (mevedel-session-durability--claim-next
+                       directory nil "*claim-proof*"))
+               (observed (mevedel-session-durability--observe-lease
+                          directory (plist-get first :generation)))
+               (programs 0))
+          (should (equal first (plist-get observed :record)))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations &rest args)
+                       (cl-incf programs)
+                       (apply run-program-function operations args))))
+            (let ((second (mevedel-session-durability--claim-next
+                           directory first "*claim-proof*" nil nil nil nil
+                           observed)))
+              (should (eq 'active (plist-get second :status)))
+              (should (= 2 (plist-get second :generation)))))
+          (should (= 1 programs))
+          ;; The predecessor was pruned by the same program.
+          (should-not (file-exists-p
+                       (mevedel-session-durability--generation-path
+                        directory (plist-get first :generation))))
+          ;; A predecessor that changed after its observation fails the
+          ;; proof and leaves the fenced claim aborted.
+          (let* ((second (mevedel-session-durability--lease-head directory))
+                 (observed (mevedel-session-durability--observe-lease
+                            directory (plist-get second :generation)))
+                 (path (mevedel-session-durability--generation-path
+                        directory (plist-get second :generation))))
+            (with-temp-file path
+              (insert (mevedel-session-durability--record-bytes
+                       (plist-put (copy-sequence second) :buffer "*changed*"))))
+            (should-not (mevedel-session-durability--claim-next
+                         directory second "*claim-proof*" nil nil nil nil
+                         observed))
+            (should-not (file-exists-p
+                         (mevedel-session-durability--generation-path
+                          directory (1+ (plist-get second :generation)))))
+            (should (equal "*changed*"
+                           (plist-get (mevedel-session-durability--lease-head
+                                       directory)
+                                      :buffer)))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-durability-lease-status ()

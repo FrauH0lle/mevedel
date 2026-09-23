@@ -22,6 +22,10 @@ mutual exclusion may supply a pinned lock directory; the program holds its
 `flock` across all operations. Journal settlement and curated-memory mutation
 use that boundary under [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
 
+Creating a directory with missing parents takes one program. Each ancestor
+below the root is an optional creation through its own pinned parent. An
+existing ancestor reports a conflict and does not stop the program.
+
 `verify-latest` rejects a claim candidate when the pinned parent contains a
 lexicographically newer leaf with the requested suffix. Used inside the claim
 lock before exclusive creation, it prevents stale acquirers from recreating
@@ -36,9 +40,11 @@ its raw captured failure output.
 
 ASCII fields travel as arguments within the shell-quoted limits: 3 KiB per
 physical line, 96 KiB per field, and 512 KiB total. Wrapped content can span
-many short physical lines. Other requests use an explicitly UTF-8 encoded input
-file in the same process. Delivery changes do not split a program into per-file
-calls. Whole-process failure invalidates cached interpreter paths for later
+many short physical lines. Other requests travel as UTF-8 bytes on stdin of the
+same process. Where direct-async spawns qualify (single-hop ssh or scp), a
+private channel carries a short bootstrap command. Its stdin carries the
+NUL-terminated script, then the request. Elsewhere TRAMP copies an input file
+to the target. Delivery changes do not split a program into per-file calls. Whole-process failure invalidates cached interpreter paths for later
 lookup; an ordinary refused operation does not.
 
 Two to 32 independent unbounded reads may use GNU tar in the same process, keeping
@@ -74,7 +80,11 @@ does not unwind that write. The 3-KiB physical-line allowance reserves room for
 TRAMP's prefix and the script's final line. Per-field and aggregate bounds also
 leave margin below kernel exec limits. Non-ASCII fields use the file carrier to
 avoid connection-coding conversion. A request-file carrier is preferable to a
-failed or wedged connection.
+failed or wedged connection. The direct channel has its own command-line bound,
+the target's `PIPE_BUF` (4096 bytes on the measured target), which TRAMP
+enforces. The script therefore travels on stdin rather than as an argument.
+Streamed payloads read with `dd iflag=fullblock`, because a pipe delivers short
+reads that a request file never did.
 
 The target requires Linux descriptor facilities, Bash, stat, and base64; locked
 programs also require flock. Missing required utilities fail visibly. GNU tar is
@@ -82,6 +92,24 @@ an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Every lease generation claim took two programs after its observation.**
+  The fencing create read the predecessors back, and activation was a second
+  program. The same mock-target replay put an unsettled-mutation latch change
+  at three programs. A remote Bash call pays two latch changes, arming and
+  settling. When the claimant already holds the newest predecessor's exact
+  bytes, the claim program now verifies them between the create and the
+  activation write, and each latch change costs two programs. An unchanged
+  byte string is at least as strict as the parsed-record equality it replaces.
+
+- **The request file cost about twenty TRAMP commands per oversized program.**
+  In the September 23 remote capture, the worst stall (2.4 s) was an autosave
+  generation write that spent 43 commands copying its request file. Diagnostic
+  appends through the same carrier took up to 1.4 s. Against the same LAN
+  target, a 100 KB write plus read over the request file took 508-578 ms and
+  20 commands. On a direct-async pipe it took 100 ms (178 ms cold) and 0
+  commands, with the exit status intact. Direct-async qualifying targets now use
+  the pipe; other targets keep the request file.
 
 - **Remote sessions still blocked input on several programs per operation.** A
   September 23 capture of a real remote session (LAN target, 13-21 ms per bare

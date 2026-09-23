@@ -440,10 +440,13 @@ for a later lookup, while an operation-level refusal does not. ASCII request
 fields travel as arguments when shell-quoted physical lines fit 3 KiB, individual
 fields fit 96 KiB, and the total fits 512 KiB. Wrapped payloads can occupy several
 short lines. Fields whose raw byte length already exceeds the individual bound
-select the input-file carrier before ASCII classification or shell quoting; quoting
-cannot make them fit. Larger requests or non-ASCII fields use an explicitly UTF-8 encoded
-input file, which incurs TRAMP transfer overhead. The carrier changes without
-splitting the program. See [ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md)
+select a stdin carrier before ASCII classification or shell quoting; quoting
+cannot make them fit. Larger requests or non-ASCII fields travel as UTF-8 bytes on
+stdin. On targets that support direct-async spawns (single-hop ssh and scp, with
+`mevedel-transport-remote-direct-async` enabled), a private channel receives the
+script and then the request, costing no command on the shared connection.
+Elsewhere, an input file carries the request, and TRAMP copies it to the target
+at about twenty commands. The carrier changes without splitting the program. See [ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md)
 for these bounds and their transport rationale.
 Reads never create control directories:
 an absent transfer mailbox holds no requests, so a polling observer performs no
@@ -1557,7 +1560,12 @@ another machine wrote, and an infinite expiry would never expire while a NaN
 fails every comparison it is put to, so either one is rejected rather than
 compared.  A new owner exclusively creates the next generation in `claiming`,
 then activates it only if the immediately preceding live generation is still
-exactly the record it observed.  A generation appearing beside a live owner's
+exactly the record it observed.  When the claimant already observed that
+record's bytes as the newest generation, the fencing create, a `verify` of
+those bytes, the activation, and the prune run as one program. A failed
+`verify` stops the program before activation, and the candidate is aborted.
+Otherwise the create reads the older records back, and activation follows as
+a second program.  A generation appearing beside a live owner's
 record without activating does not end that owner's lease, so its renewal
 heartbeat keeps running until another client's claim is actually active.
 Every complete acquire, renewal, and release transaction disables remote file

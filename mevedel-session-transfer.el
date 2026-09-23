@@ -73,9 +73,6 @@
 (defvar mevedel-session-durability--client-id)
 (defvar mevedel-session-durability--observed-time)
 
-;; `mevedel-session-recovery'
-(defvar mevedel-session-recovery--mutation-cache)
-
 ;; `mevedel-structs'
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)

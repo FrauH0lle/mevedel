@@ -99,18 +99,56 @@ stays on the target instead of transferring and sorting its full history."
                                    (plist-get (nth 1 observed) :value) nil)))
                    (< (plist-get (nth 3 observed) :value) (plist-get owner :expires-at)))))))
 
+(defun mevedel-journal-claim--newest (directory names &optional outcome-p)
+  "Return `(TOKEN . OUTCOME)' for the newest claim among DIRECTORY's NAMES.
+TOKEN is nil when NAMES hold no claim.  With OUTCOME-P, TOKEN's outcome is
+read in the same target program; OUTCOME is nil when it has not settled."
+  (when-let* ((name (car (sort (seq-filter
+                                (lambda (name)
+                                  (string-match-p mevedel-journal-claim--name-regexp
+                                                  name))
+                                names)
+                               #'string>))))
+    (let* ((path (file-name-concat directory name))
+           (results
+            (mevedel-session-control-fs-run-program
+             (append
+              (list (list :op 'read :path path))
+              (when outcome-p
+                (list (list :op 'read :optional t
+                            :path (concat (file-name-sans-extension path)
+                                          ".outcome")))))))
+           (record (mevedel-journal-claim--read path nil (car results)))
+           (token (and record (append (list :directory directory) record))))
+      (when (and record
+                 (/= (plist-get record :generation) (string-to-number name)))
+        (error "Journal claim generation does not match its filename"))
+      (cons token
+            (and token outcome-p
+                 (mevedel-journal-claim-outcome token (nth 1 results)))))))
+
+(defun mevedel-journal-claim-current-settlement (directory)
+  "Return `(TOKEN . OUTCOME)' for DIRECTORY's newest claim, or nil.
+TOKEN is as for `mevedel-journal-claim-current'; OUTCOME is its durable
+outcome, as for `mevedel-journal-claim-outcome', read in the same target
+program as the claim."
+  (setq directory (mevedel-session-control-fs-physical-path directory))
+  (mevedel-journal-claim--newest
+   directory
+   (mapcar #'file-name-nondirectory
+           (mevedel-session-control-fs-list-directory
+            directory mevedel-journal-claim--name-regexp))
+   t))
+
 (defun mevedel-journal-claim-current (directory)
   "Return DIRECTORY's newest claim token, or nil when no claim exists.
 The token names an attempt, not proof that it is still allowed to settle."
   (setq directory (mevedel-session-control-fs-physical-path directory))
-  (when-let* ((path (car (sort (mevedel-session-control-fs-list-directory
-                              directory mevedel-journal-claim--name-regexp)
-                             #'string>)))
-              (record (mevedel-journal-claim--read path nil)))
-    (unless (= (plist-get record :generation)
-               (string-to-number (file-name-nondirectory path)))
-      (error "Journal claim generation does not match its filename"))
-    (append (list :directory directory) record)))
+  (car (mevedel-journal-claim--newest
+        directory
+        (mapcar #'file-name-nondirectory
+                (mevedel-session-control-fs-list-directory
+                 directory mevedel-journal-claim--name-regexp)))))
 
 (defun mevedel-journal-claim-outcome (token &optional observation)
   "Return TOKEN's durable outcome or nil when it has not settled.
@@ -156,10 +194,24 @@ admission claim; it must be future and no later than SECONDS from now."
   (unless (and (integerp seconds) (> seconds 0))
     (error "Journal claim duration must be a positive integer"))
   (setq directory (mevedel-session-control-fs-physical-path directory))
-  (mevedel-session-control-fs-make-directory directory t)
-  (let* ((previous (mevedel-journal-claim-current directory))
-         (now (mevedel-session-control-fs-target-time directory))
-         (outcome (and previous (mevedel-journal-claim-outcome previous))))
+  (let* ((observe
+          (lambda ()
+            ;; Ensuring the directory, listing it and reading the clock are
+            ;; one target program; only a missing parent costs another.
+            (mevedel-session-control-fs-run-program
+             (list (list :op 'make-directory :path directory :optional t)
+                   (list :op 'list-directory :path directory)
+                   (list :op 'target-time :path directory)))))
+         (observed (funcall observe))
+         (observed (if (eq 'absent (plist-get (car observed) :status))
+                       (progn (mevedel-session-control-fs-make-directory directory t)
+                              (funcall observe))
+                     observed))
+         (names (mevedel-session-control-fs-program-value (nth 1 observed)))
+         (now (mevedel-session-control-fs-program-value (nth 2 observed)))
+         (newest (mevedel-journal-claim--newest directory names t))
+         (previous (car newest))
+         (outcome (cdr newest)))
     (when (and deadline
                (not (and (integerp deadline) (< now deadline) (<= deadline (+ now seconds)))))
       (error "Invalid journal claim deadline"))
@@ -205,10 +257,8 @@ outcome, or nil for an expired, foreign, or already-settled token.  Only a
 successful completed outcome authorizes publication of its exact payload."
   (unless (and (memq status '(completed failed cancelled)) (stringp payload))
     (error "Invalid journal claim settlement"))
-  (when (equal (mevedel-journal-claim--record token)
-               (mevedel-journal-claim--read
-                (mevedel-journal-claim--path token nil) nil))
-    (mevedel-journal-claim--finish token status payload)))
+  ;; The election's own `verify' of the claim bytes is the ownership proof.
+  (mevedel-journal-claim--finish token status payload))
 
 (iter-defun mevedel-journal-claim-prune (directory protected limit)
   "Yield while deleting at most LIMIT settled claim pairs in DIRECTORY.

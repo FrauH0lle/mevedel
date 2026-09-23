@@ -35,7 +35,7 @@
           (should
            (mevedel-execution-process--direct-async-p
             child command remote))
-          (let ((mevedel-execution-process-remote-direct-async nil))
+          (let ((mevedel-transport-remote-direct-async nil))
             (should-not
              (mevedel-execution-process--direct-async-p
               child command remote)))

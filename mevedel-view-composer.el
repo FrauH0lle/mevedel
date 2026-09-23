@@ -241,9 +241,6 @@
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
-;; `mevedel-session-recovery'
-(defvar mevedel-session-recovery--mutation-cache)
-
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-assert-stable-source
                   "mevedel-session-rewind"

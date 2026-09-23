@@ -101,6 +101,46 @@
           (should (memq timer timer-list)))
       (cancel-timer timer))))
 
+(mevedel-deftest mevedel-transport-call-as-remote-operation ()
+  ,test
+  (test)
+  :doc "counts a remote operation that bypasses TRAMP's handler"
+  (let (inside timer)
+    (should (eq 'value
+                (mevedel-transport-call-as-remote-operation
+                 (lambda ()
+                   (setq inside (mevedel-transport-nested-p))
+                   (let (timer-list timer-idle-list)
+                     (setq timer (mevedel-transport-run-at-time 60 #'ignore)))
+                   'value))))
+    (unwind-protect
+        (progn
+          (should inside)
+          (should-not (mevedel-transport-nested-p))
+          ;; Timers armed inside are released once the operation returns.
+          (should (memq timer timer-list))
+          (should-not mevedel-transport--held-timers))
+      (cancel-timer timer))))
+
+(mevedel-deftest mevedel-transport-call-with-spawn-channel ()
+  ,test
+  (test)
+  :doc "runs a local spawn unchanged"
+  (should (eq 'local (mevedel-transport-call-with-spawn-channel
+                      nil t (lambda () 'local))))
+
+  :doc "selects the remote channel for the spawn only"
+  (require 'tramp)
+  (let ((remote "/ssh:mevedel-spawn-channel-test:/tmp/"))
+    (should (mevedel-transport-call-with-spawn-channel
+             remote t
+             (lambda () (tramp-direct-async-process-p :file-handler t))))
+    (should-not (mevedel-transport-call-with-spawn-channel
+                 remote nil
+                 (lambda () (tramp-direct-async-process-p :file-handler t))))
+    (should-not (tramp-get-connection-property
+                 (tramp-dissect-file-name remote) "direct-async" nil))))
+
 (mevedel-deftest mevedel-transport-nested-p ()
   ,test
   (test)

@@ -589,7 +589,56 @@
        ;; A retirement with retained bytes still needs pin-release recovery.
        (mevedel-session-control-fs-create-file (mevedel-journal-capture--file workspace id "retired") "interrupted")
        (should-not (mevedel-journal-capture-list workspace))
-       (should (= 1 (length (mevedel-journal-capture-list workspace t))))))))
+       (should (= 1 (length (mevedel-journal-capture-list workspace t)))))))
+
+  :doc "reads selected descriptors together, keeping damaged ones visible"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Question" "Answer")
+     (let* ((workspace (mevedel-session-workspace session))
+            (damaged (secure-hash 'sha256 "damaged"))
+            (directory (mevedel-journal-capture--directory workspace damaged))
+            (run (symbol-function 'mevedel-session-control-fs-run-program))
+            (calls 0))
+       (make-directory directory t)
+       (with-temp-file (file-name-concat directory "ready") (insert "ready\n"))
+       (with-temp-file (file-name-concat directory "capture.json") (insert "{"))
+       (let ((captures
+              (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                         (lambda (&rest args) (cl-incf calls) (apply run args))))
+                (mevedel-journal-capture-list workspace))))
+         ;; Listing the captures, their markers, and both descriptors.
+         (should (= calls 3))
+         (should (= 2 (length captures)))
+         (should (plist-get (seq-find (lambda (capture)
+                                        (equal damaged (plist-get capture :id)))
+                                      captures)
+                            :unreadable))
+         (should (seq-find (lambda (capture) (plist-get capture :metadata))
+                           captures)))))))
+
+(mevedel-deftest mevedel-journal-capture--markers ()
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Question" "Answer")
+     (let* ((workspace (mevedel-session-workspace session))
+            (id (plist-get (car (mevedel-journal-capture-list workspace)) :id))
+            (run (symbol-function 'mevedel-session-control-fs-run-program))
+            (calls 0))
+       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (&rest args) (cl-incf calls) (apply run args))))
+         (should (equal '(t nil nil)
+                        (mevedel-journal-capture--markers
+                         workspace id '("ready" "retired" "discard.json"))))
+         (should (= calls 1))
+         (should (mevedel-journal-capture--pending-p workspace id))
+         (should-not (mevedel-journal-capture--closed-p workspace id)))
+       (mevedel-session-control-fs-create-file
+        (mevedel-journal-capture--file workspace id "discard.json") "{}")
+       (should (mevedel-journal-capture--closed-p workspace id))
+       (mevedel-session-control-fs-create-file
+        (mevedel-journal-capture--file workspace id "retired") "done")
+       (should-not (mevedel-journal-capture--pending-p workspace id))))))
 
 (provide 'test-mevedel-journal-capture)
 ;;; test-mevedel-journal-capture.el ends here
