@@ -206,6 +206,12 @@ that passed inside it fire as soon as the connection is free again."
       (timer-set-time timer (time-add nil delay))
       (timer-activate timer))))
 
+(defvar mevedel-transport--suspended-timers nil
+  "Timers enclosing exclusive sections suspended, still armed on their lists.
+Activating one of them again inside the section would give it a second copy
+on the section's list; one that fires there leaves the suspended copy marked
+triggered, which Emacs then skips forever.")
+
 (defun mevedel-transport--call-with-exclusive-connection (thunk)
   "Call THUNK with foreign timers suspended, re-arming any it schedules.
 
@@ -224,7 +230,9 @@ charged for the section."
         (scheduled nil)
         (scheduled-idle nil))
     (unwind-protect
-        (let (timer-list timer-idle-list)
+        (let ((mevedel-transport--suspended-timers
+               (append timer-list mevedel-transport--suspended-timers))
+              timer-list timer-idle-list)
           ;; A collection inside the section is paid twice: it lengthens
           ;; the section, and the section is the window where the
           ;; connection is held and foreign timers are stopped, so the

@@ -194,6 +194,9 @@
                   "mevedel-transport" (key path thunk &optional on-cancel delay))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
@@ -695,8 +698,10 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
                     (or (mevedel-execution--record-workdir record) ""))))))
     (if (mevedel-execution--record-yielded-p record)
         (setf (mevedel-execution--record-retire-timer record)
-              (run-at-time
-               mevedel-execution--terminal-retention-seconds nil
+              ;; Retirement is reached from settlement, which can run
+              ;; inside a remote command.
+              (mevedel-transport-run-at-time
+               mevedel-execution--terminal-retention-seconds
                #'mevedel-execution--cleanup-record record preserve-spool))
       (mevedel-execution--cleanup-record record preserve-spool))))
 

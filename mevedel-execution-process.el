@@ -28,10 +28,16 @@
 (declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
 (declare-function mevedel-transport-call-with-spawn-channel
                   "mevedel-transport" (remote direct-async thunk))
+;; Settlement timers are armed from sentinels and filters, which can run
+;; inside a remote command; there a plain `run-at-time' timer fires nested in
+;; that command, where the settlement's own target operations are refused.
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
 (autoload 'mevedel-transport-call-with-spawn-channel "mevedel-transport")
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-utilities'
@@ -322,8 +328,9 @@ Incomplete identity, an unreachable target, or an unexpected exit is
   (unless (mevedel--timer-pending-p
            (mevedel-execution-process--child-settle-timer child))
     (setf (mevedel-execution-process--child-settle-timer child)
-          (run-at-time mevedel-execution-process--child-kill-delay nil
-                       #'mevedel-execution-process--settle-after-kill child)))
+          (mevedel-transport-run-at-time
+           mevedel-execution-process--child-kill-delay
+           #'mevedel-execution-process--settle-after-kill child)))
   (when-let* ((process (mevedel-execution-process--child-process child))
               ((process-live-p process)))
     (ignore-errors (delete-process process))))
@@ -604,8 +611,8 @@ deferred work, so that case deletes immediately rather than leak."
     (unless (mevedel--timer-pending-p
              (mevedel-execution-process--child-settle-timer child))
       (setf (mevedel-execution-process--child-settle-timer child)
-            (run-at-time
-             mevedel-execution-process--child-kill-delay nil
+            (mevedel-transport-run-at-time
+             mevedel-execution-process--child-kill-delay
              #'mevedel-execution-process--settle-after-kill child)))))
 
 (defun mevedel-execution-process--start-stop (child)
@@ -616,8 +623,8 @@ deferred work, so that case deletes immediately rather than leak."
     (unless (eq 'unknown
                 (mevedel-execution-process--child-termination child))
       (setf (mevedel-execution-process--child-force-timer child)
-            (run-at-time
-             mevedel-execution-process--child-kill-delay nil
+            (mevedel-transport-run-at-time
+             mevedel-execution-process--child-kill-delay
              #'mevedel-execution-process--force-kill child)))))
 
 (defun mevedel-execution-process-stop (child reason)
@@ -637,8 +644,8 @@ deferred work, so that case deletes immediately rather than leak."
              (mevedel-execution-process--group-live-p child))
         (mevedel-execution-process--signal child 'TERM)
         (setf (mevedel-execution-process--child-force-timer child)
-              (run-at-time
-               mevedel-execution-process--child-kill-delay nil
+              (mevedel-transport-run-at-time
+               mevedel-execution-process--child-kill-delay
                #'mevedel-execution-process--force-kill child)))
        ((and (processp process)
              (memq (process-status process) '(exit signal)))
@@ -648,13 +655,13 @@ deferred work, so that case deletes immediately rather than leak."
          child (or (mevedel-execution-process--child-exit-code child) -1)))
        (remote
         (setf (mevedel-execution-process--child-force-timer child)
-              (run-at-time
-               0 nil #'mevedel-execution-process--start-stop child)))
+              (mevedel-transport-run-at-time
+               0 #'mevedel-execution-process--start-stop child)))
        (t
         (mevedel-execution-process--signal child 'TERM)
         (setf (mevedel-execution-process--child-force-timer child)
-              (run-at-time
-               mevedel-execution-process--child-kill-delay nil
+              (mevedel-transport-run-at-time
+               mevedel-execution-process--child-kill-delay
                #'mevedel-execution-process--force-kill child)))))
     t))
 
@@ -674,10 +681,10 @@ deferred work, so that case deletes immediately rather than leak."
   "Mark CHILD timed out and terminate its process group."
   (when (mevedel-execution-process-stop child 'timed-out)
     (setf (mevedel-execution-process--child-timed-out-p child) t)
-    (run-at-time
+    (mevedel-transport-run-at-time
      (+ (* 2 mevedel-execution-process--child-kill-delay)
         (* 4 mevedel-execution-process--remote-control-timeout))
-     nil #'mevedel-execution-process--settle-timed-out child)))
+     #'mevedel-execution-process--settle-timed-out child)))
 
 (defun mevedel-execution-process--settle-main-exit (child)
   "Drain descendants or settle CHILD after its main process exits."
@@ -726,8 +733,8 @@ deferred work, so that case deletes immediately rather than leak."
                (mevedel--timer-pending-p
                 (mevedel-execution-process--child-force-timer child)))
           (setf (mevedel-execution-process--child-settle-timer child)
-                (run-at-time
-                 0.02 nil
+                (mevedel-transport-run-at-time
+                 0.02
                  (if (file-remote-p
                       (or (mevedel-execution-process--child-workdir child) ""))
                      #'mevedel-execution-process--settle-stop-main-exit
@@ -735,8 +742,8 @@ deferred work, so that case deletes immediately rather than leak."
                  child)))
          (t
           (setf (mevedel-execution-process--child-settle-timer child)
-                (run-at-time
-                 0.02 nil #'mevedel-execution-process--settle-main-exit
+                (mevedel-transport-run-at-time
+                 0.02 #'mevedel-execution-process--settle-main-exit
                  child))))))))
 
 (cl-defun mevedel-execution-process-start
@@ -817,8 +824,8 @@ deferred work, so that case deletes immediately rather than leak."
                          (mevedel-execution-process--ended child process)))))))
           (when timeout
             (setf (mevedel-execution-process--child-timeout-timer child)
-                  (run-at-time
-                   timeout nil #'mevedel-execution-process--time-out child)))
+                  (mevedel-transport-run-at-time
+                   timeout #'mevedel-execution-process--time-out child)))
           child)
       (error
        (mevedel-execution-process--finish child -1 err)
