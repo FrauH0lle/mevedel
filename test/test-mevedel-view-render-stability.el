@@ -16,6 +16,76 @@
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-markdown)
 
+(mevedel-deftest mevedel-view-render-live-update/reader-anchors ()
+  ,test
+  (test)
+  :doc "full and retained redraws preserve group readers and composer windows"
+  (dolist (retained '(nil t))
+    (dolist (target '("Read 4 files" "f0.el" "content 0"))
+      (save-window-excursion
+        (mevedel-view-test--with-buffers
+          (mevedel-view-test--insert-data data-buf "Inspecting files.\n" 'response)
+          (dotimes (i 4)
+            (mevedel-view-test--insert-data
+             data-buf
+             (format (concat "#+begin_tool\n"
+                             "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\n"
+                             "content %d\n#+end_tool\n") i i)
+             `(tool . ,(format "call_%d" i))))
+          (with-current-buffer view-buf
+            (switch-to-buffer view-buf)
+            (delete-other-windows)
+            (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
+            (mevedel-view-stream-begin-turn
+             mevedel-view--status-marker
+             (with-current-buffer data-buf (copy-marker (point-min))))
+            (mevedel-view-render-live-update data-buf)
+            (goto-char (point-min))
+            (search-forward "Read 4 files")
+            (mevedel-view-toggle-section)
+            (when (equal target "content 0")
+              (search-forward "f0.el")
+              (mevedel-view-toggle-section))
+            (when retained
+              (dotimes (_ 2) (mevedel-view-render-live-update data-buf))
+              (should (> (marker-position mevedel-view--live-data-tail-start)
+                         (marker-position mevedel-view--data-turn-start))))
+            (goto-char (point-min))
+            (search-forward target)
+            (goto-char (match-beginning 0))
+            (set-mark (+ (point) 2))
+            (setq mark-active t)
+            (set-window-start nil (line-beginning-position) t)
+            (let ((column (current-column))
+                  (other (split-window-right))
+                  (index 4))
+              (set-window-buffer other view-buf)
+              (set-window-point other (+ (mevedel-view--input-start) 3))
+              (dolist (refresh '(full live live full live live))
+                (mevedel-view-test--insert-data
+                 data-buf
+                 (format (concat "#+begin_tool\n"
+                                 "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\n"
+                                 "next\n#+end_tool\n") index)
+                 `(tool . ,(format "call_%d" index)))
+                (cl-incf index)
+                (if (eq refresh 'full)
+                    (mevedel-view--full-rerender)
+                  (mevedel-view-render-live-update data-buf))
+                (should (looking-at-p
+                         (if (equal target "Read 4 files")
+                             "Read [0-9]+ files"
+                           (regexp-quote target))))
+                (should (= column (current-column)))
+                (should (= (mark) (+ (point) 2)))
+                (should mark-active)
+                (should (= (window-point) (point)))
+                (should (= (window-start) (line-beginning-position)))
+                (should (= (window-point other)
+                           (+ (mevedel-view--input-start) 3)))
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                (should (string-match-p "Read: f0.el" (buffer-string)))))))))))
+
 (mevedel-deftest mevedel-view-zone-reconcile/reader-stability ()
   ,test
   (test)

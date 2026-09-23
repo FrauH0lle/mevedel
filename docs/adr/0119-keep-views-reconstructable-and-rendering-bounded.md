@@ -8,7 +8,10 @@ The data buffer and session records own durable conversation and runtime facts.
 The view is a reconstructable projection: transcript parsing supplies history,
 while session status and interaction descriptors supply managed chrome. Composer
 text belongs to the user and every redraw preserves it. Source-backed anchors
-identify disclosures and reader positions across projection changes.
+identify disclosures and reader positions across projection changes. Reader
+anchors distinguish section roles and compound-child discriminators, retaining
+ordinals only among runs of the same section identity. Grouped rows reuse their
+standalone disclosure roles; neighboring separators cannot shift their anchors.
 
 Streaming updates retain completed semantic units and reconcile the mutable
 tail. A tool/reasoning/delivery activity run remains mutable until its surrounding
@@ -713,3 +716,20 @@ A separate graphical Emacs using the installed Evil took 1.20 seconds to execute
 a synthetic keystroke and redisplay after the same buildup, versus about 2 ms
 with the fix. This is a controlled reproduction, not the user's full configuration
 or a provider-request replay.
+
+### 2026-09-23: distinguish reader sections within shared source coordinates
+
+Reader anchors previously counted every source-property run with the same data
+start. A retained-tail render gives a leading separator the activity group's
+source start, whereas a complete render gives it the enclosing turn's start.
+Switching projections therefore changed which row an ordinal identified. A
+deterministic replay reproduced the summary -> first tool -> summary cursor
+jump without Evil; disabling retention in the probe removed it.
+
+Anchors now use source start, section role and child discriminator, counting
+ordinals only within that identity. Existing disclosure keys supply grouped
+rows' standalone roles and compound-child identifiers; content hashes and
+temporary in-flight tokens do not participate. Both capture and restoration
+respect source, type and disclosure-key boundaries. Tail retention stays in
+place. Regressions cover both projection directions, summary and child readers,
+selections, window positions and a multiline composer draft.

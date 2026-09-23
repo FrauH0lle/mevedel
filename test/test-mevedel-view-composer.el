@@ -1464,6 +1464,64 @@
             (should mark-active)
             (should (equal draft (mevedel-view--input-text)))))))))
 
+(mevedel-deftest mevedel-view--render-anchor-identity ()
+  ,test
+  (test)
+  :doc "source markers and standalone roles survive grouping and stale key starts"
+  (with-temp-buffer
+    (insert " header child")
+    (let ((source (cons (copy-marker 2) (copy-marker (point-max)))))
+      (add-text-properties
+       2 (point-max)
+       `(mevedel-view-source ,source
+         mevedel-view-type tool-child
+         mevedel-view-source-key (source tool-summary 2 (in-flight))))
+      (should (equal '(2 tool-summary nil)
+                     (mevedel-view--render-anchor-identity 3)))
+      (goto-char (point-min))
+      (insert "prefix")
+      (should (equal '(8 tool-summary nil)
+                     (mevedel-view--render-anchor-identity 9)))
+      (put-text-property 8 (point-max) 'mevedel-view-type 'tool-summary)
+      (put-text-property 8 (point-max) 'mevedel-view-source-key
+                         '(source tool-summary 8 (tool "call-1")))
+      (should (equal '(8 tool-summary nil)
+                     (mevedel-view--render-anchor-identity 9)))))
+
+  :doc "compound children retain their discriminator independently of content"
+  (with-temp-buffer
+    (insert (propertize "first" 'mevedel-view-source '(40 . 90)
+                        'mevedel-view-type 'tool-child
+                        'mevedel-view-source-key
+                        '(source tool-child 40 "old-hash" "child-1")))
+    (should (equal '(40 tool-child ("child-1"))
+                   (mevedel-view--render-anchor-identity 1)))
+    (put-text-property 1 (point-max) 'mevedel-view-source-key
+                       '(source tool-child 40 "new-hash" "child-2"))
+    (should (equal '(40 tool-child ("child-2"))
+                   (mevedel-view--render-anchor-identity 1))))
+
+  :doc "ordinary source text uses its rendered type and unannotated text has no identity"
+  (with-temp-buffer
+    (insert (propertize "response" 'mevedel-view-source '(40 . 90)
+                        'mevedel-view-type 'response))
+    (insert "plain")
+    (should (equal '(40 response nil) (mevedel-view--render-anchor-identity 1)))
+    (should-not (mevedel-view--render-anchor-identity 9))))
+
+(mevedel-deftest mevedel-view--render-anchor-run-end ()
+  ,test
+  (test)
+  :doc "source, role and child identity boundaries all limit a reader run"
+  (dolist (property '(mevedel-view-source mevedel-view-type mevedel-view-source-key))
+    (with-temp-buffer
+      (insert "aaaabbbb")
+      (put-text-property 1 5 property 'first)
+      (put-text-property 5 9 property 'second)
+      (should (= 5 (mevedel-view--render-anchor-run-end 1 9)))
+      (should (= 3 (mevedel-view--render-anchor-run-end 1 3)))
+      (should (= 9 (mevedel-view--render-anchor-run-end 5 9))))))
+
 (mevedel-deftest mevedel-view--position-render-anchor ()
   ,test
   (test)
@@ -1484,7 +1542,7 @@
     (insert "head ")
     (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))
     (insert " tail\n")
-    (should (equal '(source 40 0 4)
+    (should (equal '(source (40 nil nil) 0 4)
                    (mevedel-view--position-render-anchor
                     (+ (point-min) (length "head ") 4)))))
 
@@ -1495,7 +1553,7 @@
     (let ((body-start (point)))
       (insert (propertize "body text" 'mevedel-view-source (cons 40 90)))
       (insert "\n")
-      (should (equal '(source 40 1 2)
+      (should (equal '(source (40 nil nil) 1 2)
                      (mevedel-view--position-render-anchor
                       (+ body-start 2))))))
 
@@ -1533,10 +1591,10 @@
       (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))
       (insert " tail\n")
       (should (= (+ run-start 4)
-                 (mevedel-view--render-anchor-position '(source 40 0 4))))
+                 (mevedel-view--render-anchor-position '(source (40 nil nil) 0 4))))
       ;; Offsets past the run clamp to its last character.
       (should (= (+ run-start (1- (length "rendered run")))
-                 (mevedel-view--render-anchor-position '(source 40 0 99))))))
+                 (mevedel-view--render-anchor-position '(source (40 nil nil) 0 99))))))
 
   :doc "the ordinal selects among runs sharing one source start"
   (with-temp-buffer
@@ -1546,17 +1604,49 @@
       (insert (propertize "body text" 'mevedel-view-source (cons 40 90)))
       (insert "\n")
       (should (= (+ (point-min) 2)
-                 (mevedel-view--render-anchor-position '(source 40 0 2))))
+                 (mevedel-view--render-anchor-position '(source (40 nil nil) 0 2))))
       (should (= (+ body-start 2)
-                 (mevedel-view--render-anchor-position '(source 40 1 2))))))
+                 (mevedel-view--render-anchor-position '(source (40 nil nil) 1 2))))))
 
   :doc "returns nil for unresolvable anchors"
   (with-temp-buffer
     (insert "plain text\n")
-    (should-not (mevedel-view--render-anchor-position '(source 40 0 4)))
+    (should-not (mevedel-view--render-anchor-position '(source (40 nil nil) 0 4)))
     (should-not (mevedel-view--render-anchor-position
                  '(fragment status tasks 0)))
-    (should-not (mevedel-view--render-anchor-position nil))))
+    (should-not (mevedel-view--render-anchor-position nil)))
+
+  :doc "section identities survive separator changes and compound child reordering"
+  (with-temp-buffer
+    (let ((source '(40 . 90))
+          group-anchor child-anchor)
+      (insert (propertize "\n" 'mevedel-view-source source))
+      (insert (propertize "Group\n" 'mevedel-view-source source
+                          'mevedel-view-type 'tool-group))
+      (setq group-anchor (mevedel-view--position-render-anchor 3))
+      (insert (propertize "Child one\n" 'mevedel-view-source source
+                          'mevedel-view-type 'tool-child
+                          'mevedel-view-source-key
+                          '(source tool-child 40 (in-flight) "one")))
+      (setq child-anchor (mevedel-view--position-render-anchor 9))
+      (erase-buffer)
+      ;; Source coordinates alone cannot distinguish any of these rows.
+      (insert (propertize "Group\n" 'mevedel-view-source source
+                          'mevedel-view-type 'tool-group))
+      (insert (propertize "Child two\n" 'mevedel-view-source source
+                          'mevedel-view-type 'tool-child
+                          'mevedel-view-source-key
+                          '(source tool-child 40 (in-flight) "two")))
+      (let ((child-start (point)))
+        (insert (propertize "Child one\n" 'mevedel-view-source source
+                            'mevedel-view-type 'tool-child
+                            'mevedel-view-source-key
+                            '(source tool-child 40 (tool "settled") "one")))
+        (should (= 2 (mevedel-view--render-anchor-position group-anchor)))
+        (should (= (+ child-start 1)
+                   (mevedel-view--render-anchor-position child-anchor)))
+        (delete-region child-start (point-max))
+        (should-not (mevedel-view--render-anchor-position child-anchor))))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test
