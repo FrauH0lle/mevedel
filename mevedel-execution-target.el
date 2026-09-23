@@ -242,9 +242,18 @@ individual spawn uses it is the execution layer's decision."
        (memq (mevedel-execution-target-method target) '(ssh scp))
        (not (plist-get (mevedel-execution-target-identity target) :hop))))
 
-(defun mevedel-execution-target-label (target)
-  "Return a compact user-facing identity for TARGET."
-  (let* ((identity (mevedel-execution-target-identity target))
+(defun mevedel-execution-target-label (target &optional directory)
+  "Return a compact user-facing identity for TARGET.
+When TARGET is nil, derive the identity from DIRECTORY, which defaults to
+`default-directory'.  This only parses the path; it never probes the target.
+For multi-hop paths, identify the final destination."
+  (let* ((identity
+          (if target
+              (mevedel-execution-target-identity target)
+            (let* ((directory (or directory default-directory))
+                   (method (file-remote-p directory 'method 'never)))
+              (mevedel-execution-target--identity
+               directory (and method (intern method)) nil))))
          (method (plist-get identity :method))
          (user (plist-get identity :user))
          (host (plist-get identity :host)))

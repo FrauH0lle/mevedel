@@ -57,7 +57,7 @@
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-label
-                  "mevedel-execution-target" (target))
+                  "mevedel-execution-target" (target &optional directory))
 (declare-function mevedel-execution-target-native-root
                   "mevedel-execution-target" (cl-x) t)
 
