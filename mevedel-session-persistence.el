@@ -219,12 +219,17 @@
 (autoload 'mevedel-session-save-as-run "mevedel-session-save-as")
 
 ;; `mevedel-transport'
+(declare-function mevedel-transport-cancel-idle "mevedel-transport" (table tag))
 (declare-function mevedel-transport-cancel-pending
                   "mevedel-transport" (&optional key))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (owner remote-path function))
+(declare-function mevedel-transport-schedule-idle
+                  "mevedel-transport" (table key tag path thunk))
+(autoload 'mevedel-transport-cancel-idle "mevedel-transport")
 (autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+(autoload 'mevedel-transport-schedule-idle "mevedel-transport")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-authority-mode-for-session "mevedel-structs" (session))
@@ -1125,20 +1130,28 @@ publication.  Views and read-only inspection buffers never write."
                      (eq buffer (mevedel-session-root-buffer mevedel--session))))
         (let ((inhibit-quit t))
           (condition-case err
-              (let ((saved
-                     (if (bound-and-true-p mevedel--agent-invocation)
-                         (mevedel-agent-conversation-save
-                          mevedel--agent-invocation)
-                       (mevedel-session-artifacts-save
-                        mevedel--session buffer))))
+              (let* ((agent (bound-and-true-p mevedel--agent-invocation))
+                     (portable (mevedel-session-codec-portable-authority-p
+                                mevedel--session))
+                     ;; A checkpoint needs a marker, so let the transcript
+                     ;; writer include it instead of publishing twice.
+                     (_ (when (and agent portable)
+                          (setf (mevedel-agent-invocation-sidecar-dirty agent) t)))
+                     (saved
+                      (if agent
+                          (mevedel-agent-conversation-save agent)
+                        (mevedel-session-artifacts-save
+                         mevedel--session buffer))))
                 (unless saved
                   (error "Conversation was not saved"))
                 ;; Agent writes can be retained publication batches awaiting
                 ;; a sidecar commit.  A checkpoint must be visible on resume,
                 ;; even when the root transcript has not changed.
-                (when (and (bound-and-true-p mevedel--agent-invocation)
-                           (mevedel-session-codec-portable-authority-p
-                            mevedel--session))
+                (when (and agent portable
+                           (or (mevedel-session-publication-uncommitted-batches
+                                mevedel--session)
+                               (mevedel-session-publication-queue mevedel--session)
+                               (mevedel-agent-invocation-sidecar-dirty agent)))
                   (let ((root (mevedel-session-root-buffer mevedel--session)))
                     (if (mevedel-session-artifacts-artifact-present-p
                          mevedel--session "session.meta.el" t)
@@ -1161,11 +1174,14 @@ publication.  Views and read-only inspection buffers never write."
               :warning)
              nil)))))))
 
+(defvar mevedel-session-persistence--autosaves (make-hash-table :test #'eq)
+  "Conversation buffers with a queued auto-save opportunity.")
+
 (defun mevedel-session-persistence-autosave ()
   "Checkpoint modified data buffers during Emacs auto-save.
-Defer target I/O until the transport is idle.  Each buffer saves
-independently, so a failed write does not prevent other conversations
-from being saved."
+Queue one transport-safe opportunity per buffer, yielding between saves.
+A failed write does not prevent other conversations from being saved.
+Settlement and exit still persist synchronously."
   (dolist (buffer (buffer-list))
     (when (and (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -1177,11 +1193,21 @@ from being saved."
                                       mevedel--session))
                           (mevedel-session-publication-uncommitted-batches
                            mevedel--session)))))
-      (mevedel-transport-run-when-idle
-       (list 'conversation-autosave buffer)
+      (mevedel-transport-schedule-idle
+       mevedel-session-persistence--autosaves buffer 'conversation-autosave
        (buffer-local-value 'default-directory buffer)
        (lambda ()
-         (mevedel-session-persistence-autosave-buffer buffer))))))
+         ;; Settlement or an explicit save can absorb this checkpoint while
+         ;; it waits. Recheck at execution, including failed saves whose
+         ;; transcript write succeeded before their marker failed.
+         (when (and (buffer-live-p buffer)
+                    (or (buffer-modified-p buffer)
+                        (buffer-local-value 'mevedel-session--save-failed buffer)
+                        (with-current-buffer buffer
+                          (and (bound-and-true-p mevedel--session)
+                               (mevedel-session-publication-uncommitted-batches
+                                mevedel--session)))))
+           (mevedel-session-persistence-autosave-buffer buffer)))))))
 
 (defun mevedel-session-persistence-header-segment ()
   "Return a header-line fragment summarising persistence state.
@@ -2754,6 +2780,8 @@ bad buffer can't block exit."
         (mevedel-memory-decision--inhibit-recovery t)
         (mevedel-memory-pass--inhibit-scheduling t)
         (inhibit-quit t))
+    (mevedel-transport-cancel-idle
+     mevedel-session-persistence--autosaves 'conversation-autosave)
     (when (featurep 'mevedel-journal-process)
       (ignore-errors (mevedel-journal-process-stop-all)))
     (when (featurep 'mevedel-memory-decision)

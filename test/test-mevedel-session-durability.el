@@ -2959,7 +2959,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
 
-  :doc "fixed session caches remain invisible until a marker commits a snapshot"
+  :doc "staged transcripts remain private until a marker commits a snapshot"
   (let* ((local-root (file-name-as-directory
                       (make-temp-file "mevedel-publication-manifest-" t)))
          (session-dir (file-name-as-directory
@@ -3005,7 +3005,8 @@
               session (list (list :path segment :content "new segment"))))
             (should (equal "new segment"
                            (with-temp-buffer
-                             (insert-file-contents segment)
+                             (insert (mevedel-session-artifacts-read-artifact
+                                      session "segment-0001.chat.org"))
                              (buffer-string))))
             (should
              (equal old
@@ -3803,19 +3804,16 @@
             session
             (list (list :path sidecar :content "(:materialized t)"
                         :commit-marker t))))
-          (let ((publish-artifact
-                 (symbol-function
-                  'mevedel-session-publication--publish-artifact))
-                (count 0))
+          (let ((write-generation
+                 (symbol-function 'mevedel-session-publication--write-generation)))
             (cl-letf
-                (((symbol-function
-                   'mevedel-session-publication--publish-artifact)
-                  (lambda (artifact)
-                    (cl-incf count)
-                    (if (= count 2)
-                        (signal 'file-error
-                                '("Injected agent sidecar failure"))
-                      (funcall publish-artifact artifact)))))
+                (((symbol-function 'mevedel-session-publication--write-generation)
+                  (lambda (root artifacts &rest args)
+                    (if (cl-find transcript-relative artifacts
+                                 :key (lambda (artifact) (plist-get artifact :logical))
+                                 :test #'equal)
+                        (signal 'file-error '("Injected agent generation failure"))
+                      (apply write-generation root artifacts args)))))
               (mevedel-test--with-captured-diagnostics nil
                 (should-error
                  (mevedel-session-artifacts-publish-agent-terminal-state
@@ -3838,7 +3836,8 @@
           (should
            (equal "terminal transcript"
                   (with-temp-buffer
-                    (insert-file-contents transcript)
+                    (insert (mevedel-session-artifacts-read-artifact
+                             session transcript-relative t))
                     (buffer-string))))
           (let* ((saved (mevedel-session-codec-read sidecar))
                  (saved-record (car (plist-get saved :agent-registry))))
@@ -3946,12 +3945,15 @@
                    (sidecar (file-name-concat save-path "session.meta.el"))
                    (current (file-name-concat
                              save-path "instructions" "current.el")))
-              (should (file-exists-p segment))
+              (should-not (file-exists-p segment))
+              (should (mevedel-session-artifacts-artifact-present-p
+                       session "segment-0001.chat.org" t))
               (should (file-exists-p sidecar))
               (should (file-exists-p current))
               (should (equal "remote transcript"
                              (with-temp-buffer
-                               (insert-file-contents segment)
+                               (insert (mevedel-session-artifacts-read-artifact
+                                      session "segment-0001.chat.org"))
                                (buffer-string))))
               (should-not (buffer-modified-p))
               (should-not (file-exists-p
@@ -4000,7 +4002,8 @@
                  (string-match-p
                   "MEVEDEL_SEGMENT_FINALIZED_AT"
                   (with-temp-buffer
-                    (insert-file-contents old)
+                    (insert (mevedel-session-artifacts-read-artifact
+                             session (file-name-nondirectory old) t))
                     (buffer-string))))
                 (should
                  (= 2
@@ -4095,7 +4098,8 @@
                  (string-match-p
                   "Unsent draft"
                   (with-temp-buffer
-                    (insert-file-contents new)
+                    (insert (mevedel-session-artifacts-read-artifact
+                             session (file-name-nondirectory new) t))
                     (buffer-string))))
                 (should
                  (= 2

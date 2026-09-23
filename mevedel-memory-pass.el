@@ -149,7 +149,7 @@ under target ownership. No completion recursively schedules another pass."
 
 (defun mevedel-memory-pass-stop-all ()
   "Cancel this client's queued and running memory reviews on exit."
-  (mevedel-transport-cancel-idle mevedel-memory-pass--pending 'memory-pass #'mevedel-workspace-root)
+  (mevedel-transport-cancel-idle mevedel-memory-pass--pending 'memory-pass)
   (maphash (lambda (_key state) (mevedel-memory-pass-cancel (plist-get state :workspace)))
            mevedel-memory-pass--running))
 

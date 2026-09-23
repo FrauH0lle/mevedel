@@ -184,11 +184,15 @@ the old request, not the new request's active presentation.
 
 Emacs's native `auto-save-hook` checkpoints modified root and retained-agent data
 buffers through their respective persistence writers. It follows Emacs's normal
-auto-save scheduling and defers remote writes until transport is idle. Failed
+auto-save scheduling, queues one coalesced opportunity per buffer, and allows
+input between saves. Each opportunity waits for transport availability and
+pending input; settlement or an explicit save can absorb a queued checkpoint.
+Exit cancels queued opportunities and flushes synchronously. Failed
 writes remain eligible for retry even when the transcript write succeeded and
 only the sidecar failed. Views and read-only inspection buffers do not write.
 Project-agent checkpoints commit the sidecar along with retained transcript
-writes so resume can see them; root auto-save also commits outstanding batches
+writes in one publication so resume can see them; root auto-save also commits
+outstanding batches
 even when its text is unmodified.
 These checkpoints preserve unfinished text without marking a turn completed.
 
@@ -214,9 +218,9 @@ Layout:
   .recovery/                       ; target-side project recovery only
     recovery-a1b2c3...el            ; marker, written after recovery bytes
     a1b2c3.../                      ; manual repair material
-  segment-0001.chat.org              ; finalized at compact #1
-  segment-0002.chat.org              ; finalized at compact #2
-  segment-0003.chat.org              ; current/live
+  segment-0001.chat.org              ; logical name: finalized at compact #1
+  segment-0002.chat.org              ; logical name: finalized at compact #2
+  segment-0003.chat.org              ; logical name: current/live
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
@@ -231,12 +235,17 @@ Layout:
                                      ; documents); cockpit inventory and
                                      ; collaboration byte source
   tool-results/                      ; retained oversized tool output and media
-  agents/                            ; sub-agent transcript .chat.org files
+  agents/                            ; logical agent transcripts; physical
+                                     ; numbered compaction recovery archives
 ```
 
 Project sessions use the portable authority profile on both local and TRAMP
 targets: `.lease/` and immutable `.publications/` are authoritative, while
-the familiar sidecar and segment paths are only fixed caches.  File-workspace
+the fixed sidecar is a discovery cache. Root and canonical agent transcripts
+exist as logical manifest entries without an additional fixed copy. Old fixed
+transcripts are ignored, including their modification times; this change does
+not delete them. Numbered agent compaction archives still receive a physical
+recovery copy before the live buffer is rewritten. File-workspace
 sessions use the separate `pid-lock` profile and `.lock`; they do not create a
 lease or publication tree.  A session directory containing both control
 artifacts, or a persisted authority profile that disagrees with its workspace
@@ -484,9 +493,11 @@ once per execution target for that Emacs process; another client or restart
 discloses again.
 
 Completed-turn saves and segment transitions stage their complete critical
-artifact batch locally before target I/O.  Replacement files at their familiar
-session paths are published through nearby target temporary files plus atomic
-rename, but these fixed files are caches, not the durable snapshot boundary.
+artifact batch locally before target I/O. Root and canonical agent transcripts
+skip duplicate fixed writes and are stored in immutable publications. Remaining
+fixed files use nearby target temporary files plus atomic rename; these caches
+are not the durable snapshot boundary. Numbered compaction archives retain their
+physical recovery copy.
 A successful session-local batch without a sidecar marker retains its staged
 source locally.  A later batch with exactly one `session.meta.el` artifact
 marked `:commit-marker t` merges those retained artifacts with the current
@@ -499,7 +510,12 @@ target transaction at all: the candidate artifacts are hashed against the
 committed manifest, and when every one matches, the save records nothing and
 `updated-at` is not even stamped, because stamping it first would make the
 sidecar differ on every call and defeat the comparison.  When some artifacts
-differ, only those are published; an omitted artifact keeps its existing
+differ, only those are published. Payload comparison runs once per save and
+its selection is reused for publication, avoiding a second encoding/hash of a
+changed transcript. Root saves freeze the transcript's encoded bytes once after
+save hooks, using the buffer's file coding system. Comparison, staging, and
+publication reuse those bytes, including their original line endings.
+An omitted artifact keeps its existing
 manifest entry, so the logical snapshot is unchanged while whole per-artifact
 ownership proofs are avoided.  The commit marker always publishes, because it is
 the transaction's commit point rather than a payload.  `mevedel-save-session`
@@ -836,6 +852,10 @@ bytes and observes the generation listing without rewriting the record. A fresh
 transaction clock reading also avoids another target clock marker; reuse never
 extends that reading's one-second lifetime. Ownership proof cadence, takeover
 checks and the authoritative manifest commit are unchanged.
+The publication entry point shares this transaction scope across admission,
+reservation and commit, including direct agent publications. Its clock and
+recovery observations expire with the call; nested root saves retain their
+existing scope, and clocks remain keyed by target directory.
 Tombstones and immutable-only file-history artifacts do not cause fixed writes
 or per-entry renewals. The final proof and the immutable manifest commit still
 check ownership. If one uninterrupted target filesystem operation exceeds that

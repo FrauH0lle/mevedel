@@ -1054,15 +1054,23 @@ Return rollback and post-commit delivery closures for INVOCATION."
         (when (>= (mevedel-agent-control--active-count session)
                   (mevedel-session-agent-turn-capacity session))
           (user-error "Agent tree is at its active-turn capacity"))
-        (setf (mevedel-agent-record-activity record) 'starting)
-        (condition-case err
-            (mevedel-agent-control--dispatch-followup
-             session record message parent-tool-use-id)
-          (error
-           (setf (mevedel-agent-record-activity record) 'idle)
-           (setf (mevedel-agent-record-invocation record) nil)
-           (mevedel-agent-control--persist-session session)
-           (signal (car err) (cdr err)))))
+        (let ((previous-result (mevedel-agent-record-settled-result record))
+              (previous-outcome (mevedel-agent-record-settled-outcome record)))
+          ;; Provider startup can yield to another owner's mailbox save.
+          ;; Keep the published registry valid throughout that interval.
+          (setf (mevedel-agent-record-activity record) 'starting
+                (mevedel-agent-record-settled-result record) nil
+                (mevedel-agent-record-settled-outcome record) nil)
+          (condition-case err
+              (mevedel-agent-control--dispatch-followup
+               session record message parent-tool-use-id)
+            ((error quit)
+             (setf (mevedel-agent-record-activity record) 'idle
+                   (mevedel-agent-record-invocation record) nil
+                   (mevedel-agent-record-settled-result record) previous-result
+                   (mevedel-agent-record-settled-outcome record) previous-outcome)
+             (mevedel-agent-control--persist-session session)
+             (signal (car err) (cdr err))))))
       record)))
 
 (defun mevedel-agent-control-interrupt (session target)

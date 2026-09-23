@@ -1128,7 +1128,7 @@
         (insert "Recent response four.\n")
         (put-text-property start (point) 'gptel 'response))
       (insert "Pending tool result.\n")
-      (basic-save-buffer)
+      (should (mevedel-agent-conversation-save invocation))
       (let* ((original (buffer-string))
              (data (list :messages
                          (vector
@@ -1260,7 +1260,7 @@
         (insert "current tool result\n")
         (put-text-property current-start (point)
                            'gptel '(tool . "call-current")))
-      (basic-save-buffer)
+      (should (mevedel-agent-conversation-save invocation))
       (let* ((fsm
               (gptel-make-fsm
                :info
@@ -1308,7 +1308,7 @@
         (insert "Recent response four.\n")
         (put-text-property start (point) 'gptel 'response))
       (insert "Pending result four.\n")
-      (basic-save-buffer)
+      (should (mevedel-agent-conversation-save invocation))
       (let ((original (buffer-string))
             (fsm
              (gptel-make-fsm
@@ -1379,7 +1379,7 @@
               (insert "Latest response seven.\n")
               (put-text-property start (point) 'gptel 'response))
             (insert "Pending result seven.\n")
-            (basic-save-buffer)
+            (should (mevedel-agent-conversation-save invocation))
             (setq before-second (buffer-string))
             (plist-put (gptel-fsm-info fsm) :data request-data)
             (mevedel--compact-handle-agent-wait fsm)))
@@ -1528,7 +1528,7 @@
       (insert "Second recent response.\n")
       (put-text-property start (point) 'gptel 'response))
     (insert "Pending tool result.\n")
-    (basic-save-buffer)
+    (should (mevedel-agent-conversation-save invocation))
     (let* ((original (buffer-string))
            (fsm
             (gptel-make-fsm
@@ -1591,7 +1591,8 @@
       (should
        (equal original
               (with-temp-buffer
-                (insert-file-contents canonical-path)
+                (insert (mevedel-session-artifacts-read-artifact
+                        session (file-relative-name canonical-path (mevedel-session-save-path session))))
                 (buffer-string)))))))
 
 

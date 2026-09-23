@@ -200,9 +200,11 @@ publishes transcript plus sidecar atomically before it wakes a waiter or
 invokes a workflow result handler. Authority, not target locality, chooses:
 a portable session resolves its transcripts through the publication, so a
 direct write would leave resume unable to see them. A new or
-follow-up turn clears the previous settled result before it becomes active;
-active agents therefore expose no streaming or stale result and are reported
-as not ready. A later idle turn replaces the retained result atomically.
+follow-up turn clears the previous settled result before it becomes active,
+including the `starting` interval in which provider setup can yield to other
+mailbox publications. Failed or quit follow-up dispatch restores the previous
+result without discarding mail delivered during setup. Active agents expose no
+streaming or stale result and are reported as not ready. A later idle turn replaces the retained result atomically.
 
 `agent://root/PATH` reads that complete settled payload and
 `history://root/PATH` reads the same retained identity's transcript through

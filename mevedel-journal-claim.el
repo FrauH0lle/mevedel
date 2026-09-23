@@ -216,12 +216,27 @@ PROTECTED lists generations still referenced by durable work.  Keep the newest
 claim as the numbering anchor and all attempts whose deadlines have not passed.
 Checks and deletion share the claim admission/settlement target lock.
 Return the deletion count when the iterator completes."
-  (let* ((current (mevedel-journal-claim-current directory))
-         (head (or (plist-get current :generation) 0))
-         (now (mevedel-session-control-fs-target-time directory))
-         (names (mevedel-session-control-fs-list-directory
+  (let* ((names (mevedel-session-control-fs-list-directory
                  directory "\\`[0-9]\\{20\\}\\.\\(?:claim\\|outcome\\)\\'"))
-         (generations (sort (delete-dups (mapcar (lambda (path) (string-to-number (file-name-base path))) names)) #'<))
+         (anchor (car (sort (seq-filter
+                             (lambda (path) (string-suffix-p ".claim" path))
+                            names)
+                            #'string>)))
+         (head (if anchor (string-to-number (file-name-base anchor)) 0))
+         ;; A listing can rule out work, never authorize deletion.  Avoid
+         ;; reads, clock probes and ownership-checked yields for retained-only
+         ;; directories; candidates still need the ordinary fresh proof.
+         (generations
+          (sort (cl-remove-if
+                 (lambda (generation)
+                   (or (>= generation head) (memq generation protected)))
+                 (delete-dups
+                  (mapcar (lambda (path) (string-to-number (file-name-base path)))
+                          names)))
+                #'<))
+         (current (and generations (mevedel-journal-claim-current directory)))
+         (head (or (plist-get current :generation) 0))
+         (now (and current (mevedel-session-control-fs-target-time directory)))
          (deleted 0))
     (while (and generations (< deleted limit))
       (let ((generation (pop generations)))

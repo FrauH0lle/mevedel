@@ -132,6 +132,35 @@
                       (mevedel-transcript--property-segments
                        (point-min) (point-max))))))))
 
+(mevedel-deftest mevedel-transcript--org-tool-blocks-overlapping ()
+  ,test
+  (test)
+  :doc "tool discovery retires property runs before each candidate block"
+  (with-temp-buffer
+    (org-mode)
+    (let (expected inspected)
+      (dotimes (i 32)
+        (insert (propertize "Answer\n" 'gptel 'response))
+        (let ((start (point)))
+          (insert (propertize "#+begin_tool\n(:name \"Bash\")\nok\n#+end_tool\n"
+                              'gptel (cons 'tool (number-to-string i))))
+          (push (cons start (point)) expected)))
+      (let ((check (symbol-function
+                    'mevedel-transcript--tool-block-overlaps-tool-segment-p)))
+        (cl-letf (((symbol-function
+                    'mevedel-transcript--tool-block-overlaps-tool-segment-p)
+                   (lambda (segments start end)
+                     (push (and segments (<= (caddr (car segments)) start))
+                           inspected)
+                     (funcall check segments start end))))
+          (should (equal (nreverse expected)
+                         (mevedel-transcript--org-tool-blocks-overlapping
+                          (mevedel-transcript--property-segments
+                           (point-min) (point-max))
+                          (point-min) (point-max))))))
+      (should (= 32 (length inspected)))
+      (should-not (memq t inspected)))))
+
 (mevedel-deftest mevedel-transcript-segments ()
   ,test
   (test)

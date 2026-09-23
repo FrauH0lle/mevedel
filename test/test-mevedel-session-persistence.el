@@ -438,7 +438,10 @@
             ;; even with neither transcript marked modified.
             (cl-letf (((symbol-function 'buffer-list)
                        (lambda (&optional _frame) (list parent buffer))))
-              (run-hooks 'auto-save-hook))
+              (run-hooks 'auto-save-hook)
+              (with-timeout (2 (ert-fail "Auto-save remained queued"))
+                (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                  (sleep-for .002))))
             (should (string-search
                      "Agent prompt"
                      (mevedel-session-artifacts-read-artifact
@@ -448,7 +451,10 @@
               (insert (propertize "Auto-saved agent answer\n" 'gptel 'response)))
             (cl-letf (((symbol-function 'buffer-list)
                        (lambda (&optional _frame) (list buffer))))
-              (run-hooks 'auto-save-hook))
+              (run-hooks 'auto-save-hook)
+              (with-timeout (2 (ert-fail "Auto-save remained queued"))
+                (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                  (sleep-for .002))))
             (should (string-search
                      "Auto-saved agent answer"
                      (mevedel-session-artifacts-read-artifact
@@ -459,7 +465,10 @@
               (mevedel-agent-conversation-save invocation t))
             (cl-letf (((symbol-function 'buffer-list)
                        (lambda (&optional _frame) (list parent buffer))))
-              (mevedel-session-persistence--kill-emacs-hook))
+              (mevedel-session-persistence-autosave)
+              (should (gethash buffer mevedel-session-persistence--autosaves))
+              (mevedel-session-persistence--kill-emacs-hook)
+              (should (zerop (hash-table-count mevedel-session-persistence--autosaves))))
             (should (string-search
                      "Partial agent answer"
                      (mevedel-session-artifacts-read-artifact
@@ -791,7 +800,8 @@
                 (should (string-match-p (if portable-p "Saved transcript" "Newer disk transcript")
                                         (buffer-string))))
               (with-temp-buffer
-                (insert-file-contents predecessor)
+                (insert (mevedel-session-artifacts-read-artifact
+                         session (file-name-nondirectory predecessor) t))
                 (should (eq (not portable-p)
                             (not (null (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
                                                        (buffer-string)))))))))

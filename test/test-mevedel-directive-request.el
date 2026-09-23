@@ -518,9 +518,10 @@
 					      'directive-turn-boundary))))
                                (mevedel-session-artifacts-save
 				mevedel--session captured-chat)
-			       (let ((segment buffer-file-name))
+			       (let ((segment buffer-file-name) (session mevedel--session))
 				 (with-temp-buffer
-				   (insert-file-contents segment)
+				   (insert (mevedel-session-artifacts-read-artifact
+                                            session (file-name-nondirectory segment) t))
 				   (org-mode)
 				   (mevedel-transcript-restore-properties)
 				   (should (= 2 (length

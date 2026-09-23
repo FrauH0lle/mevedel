@@ -696,6 +696,16 @@ state clears an earlier map, and outgoing-history loss causes redelivery through
 the ordinary context acknowledgement mechanism. The resource roster advertises
 journal retrieval only when validated public entries are available.
 
+Discovery refreshes at most once per ten seconds. On local physical paths, it
+reuses the last validated entries when directory and file attributes for public
+records and expiry markers are unchanged. Access times are excluded; change
+times, modification times, identity, size and permissions remain in the source
+signature. A read whose before/after signatures differ is not reusable across
+refreshes. Remote or unavailable observations use the ordinary validated read
+path. Cached-only completion performs no filesystem operations, and every use
+still applies the age limit. This snapshot is advisory: evidence reads,
+consolidation admission and publication do not use it as storage authority.
+
 A completed review records its pass ID, exact examined digest IDs, focus,
 reference-check evidence and dates, and generated proposal IDs. Its public body
 is derived from that metadata; it contains no proposal replacement bodies or
@@ -928,6 +938,10 @@ prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
 no progress stops the drain. Scheduled cleanup returns to Emacs between ownership
 phases and coordination records. It rechecks acquired claims before resuming;
 expired or fenced ownership stops the batch and settles its remaining claims.
+Claim directories containing only the newest or referenced generations need only
+a fresh listing; they do not trigger record reads, clock probes, or resumptions.
+A possible deletion still requires fresh claim and target-clock observations and
+locked byte verification.
 Live-buffer artifact retention checks and their deletions remain one phase.
 Explicit synchronous cleanup drains the same steps. Redraw does not run cleanup.
 Selection currently scans validated

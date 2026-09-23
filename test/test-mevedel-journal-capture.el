@@ -410,7 +410,7 @@
         (insert (propertize "Source inspected\n" 'gptel 'response))
         (let ((result 'unfinished))
           (mevedel-test--with-captured-diagnostics nil
-            (basic-save-buffer)
+            (should (mevedel-agent-conversation-save invocation))
             (mevedel-compact-run-start
              :aggressive t :target (mevedel-compact-target-agent-target invocation)
              :prepared-summary test-mevedel-compact--valid-summary

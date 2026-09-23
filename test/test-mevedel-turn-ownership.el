@@ -124,9 +124,9 @@
             (should checkpoint-responsive)
             (should admission-fenced)
             (should-not (mevedel-turn-busy-p buffer))
-            (should (file-exists-p (mevedel-session-artifacts-segment-path
-                                   (mevedel-session-save-path session)
-                                   (mevedel-session-current-segment session)))))
+            (should (mevedel-session-artifacts-artifact-present-p
+                     session (format "segment-%04d.chat.org"
+                                     (mevedel-session-current-segment session)) t)))
         (when timer (cancel-timer timer))
         (advice-remove 'mevedel-session-artifacts-save saved)
         (advice-remove 'mevedel-journal-capture-checkpoint checkpoint)))))
@@ -163,10 +163,10 @@
           (while (and (mevedel-turn-busy-p buffer) (< (float-time) deadline)) (sleep-for .002)))
         (should-not (mevedel-turn-busy-p buffer))
         (with-temp-buffer
-          (insert-file-contents
-           (mevedel-session-artifacts-segment-path
-            (mevedel-session-save-path session)
-            (mevedel-session-current-segment session)))
+          (insert (mevedel-session-artifacts-read-artifact
+                   session (format "segment-%04d.chat.org"
+                                   (mevedel-session-current-segment session)) t))
+          (goto-char (point-min))
           (should (search-forward "Old response must remain durable." nil t)))
         (let ((replacement (mevedel-request-begin session)))
           (funcall resume)
@@ -191,10 +191,9 @@
       (should (eq 'full-auto (mevedel-session-permission-mode session)))
       (should (equal '(ask) mevedel--implementation-permission-mode-saved))
       (should-not mevedel--turn-settlements-pending)
-      (should (file-exists-p
-               (mevedel-session-artifacts-segment-path
-                (mevedel-session-save-path session)
-                (mevedel-session-current-segment session))))))
+      (should (mevedel-session-artifacts-artifact-present-p
+                     session (format "segment-%04d.chat.org"
+                                     (mevedel-session-current-segment session)) t))))
 
   :doc "transport cancellation releases success and failure admission exactly once"
   (dolist (outcome '(success error aborted))
@@ -277,11 +276,11 @@
       (should-not mevedel--turn-settlements-pending)
       (should-not mevedel--current-request)
       (with-temp-buffer
-        (insert-file-contents
-         (mevedel-session-artifacts-segment-path
-          (mevedel-session-save-path session)
-          (mevedel-session-current-segment session)))
-        (should (search-forward "Old response must remain durable." nil t)))
+        (insert (mevedel-session-artifacts-read-artifact
+                   session (format "segment-%04d.chat.org"
+                                   (mevedel-session-current-segment session)) t))
+        (goto-char (point-min))
+          (should (search-forward "Old response must remain durable." nil t)))
       (let ((replacement (mevedel-request-begin session)))
         (funcall cancel)
         (funcall resume)
@@ -301,11 +300,11 @@
     (should-not mevedel--turn-settlements-pending)
     (should-not mevedel--current-request)
     (with-temp-buffer
-      (insert-file-contents
-       (mevedel-session-artifacts-segment-path
-        (mevedel-session-save-path session)
-        (mevedel-session-current-segment session)))
-      (should (search-forward "Old response must remain durable." nil t)))
+      (insert (mevedel-session-artifacts-read-artifact
+                   session (format "segment-%04d.chat.org"
+                                   (mevedel-session-current-segment session)) t))
+      (goto-char (point-min))
+          (should (search-forward "Old response must remain durable." nil t)))
     (should (mevedel-request-p (mevedel-request-begin session)))
     (mevedel-request-end)))
 

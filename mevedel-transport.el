@@ -294,10 +294,11 @@ Return non-nil when work was accepted; disabled transport drops late work."
   "Run THUNK once for KEY after the current command, when PATH's transport is idle.
 TABLE maps KEY to its pending timer until THUNK starts or the work is
 cancelled, so repeated calls coalesce into one opportunity.  TAG names the
-transport queue entry `(TAG PATH)'.  A superseded timer, a cancelled queue
+transport queue entry `(TAG KEY)'.  A superseded timer, a cancelled queue
 entry, or a disabled transport removes KEY without calling THUNK.  Return the
 timer, or nil when KEY already has pending work. Already-due background jobs
-leave an event-loop opportunity between calls instead of running as one batch."
+leave at least 10 ms between calls and wait for pending input instead of
+running as one batch."
   (unless (gethash key table)
     (let (timer)
       (cl-labels
@@ -306,26 +307,26 @@ leave an event-loop opportunity between calls instead of running as one batch."
            (run ()
              (when (eq timer (gethash key table))
                (if (or mevedel-transport--background-running
+                       (input-pending-p)
                        (< (float-time) mevedel-transport--background-resume-at))
                    (progn
-                     (timer-set-time timer (time-add nil .001))
+                     (timer-set-time timer (time-add nil .01))
                      (timer-activate timer))
                  (forget)
                  (unwind-protect
                      (let ((mevedel-transport--background-running t)) (funcall thunk))
-                   (setq mevedel-transport--background-resume-at (+ (float-time) .001))))))
+                   (setq mevedel-transport--background-resume-at (+ (float-time) .01))))))
            (attempt ()
              (when (eq timer (gethash key table))
                (unless (mevedel-transport-run-when-idle
-                        (list tag path) path #'run #'forget)
+                        (list tag key) path #'run #'forget)
                  (forget)))))
         (setq timer (run-at-time 0 nil #'attempt))
         (puthash key timer table)
         timer))))
 
-(defun mevedel-transport-cancel-idle (table tag &optional path-of-key)
-  "Cancel every timer in TABLE and its queued `(TAG PATH)' transport work.
-PATH-OF-KEY maps a TABLE key to its transport PATH; it defaults to identity."
+(defun mevedel-transport-cancel-idle (table tag)
+  "Cancel every timer in TABLE and its queued `(TAG KEY)' transport work."
   (let (keys)
     (maphash (lambda (key timer)
                (cancel-timer timer)
@@ -334,7 +335,7 @@ PATH-OF-KEY maps a TABLE key to its transport PATH; it defaults to identity."
     (clrhash table)
     (dolist (key keys)
       (mevedel-transport-cancel-pending
-       (list tag (if path-of-key (funcall path-of-key key) key))))))
+       (list tag key)))))
 
 (defun mevedel-transport-cancel-pending (&optional key)
   "Cancel deferred transport work for KEY, or all of it when KEY is nil."

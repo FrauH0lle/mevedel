@@ -432,10 +432,9 @@
             (let ((deadline (+ (float-time) 5)))
               (while (and (mevedel-turn-busy-p chat-buf) (< (float-time) deadline)) (sleep-for .002))))
           (should (mevedel-session-save-path session))
-          (should (file-exists-p
-                   (mevedel-session-artifacts-segment-path
-                    (mevedel-session-save-path session)
-                    (mevedel-session-current-segment session))))
+          (should (mevedel-session-artifacts-artifact-present-p
+                       session (format "segment-%04d.chat.org"
+                                       (mevedel-session-current-segment session)) t))
           (with-temp-buffer
             (insert-file-contents
              (file-name-concat (mevedel-session-save-path session)

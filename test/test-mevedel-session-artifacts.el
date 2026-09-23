@@ -857,6 +857,50 @@
 (mevedel-deftest mevedel-session-artifacts-save (:quiet t)
   ,test
   (test)
+  :doc "compares a changed segment once while preserving no-op and forced saves"
+  (let* ((root (make-temp-file "mevedel-save-comparison-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *save-comparison*"))
+         (digest (symbol-function 'mevedel-session-publication--content-sha256))
+         (comparisons 0))
+    (unwind-protect
+        (with-current-buffer buffer
+          (mevedel-chat-prepare-transcript-buffer)
+          (setq-local mevedel--session session mevedel--workspace workspace)
+          (insert "First prompt\n")
+          (mevedel-session-artifacts-save session buffer)
+          (goto-char (point-max))
+          (setq-local buffer-file-coding-system 'utf-8-dos)
+          (insert "Changed transcript\n" (string #x3bb) "\n")
+          (cl-letf (((symbol-function 'mevedel-session-publication--content-sha256)
+                     (lambda (artifact)
+                       (when (equal "segment-0001.chat.org" (plist-get artifact :logical))
+                         (cl-incf comparisons)
+                         (should-not (multibyte-string-p (plist-get artifact :content)))
+                         (should (eq 'no-conversion (plist-get artifact :coding))))
+                       (funcall digest artifact))))
+            (mevedel-session-artifacts-save session buffer))
+          (should (= comparisons 1))
+          (should (equal (encode-coding-string (buffer-string) 'utf-8-dos)
+                         (mevedel-session-artifacts-read-artifact
+                          session "segment-0001.chat.org" t)))
+          (should (string-search "Changed transcript"
+                                 (mevedel-session-artifacts-read-artifact
+                                  session "segment-0001.chat.org" t)))
+          (let ((head (plist-get (mevedel-session-publication session) :head))
+                (entries (plist-get (mevedel-session-publication session) :artifacts)))
+            (mevedel-session-artifacts-save session buffer)
+            (should (equal head (plist-get (mevedel-session-publication session) :head)))
+            (mevedel-session-artifacts-save session buffer nil t)
+            (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+            (should (equal (assoc "segment-0001.chat.org" entries)
+                           (assoc "segment-0001.chat.org"
+                                  (plist-get (mevedel-session-publication session) :artifacts))))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t)))
+
   :doc "unchanged request checkpoints reuse names and preserve prior publication bytes"
   (let* ((root (make-temp-file "mevedel-checkpoint-save-" t))
          (workspace (test-mevedel-session-persistence--make-workspace root))
@@ -3921,20 +3965,45 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-fork-point-spans ()
   ,test
   (test)
-  :doc "caches parsed fork points until transcript text changes"
+  :doc "reads bounded absolute positions without copying the transcript"
   (with-temp-buffer
-    (let ((calls 0))
-      (cl-letf
-          (((symbol-function 'mevedel-transcript-audit-spans)
-            (lambda (&rest _)
-              (cl-incf calls)
-              nil)))
-        (mevedel-session-artifacts-fork-point-spans (current-buffer))
-        (mevedel-session-artifacts-fork-point-spans (current-buffer))
-        (should (= 1 calls))
-        (insert "changed")
-        (mevedel-session-artifacts-fork-point-spans (current-buffer))
-        (should (= 2 calls))))))
+    (insert (make-string 100000 ?x))
+    (let ((start (point)))
+      (insert (mevedel--format-hook-audit-record
+               '(:type fork-point :fork-point-id "inside")))
+      (let* ((end (point))
+             (span (car (mevedel-transcript-audit-buffer-spans
+                         'fork-point start end))))
+        (insert (mevedel--format-hook-audit-record
+                 '(:type fork-point :fork-point-id "outside")))
+        (save-restriction
+          (narrow-to-region start end)
+          (cl-letf (((symbol-function 'buffer-string)
+                     (lambda () (error "Whole transcript copy"))))
+            (let ((actual (mevedel-session-artifacts-fork-point-spans
+                           (current-buffer))))
+              (should (= 1 (length actual)))
+              (should (equal "inside" (plist-get (car actual) :fork-point-id)))
+              (should (= (plist-get span :start)
+                         (plist-get (car actual) :record-start)))
+              (should (= (plist-get span :end)
+                         (plist-get (car actual) :transcript-cutoff)))))
+          (should (= start (point-min)))
+          (should (= end (point-max)))))))
+  :doc "trust changes and restriction changes cannot reuse stale fork points"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record
+             '(:type fork-point :fork-point-id "one")))
+    (should (= 1 (length (mevedel-session-artifacts-fork-point-spans
+                         (current-buffer)))))
+    (save-restriction
+      (narrow-to-region (point-max) (point-max))
+      (should-not (mevedel-session-artifacts-fork-point-spans
+                   (current-buffer))))
+    (remove-text-properties (point-min) (point-max)
+                            '(gptel nil mevedel-hook-audit nil))
+    (should-not (mevedel-session-artifacts-fork-point-spans (current-buffer)))))
+
 
 
 ;;

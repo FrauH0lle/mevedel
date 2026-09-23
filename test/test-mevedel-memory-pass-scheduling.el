@@ -182,7 +182,9 @@
                          (mevedel-memory-pass-schedule workspace)
                          (drain)
                          (should (= 1 calls))
-                         (finish))
+                         (let (messages)
+                           (mevedel-test--with-captured-messages messages (finish))
+                           (should (string-search "memory review covered 5 digests" messages))))
                      (mevedel-journal-claim-settle claim 'cancelled "")))
                  :doc "manual and cached count failures perform no filesystem work at turn completion"
                  (progn
@@ -286,7 +288,7 @@
                                                        (should (= 1 calls))
                                                        (finish))
                  :doc "transport deferral can be cancelled without inference or a leaked opportunity"
-                 (let ((key (list 'memory-pass root)))
+                 (let ((key (list 'memory-pass workspace)))
                    (dotimes (n 5) (digest (1+ n)))
                    (let ((mevedel-transport--depth 1))
                      (mevedel-memory-pass-schedule workspace)

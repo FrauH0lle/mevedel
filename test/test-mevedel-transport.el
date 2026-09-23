@@ -608,6 +608,49 @@
       (when input-timer (cancel-timer input-timer))
       (mevedel-transport-cancel-idle table 'test-background))))
 
+(mevedel-deftest mevedel-transport-schedule-idle/shared-target ()
+  (let ((table (make-hash-table :test #'eq))
+        (mevedel-transport--pending (make-hash-table :test #'equal))
+        (mevedel-transport--background-resume-at 0)
+        (runs nil))
+    (unwind-protect
+        (progn
+          (dolist (key '(first second))
+            (let ((timer (mevedel-transport-schedule-idle
+                          table key 'test-shared "/tmp"
+                          (lambda () (push key runs)))))
+              (cancel-timer timer)
+              (let ((mevedel-transport--depth 1))
+                (apply (timer--function timer) (timer--args timer)))))
+          (should (= 2 (hash-table-count mevedel-transport--pending)))
+          (with-timeout (2 (ert-fail "Shared-target work was lost"))
+            (while (< (length runs) 2) (sleep-for .01)))
+          (should (memq 'first runs))
+          (should (memq 'second runs))
+          (should (zerop (hash-table-count table))))
+      (mevedel-transport-cancel-idle table 'test-shared)
+      (mevedel-transport-cancel-pending))))
+
+(mevedel-deftest mevedel-transport-schedule-idle/pending-input ()
+  (let ((table (make-hash-table :test #'eq))
+        (mevedel-transport--background-resume-at 0)
+        (unread-command-events (list ?x))
+        ran)
+    (unwind-protect
+        (let ((timer (mevedel-transport-schedule-idle
+                      table 'input 'test-input "/tmp" (lambda () (setq ran t)))))
+          (cancel-timer timer)
+          (should (input-pending-p))
+          (apply (timer--function timer) (timer--args timer))
+          (should-not ran)
+          (should (eq timer (gethash 'input table)))
+          ;; Consume an actual Emacs event before background work resumes.
+          (should (eq ?x (read-event nil nil .1)))
+          (with-timeout (2 (ert-fail "Background work did not resume"))
+            (while (not ran) (sleep-for .01)))
+          (should (zerop (hash-table-count table))))
+      (mevedel-transport-cancel-idle table 'test-input))))
+
 (provide 'test-mevedel-transport)
 
 ;;; test-mevedel-transport.el ends here

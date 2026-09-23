@@ -275,7 +275,10 @@ remains available for recovery.  These local eligibility, preflight, hook,
 abort, and application failures are non-retryable.  Only summary request
 failures receive the existing maximum of three identical attempts.
 
-Numbered agent archives are recovery artifacts, not transcript identities.
+Portable agent eligibility uses publication or owned-staging membership on local
+and remote targets alike, without requiring a fixed canonical transcript file.
+Numbered agent archives retain their physical recovery copy before a rewrite.
+They are recovery artifacts, not transcript identities.
 They are deliberately absent from the session sidecar, session browser, and
 retention index.  They remain owned by the original session directory and are
 removed with it by normal session cleanup.  Session Forks copy only canonical
@@ -525,7 +528,12 @@ compaction and live terminal settlement; settlement atomically changes it to
 `execution-completion`, while resume changes a stale archive to `lost`. The
 captured owner mailbox continues to provide the model-visible notification.
 Archive intent comes from the concrete tool rows removed by compaction, not a
-session counter. On resume or fork, a completion/archive record in a newer
+session counter. Archive preparation gives live render data precedence and
+reads retained archive records at most once per preparation, on the first
+missing live row. Its lookup is local to that operation; later preparations
+observe the current transcript afresh. This avoids decoding the full history
+again for every tool without retaining stale execution state.
+On resume or fork, a completion/archive record in a newer
 segment also supersedes the historical running row left in its predecessor, so
 the two copies cannot produce contradictory terminal states. A live archive
 record removed by a later compaction is carried into the next segment again;

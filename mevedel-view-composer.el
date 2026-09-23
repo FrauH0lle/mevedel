@@ -1079,7 +1079,8 @@ above the composer does not strand it in rendered transcript text."
                   (goto-char (point-max))
                   (recenter -1))))))
 	(when mevedel-view--pww-current-mark
-          (set-mark
+	  (set-marker
+	   (mark-marker)
            (min
             (point-max)
             (resolve-position mevedel-view--pww-current-mark

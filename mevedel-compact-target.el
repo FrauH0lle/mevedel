@@ -122,6 +122,10 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-summary-block "mevedel-session-artifacts")
 
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
+(autoload 'mevedel-session-codec-portable-authority-p "mevedel-session-codec")
+
 ;; `mevedel-structs'
 (declare-function mevedel-file-interaction-modified-turn
                   "mevedel-structs" (cl-x) t)
@@ -279,7 +283,7 @@ the in-flight turn."
                 relative-path save-path))
               (canonical-path (expand-file-name relative-path save-path))
               (buffer-path buffer-file-name)
-              ((if (file-remote-p save-path)
+              ((if (mevedel-session-codec-portable-authority-p session)
                    (and (equal (expand-file-name buffer-path)
                                canonical-path)
                         (mevedel-session-artifacts-artifact-present-p

@@ -234,10 +234,11 @@
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record "mevedel-transcript-audit" (record))
-(declare-function mevedel-transcript-audit-spans "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-audit-buffer-spans
+                  "mevedel-transcript-audit" (&optional type start end))
 (declare-function mevedel-transcript-buffer-directive-ranges "mevedel-transcript-audit" (&optional allow-open))
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
-(autoload 'mevedel-transcript-audit-spans "mevedel-transcript-audit")
+(autoload 'mevedel-transcript-audit-buffer-spans "mevedel-transcript-audit")
 (autoload 'mevedel-transcript-buffer-directive-ranges
   "mevedel-transcript-audit")
 
@@ -293,7 +294,6 @@
 (autoload 'org-entry-get "org")
 (autoload 'org-entry-put "org")
 (defvar org-agenda-file-menu-enabled)
-(defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
 
 ;; `so-long'
@@ -580,7 +580,6 @@ for saving."
               buffer-file-truename path)
         (if (string-suffix-p ".org" logical)
             (let ((org-element-use-cache nil)
-                  (org-element-cache-persistent nil)
                   (org-agenda-file-menu-enabled nil))
               (mevedel--transcript-org-mode))
           (delay-mode-hooks (set-auto-mode))))
@@ -589,7 +588,8 @@ for saving."
       (setq-local buffer-offer-save (not inspection))
       (setq buffer-read-only inspection)
       (set-buffer-modified-p nil)
-      (set-visited-file-modtime))
+      (set-visited-file-modtime
+       (and (mevedel-session-codec-portable-authority-p session) 0)))
     buffer))
 
 (defun mevedel-session-artifacts-segments (session live-buffer)
@@ -812,32 +812,17 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                   (emacs-pid))))
    0 32))
 
-(defvar-local mevedel-session-artifacts--fork-point-spans-cache nil
-  "Cached transcript fork-point spans keyed by modification tick.")
-
 (defun mevedel-session-artifacts-fork-point-spans (buffer)
-  "Return durable fork-point records and source spans from BUFFER."
+  "Return durable fork-point records and source spans from BUFFER.
+Respect BUFFER's current restriction and record provenance."
   (with-current-buffer buffer
-    (let ((tick (buffer-chars-modified-tick)))
-      (if (eq tick
-              (car-safe
-               mevedel-session-artifacts--fork-point-spans-cache))
-          (cdr mevedel-session-artifacts--fork-point-spans-cache)
-        (let ((spans
-               (mapcar
-                (lambda (span)
-                  (append
-                   (copy-sequence (plist-get span :record))
-                   (list
-                    :record-start
-                    (+ (point-min) (plist-get span :start))
-                    :transcript-cutoff
-                    (+ (point-min) (plist-get span :end)))))
-                (mevedel-transcript-audit-spans
-                 (buffer-string) 'fork-point))))
-          (setq mevedel-session-artifacts--fork-point-spans-cache
-                (cons tick spans))
-          spans)))))
+    (mapcar
+     (lambda (span)
+       (append (copy-sequence (plist-get span :record))
+               (list :record-start (plist-get span :start)
+                     :transcript-cutoff (plist-get span :end))))
+     (mevedel-transcript-audit-buffer-spans
+      'fork-point (point-min) (point-max)))))
 
 (defun mevedel-session-artifacts-fork-point-at-source
     (buffer source-start source-end)
@@ -1051,7 +1036,8 @@ Returns SESSION's `save-path' (allocated or existing)."
                             (expand-file-name segment-path)))
           (setq buffer-file-name segment-path))
         (mevedel-session-artifacts-disown-save-machinery)
-        (unless (file-exists-p segment-path)
+        (unless (mevedel-session-artifacts-artifact-present-p
+                 session (file-name-nondirectory segment-path))
           (set-buffer-modified-p t)
           (unless (mevedel-session-codec-portable-authority-p session)
             (mevedel-session-artifacts-save-buffer-silently))))
@@ -1837,7 +1823,7 @@ continues to wait for the root turn's completed-turn publication boundary."
         (when modified-p
           (condition-case err
               (progn
-                (set-visited-file-modtime)
+                (set-visited-file-modtime 0)
                 (set-buffer-modified-p nil)
                 (mevedel-session-artifacts--run-save-hooks-silently
                  'after-save-hook))
@@ -1967,9 +1953,11 @@ calling this serializer."
         (setq segment-artifact
               (list
                :path buffer-file-name
-               :content (buffer-substring-no-properties
-                         (point-min) (point-max))
-               :coding buffer-file-coding-system))))
+               ;; Freeze the bytes once for comparison, staging and writing.
+               :content (encode-coding-string
+                         (buffer-substring-no-properties (point-min) (point-max))
+                         (or buffer-file-coding-system 'utf-8-unix) t)
+               :coding 'no-conversion))))
     (mevedel-session-artifacts-update-prompt-index session buffer)
     (when (and (boundp 'mevedel--current-request)
                mevedel--current-request)
@@ -1988,24 +1976,25 @@ calling this serializer."
              (mevedel-session-artifacts--instruction-artifacts
               session buffer)
              (mevedel-session-artifacts--published-artifact-files session)))
-           (artifacts
-            (append leading
-                    (list (mevedel-session-artifacts--sidecar-artifact
-                           session buffer))))
+           ;; Compare payloads once.  The same selection decides whether a
+           ;; save is needed and supplies its publication; hashing a changed
+           ;; transcript again here only duplicates encoding and allocation.
+           (changed (mevedel-session-publication-prune-committed session leading))
            (unchanged
-            (and (not force)
+            (and (not force) (null changed)
                  (mevedel-session-publication-committed-p
-                  session artifacts))))
+                  session (list (mevedel-session-artifacts--sidecar-artifact
+                                 session buffer))))))
       (if unchanged
           ;; Nothing durable differs from the committed snapshot, so this
           ;; save owes the target no transaction.  A segment artifact that
-          ;; compared equal proves the fixed cache already holds these
+          ;; compared equal proves the committed snapshot already holds these
           ;; bytes, so the buffer is no longer dirty against the target.
           (when segment-artifact
             (with-current-buffer buffer
               (condition-case err
                   (progn
-                    (set-visited-file-modtime)
+                    (set-visited-file-modtime 0)
                     (set-buffer-modified-p nil))
                 (error
                  (mevedel--warn-once
@@ -2015,11 +2004,9 @@ calling this serializer."
         (setf (mevedel-session-updated-at session)
               (format-time-string "%FT%H-%M-%S"))
         (let ((publication
-               (mevedel-session-publication-prune-committed
-                session
-                (append leading
-                        (list (mevedel-session-artifacts--sidecar-artifact
-                               session buffer))))))
+               (append changed
+                       (list (mevedel-session-artifacts--sidecar-artifact
+                              session buffer)))))
           (if mevedel-session-artifacts-require-agent-commit-p
               (mevedel-session-publication-publish session publication t)
             (mevedel-session-publication-publish session publication)))
@@ -2027,7 +2014,7 @@ calling this serializer."
           (with-current-buffer buffer
             (condition-case err
                 (progn
-                  (set-visited-file-modtime)
+                  (set-visited-file-modtime 0)
                   (set-buffer-modified-p nil)
                   (mevedel-session-artifacts--run-save-hooks-silently
                    'after-save-hook))
@@ -2376,8 +2363,12 @@ visited file.  This covers automatic edits that first remove transient
 unsaved text from the live buffer.  If the visited file changed externally
 to different text or was deleted, signal a controlled error instead of
 letting `save-buffer' ask an interactive supersession question during
-automatic segment rotation."
-  (when buffer-file-name
+automatic segment rotation.  Portable transcripts have no authoritative
+visited file; their caller checks the lease and publication instead."
+  (when (and buffer-file-name
+             (not (and (bound-and-true-p mevedel--session)
+                       (mevedel-session-codec-portable-authority-p
+                        mevedel--session))))
     (cond
      ((not (file-exists-p buffer-file-name))
       (when buffer-file-number
@@ -2415,7 +2406,9 @@ client resumes from, where neither means anything."
     (rename-buffer name t))
   (setq buffer-file-truename (file-truename file))
   (mevedel-session-artifacts-disown-save-machinery)
-  (set-visited-file-modtime)
+  (set-visited-file-modtime
+   (and (bound-and-true-p mevedel--session)
+        (mevedel-session-codec-portable-authority-p mevedel--session) 0))
   (set-buffer-modified-p nil))
 
 (defun mevedel-session-artifacts--publish-segment-text (file text)
