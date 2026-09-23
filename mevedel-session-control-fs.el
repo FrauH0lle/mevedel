@@ -17,6 +17,15 @@
 (require 'mevedel-transport)
 (require 'tar-mode)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-direct-async-capable-p
+                  "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-direct-async-capable-p
+  "mevedel-execution-target")
+
 (define-error 'mevedel-session-control-fs-conflict
 	      "Portable control filesystem name already exists")
 (define-error 'mevedel-session-control-fs-absent
@@ -165,7 +174,7 @@ before the operation ran."
    "}\n"
    "decode_payload() {\n"
    "  if test \"$payload_stream\" -gt 0; then\n"
-   "    (set -o pipefail; dd bs=65536 iflag=count_bytes count=\"$payload_stream\" status=none | base64 -d) || return 66\n"
+   "    (set -o pipefail; dd bs=65536 iflag=count_bytes,fullblock count=\"$payload_stream\" status=none | base64 -d) || return 66\n"
    "    IFS= read -r -d '' boundary && test -z \"$boundary\"\n"
    "  else\n"
    "    printf '%s' \"$payload\" | base64 -d\n"
@@ -579,24 +588,106 @@ parent must not turn into a `Setting current directory' failure."
           payload
           (if (plist-get op :optional) "1" "0"))))
 
-(defun mevedel-session-control-fs--write-program-request (fields file)
-  "Write FIELDS to FILE for stdin, with a byte length before each payload.
+(defun mevedel-session-control-fs--insert-program-request (fields)
+  "Insert FIELDS as a stdin request, with a byte length before each payload.
 A trailing NUL proves a complete field before a streamed write commits.
 The request is assembled in a buffer rather than as a string: a
 request-sized string, and then its encoded copy, used to double every large
-payload before it reached the target."
+payload before it reached the target.  The buffer's own representation is
+already the UTF-8 the target reads, raw bytes included, so it is sent
+unconverted."
+  (dolist (row fields)
+    (let ((payload (nth 3 row)))
+      (dolist (field (list (nth 0 row) (nth 1 row) (nth 2 row) (nth 4 row)
+                           (number-to-string (string-bytes payload))
+                           payload))
+        (insert field 0)))))
+
+(defun mevedel-session-control-fs--write-program-request (fields file)
+  "Write FIELDS to FILE as a stdin request.
+See `mevedel-session-control-fs--insert-program-request'."
   (with-temp-buffer
-    (dolist (row fields)
-      (let ((payload (nth 3 row)))
-        (dolist (field (list (nth 0 row) (nth 1 row) (nth 2 row) (nth 4 row)
-                             (number-to-string (string-bytes payload))
-                             payload))
-          (insert field 0))))
-    ;; The buffer's own representation is already the UTF-8 the target
-    ;; reads, raw bytes included.  Writing it unconverted streams an ASCII
-    ;; request, and base64 payloads always are, without an encoded copy.
+    (mevedel-session-control-fs--insert-program-request fields)
+    ;; Writing unconverted streams an ASCII request, and base64 payloads
+    ;; always are, without an encoded copy.
     (let ((coding-system-for-write 'no-conversion))
       (write-region nil nil file nil 'silent))))
+
+(defconst mevedel-session-control-fs--pipe-bootstrap
+  (concat "IFS= read -r -d '' script || exit 70; "
+          "exec \"$0\" -p -c \"$script\" mevedel-session-control-fs \"$@\" 2>/dev/null")
+  "Command line that reads the program script from stdin and runs it.
+
+TRAMP bounds a direct-async command line by the target's PIPE_BUF, so the
+script travels ahead of the request on stdin, terminated by a NUL, and this
+bootstrap replaces itself with it.  `read' consumes a pipe byte by byte, so
+the request that follows remains unread for the script.  Stderr is discarded
+as on the request-file carrier -- the script ships its diagnostics in its own
+record -- and because the wait never drains a separate stderr pipe, which a
+chatty target could otherwise fill until it blocks.")
+
+(defvar mevedel-session-control-fs--pipe-local nil
+  "Test-only: carry local programs over the pipe as well.")
+
+(defun mevedel-session-control-fs--pipe-capable-p (remote)
+  "Return non-nil when REMOTE programs may stream their request over a pipe.
+
+A direct-async process is a plain ssh channel beside the connection's shell,
+so a request reaches the target without being copied through that shell as
+a temporary file first -- about twenty TRAMP commands.  Targets qualify as
+for direct-async Bash."
+  (if remote
+      (and mevedel-transport-remote-direct-async
+           (fboundp 'tramp-direct-async-process-p)
+           (mevedel-execution-target-direct-async-capable-p
+            (mevedel-execution-target-create remote)))
+    mevedel-session-control-fs--pipe-local))
+
+(defun mevedel-session-control-fs--run-over-pipe
+    (remote bash request output flags)
+  "Run the program for REMOTE with BASH, streaming REQUEST's buffer on stdin.
+
+Output goes to buffer OUTPUT and stderr is discarded, as with the request
+file carrier.  FLAGS are the script's positional arguments.  Return the exit
+status.  The wait accepts only this process's output and runs no timers, so
+nothing can start another target operation inside it; the whole call counts
+as one remote operation for `mevedel-transport-busy-p'."
+  (mevedel-transport-call-as-remote-operation
+   (lambda ()
+     (let ((stderr (generate-new-buffer " *mevedel-control-fs-stderr*"))
+           process)
+       (unwind-protect
+           (progn
+             (setq process
+                   (mevedel-transport-call-with-spawn-channel
+                    remote t
+                    (lambda ()
+                      (make-process
+                       :name "mevedel-control-fs" :buffer output
+                       :stderr stderr
+                       :command (append (list bash "-p" "-c"
+                                              mevedel-session-control-fs--pipe-bootstrap
+                                              bash)
+                                        flags)
+                       :connection-type 'pipe :coding 'no-conversion
+                       :file-handler t :noquery t :sentinel #'ignore))))
+             (process-send-string
+              process
+              (concat (encode-coding-string
+                       mevedel-session-control-fs--program-script 'utf-8-unix)
+                      "\0"))
+             (with-current-buffer request
+               (process-send-region process (point-min) (point-max)))
+             (process-send-eof process)
+             (while (or (process-live-p process)
+                        (accept-process-output process 0 nil 1))
+               (accept-process-output process 0.05 nil 1))
+             (process-exit-status process))
+         (when (process-live-p process)
+           (delete-process process))
+         (when-let* ((pipe (get-buffer-process stderr)))
+           (delete-process pipe))
+         (kill-buffer stderr))))))
 
 (defconst mevedel-session-control-fs--argument-budget 3072
   "Largest physical line, in bytes, that the argument list may contribute.
@@ -855,42 +946,55 @@ signal contract of the single-operation wrappers per operation."
                                               (not (plist-member op :max-bytes)))) operations)))
              (arguments
               (mevedel-session-control-fs--program-arguments fields))
-             (input (unless arguments
+             ;; A request too large for the command line streams over a
+             ;; direct pipe where the target allows one, and otherwise
+             ;; travels as an input file TRAMP copies to the target.
+             (pipe (and (not arguments)
+                        (mevedel-session-control-fs--pipe-capable-p remote)
+                        (generate-new-buffer " *mevedel-control-fs-request*")))
+             (input (unless (or arguments pipe)
                       (make-temp-file ".mevedel-control-fs-program-")))
+             (flags (list (or mevedel-session-control-fs--test-pause-file "")
+                          (if lock-directory (file-local-name lock-directory) "")
+                          nil))
              (output (generate-new-buffer " *mevedel-control-fs-output*")))
         (with-current-buffer output (set-buffer-multibyte nil))
         (unwind-protect
             (progn
+              (when pipe
+                (with-current-buffer pipe
+                  (mevedel-session-control-fs--insert-program-request fields)))
               (when input
                 (mevedel-session-control-fs--write-program-request
                  fields input))
               (catch 'read-result
                 (dotimes (_attempt 2)
                   (with-current-buffer output (erase-buffer))
+                  (setcar (last flags) (if archive-p "1" "0"))
                   (let* ((coding-system-for-read 'no-conversion)
                          (status
                           (mevedel-transport-with-exclusive-connection
-                           ;; Stderr is discarded rather than pointed at a local
-                           ;; file: TRAMP would answer a local one by creating a
-                           ;; remote temporary and copying it back on every
-                           ;; program.  The script ships diagnostics itself, in a
-                           ;; record of its own.  A bare buffer destination is
-                           ;; not an option -- that leaves stderr unredirected
-                           ;; into the connection buffer, which TRAMP appends to
-                           ;; the output, corrupting the framing.
-                           ;;
-                           ;; Oversized requests use stdin in the same process.
-                           ;; Only a rejected archive needs an ordinary retry.
-                           (apply
-                            #'process-file
-                            bash input (list output nil) nil
-                            "-p" "-c"
-                            mevedel-session-control-fs--program-script
-                            "mevedel-session-control-fs"
-                            (or mevedel-session-control-fs--test-pause-file "")
-                            (if lock-directory (file-local-name lock-directory) "")
-                            (if archive-p "1" "0")
-                            arguments)))
+                           (if pipe
+                               (mevedel-session-control-fs--run-over-pipe
+                                remote bash pipe output flags)
+                             ;; Stderr is discarded rather than pointed at a local
+                             ;; file: TRAMP would answer a local one by creating a
+                             ;; remote temporary and copying it back on every
+                             ;; program.  The script ships diagnostics itself, in a
+                             ;; record of its own.  A bare buffer destination is
+                             ;; not an option -- that leaves stderr unredirected
+                             ;; into the connection buffer, which TRAMP appends to
+                             ;; the output, corrupting the framing.
+                             ;;
+                             ;; Oversized requests use stdin in the same process.
+                             ;; Only a rejected archive needs an ordinary retry.
+                             (apply
+                              #'process-file
+                              bash input (list output nil) nil
+                              "-p" "-c"
+                              mevedel-session-control-fs--program-script
+                              "mevedel-session-control-fs"
+                              (append flags arguments)))))
                          (text (with-current-buffer output (buffer-string))))
                     (unless (and (integerp status) (zerop status))
                       ;; The resolved interpreters are the only cached input, so a
@@ -924,6 +1028,8 @@ signal contract of the single-operation wrappers per operation."
                              (mevedel-session-control-fs--program-results operations text)))))))
           (when (and input (file-exists-p input))
             (delete-file input))
+          (when (buffer-live-p pipe)
+            (kill-buffer pipe))
           (when (buffer-live-p output)
             (kill-buffer output)))))))
 
@@ -992,6 +1098,17 @@ left different content.  CODING-SYSTEM defaults to UTF-8."
         t)
     (mevedel-session-control-fs-absent nil)))
 
+(defun mevedel-session-control-fs-paths-exist (paths)
+  "Return, in PATHS order, whether each target path exists.
+One program answers every path, each as for
+`mevedel-session-control-fs-path-exists-p'."
+  (mapcar (lambda (result)
+            (pcase (plist-get result :status)
+              ('ok t)
+              ('absent nil)
+              (_ (mevedel-session-control-fs-program-value result))))
+          (mevedel-session-control-fs--optional-batch 'path-exists-p paths)))
+
 (defun mevedel-session-control-fs-directory-p (path)
   "Return non-nil when target PATH exists as a non-symlink directory."
   (condition-case nil
@@ -1044,7 +1161,9 @@ CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
 
 A pinned operation can only create a name inside a directory it already
 opened, so missing parents are created one component at a time, each through
-its own pinned parent."
+its own pinned parent.  They share one program: every ancestor below the root
+is an optional creation, top down, where an existing one is a conflict.
+Return non-nil when PATH was created, nil when it already existed."
   (let ((path (mevedel-session-control-fs-physical-path path)))
     (condition-case nil
         (progn
@@ -1052,12 +1171,33 @@ its own pinned parent."
           t)
       (mevedel-session-control-fs-conflict nil)
       (mevedel-session-control-fs-absent
-       (let ((parent (directory-file-name
-                      (file-name-directory path))))
-         (unless (and parents (not (equal parent path)))
-           (signal 'mevedel-session-control-fs-absent (list path)))
-         (mevedel-session-control-fs-make-directory parent t)
-         (mevedel-session-control-fs-make-directory path nil))))))
+       (unless parents
+         (signal 'mevedel-session-control-fs-absent (list path)))
+       (let ((directory path) ancestors)
+         (while (let ((parent (directory-file-name
+                               (file-name-directory directory))))
+                  (unless (equal parent directory)
+                    (push parent ancestors)
+                    (setq directory parent))))
+         (let* ((results
+                 (mevedel-session-control-fs-run-program
+                  (append (mapcar (lambda (ancestor)
+                                    (list :op 'make-directory :path ancestor
+                                          :optional t))
+                                  (cdr ancestors))
+                          (list (list :op 'make-directory :path path)))))
+                (final (car (last results))))
+           (pcase (plist-get final :status)
+             ('ok t)
+             ('conflict nil)
+             ;; An ancestor that could not be created explains the failure
+             ;; better than the absent parent it left behind.
+             (_ (mevedel-session-control-fs-program-value
+                 (or (seq-find (lambda (result)
+                                 (not (memq (plist-get result :status)
+                                            '(ok conflict))))
+                               results)
+                     final))))))))))
 
 (defun mevedel-session-control-fs-list-directory (directory regexp)
   "Return physical paths in DIRECTORY matching REGEXP.

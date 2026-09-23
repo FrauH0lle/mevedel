@@ -45,6 +45,8 @@
 (declare-function mevedel-session-durability-lease-owned-p "mevedel-session-durability" (session))
 (autoload 'mevedel-session-durability-call-with-reserved-lease "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-owned-p "mevedel-session-durability")
+;; The transaction scope is a macro over variables its lazy owners define.
+(eval-when-compile (require 'mevedel-session-durability))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
@@ -84,10 +86,22 @@ record the trigger or omission, and attempts holds the request claims."
   "Return non-nil when capture ID in WORKSPACE has marker file NAME."
   (mevedel-session-control-fs-path-exists-p (mevedel-journal-capture--file workspace id name)))
 
+(defun mevedel-journal-capture--markers (workspace id names)
+  "Return, in NAMES order, whether capture ID in WORKSPACE has each marker.
+One target program answers them all."
+  (mevedel-session-control-fs-paths-exist
+   (mapcar (lambda (name) (mevedel-journal-capture--file workspace id name))
+           names)))
+
+(defun mevedel-journal-capture--closed-p (workspace id)
+  "Return non-nil when capture ID in WORKSPACE is retired or discarded."
+  (memq t (mevedel-journal-capture--markers
+           workspace id '("retired" "discard.json"))))
+
 (defun mevedel-journal-capture--pending-p (workspace id)
   "Return non-nil when capture ID in WORKSPACE is ready and not retired."
-  (and (mevedel-journal-capture--marked-p workspace id "ready")
-       (not (mevedel-journal-capture--marked-p workspace id "retired"))))
+  (equal '(t nil) (mevedel-journal-capture--markers
+                   workspace id '("ready" "retired"))))
 
 (defun mevedel-journal-capture--write-seal (workspace id trigger)
   "Record TRIGGER as the seal of capture ID in WORKSPACE, keeping any first seal."
@@ -113,12 +127,21 @@ evidence bundle; accepted output is never deleted here."
     (unless (memq trigger '(session-end compaction clear)) (error "Invalid journal capture trigger"))
     (plist-put metadata :trigger trigger)))
 
-(defun mevedel-journal-capture--read (workspace id)
-  "Read and validate WORKSPACE's immutable capture ID, or nil if absent."
+(defun mevedel-journal-capture--read-operation (workspace id)
+  "Return the bounded control operation reading capture ID in WORKSPACE."
+  (list :op 'read :path (mevedel-journal-capture--file workspace id "capture.json")
+        :coding 'utf-8-unix :max-bytes (1+ mevedel-journal-store--entry-max-bytes)))
+
+(defun mevedel-journal-capture--read (workspace id &optional observation)
+  "Read and validate WORKSPACE's immutable capture ID, or nil if absent.
+OBSERVATION is the result of `mevedel-journal-capture--read-operation' from
+the caller's own program, used instead of a fresh read."
   (condition-case nil
-      (let* ((text (mevedel-session-control-fs-read-file
-                    (mevedel-journal-capture--file workspace id "capture.json")
-                    'utf-8-unix (1+ mevedel-journal-store--entry-max-bytes)))
+      (let* ((text (mevedel-session-control-fs-program-value
+                    (or observation
+                        (car (mevedel-session-control-fs-run-program
+                              (list (mevedel-journal-capture--read-operation
+                                     workspace id)))))))
              (record
               (progn
                 (when (> (string-bytes text) mevedel-journal-store--entry-max-bytes)
@@ -205,7 +228,8 @@ for every marker.  Observations belong only to this call."
              (observations
               (mevedel-session-control-fs-run-program
                (mapcar (lambda (directory)
-                         (list :op 'list-directory :path directory :optional t)) batch))))
+                         (list :op 'list-directory :path directory :optional t)) batch)))
+             selected)
         (setq directories (nthcdr (length batch) directories))
         (dolist (observed observations)
           (unless (eq (plist-get observed :status) 'absent)
@@ -215,11 +239,22 @@ for every marker.  Observations belong only to this call."
               (when (if include-inactive
                         (not (and retired (not (member "capture.json" names))))
                       (and (member "ready" names) (not retired)))
-                (push (condition-case err
-                          (or (mevedel-journal-capture--read workspace id)
-                              (error "Ready journal capture has no descriptor"))
-                        (error (list :id id :unreadable t :error (error-message-string err))))
-                      records)))))))
+                (push id selected)))))
+        ;; The selected descriptors are read together, in one more program.
+        (setq selected (nreverse selected))
+        (cl-loop
+         for id in selected
+         for read in (and selected
+                          (mevedel-session-control-fs-run-program
+                           (mapcar (lambda (id)
+                                     (append (mevedel-journal-capture--read-operation workspace id)
+                                             (list :optional t)))
+                                   selected)))
+         do (push (condition-case err
+                      (or (mevedel-journal-capture--read workspace id read)
+                          (error "Ready journal capture has no descriptor"))
+                    (error (list :id id :unreadable t :error (error-message-string err))))
+                  records))))
     (sort records (lambda (left right)
                     (string< (or (plist-get (plist-get left :metadata) :created) "")
                              (or (plist-get (plist-get right :metadata) :created) ""))))))
@@ -266,21 +301,24 @@ Repeated triggers preserve the first seal.  This reads no mutable transcript,
 starts no inference, and returns the sealed capture descriptors."
   (unless (memq trigger '(compaction session-end clear))
     (error "Invalid journal capture trigger"))
-  (when (and mevedel-journal-enabled
-             (buffer-live-p buffer)
-             (mevedel-workspace-p (mevedel-session-workspace session))
-             (eq buffer (mevedel-session-root-buffer session))
-             (mevedel-session-save-path session)
-             (or (not (mevedel-session-codec-portable-authority-p session))
-                 (mevedel-session-durability-lease-owned-p session)))
-    (with-current-buffer buffer
-      (unless (or (bound-and-true-p mevedel--agent-invocation)
-                  (bound-and-true-p mevedel-session--read-only-mode))
-        (mevedel-session-artifacts-assert-mutation-authority session buffer)
-        (let ((seal (lambda () (mevedel-journal-capture--seal-owned session trigger captures))))
-          (if (mevedel-session-codec-portable-authority-p session)
-              (mevedel-session-durability-call-with-reserved-lease session seal)
-            (funcall seal)))))))
+  ;; One transaction: the ownership test, the authority assertion and the
+  ;; reservation share one target clock reading.
+  (mevedel-session-durability-with-transaction
+    (when (and mevedel-journal-enabled
+               (buffer-live-p buffer)
+               (mevedel-workspace-p (mevedel-session-workspace session))
+               (eq buffer (mevedel-session-root-buffer session))
+               (mevedel-session-save-path session)
+               (or (not (mevedel-session-codec-portable-authority-p session))
+                   (mevedel-session-durability-lease-owned-p session)))
+      (with-current-buffer buffer
+        (unless (or (bound-and-true-p mevedel--agent-invocation)
+                    (bound-and-true-p mevedel-session--read-only-mode))
+          (mevedel-session-artifacts-assert-mutation-authority session buffer)
+          (let ((seal (lambda () (mevedel-journal-capture--seal-owned session trigger captures))))
+            (if (mevedel-session-codec-portable-authority-p session)
+                (mevedel-session-durability-call-with-reserved-lease session seal)
+              (funcall seal))))))))
 
 (defun mevedel-journal-capture-seal-and-schedule (session buffer trigger &optional captures)
   "Seal SESSION's checkpoints with TRIGGER, then schedule digest processing.
@@ -382,11 +420,13 @@ settlement.  This performs no inference and does not seal the capture."
     (with-current-buffer buffer
       (unless (or (bound-and-true-p mevedel--agent-invocation)
                   (bound-and-true-p mevedel-session--read-only-mode))
-        (mevedel-session-artifacts-assert-mutation-authority session buffer)
-        (if (mevedel-session-codec-portable-authority-p session)
-            (mevedel-session-durability-call-with-reserved-lease
-             session (lambda () (mevedel-journal-capture--checkpoint-owned session)))
-          (mevedel-journal-capture--checkpoint-owned session))))))
+        ;; The assertion and the reservation share one clock reading.
+        (mevedel-session-durability-with-transaction
+          (mevedel-session-artifacts-assert-mutation-authority session buffer)
+          (if (mevedel-session-codec-portable-authority-p session)
+              (mevedel-session-durability-call-with-reserved-lease
+               session (lambda () (mevedel-journal-capture--checkpoint-owned session)))
+            (mevedel-journal-capture--checkpoint-owned session)))))))
 
 (defun mevedel-journal-capture--prepare (session policy client)
   "Prepare SESSION's frozen checkpoint without publishing or pinning it.
@@ -397,20 +437,23 @@ are read, so a worker needs no source mutation authority."
          (pending (mevedel-journal-capture-list workspace))
          (covered
           (append (mevedel-journal-store-covered-turns root)
-                  (mapcan
-                   (lambda (capture)
-                     (when (mevedel-session-control-fs-path-exists-p
-                            (mevedel-journal-capture--file workspace (plist-get capture :id) "seal.json"))
+                  (cl-mapcan
+                   (lambda (capture sealed)
+                     (when sealed
                        (copy-sequence (plist-get (plist-get capture :metadata) :turn-ids))))
-                   pending)))
+                   pending
+                   (mevedel-session-control-fs-paths-exist
+                    (mapcar (lambda (capture)
+                              (mevedel-journal-capture--file
+                               workspace (plist-get capture :id) "seal.json"))
+                            pending)))))
          (turns (cl-remove-if
                  (lambda (turn) (member (plist-get turn :id) covered))
                  (mevedel-journal-capture--turns session))))
     (when turns
       (let* ((ids (mapcar (lambda (turn) (plist-get turn :id)) turns))
              (id (mevedel-journal-capture--identity (mevedel-session-session-id session) ids)))
-        (unless (or (mevedel-journal-capture--marked-p workspace id "retired")
-                    (mevedel-journal-capture--marked-p workspace id "discard.json"))
+        (unless (mevedel-journal-capture--closed-p workspace id)
           (let* ((capture (mevedel-journal-capture--read workspace id))
                  (new (null capture)))
             (unless capture
@@ -467,8 +510,7 @@ are read, so a worker needs no source mutation authority."
            (id (plist-get capture :id))
            (pending (plist-get prepared :pending))
            (ids (append (plist-get (plist-get capture :metadata) :turn-ids) nil)))
-      (unless (or (mevedel-journal-capture--marked-p workspace id "retired")
-                  (mevedel-journal-capture--marked-p workspace id "discard.json"))
+      (unless (mevedel-journal-capture--closed-p workspace id)
         (when (plist-get prepared :new)
           ;; Descriptor and evidence still share one exclusive publication.
           (let ((text (json-serialize capture)))

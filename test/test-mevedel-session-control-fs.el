@@ -65,6 +65,33 @@
           (should (= 0 (file-attribute-size (file-attributes file)))))
       (delete-file file))))
 
+(mevedel-deftest mevedel-session-control-fs-paths-exist ()
+  (let* ((root (make-temp-file "mevedel-control-exist-" t))
+         (present (file-name-concat root "present"))
+         (linked (file-name-concat root "linked"))
+         (original (symbol-function 'mevedel-session-control-fs-run-program))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (write-region "" nil present nil 'silent)
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args)
+                       (cl-incf calls)
+                       (apply original args))))
+            (should-not (mevedel-session-control-fs-paths-exist nil))
+            (should (= calls 0))
+            (should (equal '(t nil nil)
+                           (mevedel-session-control-fs-paths-exist
+                            (list present
+                                  (file-name-concat root "absent")
+                                  (file-name-concat root "gone" "leaf")))))
+            (should (= calls 1)))
+          ;; A symbolic link is refused, as for a single existence test.
+          (make-symbolic-link "present" linked)
+          (should-error (mevedel-session-control-fs-paths-exist (list linked))
+                        :type 'file-error))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs--program-arguments/large-field ()
   (let* ((field (make-string (1+ mevedel-session-control-fs--argument-field-budget) ?x))
          (quote (symbol-function 'shell-quote-argument))
@@ -161,14 +188,30 @@
                          (file-name-concat root "gone") ".*"))
             (should-error (mevedel-session-control-fs-read-file orphan)
                           :type 'mevedel-session-control-fs-absent))
-          ;; Missing parents are created one pinned component at a time.
-          (let ((nested (file-name-concat root "a" "b" "c")))
+          ;; Missing parents are created one pinned component at a time,
+          ;; in one program after the attempt that found them missing.
+          (let ((nested (file-name-concat root "a" "b" "c"))
+                (programs 0))
             (should-error
              (mevedel-session-control-fs-make-directory nested)
              :type 'mevedel-session-control-fs-absent)
-            (should (mevedel-session-control-fs-make-directory nested t))
+            (cl-letf* ((original (symbol-function
+                                  'mevedel-session-control-fs-run-program))
+                       ((symbol-function 'mevedel-session-control-fs-run-program)
+                        (lambda (&rest args)
+                          (cl-incf programs)
+                          (apply original args))))
+              (should (mevedel-session-control-fs-make-directory nested t)))
+            (should (= 2 programs))
             (should (mevedel-session-control-fs-directory-p nested))
-            (should-not (mevedel-session-control-fs-make-directory nested t)))
+            (should-not (mevedel-session-control-fs-make-directory nested t))
+            ;; A linked ancestor is refused, not created through.
+            (make-symbolic-link "a" (file-name-concat root "linked-a"))
+            (should-error
+             (mevedel-session-control-fs-make-directory
+              (file-name-concat root "linked-a" "x" "y") t)
+             :type 'file-error)
+            (should-not (file-exists-p (file-name-concat root "a" "x"))))
           ;; Multi-kilobyte content must round trip byte for byte through the
           ;; staged payload rather than through a command line.
           (let* ((large-path (file-name-concat root "large"))
@@ -698,6 +741,42 @@
                          (mapcar (lambda (result) (plist-get result :status)) results)))
           (should (equal text (decode-coding-string (plist-get (nth 4 results) :value) 'utf-8-unix)))
           (should (equal binary (mevedel-session-control-fs-read-file first 'no-conversion))))
+      (delete-directory root t)))
+
+  :doc "streams an oversized request over a pipe where the target allows one"
+  ;; The pipe carrier replaces the stdin file TRAMP would copy; the script
+  ;; must also read a payload that arrives in pipe-sized pieces.
+  (let* ((root (make-temp-file "mevedel-control-pipe-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (binary (concat (make-string (* 512 1024) ?x) (unibyte-string 0 128 255)))
+         (text "Unicode: λ\nsecond line\0")
+         (mevedel-session-control-fs--pipe-local t)
+         (spawns 0))
+    (unwind-protect
+        (cl-letf* (((symbol-function 'process-file)
+                    (lambda (&rest _) (error "Request file carrier used")))
+                   (original (symbol-function 'make-process))
+                   ((symbol-function 'make-process)
+                    (lambda (&rest args)
+                      (cl-incf spawns)
+                      (apply original args))))
+          (let ((results (mevedel-session-control-fs-run-program
+                          (list (list :op 'write :path first :content binary)
+                                (list :op 'write :path second :content text)
+                                (list :op 'read :path second)
+                                (list :op 'verify :path second :content "mismatch")
+                                (list :op 'delete-file :path first)))))
+            (should (equal '(ok ok ok mismatch skipped)
+                           (mapcar (lambda (result) (plist-get result :status))
+                                   results)))
+            (should (equal text (decode-coding-string
+                                 (plist-get (nth 2 results) :value) 'utf-8-unix)))
+            (should (= 1 spawns)))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally first)
+            (should (equal binary (buffer-string)))))
       (delete-directory root t)))
 
   :doc "a truncated streamed field cannot replace or create a destination"

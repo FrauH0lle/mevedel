@@ -75,9 +75,14 @@
                  (setq detail (plist-get (json-parse-string (plist-get outcome :payload) :object-type 'plist) :error))))
            (error (setq status 'unreadable detail (error-message-string err))))
          (list :id id :capture capture :status status :attempts attempts :detail detail)))
-     (cl-remove-if
-      (lambda (capture) (mevedel-journal-capture--marked-p workspace (plist-get capture :id) "retired"))
-      (mevedel-journal-capture-list workspace t)))))
+     (let ((captures (mevedel-journal-capture-list workspace t)))
+       (cl-loop for capture in captures
+                for retired in (mevedel-session-control-fs-paths-exist
+                                (mapcar (lambda (capture)
+                                          (mevedel-journal-capture--file
+                                           workspace (plist-get capture :id) "retired"))
+                                        captures))
+                unless retired collect capture)))))
 
 (defun mevedel-journal-jobs--retained (workspace)
   "Describe overdue public evidence still stored in WORKSPACE.
@@ -101,9 +106,8 @@ explain retention for humans; they grant neither recall nor deletion authority."
           (pcase (plist-get entry :kind)
             ('digest
              (let ((capture (file-name-concat (mevedel-journal-store-state-directory root) "captures" (plist-get entry :capture-id))))
-               (when (and (mevedel-session-control-fs-path-exists-p capture)
-                          (not (mevedel-session-control-fs-path-exists-p
-                                (file-name-concat capture "retired"))))
+               (when (equal '(t nil) (mevedel-session-control-fs-paths-exist
+                                      (list capture (file-name-concat capture "retired"))))
                  (push "Capture completion pending" reasons)))
              (when (mevedel-session-control-fs-list-directory
                     (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins" (plist-get entry :id)) "\\`[^.]")

@@ -135,6 +135,23 @@ limit is not an erasure guarantee.
 
 ## Decision history
 
+- **Remote journal work ran one target program per check.** A September 23
+  capture of a remote session found 117 control programs, about 12 s of
+  blocking, in the journal and memory work that follows a request's
+  completion. The user felt this as hangs while typing and scrolling. On a mock
+  remote target, the same flow issued 37 programs for the save and checkpoint,
+  14 for a seal, 40 for digest processing and 60 for a cleanup drain. Claim
+  acquisition had used six programs; it now uses three. One program ensures the
+  directory, lists it, and reads the target clock. A second reads the newest
+  claim with its outcome, and the election is the third. Settlement relies on
+  the election's own `verify` of the claim bytes instead of reading them first.
+  Capture markers and descriptors are observed in batched programs. Missing
+  parents are created in one program. Checkpoint and seal run as one durable
+  transaction, so they share a single clock reading. The replay went to 28,
+  11, 32 and 50 programs respectively. Proof cadence is unchanged: every
+  resumed step still checks claim ownership afresh, and elections remain
+  exclusive creates.
+
 - **Retained-only claim directories caused needless cleanup work.** A copied
   September 22 multi-agent journal fixture took about 14 seconds per cleanup
   pass, even after all eligible pairs were gone. Filtering retained generations

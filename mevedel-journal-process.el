@@ -143,8 +143,10 @@ only after publication or an accepted explicit discard.  Recovery errors never
 admit replacement inference.  USAGE carries available provider token counts."
   (let* ((id (plist-get capture :id))
          (entry (mevedel-journal-store-entry-for-capture entries id))
-         (claim (mevedel-journal-claim-current (mevedel-journal-process--attempts workspace capture)))
-         (outcome (and claim (mevedel-journal-claim-outcome claim)))
+         (settlement (mevedel-journal-claim-current-settlement
+                      (mevedel-journal-process--attempts workspace capture)))
+         (claim (car settlement))
+         (outcome (cdr settlement))
          (discard (mevedel-journal-discard-accepted outcome id)))
     (if discard
         (mevedel-journal-discard-complete workspace discard)
@@ -310,8 +312,7 @@ original source and must contain its matching valid pin."
      workspace
      (lambda (admission)
        (let* ((attempts (mevedel-journal-process--attempts workspace (list :id id)))
-              (previous (mevedel-journal-claim-current attempts))
-              (outcome (and previous (mevedel-journal-claim-outcome previous)))
+              (outcome (cdr (mevedel-journal-claim-current-settlement attempts)))
               (discard (mevedel-journal-discard-accepted outcome id))
               (capture (ignore-errors (mevedel-journal-capture--read workspace id))))
          (cond

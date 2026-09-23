@@ -10,8 +10,7 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'subr-x)
-  (require 'tramp-cache))
+  (require 'subr-x))
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -27,9 +26,12 @@
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-call-with-spawn-channel
+                  "mevedel-transport" (remote direct-async thunk))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-call-with-spawn-channel "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-utilities'
@@ -39,22 +41,9 @@
 (autoload 'mevedel--executable-find "mevedel-utilities")
 (autoload 'mevedel--timer-pending-p "mevedel-utilities")
 
-;; `tramp'
-(declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
-
-;; `tramp-cache'
-(declare-function tramp-get-hash-table "tramp-cache" (key))
-(declare-function tramp-set-connection-property
-                  "tramp-cache" (key property value))
-
 (defcustom mevedel-execution-process-output-limit (* 64 1024 1024)
   "Maximum bytes retained from one child process."
   :type 'integer
-  :group 'mevedel)
-
-(defcustom mevedel-execution-process-remote-direct-async t
-  "When non-nil, eligible remote children use a private TRAMP channel."
-  :type 'boolean
   :group 'mevedel)
 
 (defconst mevedel-execution-process--direct-async-command-limit 3584
@@ -247,34 +236,9 @@
            mevedel-execution-process--remote-group-script marker)
      command)))
 
-(defun mevedel-execution-process--with-spawn-channel
-    (remote direct-async thunk)
-  "Call THUNK through the selected REMOTE spawn channel."
-  (if (and remote (fboundp 'tramp-direct-async-process-p))
-      (let ((shim (and direct-async
-                       (not (fboundp 'tramp-ssh-controlmaster-options))
-                       (fboundp 'tramp-ssh-or-plink-options))))
-        (cl-letf (((symbol-function 'tramp-direct-async-process-p)
-                   (if direct-async
-                       (lambda (&rest _) t)
-                     (lambda (&rest _) nil)))
-                  ((symbol-function 'tramp-ssh-controlmaster-options)
-                   (if shim
-                       (symbol-function 'tramp-ssh-or-plink-options)
-                     (symbol-function 'tramp-ssh-controlmaster-options))))
-          (if direct-async
-              (progn
-                (require 'tramp-cache)
-                (let ((vec (tramp-dissect-file-name remote)))
-                  (with-tramp-saved-connection-property vec "direct-async"
-                    (tramp-set-connection-property vec "direct-async" t)
-                    (funcall thunk))))
-            (funcall thunk))))
-    (funcall thunk)))
-
 (defun mevedel-execution-process--direct-async-p (child command workdir)
   "Return non-nil when CHILD may spawn COMMAND direct-async."
-  (and mevedel-execution-process-remote-direct-async
+  (and mevedel-transport-remote-direct-async
        (not (mevedel-execution-process--child-tty-p child))
        (fboundp 'tramp-direct-async-process-p)
        (mevedel-execution-target-direct-async-capable-p
@@ -811,7 +775,7 @@ deferred work, so that case deletes immediately rather than leak."
             (setf (mevedel-execution-process--child-launch-attempted-p child)
                   t
                   (mevedel-execution-process--child-process child)
-                  (mevedel-execution-process--with-spawn-channel
+                  (mevedel-transport-call-with-spawn-channel
                    remote direct-async
                    (lambda ()
                      (make-process

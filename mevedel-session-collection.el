@@ -17,9 +17,6 @@
 ;; `mevedel-request'
 (defvar mevedel--current-request)
 
-;; `mevedel-session-recovery'
-(defvar mevedel-session-recovery--mutation-cache)
-
 ;; `mevedel-structs'
 (defvar mevedel--session)
 

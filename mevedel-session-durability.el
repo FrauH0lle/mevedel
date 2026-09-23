@@ -275,9 +275,10 @@ mutation lookups repeat across the entry points one user action reaches;
 inside this scope each is paid once.  The bindings nest: an inner
 transaction joins the outer one instead of starting fresh, and the reads
 are tolerant so the scope works before the lazily loaded modules that own
-the variables are in."
+the variables are in.  `dlet' keeps the bindings dynamic in callers that do
+not declare the variables; a lexical binding would silently share nothing."
   (declare (indent 0) (debug t))
-  `(let ((mevedel-session-durability--transaction-clock
+  `(dlet ((mevedel-session-durability--transaction-clock
           (or (bound-and-true-p mevedel-session-durability--transaction-clock)
               (list nil)))
          (mevedel-session-durability--asserted-directories
@@ -833,59 +834,94 @@ function's own."
                        (equal mevedel-session-durability--client-id
                               (plist-get expected :client-id))
                        (plist-get expected :transfer-generation))))))
-         ;; The fencing create and the predecessor reads are one program:
-         ;; the create is first, so a lost race skips the reads.
-         (results
-          (mevedel-session-control-fs-run-program
-           (cons (list :op 'create :path candidate-path
-                       :content (mevedel-session-durability--record-bytes
-                                 candidate))
-                 (mapcar (lambda (path)
-                           (list :op 'read :path path :optional t))
-                         older))))
-         (created (car results)))
-    (cond
-     ((eq 'conflict (plist-get created :status)) nil)
-     ((not (eq 'ok (plist-get created :status)))
-      (mevedel-session-control-fs-program-value created))
-     (t
-      (let ((predecessor
-             (mevedel-session-durability--head-of-records
-              (mapcar
-               (lambda (result)
-                 (and (eq 'ok (plist-get result :status))
-                      (condition-case nil
-                          (car (read-from-string
-                                (plist-get result :value)))
-                        (error nil))))
-               (cdr results)))))
-        (if (equal expected predecessor)
-            (progn
-              (setq candidate (plist-put candidate :status status))
-              ;; Settling the claim and pruning superseded generations
-              ;; share one program; a prune that fails is best-effort,
-              ;; but a failed settle write must still raise.
-              (mevedel-session-control-fs-program-value
-               (car (mevedel-session-control-fs-run-program
-                     (cons (list :op 'write :path candidate-path
-                                 :content
-                                 (mevedel-session-durability--record-bytes
+         (expected-bytes
+          ;; EXPECTED's exact bytes, when it is the newest observed
+          ;; generation and live: it is then the head exactly when those
+          ;; bytes are unchanged, so a `verify' proves it without reading
+          ;; the predecessors back.
+          (and expected observed
+               (not (eq 'aborted (plist-get expected :status)))
+               (equal expected (plist-get observed :record))
+               (eql (plist-get expected :generation) (1- generation))
+               (plist-get observed :bytes)))
+         (settle
+          (lambda ()
+            (setq candidate (plist-put candidate :status status))
+            ;; Settling the claim and pruning superseded generations share
+            ;; one program; a prune that fails is best-effort, but a failed
+            ;; settle write must still raise.
+            (cons (list :op 'write :path candidate-path
+                        :content (mevedel-session-durability--record-bytes
                                   candidate))
-                           (mapcar (lambda (path)
-                                     (list :op 'delete-file :path path
-                                           :optional t))
-                                   older)))))
-              candidate)
-          (setq candidate (plist-put candidate :status 'aborted))
+                  (mapcar (lambda (path)
+                            (list :op 'delete-file :path path :optional t))
+                          older))))
+         (abort
+          (lambda ()
+            (setq candidate (plist-put candidate :status 'aborted))
+            (mevedel-session-control-fs-program-value
+             (car (mevedel-session-control-fs-run-program
+                   (list (list :op 'write :path candidate-path
+                               :content
+                               (mevedel-session-durability--record-bytes
+                                candidate))
+                         (list :op 'delete-file :path candidate-path
+                               :optional t)))))
+            nil))
+         (create (list :op 'create :path candidate-path
+                       :content (mevedel-session-durability--record-bytes
+                                 candidate))))
+    (if expected-bytes
+        ;; Fence, prove, settle and prune in one program.  A failed proof
+        ;; stops it before the settle write, leaving the claim to abort.
+        (let* ((results
+                (mevedel-session-control-fs-run-program
+                 (append (list create
+                               (list :op 'verify
+                                     :path (mevedel-session-durability--generation-path
+                                            directory (plist-get expected :generation))
+                                     :content expected-bytes))
+                         (funcall settle))))
+               (created (nth 0 results))
+               (proved (nth 1 results)))
+          (cond
+           ((eq 'conflict (plist-get created :status)) nil)
+           ((not (eq 'ok (plist-get created :status)))
+            (mevedel-session-control-fs-program-value created))
+           ((not (eq 'ok (plist-get proved :status)))
+            (if (memq (plist-get proved :status) '(mismatch absent))
+                (funcall abort)
+              (mevedel-session-control-fs-program-value proved)))
+           (t
+            (mevedel-session-control-fs-program-value (nth 2 results))
+            candidate)))
+      ;; The fencing create and the predecessor reads are one program: the
+      ;; create is first, so a lost race skips the reads.
+      (let* ((results
+              (mevedel-session-control-fs-run-program
+               (cons create
+                     (mapcar (lambda (path)
+                               (list :op 'read :path path :optional t))
+                             older))))
+             (created (car results)))
+        (cond
+         ((eq 'conflict (plist-get created :status)) nil)
+         ((not (eq 'ok (plist-get created :status)))
+          (mevedel-session-control-fs-program-value created))
+         ((equal expected
+                 (mevedel-session-durability--head-of-records
+                  (mapcar
+                   (lambda (result)
+                     (and (eq 'ok (plist-get result :status))
+                          (condition-case nil
+                              (car (read-from-string
+                                    (plist-get result :value)))
+                            (error nil))))
+                   (cdr results))))
           (mevedel-session-control-fs-program-value
-           (car (mevedel-session-control-fs-run-program
-                 (list (list :op 'write :path candidate-path
-                             :content
-                             (mevedel-session-durability--record-bytes
-                              candidate))
-                       (list :op 'delete-file :path candidate-path
-                             :optional t)))))
-          nil))))))
+           (car (mevedel-session-control-fs-run-program (funcall settle))))
+          candidate)
+         (t (funcall abort)))))))
 
 (defun mevedel-session-durability--owned-lease-record-p
     (lease directory &optional now)

@@ -101,9 +101,6 @@
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
-;; `mevedel-session-recovery'
-(defvar mevedel-session-recovery--mutation-cache)
-
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-parse-slash-line
                   "mevedel-skills-ui" (text))

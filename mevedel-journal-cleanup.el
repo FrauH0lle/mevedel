@@ -182,8 +182,8 @@ evidence."
 (defun mevedel-journal-cleanup--protected-p (root entry)
   "Return non-nil when ENTRY retains pending capture or pinned review evidence."
   (let ((capture (file-name-concat (mevedel-journal-store-state-directory root) "captures" (plist-get entry :capture-id))))
-    (or (and (mevedel-session-control-fs-path-exists-p capture)
-             (not (mevedel-session-control-fs-path-exists-p (file-name-concat capture "retired"))))
+    (or (equal '(t nil) (mevedel-session-control-fs-paths-exist
+                         (list capture (file-name-concat capture "retired"))))
         (mevedel-session-control-fs-list-directory
          (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins" (plist-get entry :id))
          "\\`[^.]"))))
