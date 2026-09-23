@@ -374,6 +374,16 @@ directive being processed.  Return the new request struct."
        :sandbox-mode (mevedel-sandbox-mode-effective session)))
     request))
 
+(defun mevedel-request-call-owned (request buffer function &rest args)
+  "Call FUNCTION with ARGS in BUFFER while REQUEST still owns it.
+Ignore delivery to a dead buffer, a cancelled request, or a replacement owner."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and (eq request mevedel--current-request)
+                 (or (null request)
+                     (not (mevedel-request-cancelled-p request))))
+        (apply function args)))))
+
 (defun mevedel-request-cancel (request &optional abort-plan-approval)
   "Cancel REQUEST terminally and drain its owned pending interactions.
 Queued permission prompts are swept only for REQUEST's identity.  Plan

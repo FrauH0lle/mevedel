@@ -788,7 +788,8 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
               (overlay-buffer directive)))
         cleanup-chat-buffer cleanup-record cleanup-prior-state
         cleanup-request-context-set-p cleanup-request-reserved-p
-        cleanup-turn-start cleanup-mode-applied-p cleanup-planning-session)
+        cleanup-turn-start cleanup-mode-applied-p cleanup-planning-session
+        reserved-request)
     (condition-case err
         (let* ((model-policy (or (plist-get options :model-policy)
                                  (mevedel--directive-model-policy directive)))
@@ -827,7 +828,6 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		     (mevedel--submitted-subdirectives directive)))
                execution-session-id
                reserved-turn
-               reserved-request
                response-start
                settled-p
                (callback-fn
@@ -1000,7 +1000,8 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                       (marker-position cleanup-turn-start))
              (let ((inhibit-read-only t))
                (delete-region cleanup-turn-start (point-max))))
-           (when cleanup-request-reserved-p
+           (when (and cleanup-request-reserved-p
+                      (eq reserved-request mevedel--current-request))
              (condition-case cleanup-error
                  (mevedel-request-end)
                (error

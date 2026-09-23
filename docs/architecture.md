@@ -392,6 +392,13 @@ refresh live row details without creating transcript state.
 
 ## gptel integration
 
+Request admission captures the owning request identity. Late fork-skill and
+review preparation/results are ignored after that identity is cancelled,
+replaced, or its buffer dies. Synthetic results keep their original identity
+through post-response hooks. Failed send startup and directive rollback end only
+their own request; nested replacement requests remain active. Interrupted agent
+startup uses the same rollback as provider errors.
+
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `gptel--known-tools`. Presets use exact declared names and inherit in parent
 order (later parents win, then the child). Ordinary preset keys resolve to

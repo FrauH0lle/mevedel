@@ -7,6 +7,8 @@
 
 (require 'mevedel)
 (require 'mevedel-presets)
+(require 'mevedel-review)
+(require 'mevedel-view)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -364,6 +366,220 @@
       (when (buffer-live-p source) (kill-buffer source))
       (mevedel-workspace-clear-registry)
       (delete-directory root t))))
+
+
+(mevedel-deftest mevedel-request-call-owned (:quiet t)
+  ,test
+  (test)
+  :doc "callbacks run in their buffer and ignore cancelled dead or replaced owners"
+  (mevedel-turn-ownership-test--with-session
+    (should (eq buffer (mevedel-request-call-owned request buffer #'current-buffer)))
+    (should (eq 'done (mevedel-request-call-owned request buffer #'identity 'done)))
+    (should-error (mevedel-request-call-owned request buffer #'error "Callback failed"))
+    (setf (mevedel-request-cancelled-p request) t)
+    (mevedel-request-call-owned request buffer #'ert-fail "Cancelled callback ran")
+    (setf (mevedel-request-cancelled-p request) nil)
+    (let ((replacement (mevedel-request-begin session)))
+      (mevedel-request-call-owned request buffer #'ert-fail "Stale callback ran")
+      (should (eq replacement mevedel--current-request)))
+    (kill-buffer buffer)
+    (mevedel-request-call-owned request buffer #'ert-fail "Dead callback ran")))
+
+(mevedel-deftest mevedel-view--forward-input-now/ownership (:quiet t)
+  ,test
+  (test)
+  :doc "startup cleanup keeps the first FSM and cannot end a nested replacement"
+  (dolist (replace '(send summary))
+    (dolist (failure '(error quit))
+      (mevedel-turn-ownership-test--with-session
+        (mevedel-request-end)
+        (mevedel-view-test--with-buffers
+          (setf (mevedel-session-root-buffer session) data-buf)
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session mevedel--workspace workspace
+                        default-directory (file-name-as-directory root)))
+          (let (replacement caught)
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (let ((fsm (gptel-make-fsm :info (list :buffer data-buf))))
+                           (funcall (cadr (assq 'WAIT gptel-send--handlers)) fsm)
+                           (plist-put (gptel-fsm-info fsm) :mevedel-request
+                                      (mevedel-request-begin session)))
+                         (when (eq replace 'send)
+                           (setq replacement (mevedel-request-begin session))
+                           (funcall
+                            (cadr (assq 'WAIT gptel-send--handlers))
+                            (gptel-make-fsm
+                             :info (list :buffer data-buf :mevedel-request replacement))))
+                         (signal failure '("Injected send failure"))))
+                      ((symbol-function 'mevedel-view--append-request-summary)
+                       (lambda (&rest _)
+                         (should (eq replace 'summary))
+                         (setq replacement (mevedel-request-begin session)))))
+              (with-current-buffer view-buf
+                (condition-case err
+                    (mevedel-view--forward-input-now "Inspect safely")
+                  ((error quit) (setq caught err)))))
+            (should (eq failure (car caught)))
+            (should replacement)
+            (should (eq replacement (buffer-local-value 'mevedel--current-request data-buf)))
+            (should-not (mevedel-request-cancelled-p replacement))))))))
+
+(mevedel-deftest mevedel-view--dispatch-prepared-outcome/ownership (:quiet t)
+  ,test
+  (test)
+  :doc "fork delivery after replacement leaves the newer transcript and draft alone"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (mevedel-view-test--with-buffers
+      (setf (mevedel-session-root-buffer session) data-buf)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session mevedel--workspace workspace
+                    default-directory (file-name-as-directory root)))
+      (let (callback replacement before)
+        (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
+                   (lambda (_outcome fn &rest _) (setq callback fn))))
+          (with-current-buffer view-buf
+            (mevedel-view--dispatch-prepared-outcome
+             (mevedel-prompt-submission-create
+              :display-text "$forker inspect"
+              :outcome
+              (list :model-input "Inspect" :transcript-input "Inspect"
+                    :hook-input "Inspect" :fork-outcome
+                    (list :skill (mevedel-skill--create :name "forker"))))
+             data-buf)))
+        (should callback)
+        (with-current-buffer data-buf
+          (setq replacement (mevedel-request-begin session)
+                before (buffer-string)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "> Keep this draft\nand its second line"))
+        (funcall callback '(:status ok :kind fork :result "Late answer"))
+        (funcall callback '(:status error :message "Late error"))
+        (should (eq replacement (buffer-local-value 'mevedel--current-request data-buf)))
+        (with-current-buffer data-buf (should (equal before (buffer-string))))
+        (with-current-buffer view-buf
+          (should (equal "> Keep this draft\nand its second line"
+                         (mevedel-view--input-text))))))))
+
+(mevedel-deftest mevedel-review--run-task/ownership (:quiet t)
+  ,test
+  (test)
+  :doc "late review preparation and results cannot reach a replacement owner"
+  (dolist (stage '(preparation result))
+    (mevedel-turn-ownership-test--with-session
+      (let (prepare result spawned delivered)
+        (cl-letf (((symbol-function 'mevedel-review--write-target-package)
+                   (lambda (_cwd _target callback) (setq prepare callback) #'ignore))
+                  ((symbol-function 'mevedel-agent-resolve-role)
+                   (lambda (&rest _) (mevedel-agent--create :name "reviewer")))
+                  ((symbol-function 'mevedel-agent-control-spawn)
+                   (lambda (_session _name _message _prepared &rest keys)
+                     (setq spawned t result (plist-get keys :result-handler))
+                     #'ignore)))
+          (mevedel-review--run-task
+           "Inspect" "Review" (lambda (_) (setq delivered t))
+           nil nil nil (and (eq stage 'preparation) root)
+           (and (eq stage 'preparation) 'target))
+          ;; Replace without draining cancellers to exercise the identity fence
+          ;; independently of cooperative cancellation at the sender.
+          (setq-local mevedel--current-request (mevedel-request--create :session session))
+          (if (eq stage 'preparation)
+              (progn (should prepare) (funcall prepare nil) (should-not spawned))
+            (should result)
+            (funcall result '(:outcome completed :payload "Late answer")))
+          (should-not delivered))))))
+
+(mevedel-deftest mevedel-review--record-direct-turn/ownership (:quiet t)
+  ,test
+  (test)
+  :doc "review insertion cannot dispatch under a replacement admitted by a hook"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (let (replacement dispatched)
+      (cl-letf (((symbol-function 'mevedel--insert-user-turn)
+                 (lambda (_display)
+                   (insert "User prompt")
+                   (setq replacement (mevedel-request-begin session)))))
+        (mevedel-review--record-direct-turn
+         "Inspect" buffer (lambda () (setq dispatched t))))
+      (should replacement)
+      (should (eq replacement mevedel--current-request))
+      (should-not dispatched))))
+
+(mevedel-deftest mevedel-skills-input-insert-fork-result (:quiet t)
+  ,test
+  (test)
+  :doc "fork result hooks cannot settle a replacement request"
+  (mevedel-turn-ownership-test--with-session
+    (let* (replacement
+           (gptel-post-response-functions
+            (list (lambda (&rest _)
+                    (setq replacement (mevedel-request-begin session))))))
+      (mevedel-skills-input-insert-fork-result '(:result "Answer"))
+      (should replacement)
+      (should (eq replacement mevedel--current-request))
+      (should-not (mevedel-request-cancelled-p replacement))
+      (should (= 0 (or (mevedel-session-turn-count session) 0))))))
+
+(mevedel-deftest mevedel--process-directive/ownership (:quiet t)
+  ,test
+  (test)
+  :doc "directive admission rollback does not end a replacement request"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (let ((file (file-name-concat root "source.txt")) source replacement)
+      (with-temp-file file (insert "source\n"))
+      (setq source (find-file-noselect file))
+      (unwind-protect
+          (with-current-buffer source
+            (setq-local mevedel--workspace workspace)
+            (let ((directive
+                   (mevedel--create-directive-in
+                    source (point-min) (1- (point-max)) nil "Change it")))
+              (overlay-put directive 'mevedel-directive-action 'implement)
+              (cl-letf (((symbol-function 'mevedel--directive-session-buffer)
+                         (lambda (&rest _) (cons buffer nil)))
+                        ((symbol-function 'save-some-buffers) #'ignore)
+                        ((symbol-function 'display-buffer) #'ignore)
+                        ((symbol-function 'gptel--apply-preset) #'ignore)
+                        ((symbol-function 'gptel-request)
+                         (lambda (&rest _)
+                           (setq replacement (mevedel-request-begin session))
+                           (error "Injected directive startup failure"))))
+                (should-error
+                 (mevedel--process-directive
+                  directive '(:system "test")
+                  #'mevedel--implement-directive-prompt nil))))
+            (should replacement)
+            (should (eq replacement (buffer-local-value 'mevedel--current-request buffer)))
+            (should-not (mevedel-request-cancelled-p replacement)))
+        (when (buffer-live-p source) (kill-buffer source))))))
+
+(mevedel-deftest mevedel-agent-runtime-dispatch/ownership (:quiet t)
+  ,test
+  (test)
+  :doc "interrupted provider startup rolls back its unpublished child buffer"
+  (mevedel-turn-ownership-test--with-session
+    (setq-local mevedel--workspace workspace)
+    (let* ((agent (mevedel-agent--create :name "worker" :frozen-p t))
+           (configuration (mevedel-agent-configuration--create :agent agent))
+           child caught)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+                     (lambda (_callback _role _description _invocation child-buffer)
+                       (setq child child-buffer)
+                       (signal 'quit nil))))
+            (condition-case err
+                (mevedel-agent-runtime-dispatch
+                 agent "Work" "Inspect" :path "/root/failure"
+                 :frozen-configuration configuration :prepared-turn '(:prompt "Inspect"))
+              (quit (setq caught err)))
+            (should (eq 'quit (car caught)))
+            (should child)
+            (should-not (buffer-live-p child)))
+        (when (buffer-live-p child) (kill-buffer child))))))
 
 (provide 'test-mevedel-turn-ownership)
 ;;; test-mevedel-turn-ownership.el ends here
