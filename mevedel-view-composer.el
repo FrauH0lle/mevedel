@@ -912,13 +912,32 @@ late callback accidentally inserts transcript content below the prompt."
             (insert text)))))
     result))
 
+(defun mevedel-view--render-anchor-identity (pos)
+  "Return POS's source start, section role and child discriminator.
+Disclosure keys keep grouped rows' standalone roles and distinguish
+compound children sharing source coordinates.  Their content hash or
+in-flight token is not part of reader identity: it can change as the
+section grows or settles."
+  (when-let* ((source (get-text-property pos 'mevedel-view-source))
+              (start (mevedel-view-disclosure-source-start source)))
+    (let ((key (get-text-property pos 'mevedel-view-source-key)))
+      (if (eq (car-safe key) 'source)
+          (list start (cadr key) (nthcdr 4 key))
+        (list start (get-text-property pos 'mevedel-view-type) nil)))))
+
+(defun mevedel-view--render-anchor-run-end (pos limit)
+  "Return the next source or section boundary after POS, up to LIMIT."
+  (min (next-single-property-change pos 'mevedel-view-source nil limit)
+       (next-single-property-change pos 'mevedel-view-type nil limit)
+       (next-single-property-change pos 'mevedel-view-source-key nil limit)))
+
 (defun mevedel-view--position-render-anchor (pos)
   "Return a semantic anchor for POS that survives a re-render, or nil.
 
 Redraws delete and re-insert view text, so a raw buffer position saved
 across one lands in different content whenever lengths shift above or
 around it.  A managed fragment (zone namespace, fragment id, offset
-into the fragment) or the transcript source map (data-buffer position
+into the fragment) or the transcript source map (section identity
 plus offset into its rendered run) identifies the same content after
 the redraw.  Composer positions are handled by input offsets and
 return nil here."
@@ -932,29 +951,21 @@ return nil here."
              (plist-get bounds :namespace)
              (plist-get bounds :id)
              (- pos (plist-get bounds :start))))
-     (when-let* ((source (get-text-property pos 'mevedel-view-source))
-                 ((consp source))
-                 (data-start (mevedel-view-disclosure-source-start source)))
-       (let ((run-start (previous-single-property-change
-                         (min (1+ pos) (point-max))
-                         'mevedel-view-source nil (point-min)))
-             (nth 0)
-             (scan (point-min)))
-         ;; Several runs can share one source start -- a fold header and
-         ;; its body, or a turn whose first segment starts the turn.  The
-         ;; ordinal picks the same run back out after the redraw instead
-         ;; of the first one that happens to match.
-         (while (< scan run-start)
-           (let ((next (or (next-single-property-change
-                            scan 'mevedel-view-source nil run-start)
-                           run-start))
-                 (other (get-text-property scan 'mevedel-view-source)))
-             (when (and (consp other)
-                        (eql (mevedel-view-disclosure-source-start other)
-                             data-start))
-               (setq nth (1+ nth)))
+     (when-let* ((identity (mevedel-view--render-anchor-identity pos)))
+       (let ((nth 0)
+             (scan (point-min))
+             anchor)
+         ;; Count only runs of this section.  A retained-tail render can
+         ;; give a neighboring separator the same source start; it must
+         ;; not shift a group header or its first child's ordinal.
+         (while (<= scan pos)
+           (let ((next (mevedel-view--render-anchor-run-end scan (point-max))))
+             (if (< pos next)
+                 (setq anchor (list 'source identity nth (- pos scan)))
+               (when (equal identity (mevedel-view--render-anchor-identity scan))
+                 (setq nth (1+ nth))))
              (setq scan next)))
-         (list 'source data-start nth (- pos run-start)))))))
+         anchor)))))
 
 (defun mevedel-view--render-anchor-position (anchor)
   "Return the buffer position ANCHOR identifies after a redraw, or nil.
@@ -968,7 +979,7 @@ into a neighbor."
        (min (max (plist-get bounds :start)
                  (1- (plist-get bounds :end)))
             (+ (plist-get bounds :start) offset))))
-    (`(source ,data-start ,nth ,offset)
+    (`(source ,identity ,nth ,offset)
      (let ((limit (if (and (markerp mevedel-view--input-marker)
                            (marker-buffer mevedel-view--input-marker))
                      (mevedel-view--input-start)
@@ -977,13 +988,8 @@ into a neighbor."
            (count 0)
            found)
        (while (and (not found) (< pos limit))
-         (let ((next (or (next-single-property-change
-                          pos 'mevedel-view-source nil limit)
-                         limit))
-               (source (get-text-property pos 'mevedel-view-source)))
-           (when (and (consp source)
-                      (eql (mevedel-view-disclosure-source-start source)
-                           data-start))
+         (let ((next (mevedel-view--render-anchor-run-end pos limit)))
+           (when (equal identity (mevedel-view--render-anchor-identity pos))
              (if (= count nth)
                  (setq found (min (max pos (1- next)) (+ pos offset)))
                (setq count (1+ count))))
