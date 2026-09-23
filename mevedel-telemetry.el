@@ -160,7 +160,7 @@ profile file larger and cost a little more per sample."
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
     :artifacts-local :attempt-generation :backend :baseline-marker-position
     :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
-    :budget-kind :budget-status :buffer-chars-model-visible :buffer-chars-total
+    :budget-kind :budget-status :buffer-chars-total
     :buffers :cache-identity :cached-tokens :call-source :capture-id :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
     :command-class :command-hash :context :context-chars
@@ -456,8 +456,16 @@ supplies them itself."
         (if (mevedel-telemetry--remote-p session)
             (mevedel-session-publication-append-diagnostic
              session file content)
-          (make-directory (file-name-directory file) t)
-          (write-region content nil file t 'silent)
+          ;; Appends run for every event on the hot path.  The directory
+          ;; normally exists, and a pinned coding system avoids asking the
+          ;; ambient buffer how to encode each line; together they were
+          ;; nine tenths of an append.
+          (let ((coding-system-for-write 'utf-8-unix))
+            (condition-case nil
+                (write-region content nil file t 'silent)
+              (file-missing
+               (make-directory (file-name-directory file) t)
+               (write-region content nil file t 'silent))))
           t)
       (error
        (message "mevedel: telemetry persistence failed: %s"

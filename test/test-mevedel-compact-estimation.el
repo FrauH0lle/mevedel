@@ -308,7 +308,11 @@
                              :tokens-full '(:input 10
                                             :cached 5
                                             :output 7)))))
-      (mevedel-compact-estimation-record-token-baseline fsm)
+      (cl-letf (((symbol-function 'mevedel-compact-estimation-estimate-buffer-tokens)
+                 (lambda (_) (error "Valid provider usage rescanned the transcript"))))
+        (mevedel-compact-estimation-record-token-baseline fsm))
+      (should-not (plist-get mevedel-compact-estimation--known-token-baseline
+                             :fresh-visible-prompt-estimate))
       (should (= (plist-get mevedel-compact-estimation--known-token-baseline :tokens) 22))
       (should (eq (plist-get mevedel-compact-estimation--known-token-baseline :source)
                   'provider-context))
@@ -460,12 +464,35 @@ missing or zero prompt-side usage cannot become the active baseline"
       (mevedel-compact-estimation-record-token-baseline fsm)
       (should (null mevedel-compact-estimation--known-token-baseline)))))
 
-(mevedel-deftest mevedel-compact-estimation-model-visible-chars
-  (:doc "counts only model-visible characters outside file-local variables")
+(mevedel-deftest mevedel-compact-estimation-model-visible-chars ()
+  ,test
+  (test)
+  :doc "counts only model-visible characters outside file-local variables"
   (with-temp-buffer
     (insert "abcdWXYZ")
     (put-text-property 5 9 'gptel 'ignore)
-    (should (= 4 (mevedel-compact-estimation-model-visible-chars)))))
+    (should (= 4 (mevedel-compact-estimation-model-visible-chars))))
+
+  :doc "counts reminder records in their wrapped, newline-joined provider shape"
+  (with-temp-buffer
+    (insert "ab")
+    ;; Adjacent records share one audit property run.
+    (insert (mevedel--format-hook-audit-record
+             '(:type injected-reminders
+               :items ((:type fixture :body "keep")
+                       (:type fixture :body "abc")))))
+    (insert (mevedel--format-hook-audit-record
+             '(:type injected-reminders :items ((:type fixture :body "z")))))
+    (insert (mevedel--format-hook-audit-record
+             '(:type injected-reminders :items nil)))
+    (insert (mevedel--format-hook-audit-record
+             (list :type 'provider-tool-batch :messages (make-string 500 ?x))))
+    (should
+     (= (+ 2
+           (length (concat "<system-reminder>\nkeep\n</system-reminder>\n"
+                           "<system-reminder>\nabc\n</system-reminder>"))
+           (length "<system-reminder>\nz\n</system-reminder>"))
+        (mevedel-compact-estimation-model-visible-chars)))))
 
 (mevedel-deftest mevedel-compact-estimation-current-request-id
   (:doc "returns only a live mevedel request identifier")
@@ -475,7 +502,7 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (equal "request-test" (mevedel-compact-estimation-current-request-id))))))
 
 (mevedel-deftest mevedel-compact-estimation-telemetry-inputs
-  (:doc "captures provider counts, thresholds, marker, and visible size")
+  (:doc "captures provider counts, thresholds, marker, and size without rescanning")
   (with-temp-buffer
     (insert "abcdefgh")
     (put-text-property 5 9 'gptel 'ignore)
@@ -497,8 +524,8 @@ missing or zero prompt-side usage cannot become the active baseline"
                 ((symbol-function 'mevedel-compact-estimation-policy-threshold-tokens)
                  (lambda (policy)
                    (if (eq (plist-get policy :kind) 'summary) 80 90)))
-                ((symbol-function 'mevedel-compact-estimation-estimate-buffer-tokens)
-                 (lambda (_) 2)))
+                ((symbol-function 'mevedel-compact-estimation-model-visible-chars)
+                 (lambda () (error "Threshold telemetry rescanned the transcript"))))
         (let ((facts (mevedel-compact-estimation-telemetry-inputs
                       25 (list :model target-model :kind 'target))))
           (should (= 21 (plist-get facts :provider-context-tokens)))
@@ -513,11 +540,11 @@ missing or zero prompt-side usage cannot become the active baseline"
           (should (= 900 (plist-get facts :provider-context-window)))
           (should (eq 'provider-context (plist-get facts :chosen-source)))
           (should (eq target-model (plist-get facts :target-model)))
-          (should (= 2 (plist-get facts :fresh-visible-prompt-estimate)))
+          (should-not (plist-member facts :fresh-visible-prompt-estimate))
           (should (= 80 (plist-get facts :threshold)))
           (should (= 1000 (plist-get facts :model-context-window)))
           (should (= 8 (plist-get facts :buffer-chars-total)))
-          (should (= 4 (plist-get facts :buffer-chars-model-visible))))))))
+          (should-not (plist-member facts :buffer-chars-model-visible)))))))
 
 (mevedel-deftest mevedel-compact-estimation-workload-policy ()
   ,test

@@ -151,8 +151,6 @@ count never becomes the baseline for the chat buffer."
               (mevedel-compact-estimation--token-usage-count provider-usage))
              (cumulative-count
               (mevedel-compact-estimation--token-usage-count cumulative-usage))
-             (fresh-estimate
-              (mevedel-compact-estimation-estimate-buffer-tokens chat-buffer))
              (model (or (plist-get info :model) gptel-model))
              (context-window
               (mevedel-model-effective-context-window model))
@@ -165,6 +163,12 @@ count never becomes the baseline for the chat buffer."
              (source (if (eq provider-status 'valid)
                          'provider-context
                        'fresh-estimate))
+             ;; A whole-transcript scan per response is only worth paying
+             ;; when it becomes the baseline.
+             (fresh-estimate
+              (and (eq source 'fresh-estimate)
+                   (mevedel-compact-estimation-estimate-buffer-tokens
+                    chat-buffer)))
              (chosen (if (eq source 'provider-context)
                          provider-count
                        fresh-estimate))
@@ -225,6 +229,21 @@ excludes file-local variables block."
             4))
     (/ (mevedel-compact-estimation-model-visible-chars) 4)))
 
+(defconst mevedel-compact-estimation--reminder-wrapper-chars
+  (length "<system-reminder>\n\n</system-reminder>")
+  "Characters the provider wrapper adds around one reminder body.")
+
+(defun mevedel-compact-estimation--reminder-chars (items)
+  "Return the provider-visible length of reminder ITEMS.
+Each body is sent wrapped in a system-reminder element and the elements are
+joined by newlines; count that shape without building it."
+  (let ((total (max 0 (1- (length items)))))
+    (dolist (entry items total)
+      (let ((body (plist-get entry :body)))
+        (cl-incf total
+                 (+ mevedel-compact-estimation--reminder-wrapper-chars
+                    (length (if (stringp body) body (format "%s" body)))))))))
+
 (defun mevedel-compact-estimation-model-visible-chars ()
   "Return model-visible character count in the current buffer."
   (let ((pos (point-min))
@@ -236,15 +255,11 @@ excludes file-local variables block."
         (when (or (null flv-start) (< pos flv-start))
           (pcase (get-text-property pos 'gptel)
             ('mevedel-hook-audit
-             (dolist (record (mevedel-transcript-audit-records
-                              (buffer-substring pos end) 'injected-reminders))
+             (dolist (span (mevedel-transcript-audit-buffer-spans
+                            'injected-reminders pos end))
                (cl-incf total
-                        (length
-                         (mapconcat
-                          (lambda (entry)
-                            (format "<system-reminder>\n%s\n</system-reminder>"
-                                    (plist-get entry :body)))
-                          (plist-get record :items) "\n")))))
+                        (mevedel-compact-estimation--reminder-chars
+                         (plist-get (plist-get span :record) :items)))))
             ((or 'ignore 'mevedel-render-data))
             (_ (cl-incf total (- end pos)))))
         (setq pos next)))
@@ -273,8 +288,6 @@ excludes file-local variables block."
      :provider-context-status (plist-get baseline :provider-context-status)
      :chosen-active-context-tokens estimate
      :chosen-source (or (plist-get baseline :source) 'fresh-estimate)
-     :fresh-visible-prompt-estimate
-     (mevedel-compact-estimation-estimate-buffer-tokens (current-buffer))
      :target-model (plist-get target-policy :model)
      :model-context-window
      (mevedel-model-context-window (plist-get target-policy :model))
@@ -284,8 +297,7 @@ excludes file-local variables block."
      :baseline-marker-position
      (and (integer-or-marker-p position)
           (if (markerp position) (marker-position position) position))
-     :buffer-chars-total (buffer-size)
-     :buffer-chars-model-visible (mevedel-compact-estimation-model-visible-chars))))
+     :buffer-chars-total (buffer-size))))
 
 (defun mevedel-compact-estimation-admission (estimate target-policy)
   "Return compaction admission for ESTIMATE and TARGET-POLICY, or nil."

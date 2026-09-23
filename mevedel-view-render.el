@@ -199,6 +199,8 @@
 (defvar mevedel-transcript--tool-block-index)
 
 ;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-buffer-only-p
+                  "mevedel-transcript-audit" (start end))
 (declare-function mevedel-transcript-audit-guest-prompts
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-audit-only-p
@@ -2934,8 +2936,7 @@ Completed blocks are cached globally; see
 (defun mevedel-view--hook-audit-only-segment-p (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hook audit data."
   (with-current-buffer data-buf
-    (mevedel-transcript-audit-only-p
-     (buffer-substring seg-start seg-end))))
+    (mevedel-transcript-audit-buffer-only-p seg-start seg-end)))
 
 (defun mevedel-view--system-reminder-body-from-text (text)
   "Return generated system reminder body from TEXT, or nil.

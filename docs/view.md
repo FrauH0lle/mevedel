@@ -1230,7 +1230,12 @@ repeated scans of unrelated completed history. The index is keyed by buffer, tex
 property modification tick, and accessible range. Audit decoding caches valid
 and invalid results by encoded text, while provenance and trust checks remain
 in their callers. Both caches expire when the projection returns or fails;
-nested projections receive their own caches.
+nested projections receive their own caches. A scan for one record type first
+decodes only the payload's leading base64 block: a record printed with its
+`:type` first settles that type, so other payloads are skipped without being
+copied or decoded, and any other head falls back to the full read. Audit-only
+segment checks run over the data buffer region rather than a copy, and settle
+visible text in the gaps before decoding any block.
 
 `mevedel-view-disclosure.el` keys source-backed disclosure state from
 data-buffer coordinates and stable source anchors, not view-buffer positions.

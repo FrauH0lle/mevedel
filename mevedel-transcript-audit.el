@@ -96,6 +96,45 @@ Trust checks always belong to callers; cached records convey no authority."
       (puthash text entry mevedel-transcript-audit--decode-cache))
     (cdr entry)))
 
+(defun mevedel-transcript-audit--payload-type (object start end)
+  "Return (t . TYPE) when the payload START..END in OBJECT names its TYPE.
+OBJECT is a string, or nil for the current buffer.  Only the first base64
+block is decoded: a printed record that begins with its `:type' settles what
+`plist-get' would answer for the whole record, so a scan for another type
+can skip the payload without copying or decoding it.  Return nil when the
+head does not settle the type; the caller then reads the whole payload."
+  (let* ((start (if object
+                    (or (string-match-p "[^ \t\r\n]" object start) end)
+                  (save-excursion
+                    (goto-char start)
+                    (skip-chars-forward " \t\r\n" end)
+                    (point))))
+         (count (* 4 (/ (min 64 (max 0 (- end start))) 4)))
+         (head (and (> count 0)
+                    (ignore-errors
+                      (base64-decode-string
+                       (if object
+                           (substring-no-properties object start (+ start count))
+                         (buffer-substring-no-properties
+                          start (+ start count))))))))
+    (when (and head (string-match "\\`(:type \\([-a-z0-9]+\\)[ )]" head))
+      (cons t (intern (match-string 1 head))))))
+
+(defun mevedel-transcript-audit--typed-record (object start end type)
+  "Return the record in payload START..END of OBJECT when it has TYPE.
+OBJECT is a string, or nil for the current buffer.  With TYPE nil return
+any valid record."
+  (unless (when-let* ((type type)
+                      (named (mevedel-transcript-audit--payload-type
+                              object start end)))
+            (not (eq (cdr named) type)))
+    (when-let* ((record (mevedel--read-hook-audit-record
+                         (if object
+                             (substring-no-properties object start end)
+                           (buffer-substring-no-properties start end))))
+                ((or (null type) (eq (plist-get record :type) type))))
+      record)))
+
 (defun mevedel-transcript-audit--decode (text)
   "Read one encoded hook audit record from TEXT, or nil."
   (condition-case nil
@@ -136,12 +175,11 @@ attributes is the nearest user turn ending at or before POSITION."
                 (record-start (point)))
             (when (and (mevedel-transcript-audit-trusted-range-p start record-start)
                        (search-forward mevedel--hook-audit-close nil t))
-              (when-let* (((mevedel-transcript-audit-trusted-range-p
+              (when-let* ((record-end (match-beginning 0))
+                          ((mevedel-transcript-audit-trusted-range-p
                             start (point)))
-                          (record (mevedel--read-hook-audit-record
-                                   (buffer-substring-no-properties
-                                    record-start (match-beginning 0))))
-                          ((eq (plist-get record :type) 'guest-prompt))
+                          (record (mevedel-transcript-audit--typed-record
+                                   nil record-start record-end 'guest-prompt))
                           ((stringp (plist-get record :name))))
                 (push (cons start record) result)))))
         (nreverse result)))))
@@ -165,6 +203,34 @@ Edited or mismatched prompts remain fully visible.  This never changes TEXT."
                                "Selection" "Whole item")
                            (or (plist-get shared :revision) "?"))))))
 
+(defun mevedel-transcript-audit--string-ranges (text)
+  "Return trusted audit block ranges in TEXT without decoding them.
+Each range is (OPEN RECORD-START CLOSE END)."
+  (let ((open-length (length mevedel--hook-audit-open))
+        (close-length (length mevedel--hook-audit-close))
+        (search 0)
+        open ranges)
+    (while (setq open (string-search mevedel--hook-audit-open text search))
+      (let* ((record-start (+ open open-length))
+             ;; A quoted opener must not consume a later real record's close.
+             (close (and (mevedel-transcript-audit-trusted-range-p
+                          open record-start text)
+                         (string-search mevedel--hook-audit-close
+                                        text record-start))))
+        (if (not close)
+            (setq search record-start)
+          (let ((end (+ close close-length)))
+            (when (mevedel-transcript-audit-trusted-range-p open end text)
+              (push (list open record-start close end) ranges))
+            (setq search end)))))
+    (nreverse ranges)))
+
+(defun mevedel-transcript-audit--string-record (text range &optional type)
+  "Return the record TEXT encodes within trusted RANGE, or nil.
+With TYPE, return only a record of that type."
+  (mevedel-transcript-audit--typed-record
+   text (nth 1 range) (nth 2 range) type))
+
 (defun mevedel-transcript-audit-spans (text &optional type)
   "Return parsed audit spans from TEXT, optionally restricted to TYPE.
 
@@ -174,33 +240,12 @@ Scans TEXT directly: this runs per transcript segment during live
 rendering, and copying TEXT into a temporary buffer first dominated
 render allocation."
   (when (stringp text)
-    (let ((open-length (length mevedel--hook-audit-open))
-          (close-length (length mevedel--hook-audit-close))
-          (search 0)
-          open spans)
-      (while (setq open (string-search mevedel--hook-audit-open text search))
-        (let* ((record-start (+ open open-length))
-               ;; A quoted opener must not consume a later real record's close.
-               (close (and (mevedel-transcript-audit-trusted-range-p
-                            open record-start text)
-                           (string-search mevedel--hook-audit-close
-                                          text record-start))))
-          (if (not close)
-              (setq search record-start)
-            (let ((end (+ close close-length)))
-              (when-let* (((mevedel-transcript-audit-trusted-range-p
-                            open end text))
-                          (record
-                           (mevedel--read-hook-audit-record
-                            (substring-no-properties
-                             text record-start close)))
-                          ((or (null type)
-                               (eq (plist-get record :type) type))))
-                (push (list :record record
-                            :start open
-                            :end end)
-                      spans))
-              (setq search end)))))
+    (let (spans)
+      (dolist (range (mevedel-transcript-audit--string-ranges text))
+        (when-let* ((record (mevedel-transcript-audit--string-record
+                             text range type)))
+          (push (list :record record :start (nth 0 range) :end (nth 3 range))
+                spans)))
       (nreverse spans))))
 
 (defun mevedel-transcript-audit-buffer-spans (&optional type start end)
@@ -221,9 +266,8 @@ only pure decoding.  Never copy the whole transcript."
                        (search-forward mevedel--hook-audit-close nil t))
               (let ((close (match-beginning 0)) (finish (point)))
                 (when-let* (((mevedel-transcript-audit-trusted-range-p open finish))
-                            (record (mevedel--read-hook-audit-record
-                                     (buffer-substring-no-properties body close)))
-                            ((or (null type) (eq (plist-get record :type) type))))
+                            (record (mevedel-transcript-audit--typed-record
+                                     nil body close type)))
                   (push (list :record record :start open :end finish) spans))))))
         (nreverse spans)))))
 
@@ -355,18 +399,48 @@ ALLOW-OPEN is forwarded to `mevedel-transcript-directive-ranges'."
 (defun mevedel-transcript-audit-only-p (text)
   "Return non-nil when non-whitespace TEXT consists only of audit blocks."
   (when (stringp text)
-    (let ((spans (mevedel-transcript-audit-spans text))
+    (let ((ranges (mevedel-transcript-audit--string-ranges text))
           (cursor 0))
-      (and spans
+      (and ranges
+           ;; Visible text in any gap settles the answer, and an undecodable
+           ;; block only adds visible text, so decode once the gaps are blank.
            (catch 'visible
-             ;; Inspect the gaps without copying TEXT or decoding the same
-             ;; audit bodies a second time merely to remove them.
-             (dolist (span spans)
+             (dolist (range ranges)
                (when-let* ((nonblank (string-match-p "[^ \t\r\n]" text cursor))
-                           ((< nonblank (plist-get span :start))))
+                           ((< nonblank (nth 0 range))))
                  (throw 'visible nil))
-               (setq cursor (plist-get span :end)))
-             (not (string-match-p "[^ \t\r\n]" text cursor)))))))
+               (setq cursor (nth 3 range)))
+             (not (string-match-p "[^ \t\r\n]" text cursor)))
+           (cl-every (lambda (range)
+                       (mevedel-transcript-audit--string-record text range))
+                     ranges)))))
+
+(defun mevedel-transcript-audit-buffer-only-p (start end)
+  "Return non-nil when non-whitespace START..END holds only audit blocks.
+This is `mevedel-transcript-audit-only-p' for a region of the current buffer,
+without copying it."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (narrow-to-region start end)
+      (goto-char (point-min))
+      (let ((open-length (length mevedel--hook-audit-open))
+            found)
+        (catch 'visible
+          (while (progn (skip-chars-forward " \t\r\n") (not (eobp)))
+            (let* ((open (point))
+                   (body (+ open open-length)))
+              (unless (and (<= body (point-max))
+                           (search-forward mevedel--hook-audit-open body t)
+                           (mevedel-transcript-audit-trusted-range-p open body)
+                           (search-forward mevedel--hook-audit-close nil t)
+                           (mevedel-transcript-audit-trusted-range-p
+                            open (point))
+                           (mevedel-transcript-audit--typed-record
+                            nil body (match-beginning 0) nil))
+                (throw 'visible nil))
+              (setq found t)))
+          found)))))
 
 (provide 'mevedel-transcript-audit)
 

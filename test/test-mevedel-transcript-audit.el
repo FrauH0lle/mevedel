@@ -97,7 +97,111 @@
                                "<!-- /mevedel-hook-audit -->\n")
                        (substring-no-properties block)
                        "" nil))
-      (should-not (mevedel-transcript-audit-only-p text)))))
+      (should-not (mevedel-transcript-audit-only-p text))))
+
+  :doc "settles visible gaps before decoding any block"
+  (let* ((block (mevedel--format-hook-audit-record '(:type tool-context)))
+         (decode (symbol-function 'mevedel--read-hook-audit-record))
+         (calls 0))
+    (cl-letf (((symbol-function 'mevedel--read-hook-audit-record)
+               (lambda (text) (cl-incf calls) (funcall decode text))))
+      (should-not (mevedel-transcript-audit-only-p
+                   (concat block "visible" block)))
+      (should (= 0 calls))
+      (should (mevedel-transcript-audit-only-p (concat block "\n" block)))
+      (should (= 2 calls)))))
+
+(mevedel-deftest mevedel-transcript-audit-buffer-only-p ()
+  ,test
+  (test)
+  :doc "agrees with the string predicate on the same text"
+  (let ((block (mevedel--format-hook-audit-record '(:type tool-context))))
+    (dolist (text (list block
+                        (concat " \t\r\n" block "\n\t" block "\r\n")
+                        (concat "visible" block)
+                        (concat block "visible" block)
+                        (concat block "visible")
+                        (concat block "\n<!-- mevedel-hook-audit -->\ninvalid\n"
+                                "<!-- /mevedel-hook-audit -->\n")
+                        (substring-no-properties block)
+                        "   " ""))
+      (with-temp-buffer
+        (insert text)
+        (should (eq (and (mevedel-transcript-audit-only-p text) t)
+                    (and (mevedel-transcript-audit-buffer-only-p
+                          (point-min) (point-max))
+                         t))))))
+
+  :doc "judges only the requested region, even under narrowing"
+  (let ((block (mevedel--format-hook-audit-record '(:type tool-context))))
+    (with-temp-buffer
+      (insert "visible")
+      (let ((start (point)))
+        (insert block "\n")
+        (let ((end (point)))
+          (insert "more visible")
+          (narrow-to-region 1 2)
+          (should (mevedel-transcript-audit-buffer-only-p start end))
+          (should-not (mevedel-transcript-audit-buffer-only-p 1 end))
+          (should-not (mevedel-transcript-audit-buffer-only-p start (- end 3)))
+          (should (= 2 (point-max)))))))
+
+  :doc "rejects an undecodable trusted block"
+  (with-temp-buffer
+    (insert (propertize (concat "\n<!-- mevedel-hook-audit -->\ninvalid\n"
+                                "<!-- /mevedel-hook-audit -->\n")
+                        'gptel 'mevedel-hook-audit 'mevedel-hook-audit t))
+    (should-not (mevedel-transcript-audit-buffer-only-p (point-min) (point-max)))))
+
+(mevedel-deftest mevedel-transcript-audit--payload-type ()
+  ,test
+  (test)
+  :doc "names the type a record's head settles, in strings and buffers"
+  (let* ((payload (mevedel--hook-audit-record-payload
+                   '(:type fork-point :fork-point-id "a")))
+         (text (concat "\n" payload "\n")))
+    (should (equal '(t . fork-point)
+                   (mevedel-transcript-audit--payload-type text 0 (length text))))
+    (with-temp-buffer
+      (insert "x" text)
+      (should (equal '(t . fork-point)
+                     (mevedel-transcript-audit--payload-type nil 2 (point-max))))))
+
+  :doc "leaves undecided heads, other key orders, and garbage to a full read"
+  (dolist (record '((:event "PostToolUse" :type tool-context)
+                    (:type |odd\ name| :x 1)))
+    (let ((payload (mevedel--hook-audit-record-payload record)))
+      (should-not (mevedel-transcript-audit--payload-type
+                   payload 0 (length payload)))))
+  (dolist (text '("" "   " "!!!!" "bad base64 here"))
+    (should-not (mevedel-transcript-audit--payload-type text 0 (length text)))))
+
+(mevedel-deftest mevedel-transcript-audit--typed-record ()
+  ,test
+  (test)
+  :doc "skips payloads of another type without reading them"
+  (with-temp-buffer
+    (dotimes (n 3)
+      (insert (mevedel--format-hook-audit-record (list :type 'tool-context :number n))))
+    (insert (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "a")))
+    (let ((read (symbol-function 'mevedel--read-hook-audit-record))
+          (reads 0))
+      (cl-letf (((symbol-function 'mevedel--read-hook-audit-record)
+                 (lambda (text) (cl-incf reads) (funcall read text))))
+        (should (= 1 (length (mevedel-transcript-audit-buffer-spans 'fork-point))))
+        (should (= 1 reads))
+        (should (= 1 (length (mevedel-transcript-audit-spans (buffer-string) 'fork-point))))
+        (should (= 2 reads))
+        (should (= 4 (length (mevedel-transcript-audit-buffer-spans))))
+        (should (= 6 reads)))))
+
+  :doc "still finds a record whose type is not its first key"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record '(:fork-point-id "late" :type fork-point)))
+    (should (equal "late"
+                   (plist-get (plist-get (car (mevedel-transcript-audit-buffer-spans 'fork-point))
+                                         :record)
+                              :fork-point-id)))))
 
 (mevedel-deftest mevedel-transcript-directive-ranges ()
   ,test

@@ -146,7 +146,11 @@ The next request is estimated from its new prompt.
 The baseline uses gptel's latest request token plist (`info :tokens`)
 when it is present, positive, and no larger than the active model's
 context window. Missing, zero, malformed, or over-window provider usage
-falls back to a fresh chars/4 scan of the model-visible prompt.
+falls back to a fresh chars/4 scan of the model-visible prompt. That scan
+runs only for this fallback; valid provider usage records no fresh estimate.
+Threshold telemetry reports the chosen estimate and the buffer size rather than
+rescanning the transcript at every check. Reminder bodies are counted in their
+wrapped provider shape without building that text.
 `info :tokens-full` is retained only as cumulative usage telemetry; it
 is never used to decide whether to compact.
 
