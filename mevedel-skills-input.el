@@ -641,7 +641,8 @@ fork skill suppresses the main `gptel-send'; it records the retained
 agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
-  (let* ((render-data (plist-get outcome :render-data))
+  (let* ((request mevedel--current-request)
+         (render-data (plist-get outcome :render-data))
          (hook-audits (plist-get outcome :hook-audits))
          (result (or (plist-get outcome :result)
                      "Fork skill produced no result."))
@@ -654,9 +655,11 @@ observe the completed response."
       (when (bound-and-true-p mevedel--session)
         (mevedel-session-artifacts-assert-new-mutation-authority
          mevedel--session)
-        (mevedel-request-begin mevedel--session
-                               (and (boundp 'mevedel--current-directive-uuid)
-                                    mevedel--current-directive-uuid))))
+        (setq request
+              (mevedel-request-begin
+               mevedel--session
+               (and (boundp 'mevedel--current-directive-uuid)
+                    mevedel--current-directive-uuid)))))
     (goto-char (point-max))
     (when-let* ((synthetic (plist-get outcome :synthetic-user-message)))
       (let ((user-turn-start (point)))
@@ -689,8 +692,8 @@ observe the completed response."
         (mevedel--complete-turn
          (gptel-make-fsm
           :info (list :buffer (current-buffer)
-                      :mevedel-request-id
-                      (mevedel-request-id mevedel--current-request))))
+                      :mevedel-request request
+                      :mevedel-request-id (mevedel-request-id request))))
         (gptel--update-status " Ready" 'success)))))
 
 (defun mevedel-skills-input-command-delete-context (command-pos)

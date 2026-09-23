@@ -133,11 +133,14 @@
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
+(declare-function mevedel-request-call-owned
+                  "mevedel-turn" (request buffer function &rest args))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
 (autoload 'mevedel-request-begin "mevedel-turn")
+(autoload 'mevedel-request-call-owned "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
 (autoload 'mevedel-request-push-canceller "mevedel-turn")
 
@@ -161,7 +164,7 @@
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view-composer"
                   (input display-text &optional hook-context
-                         submitted-draft))
+                         submitted-draft dispatch))
 (declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
 (autoload 'mevedel-view--assert-live-tip "mevedel-view-composer")
 
@@ -986,17 +989,23 @@ Loading the agents module registers the bundled agents."
     (when (bound-and-true-p mevedel-session--read-only-mode)
       (user-error "Session is open read-only (another host holds the lock)"))))
 
-(defun mevedel-review--record-direct-turn (display data-buffer)
-  "Record direct no-view review DISPLAY in DATA-BUFFER."
+(defun mevedel-review--record-direct-turn (display data-buffer &optional dispatch)
+  "Record direct no-view review DISPLAY in DATA-BUFFER, then call DISPATCH.
+Dispatch only while the admitted request still owns DATA-BUFFER."
   (with-current-buffer data-buffer
-    (when mevedel--session
-      (mevedel-session-artifacts-assert-new-mutation-authority
-       mevedel--session)
-      (mevedel-request-begin mevedel--session
-                             (and (boundp 'mevedel--current-directive-uuid)
-                                  mevedel--current-directive-uuid)))
-    (goto-char (point-max))
-    (mevedel--insert-user-turn display)))
+    (let (request)
+      (when mevedel--session
+        (mevedel-session-artifacts-assert-new-mutation-authority
+         mevedel--session)
+        (setq request
+              (mevedel-request-begin
+               mevedel--session
+               (and (boundp 'mevedel--current-directive-uuid)
+                    mevedel--current-directive-uuid))))
+      (goto-char (point-max))
+      (mevedel--insert-user-turn display)
+      (when dispatch
+        (mevedel-request-call-owned request data-buffer dispatch)))))
 
 (defun mevedel-review--end-direct-request (data-buffer)
   "End DATA-BUFFER's direct review request if one is active."
@@ -1107,72 +1116,80 @@ when non-empty. PROGRESS-CALLBACK receives the invocation before dispatch.
 COMMAND defaults to `review'. CWD and TARGET schedule package preparation only
 after the parent has accepted the review turn; cancellation covers preparation."
   (let* ((command (or command 'review))
-         (session mevedel--session))
+         (session mevedel--session)
+         (request mevedel--current-request)
+         (data-buffer (current-buffer)))
     (if (null session)
         (funcall callback '(:status error :reason no-session
-                           :message "Validation requires an active session"))
+				    :message "Validation requires an active session"))
       (let (path invocation preparation-cancel cancelled-p settled-p)
         (cl-labels
             ((finish (result)
                (unless settled-p
-                 (setq settled-p t)
-                 (unless cancelled-p
-                   (let ((outcome (mevedel-review--result-outcome result)))
-                     (funcall callback
-                              (if (eq command 'verify)
-                                  (mevedel-review--verify-outcome outcome invocation)
-                                outcome))))))
+		 (setq settled-p t)
+		 (unless cancelled-p
+                   (mevedel-request-call-owned
+                    request data-buffer
+                    (lambda ()
+                      (let ((outcome (mevedel-review--result-outcome result)))
+			(funcall callback
+				 (if (eq command 'verify)
+                                     (mevedel-review--verify-outcome outcome invocation)
+                                   outcome))))))))
              (cancel ()
                (unless (or settled-p cancelled-p)
-                 (setq cancelled-p t)
-                 (if path
+		 (setq cancelled-p t)
+		 (if path
                      (mevedel-agent-control-interrupt session path)
                    (when preparation-cancel (funcall preparation-cancel)))))
              (prepared (outcome)
                (pcase (plist-get outcome :outcome)
-                 ('success
-                  (setq path (mevedel-agent-record-path (plist-get outcome :record))))
-                 ((or 'error 'aborted)
-                  (unless cancelled-p
+		 ('success
+		  (setq path (mevedel-agent-record-path (plist-get outcome :record))))
+		 ((or 'error 'aborted)
+		  (unless cancelled-p
                     (finish (list :type 'RESULT :outcome 'errored
-                                  :payload (or (plist-get outcome :error)
+				  :payload (or (plist-get outcome :error)
                                                "Agent preparation was cancelled")))))))
              (dispatch (package-file)
                (unless cancelled-p
-                 (let* ((prompt (if package-file
-                                    (mevedel-review--prompt-with-package prompt package-file command)
-                                  prompt))
-                        (message (if (and (stringp submit-context) (not (string-empty-p submit-context)))
-                                     (concat prompt "\n\n" submit-context)
-                                   prompt)))
-                   (condition-case err
-                       (progn
-                         (setq preparation-cancel
-                               (mevedel-agent-control-spawn
-                                session (mevedel-review--next-task-name session command)
-                                message #'prepared
-                                :agent (mevedel-agent-resolve-role (mevedel-review--command-agent-name command))
-                                :context "none"
-                                :description (or hint (mevedel-review--command-description command))
-                                :skill-permission-rules
-                                (if (eq command 'verify) (mevedel-review--verify-permission-rules)
-                                  (mevedel-review--permission-rules))
-                                :on-invocation
-                                (lambda (value)
-                                  (setq invocation value path (mevedel-agent-invocation-path value))
-                                  (when progress-callback (funcall progress-callback value)))
-                                :result-handler #'finish))
-                         (when (and cancelled-p preparation-cancel) (funcall preparation-cancel)))
-                     (error
-                      (unless settled-p
-                        (setq settled-p t)
-                        (funcall callback (list :status 'error :reason 'agent-dispatch-failed
-                                                :message (error-message-string err))))))))))
+		 (mevedel-request-call-owned
+		  request data-buffer
+		  (lambda ()
+                    (let* ((prompt (if package-file
+                                       (mevedel-review--prompt-with-package prompt package-file command)
+                                     prompt))
+                           (message (if (and (stringp submit-context) (not (string-empty-p submit-context)))
+					(concat prompt "\n\n" submit-context)
+                                      prompt)))
+                      (condition-case err
+			  (progn
+                            (setq preparation-cancel
+				  (mevedel-agent-control-spawn
+                                   session (mevedel-review--next-task-name session command)
+                                   message #'prepared
+                                   :agent (mevedel-agent-resolve-role (mevedel-review--command-agent-name command))
+                                   :context "none"
+                                   :description (or hint (mevedel-review--command-description command))
+                                   :skill-permission-rules
+                                   (if (eq command 'verify) (mevedel-review--verify-permission-rules)
+                                     (mevedel-review--permission-rules))
+                                   :on-invocation
+                                   (lambda (value)
+                                     (setq invocation value path (mevedel-agent-invocation-path value))
+                                     (when progress-callback (funcall progress-callback value)))
+                                   :result-handler #'finish))
+                            (when (and cancelled-p preparation-cancel) (funcall preparation-cancel)))
+			(error
+			 (unless settled-p
+                           (setq settled-p t)
+                           (funcall callback (list :status 'error :reason 'agent-dispatch-failed
+                                                   :message (error-message-string err))))))))))))
           (if (and cwd target)
               (setq preparation-cancel (mevedel-review--write-target-package cwd target #'dispatch))
             (dispatch nil))
           (unless settled-p
-            (mevedel-request-push-canceller mevedel--current-request #'cancel)))))))
+            (mevedel-request-push-canceller request #'cancel)))))))
 
 (defun mevedel-review--transform-command-outcome (outcome &optional command)
   "Transform validation OUTCOME for COMMAND before parent insertion."
@@ -1265,19 +1282,22 @@ DATA-BUFFER receives the task transcript."
                 (if hook-context
                     (concat display "\n\n" hook-context)
                   display)
-                display hook-context submitted-draft)
-               (mevedel-prompt-submission-commit submission)
-               (with-current-buffer data-buffer
-                 (mevedel-review--run-task
-                  prompt hint
-                  (lambda (outcome)
-                    (mevedel-review--handle-view-outcome
-                     outcome view-buffer data-buffer command))
-                  hook-context
-                  (lambda (invocation)
-                    (mevedel-review--insert-progress-handle
-                     invocation hint command))
-                  command cwd target))))))))))
+                display hook-context submitted-draft
+                (lambda (request)
+                  (mevedel-prompt-submission-commit submission)
+                  (mevedel-request-call-owned
+                   request data-buffer
+                   (lambda ()
+                     (mevedel-review--run-task
+                      prompt hint
+                      (lambda (outcome)
+			(mevedel-review--handle-view-outcome
+                         outcome view-buffer data-buffer command))
+                      hook-context
+                      (lambda (invocation)
+			(mevedel-review--insert-progress-handle
+                         invocation hint command))
+                      command cwd target)))))))))))))
 
 (defun mevedel-review--dispatch (prompt hint &optional cwd command target)
   "Dispatch COMMAND with PROMPT, HINT, CWD, and optional package TARGET."
@@ -1306,17 +1326,18 @@ DATA-BUFFER receives the task transcript."
              display prompt hint view-buffer data-buffer command cwd target)
             'mevedel-view-sent)
         (message "mevedel: running %s for %s" command-name hint)
-        (mevedel-review--record-direct-turn display data-buffer)
-        (with-current-buffer data-buffer
-          (mevedel-review--run-task
-           prompt hint
-           (lambda (outcome)
-             (mevedel-review--handle-direct-outcome outcome data-buffer command))
-           nil
-           (lambda (invocation)
-             (mevedel-review--insert-progress-handle
-              invocation hint command))
-           command cwd target))))))
+        (mevedel-review--record-direct-turn
+         display data-buffer
+         (lambda ()
+           (mevedel-review--run-task
+            prompt hint
+            (lambda (outcome)
+              (mevedel-review--handle-direct-outcome outcome data-buffer command))
+            nil
+            (lambda (invocation)
+              (mevedel-review--insert-progress-handle
+               invocation hint command))
+            command cwd target)))))))
 
 (defun mevedel-review--target-from-instructions
     (instructions cwd command)

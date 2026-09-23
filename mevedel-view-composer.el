@@ -34,6 +34,7 @@
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-backend)
+(defvar gptel-send--handlers)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -373,11 +374,14 @@
                   "mevedel-turn" (session))
 (declare-function mevedel-request-begin "mevedel-turn"
                   (session &optional directive-uuid))
+(declare-function mevedel-request-call-owned
+                  "mevedel-turn" (request buffer function &rest args))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-assert-target-ready "mevedel-turn")
 (autoload 'mevedel-request-begin "mevedel-turn")
+(autoload 'mevedel-request-call-owned "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
 
@@ -1710,32 +1714,36 @@ and command argument completion for commands with finite choices."
        (mevedel-view--input-start)))))
 
 (defun mevedel-view--start-fork-skill-turn
-    (input display-text &optional hook-context submitted-draft)
+    (input display-text &optional hook-context submitted-draft dispatch)
   "Render and record a fork skill INPUT without calling `gptel-send'.
 
 DISPLAY-TEXT is shown in the view for the user turn.  INPUT is written
 to the data buffer as the authoritative user prompt.  The data-turn
-  marker is anchored after that prompt so the eventual fork result can be
+marker is anchored after that prompt so the eventual fork result can be
 rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
 in the view when present.  SUBMITTED-DRAFT is the composer text captured
-when the submission started."
+when the submission started.  DISPATCH receives the admitted request and
+starts the fork after insertion."
   (when (mevedel-turn-busy-p mevedel--data-buffer)
     (user-error "Turn settlement is still pending"))
   (let ((view-turn-start
-         (mevedel-view--insert-user-message display-text nil hook-context)))
+         (mevedel-view--insert-user-message display-text nil hook-context))
+        request)
     (mevedel-view--clear-submitted-input submitted-draft)
     (with-current-buffer mevedel--data-buffer
       (when mevedel--session
-        (mevedel-request-begin
-         mevedel--session
-         (and (boundp 'mevedel--current-directive-uuid)
-              mevedel--current-directive-uuid)))
+        (setq request
+              (mevedel-request-begin
+               mevedel--session
+               (and (boundp 'mevedel--current-directive-uuid)
+                    mevedel--current-directive-uuid))))
       (goto-char (point-max))
       (mevedel--insert-user-turn input)
       (let ((data-turn-start (copy-marker (point) nil)))
         (with-current-buffer mevedel--view-buffer
           (mevedel-view-stream-begin-turn
-           view-turn-start data-turn-start))))))
+           view-turn-start data-turn-start))))
+    (when dispatch (funcall dispatch request))))
 
 (defun mevedel-view--finish-fork-skill-outcome
     (name outcome view-buffer data-buffer &optional skill)
@@ -1877,21 +1885,24 @@ ran survives the send."
                    (name (mevedel-skill-name skill)))
               (mevedel-view--start-fork-skill-turn
                (concat transcript-input render-data) input view-context
-               submitted-draft)
-              (mevedel-prompt-submission-commit submission)
-              (mevedel-session-naming-consider
-               (buffer-local-value 'mevedel--session data-buffer) input)
-              (when after-insert
-                (funcall after-insert))
-              (with-current-buffer data-buffer
-                (mevedel-skills-dispatch-prepared-fork
-                 fork-outcome
-                 (lambda (result)
-                   (mevedel-view--finish-fork-skill-outcome
-                    name result view-buffer data-buffer skill))
-                 :prompt model-input
-                 :request-context request-context
-                 :hook-audits all-audits))))
+               submitted-draft
+               (lambda (request)
+                 (mevedel-prompt-submission-commit submission)
+                 (mevedel-session-naming-consider
+                  (buffer-local-value 'mevedel--session data-buffer) input)
+                 (when after-insert
+                   (funcall after-insert))
+                 (with-current-buffer data-buffer
+                   (mevedel-request-call-owned
+                    request data-buffer #'mevedel-skills-dispatch-prepared-fork
+                    fork-outcome
+                    (lambda (result)
+                      (mevedel-request-call-owned
+                       request data-buffer #'mevedel-view--finish-fork-skill-outcome
+                       name result view-buffer data-buffer skill))
+                    :prompt model-input
+                    :request-context request-context
+                    :hook-audits all-audits))))))
            (t
             (with-current-buffer data-buffer
               (setq-local mevedel-skills--pending-request-context
@@ -2675,38 +2686,51 @@ asynchronous preparation ran is left alone instead of cleared."
          (mevedel-view--activate-dropped-file-grants
           dropped-file-grants session)
          (setq-local mevedel--pending-model-input model-input)
-         (condition-case err
-             (unwind-protect
-                 (gptel-send)
-               (setq-local mevedel--pending-model-input nil))
-           ((error quit)
-            ;; The user's turn is committed, but a start that failed or was
-            ;; interrupted gets no gptel terminal callback, so this is the
-            ;; only place that can settle it.  The summary is recorded first
-            ;; because it reads the request's elapsed time, which ending the
-            ;; request clears; the UI stops before that teardown so it never
-            ;; outlives the request it describes.  C-g is the user's own
-            ;; cancellation, not a provider failure, so it settles as
-           ;; aborted like every other cancellation; and the interrupted
-           ;; start left gptel's mode-line at " Waiting" for a request
-           ;; that no longer exists.
-            (let ((quit-p (eq (car err) 'quit)))
-              (mevedel-view--append-request-summary
-               (current-buffer) data-turn-start
-               (list :outcome (if quit-p 'aborted 'error)
-                     :backend (or (ignore-errors
-                                    (gptel-backend-name gptel-backend))
-                                  "Provider")
-                     :message (if quit-p
-                                  "Interrupted before the provider replied"
-                                (error-message-string err))
-                     :retry 'manual)))
-            (gptel--update-status " Ready" 'success)
-            (when (buffer-live-p mevedel--view-buffer)
-              (with-current-buffer mevedel--view-buffer
-                (mevedel-view-stream-stop)))
-            (mevedel-request-end)
-            (signal (car err) (cdr err)))))))))
+         (let ((gptel-send--handlers (copy-tree gptel-send--handlers))
+               startup-fsm)
+           ;; Capture the send's FSM before admission: startup can reenter and
+           ;; install a different request before signaling an error.
+           (when-let* ((wait (assq 'WAIT gptel-send--handlers)))
+             (push (lambda (fsm) (unless startup-fsm (setq startup-fsm fsm)))
+                   (cdr wait)))
+           (condition-case err
+               (unwind-protect
+                   (gptel-send)
+                 (setq-local mevedel--pending-model-input nil))
+             ((error quit)
+              (let ((request (and startup-fsm
+                                  (plist-get (gptel-fsm-info startup-fsm)
+                                             :mevedel-request))))
+                (when (or (null mevedel--current-request)
+                          (and request (eq request mevedel--current-request)))
+                  ;; The user's turn is committed, but a start that failed or was
+                  ;; interrupted gets no gptel terminal callback, so this is the
+                  ;; only place that can settle it.  The summary is recorded first
+                  ;; because it reads the request's elapsed time, which ending the
+                  ;; request clears; the UI stops before that teardown so it never
+                  ;; outlives the request it describes.  C-g is the user's own
+                  ;; cancellation, not a provider failure, so it settles as
+                  ;; aborted like every other cancellation; and the interrupted
+                  ;; start left gptel's mode-line at " Waiting" for a request
+                  ;; that no longer exists.
+                  (let ((quit-p (eq (car err) 'quit)))
+                    (mevedel-view--append-request-summary
+                     (current-buffer) data-turn-start
+                     (list :outcome (if quit-p 'aborted 'error)
+                           :backend (or (ignore-errors
+                                          (gptel-backend-name gptel-backend))
+                                        "Provider")
+                           :message (if quit-p
+                                        "Interrupted before the provider replied"
+                                      (error-message-string err))
+                           :retry 'manual)))
+                  (gptel--update-status " Ready" 'success)
+                  (when (buffer-live-p mevedel--view-buffer)
+                    (with-current-buffer mevedel--view-buffer
+                      (mevedel-view-stream-stop)))
+                  (when (eq request mevedel--current-request)
+                    (mevedel-request-end))))
+              (signal (car err) (cdr err))))))))))
 
 (defun mevedel-view--transform-model-input (fsm)
   "Replace the latest stored prompt with its one-shot model input for FSM."

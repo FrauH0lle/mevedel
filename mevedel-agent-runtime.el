@@ -1037,7 +1037,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                    :agent-type agent-type
                    :retained (and retained-p t)))
                 invocation))
-          (error
+          ((error quit)
            (if published-p
                (progn
                  (setf (mevedel-agent-invocation-terminal-reason invocation)

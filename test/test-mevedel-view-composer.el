@@ -3679,7 +3679,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    ;; gptel-send already runs in the data buffer, which is
                    ;; where the first WAIT handler begins the request.
-                   (mevedel-request-begin session)
+                   (let ((fsm (gptel-make-fsm :info (list :buffer data-buf))))
+                     (funcall (cadr (assq 'WAIT gptel-send--handlers)) fsm)
+                     (plist-put (gptel-fsm-info fsm) :mevedel-request
+                                (mevedel-request-begin session)))
                    (error "Provider refused to start"))))
         (with-current-buffer view-buf
           (should-error
