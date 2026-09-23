@@ -327,15 +327,24 @@ retires its batch before invoking cleanup callbacks, so reentrantly scheduled
 replacement work keeps its own pending entry and cancellation callback.
 
 TRAMP let-binds the timer lists to nil around its critical sections, and a
-process filter or sentinel can run inside one: a plain timer armed there is
-discarded with the binding. Continuations armed from that context -- pipeline
-yields, the ToolCall trampoline, WaitAgent timeouts, and stream-bridge flushes
--- use `mevedel-transport-run-at-time`. Inside a TRAMP handler frame it holds
-the timer and arms it when the outermost frame returns, so the continuation
-neither disappears nor runs nested inside the remote command. A held timer
-cancelled before arming still fires once; its callers check that their work is
-current. Agent conversation saves refused as busy are requeued through
-`mevedel-transport-run-when-idle` rather than dropped.
+process filter or sentinel can run inside one. A plain timer armed there either
+fires inside TRAMP's own wait, nested in the remote command, or is discarded
+with the binding. Continuations armed from that context use
+`mevedel-transport-run-at-time`: pipeline yields, the ToolCall trampoline,
+WaitAgent timeouts, stream-bridge flushes, and child process settlement and
+retirement. Inside a TRAMP handler frame it holds the timer and arms it when
+the outermost frame returns. The continuation neither disappears nor runs
+nested inside the remote command. A held timer cancelled before arming still
+fires once; its callers check that their work is current. Agent conversation
+saves refused as busy are requeued through `mevedel-transport-run-when-idle`
+rather than dropped.
+
+`mevedel-transport-with-exclusive-connection` suspends existing timers the
+same way. `mevedel--timer-pending-p` counts a suspended timer as armed. A
+pending retry is therefore not activated a second time on the section's
+temporary list. Otherwise that copy could fire there and leave the suspended
+original marked triggered, which Emacs skips forever. A listed timer already
+marked triggered is not pending.
 
 Replacing a remote file with `mevedel--write-file-atomically` (ApplyPatch,
 skill and plugin files, persisted state) is one pinned control program: the

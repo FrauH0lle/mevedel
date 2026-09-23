@@ -122,6 +122,28 @@
           (should-not mevedel-transport--held-timers))
       (cancel-timer timer))))
 
+(mevedel-deftest mevedel-transport-with-exclusive-connection/pending-retry
+  (:doc "a retry pending outside a section fires once and leaves no corpse")
+  ;; A program inside the section used to re-arm the suspended retry onto the
+  ;; section's list; firing there left the suspended copy marked triggered,
+  ;; which Emacs skips forever and which still looked armed.
+  (let ((mevedel-transport--enabled-p t)
+        (mevedel-transport--pending (make-hash-table :test #'equal))
+        (runs 0))
+    (let ((mevedel-transport--depth 1))
+      (mevedel-transport-run-when-idle
+       'exclusive-pending-retry "/tmp" (lambda () (cl-incf runs))))
+    (let ((timer (car (gethash 'exclusive-pending-retry
+                               mevedel-transport--pending))))
+      (mevedel-transport-with-exclusive-connection
+        (mevedel-transport-call-as-remote-operation #'ignore)
+        (should-not (memq timer timer-list))
+        (accept-process-output nil 0.1))
+      (with-timeout (2 (ert-fail "Pending retry never ran"))
+        (while (zerop runs) (accept-process-output nil 0.01)))
+      (should (= 1 runs))
+      (should-not (memq timer timer-list)))))
+
 (mevedel-deftest mevedel-transport-call-with-spawn-channel ()
   ,test
   (test)

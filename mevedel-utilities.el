@@ -65,6 +65,7 @@
 
 ;; `mevedel-transport'
 (defvar mevedel-transport--held-timers)
+(defvar mevedel-transport--suspended-timers)
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -664,12 +665,17 @@ A timer object proves nothing by itself: `run-at-time' pushes onto the
 current binding of `timer-list', and TRAMP let-binds that list to nil
 around every remote command, so a timer created from a process filter or
 hook inside that window is discarded with the binding and never fires.
-Only presence on `timer-list', or being held by
+Only presence on `timer-list', on a list an enclosing
+`mevedel-transport-with-exclusive-connection' suspended, or being held by
 `mevedel-transport-run-at-time' until TRAMP returns, means the timer is
-actually scheduled."
+actually scheduled.  A listed timer already marked triggered is not: Emacs
+skips it, so it never fires again."
   (and (timerp timer)
-       (or (memq timer timer-list)
-           (memq timer (bound-and-true-p mevedel-transport--held-timers)))
+       (or (memq timer (bound-and-true-p mevedel-transport--held-timers))
+           (and (not (timer--triggered timer))
+                (or (memq timer timer-list)
+                    (memq timer (bound-and-true-p
+                                 mevedel-transport--suspended-timers)))))
        t))
 
 (defun mevedel--cycle-list-around (element list)

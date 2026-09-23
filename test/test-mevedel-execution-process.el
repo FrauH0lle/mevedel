@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution-process)
+(require 'mevedel-transport)
 (require 'tramp-sh)
 (require 'helpers
          (file-name-concat
@@ -300,6 +301,44 @@
 (mevedel-deftest mevedel-execution-process-start ()
   ,test
   (test)
+  :doc "settles an exit observed inside a remote command after it returns"
+  ;; A sentinel can run inside another remote command, where TRAMP has bound
+  ;; the timer list away.  The settle timer it arms must neither be lost nor
+  ;; fire in that command, where settlement's own target work is refused.
+  (let* ((root (make-temp-file "mevedel-process-nested-" t))
+         (spool (file-name-concat root "output"))
+         nested result watch
+         (child
+          (mevedel-execution-process-create
+           :workdir root :spool-path spool
+           :terminal-function
+           (lambda (_child value)
+             (setq nested (mevedel-transport-nested-p)
+                   result value)))))
+    (unwind-protect
+        (progn
+          (write-region "" nil spool nil 'silent)
+          (mevedel-execution-process-start
+           child :name "mevedel-test-process-nested"
+           :command '("sh" "-c" "exit 0") :coding 'utf-8-unix)
+          (setq watch (mevedel-execution-process--child-watch-timer child))
+          (let ((process (mevedel-execution-process--child-process child)))
+            (test-mevedel-execution-process--wait
+             (lambda () (memq (process-status process) '(exit signal))))
+            (mevedel-transport--handler-advice
+             (lambda ()
+               (let (timer-list timer-idle-list)
+                 (mevedel-execution-process--ended child process)
+                 ;; TRAMP's own wait runs timers armed on its binding.
+                 (accept-process-output nil 0.05)
+                 (should-not result)))))
+          (test-mevedel-execution-process--wait (lambda () result))
+          (should-not nested)
+          (should (= 0 (plist-get result :exit-code)))
+          (should-not (memq watch timer-list)))
+      (mevedel-execution-process-release child)
+      (delete-directory root t)))
+
   :doc "emits one complete terminal result after a successful child"
   (let* ((root (make-temp-file "mevedel-process-start-" t))
          (spool (file-name-concat root "output"))
