@@ -12,6 +12,7 @@
 
 (eval-when-compile
   (require 'cl-lib)
+  (require 'mevedel-session-durability)
   (require 'subr-x))
 
 ;; `mevedel-agents'
@@ -427,11 +428,14 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
            (authority (mevedel-execution--mutation-target session))
            (target (mevedel-session-execution-target authority)))
       (when (mevedel-execution-target-remote-p target)
-        (mevedel-execution--assert-mutation-authority record)
-        (unless
-            (mevedel-session-durability-set-unsettled-mutation authority t)
-          (signal 'mevedel-execution-error
-                  (list "Could not arm remote mutation authority")))
+        ;; The authority check and the arm share one transaction's clock
+        ;; and recovery observations.
+        (mevedel-session-durability-with-transaction
+          (mevedel-execution--assert-mutation-authority record)
+          (unless
+              (mevedel-session-durability-set-unsettled-mutation authority t)
+            (signal 'mevedel-execution-error
+                    (list "Could not arm remote mutation authority"))))
         (setf (mevedel-execution--record-mutation-armed-p record) t)))))
 
 (defun mevedel-execution--mark-unknown (record error-data &optional child-status)

@@ -85,14 +85,73 @@
           (run-with-idle-timer
            0.5 nil #'mevedel-view--verify-paths (current-buffer)))))
 
+(defconst mevedel-view--path-probe-budget 2048
+  "Largest quoted argument bytes one batched remote existence probe carries.
+
+A TRAMP command line crosses a pty whose canonical line truncates above
+4 KiB, so a batch stays well below it.")
+
+(defun mevedel-view--path-probe-batches (paths)
+  "Split remote PATHS into (PREFIX . PATHS) batches for one command each."
+  (let (batches)
+    (dolist (path paths)
+      (let* ((prefix (file-remote-p path))
+             (quoted (+ 1 (string-bytes
+                           (shell-quote-argument (file-local-name path)))))
+             (batch (car batches)))
+        (if (and batch (equal prefix (car batch))
+                 (<= (+ (cadr batch) quoted) mevedel-view--path-probe-budget))
+            (setcar batches (list prefix (+ (cadr batch) quoted)
+                                  (cons path (nth 2 batch))))
+          (push (list prefix quoted (list path)) batches))))
+    (mapcar (lambda (batch) (cons (car batch) (nreverse (nth 2 batch))))
+            (nreverse batches))))
+
+(defun mevedel-view--probe-paths (prefix paths)
+  "Return PATHS' existence on remote PREFIX from one command, or nil.
+Nil means the command failed and the caller checks each path itself."
+  (condition-case nil
+      (with-temp-buffer
+        (let ((default-directory (file-name-as-directory prefix)))
+          (when (eql 0 (apply #'process-file "sh" nil t nil "-c"
+                              "for p; do if test -e \"$p\"; then echo 1; else echo 0; fi; done"
+                              "mevedel-path-probe"
+                              (mapcar #'file-local-name paths)))
+            (let ((answers (split-string (buffer-string) "\n" t)))
+              (when (and (= (length answers) (length paths))
+                         (seq-every-p (lambda (answer) (member answer '("0" "1")))
+                                      answers))
+                (mapcar (lambda (answer) (equal answer "1")) answers))))))
+    (error nil)))
+
+(defun mevedel-view--path-existences (paths)
+  "Return PATHS' existence flags in order, batching remote checks."
+  (let ((answers (make-hash-table :test #'equal)))
+    (dolist (batch (mevedel-view--path-probe-batches
+                    (seq-filter
+                     (lambda (path)
+                       (and (file-remote-p path)
+                            (not (string-match-p "[\n\r]" path))))
+                     paths)))
+      (seq-mapn (lambda (path exists) (puthash path exists answers))
+               (cdr batch)
+               (or (mevedel-view--probe-paths (car batch) (cdr batch))
+                   (make-list (length (cdr batch)) 'unknown))))
+    (mapcar (lambda (path)
+              (let ((exists (gethash path answers 'unknown)))
+                (if (eq exists 'unknown)
+                    (ignore-errors (and (file-exists-p path) t))
+                  exists)))
+            paths)))
+
 (defun mevedel-view--verify-paths (buffer)
   "Resolve BUFFER's pending paths once the transport is idle."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq mevedel-view--path-verify-timer nil)
       (when mevedel-view--path-pending
-        ;; ponytail: one round trip per path, once per path rather than once
-        ;; per redraw.  Batch only if profiling shows this is still material.
+        ;; A remote capture spent 104 round trips here in 7.6 minutes, one
+        ;; per path; paths on one target now share one command.
         (mevedel-transport-run-when-idle
          (list 'view-path-verify buffer) (car mevedel-view--path-pending)
          (lambda ()
@@ -102,13 +161,14 @@
                ;; while it waited join this batch.
                (let ((pending (nreverse mevedel-view--path-pending)))
                  (setq mevedel-view--path-pending nil)
-                 (dolist (path pending)
-                   (let ((exists (ignore-errors (and (file-exists-p path) t))))
-                     (unless mevedel-view--path-existence
-                       (setq mevedel-view--path-existence
-                             (make-hash-table :test #'equal)))
-                     (puthash path (cons exists (float-time))
-                              mevedel-view--path-existence)))
+                 (seq-mapn
+                  (lambda (path exists)
+                    (unless mevedel-view--path-existence
+                      (setq mevedel-view--path-existence
+                            (make-hash-table :test #'equal)))
+                    (puthash path (cons exists (float-time))
+                             mevedel-view--path-existence))
+                  pending (mevedel-view--path-existences pending))
                  (mevedel-view-rerender buffer)))))
          (lambda ()
            (when (buffer-live-p buffer)

@@ -337,6 +337,13 @@ cancelled before arming still fires once; its callers check that their work is
 current. Agent conversation saves refused as busy are requeued through
 `mevedel-transport-run-when-idle` rather than dropped.
 
+Replacing a remote file with `mevedel--write-file-atomically` (ApplyPatch,
+skill and plugin files, persisted state) is one pinned control program: the
+temporary file, mode and rename happen beside the destination on the target,
+where TRAMP's file operations needed about twenty round trips. A symlinked
+leaf, an unproven parent spelling, a missing directory or a busy transport falls
+back to the TRAMP operations, which keep their existing semantics.
+
 `mevedel-session-durability.el` owns portable project lease and storage
 primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
 `mevedel-session-transfer.el` owns cooperative control-transfer records, and
