@@ -17,11 +17,44 @@
 (declare-function mevedel-resource-encode-component "mevedel-resource" (value))
 (autoload 'mevedel-resource-encode-component "mevedel-resource")
 
+(defun mevedel-journal-index--signature (root)
+  "Return local discovery source facts for ROOT, or nil when unavailable.
+Include public entries and expiry markers, excluding access times changed by
+reads.  These facts can reuse an advisory index, never authorize an evidence
+read or mutation.  Remote targets retain ordinary throttled validation."
+  (unless (file-remote-p root)
+    (condition-case nil
+        (cl-labels
+            ((facts (attributes)
+               (when attributes
+                 (append (seq-take attributes 4) (nthcdr 5 attributes))))
+             (observe (directory regexp)
+               (unless (equal (file-truename directory)
+                              (expand-file-name directory))
+                 (error "Journal discovery path is not physical"))
+               (let ((attributes (file-attributes directory 'integer)))
+                 (when (and attributes (not (eq t (car attributes))))
+                   (error "Journal discovery source is not a directory"))
+                 (list (facts attributes)
+                       (when attributes
+                         (mapcar (lambda (entry)
+                                   (cons (car entry) (facts (cdr entry))))
+                                 (directory-files-and-attributes
+                                  directory nil regexp nil 'integer)))))))
+          (let ((directory (mevedel-journal-store-directory root)))
+            (list (observe directory mevedel-journal-store-file-regexp)
+                  (observe (file-name-concat
+                            (mevedel-journal-store-state-directory directory)
+                            "expired")
+                           directory-files-no-dot-files-regexp))))
+      (error nil))))
+
 (defun mevedel-journal-index-entries (workspace &optional cached-only)
   "Return recently validated public entries for WORKSPACE.
 Observe storage at most once every ten seconds.  CACHED-ONLY never performs
 filesystem operations, including when there is no observation yet.  Storage
 failures produce an empty observation until the next refresh opportunity.
+Unchanged local source facts reuse the validated discovery snapshot.
 Apply the age limit on every use, including cached-only discovery."
   (when-let* ((root (and workspace (mevedel-workspace-root workspace))))
     (let* ((observation (mevedel-workspace-journal-observation workspace))
@@ -32,11 +65,18 @@ Apply the age limit on every use, including cached-only discovery."
                  (or (null observation)
                      (>= (- now (plist-get observation :time)) 10)
                      (< now (plist-get observation :time))))
-        (setq observation
-              (list :root root :time now
-                    :entries (condition-case nil
-                                 (mevedel-journal-store-entries root)
-                               (error nil))))
+        (let ((signature (mevedel-journal-index--signature root)))
+          (if (and signature (equal signature (plist-get observation :signature)))
+              (setq observation (plist-put observation :time now))
+            (setq observation
+                  (condition-case nil
+                      (let ((entries (mevedel-journal-store-entries root)))
+                        (list :root root :time now :entries entries
+                              :signature
+                              (and signature
+                                   (equal signature (mevedel-journal-index--signature root))
+                                   signature)))
+                    (error (list :root root :time now :entries nil))))))
         (setf (mevedel-workspace-journal-observation workspace) observation))
       (seq-filter #'mevedel-journal-store-recall-p
                   (plist-get observation :entries)))))

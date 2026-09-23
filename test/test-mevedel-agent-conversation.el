@@ -349,7 +349,9 @@
 			   (should-not (get-text-property (match-beginning 0) 'gptel))
 			   (should (= (marker-position marker) (point-max))))
 			 (with-temp-buffer
-			   (insert-file-contents absolute)
+			   (insert (decode-coding-string
+                                    (mevedel-session-artifacts-read-artifact session relative)
+                                    'utf-8-unix))
 			   (should (string-match-p "Reminder text" (buffer-string)))))
 		     (when (buffer-live-p buf)
 		       (with-current-buffer buf
@@ -939,7 +941,9 @@
 			     (should (mevedel-agent-conversation-save invocation)))
 			   (should (= 1 publications)))
 			 (with-temp-buffer
-			   (insert-file-contents absolute)
+			   (insert (decode-coding-string
+                                    (mevedel-session-artifacts-read-artifact session relative)
+                                    'utf-8-unix))
 			   (org-mode)
 			   (should (org-entry-get (point-min) "GPTEL_BOUNDS"))
 			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))

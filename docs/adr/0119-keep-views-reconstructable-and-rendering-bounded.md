@@ -54,10 +54,15 @@ audit disclosures use their ordinary toggle renderer, preserving the single
 summary and audit styling.
 A full or live-turn projection shares disposable boundary indexes and pure audit-decoding
 results. Audit readers also reuse bounded pure decoding in the current buffer
-across projections; callers still establish trust independently. Fork-point
+across projections, retaining at most 1024 payloads totaling 4 MiB (at most
+1 MiB each); callers still establish trust independently. Fork-point
 classification scans the requested buffer range without copying the transcript. Boundary misses search only
 after the preceding validated block. Whole-buffer normalization is reused until
-text or properties change. Complete tool cache entries use source-buffer character revisions and explicit
+text or properties change. Tool discovery advances through ordered property
+runs and validated blocks, discarding completed prefixes and stopping overlap
+searches at the candidate's end. This avoids searching old or later history for
+each tool while retaining structural repair of stale properties.
+Complete tool cache entries use source-buffer character revisions and explicit
 provenance intervals. Observed appends retain preceding tools; suffix edits,
 missing hooks, and unobserved character changes retire affected identities.
 This allows hits to skip payload copying, hashing, structural parsing, and
@@ -105,6 +110,18 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: audit memo capacity during long requests
+
+A captured multi-agent request had 184 distinct encoded audits totaling 956 KB.
+The 128-record memo cleared on every full scan, so each subsequent token estimate
+again decoded all 184 records. Raising the record cap to 1024 keeps the same
+4 MiB total encoded-byte and 1 MiB individual-payload limits. Repeated isolated
+estimates fell from about 34 ms and 9.3 MB temporary allocation to 2.2 ms and
+2.3 MB, with identical character counts. First decoding still incurs its cost;
+working sets beyond either bound can still churn. Fresh provenance checks remain
+mandatory, including for cached payloads.
+
 
 ### September 2026: nested compound disclosure ownership
 
@@ -674,3 +691,25 @@ On the captured 574-KB transcript, ten repeated classifications fell from about
 154 MB to 120 MB. Median redraw time fell from 325 to 289 ms for all ten combined.
 Rendered text and draft checks matched. These are isolated headless replays,
 not a claim that graphical GC pauses or redisplay costs have disappeared.
+
+### 2026-09-23: restore marks without activating editor hooks
+
+The next graphical profile showed spinner preservation repeatedly entering
+Evil's mark-activation hook. `set-mark` activates hooks even when restoring an
+inactive, unchanged mark. Evil then schedules a distinct post-command callback
+for every restoration; while the user is away these accumulate until the next
+command. Window-state and managed-zone restoration now move the existing marker
+directly and restore activation state explicitly, as logical-zone restoration
+already did.
+
+An isolated replay using the installed Evil reproduced 15,000 queued callbacks
+and a 1.21-second drain on the next command. The changed preservation path queued
+none and its hook drain took under 0.01 ms. Actual spinner and status-update
+regressions preserve active/inactive selections, both endpoints and a multiline
+draft without activating hooks. The aggregate graphical profile cannot attribute
+the exact 1.25-second completion pause to this backlog; this fixes a reproduced
+cause of delayed input, with live confirmation still required.
+A separate graphical Emacs using the installed Evil took 1.20 seconds to execute
+a synthetic keystroke and redisplay after the same buildup, versus about 2 ms
+with the fix. This is a controlled reproduction, not the user's full configuration
+or a provider-request replay.

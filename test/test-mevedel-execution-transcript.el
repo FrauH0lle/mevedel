@@ -146,7 +146,76 @@
       (should (eq 'running
                   (plist-get (cdar (plist-get plan :live)) :state)))
       (should (equal "done-call"
-                     (caar (plist-get plan :completed)))))))
+                     (caar (plist-get plan :completed))))))
+
+  :doc "resolves multiple archive misses with one transcript inspection"
+  (with-temp-buffer
+    (insert
+     (mevedel--format-hook-audit-record
+      '(:type execution-archive :tool-use-id "archived"
+              :render-data (:execution-id "exec-archived" :state running
+                            :live-execution-p t))))
+    (let ((read-records (symbol-function 'mevedel-transcript-audit-records))
+          (reads 0)
+          (before (buffer-string)))
+      (cl-letf (((symbol-function 'mevedel-transcript-audit-records)
+                 (lambda (&rest args)
+                   (cl-incf reads)
+                   (apply read-records args))))
+        (should
+         (equal
+          '(:live (("archived" :execution-id "exec-archived" :state running
+                     :live-execution-p t)) :completed nil)
+          (mevedel-execution-transcript-prepare-archive
+           (current-buffer) '("missing-first" "archived" "missing-last")))))
+      (should (equal-including-properties before (buffer-string)))
+      (should (= 1 reads))))
+
+  :doc "keeps live precedence and observes later archive changes without narrowing edits"
+  (with-temp-buffer
+    (insert
+     (mevedel--format-hook-audit-record
+      '(:type execution-archive :tool-use-id "row"
+              :render-data (:execution-id "old" :state running
+                            :live-execution-p t)))
+     (mevedel--format-hook-audit-record
+      '(:type execution-archive :tool-use-id "row"
+              :render-data (:execution-id "later" :state running
+                            :live-execution-p t))))
+    (save-restriction
+      (narrow-to-region (point-max) (point-max))
+      (let ((begin (point-min)))
+        (should (equal "old"
+                       (plist-get
+                        (cdar (plist-get
+                               (mevedel-execution-transcript-prepare-archive
+                                (current-buffer) '("row")) :live))
+                        :execution-id)))
+        (should (= begin (point-min) (point-max)))))
+    (erase-buffer)
+    (insert
+     (mevedel--format-hook-audit-record
+      '(:type execution-archive :tool-use-id "row"
+              :render-data (:execution-id "new" :state completed))))
+    (should (equal "new"
+                   (plist-get
+                    (cdar (plist-get
+                           (mevedel-execution-transcript-prepare-archive
+                            (current-buffer) '("row")) :completed))
+                    :execution-id)))
+    (insert
+     (propertize
+      (mevedel-tool-render-data-format
+       '(:execution-id "live" :state running :live-execution-p t) "row")
+      'gptel '(tool . "row")))
+    (cl-letf (((symbol-function 'mevedel-transcript-audit-records)
+               (lambda (&rest _) (ert-fail "Live rows should not inspect archives"))))
+      (should (equal "live"
+                     (plist-get
+                      (cdar (plist-get
+                             (mevedel-execution-transcript-prepare-archive
+                              (current-buffer) '("row")) :live))
+                      :execution-id))))))
 
 (mevedel-deftest mevedel-execution-transcript-commit-archive ()
   ,test
@@ -458,6 +527,7 @@
                                                      (mevedel-session-artifacts-build-sidecar
                                                       session root-buffer))
                                                     :commit-marker t))))
+                                                (make-directory (file-name-directory transcript) t)
                                                 (write-region "poisoned fixed cache" nil transcript nil 'silent)
                                                 (with-current-buffer buffer
                                                   (goto-char (point-max))

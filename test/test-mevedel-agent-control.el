@@ -10,6 +10,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
+(require 'mevedel-agent-persistence)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-agents)
 (require 'mevedel-compact-evidence)
@@ -230,7 +231,8 @@
           (mevedel-agent-control-teardown-session session)
           (should-not (buffer-live-p buffer))
           (with-temp-buffer
-            (insert-file-contents absolute)
+            (insert (mevedel-session-artifacts-read-artifact
+                     session relative))
             (should (equal "previous\nlatest\n" (buffer-string)))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
@@ -1290,6 +1292,75 @@
       (kill-buffer buffer))
     (should (eq 'running (mevedel-agent-record-activity record)))
     (should-not (mevedel-agent-control-settled-result record)))
+
+  :doc "execution mail persists during followup startup and survives rollback"
+  (dolist (outcome '(success error quit))
+    (let* ((gptel--known-backends nil)
+           (backend (gptel-make-openai "Followup Persistence Test"
+                      :models '(test-model)))
+           (session (mevedel-agent-control-test--session))
+           (configuration
+            (mevedel-agent-configuration--create
+             :agent (mevedel-agent--create
+                     :name "default" :description "Retained test agent"
+                     :frozen-p t)
+             :request-locals
+             (mapcar (lambda (symbol)
+                       (cons symbol (and (eq symbol 'gptel-backend) backend)))
+                     mevedel-agent-request-local-symbols)))
+           (record (mevedel-agent-record--create
+                    :id "retained" :path "/root/worker" :parent-path "/root"
+                    :role "default" :configuration configuration
+                    :activity 'idle :settled-result "previous result"
+                    :settled-outcome 'completed
+                    :conversation-location "agents/worker.chat.org"))
+           observed)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (cl-letf
+          (((symbol-function 'mevedel-agent-control-commit-session)
+            (lambda (owner)
+              (mevedel-agent-persistence-serialize-registry owner)))
+           ((symbol-function 'mevedel-agent-control--persist-session)
+            (lambda (owner)
+              (mevedel-agent-persistence-serialize-registry owner)))
+           ((symbol-function 'mevedel-agent-control--dispatch-followup)
+            (lambda (owner current _message _tool-id)
+              ;; Reproduce a process sentinel delivering another command's
+              ;; result while provider startup yields to Emacs.
+              (mevedel-agent-control-enqueue-execution-result
+               owner "/root" "Full suite passed")
+              (setq observed t)
+              (should (eq 'starting (mevedel-agent-record-activity current)))
+              (should-not (mevedel-agent-record-settled-result current))
+              (should-not (mevedel-agent-record-settled-outcome current))
+              (if (memq outcome '(error quit))
+                  (signal outcome '("Dispatch interrupted"))
+                (mevedel-agent-control--record-invocation
+                 owner current
+                 (mevedel-agent-invocation--create
+                  :agent-id "retained" :path "/root/worker"
+                  :frozen-configuration configuration
+                  :transcript-relative-path "agents/worker.chat.org"))))))
+        (let ((caught
+               (condition-case err
+                   (progn
+                     (mevedel-agent-control-followup
+                      session "/root/worker" "Continue")
+                     nil)
+                 ((error quit) err))))
+          (should (equal caught (and (not (eq outcome 'success))
+                                     (list outcome "Dispatch interrupted"))))
+          (should observed)
+          (should (equal "Full suite passed"
+                         (plist-get (car (mevedel-session-messages session))
+                                    :payload)))
+          (if (eq outcome 'success)
+              (should (eq 'running (mevedel-agent-record-activity record)))
+            (should (eq 'idle (mevedel-agent-record-activity record)))
+            (should-not (mevedel-agent-record-invocation record))
+            (should (equal '(:outcome completed :payload "previous result")
+                           (mevedel-agent-control-settled-result record))))))))
 
   :doc "attributes peer steering while returning results to the spawn parent"
   (let* ((session (mevedel-agent-control-test--session))

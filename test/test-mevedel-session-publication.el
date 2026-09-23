@@ -193,6 +193,58 @@ and its segment path."
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-session-publication-publish/transaction-scope (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-clock" "mevedel-publication-clock-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((path (file-name-concat session-dir "session.meta.el"))
+            (content (mevedel-session-artifacts-printed-value
+                      (mevedel-session-artifacts-build-sidecar session (current-buffer))))
+            (program (symbol-function 'mevedel-session-control-fs-run-program))
+            (now (float-time))
+            (clocks 0))
+       (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now))
+                 ((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (ops &rest args)
+                    (cl-incf clocks (cl-count 'target-time ops :key (lambda (op) (plist-get op :op))))
+                    (apply program ops args))))
+         (dotimes (index 2)
+           (mevedel-session-publication-publish
+            session (list (list :path path :content content :commit-marker t)) t)
+           ;; One fresh target clock per publication; subsequent ownership
+           ;; checks in that publication reuse only the bounded observation.
+           (should (= clocks (1+ index)))))
+       (should (equal content
+                      (mevedel-session-control-fs-read-file
+                       (plist-get (mevedel-session-publication session) :sidecar))))))))
+
+(mevedel-deftest mevedel-session-publication-publish/transcript-copies (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-transcripts" "mevedel-transcript-copies-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((paths '("segment-0002.chat.org" "agents/worker.chat.org"))
+            (marker (list :path (file-name-concat session-dir "session.meta.el")
+                          :content (mevedel-session-artifacts-printed-value
+                                    (mevedel-session-artifacts-build-sidecar
+                                     session (current-buffer)))
+                          :commit-marker t)))
+       (mevedel-session-publication-publish
+        session (append (mapcar (lambda (logical)
+                                  (list :path (file-name-concat session-dir logical)
+                                        :content "published transcript")) paths)
+                        (list marker)) t)
+       (dolist (logical paths)
+         (should-not (file-exists-p (file-name-concat session-dir logical)))
+         (should (equal "published transcript"
+                        (mevedel-session-artifacts-read-artifact session logical t))))
+       ;; Discovery still has its small sidecar; mutable authored files keep
+       ;; their ordinary file path as well as their immutable publication.
+       (should (file-exists-p (plist-get marker :path)))
+       (let ((path (file-name-concat session-dir "artifacts/example.chat.org")))
+         (mevedel-session-publication-publish
+          session (list (list :path path :content "authored") marker) t)
+         (should (equal "authored" (mevedel-session-control-fs-read-file path))))))))
+
 (mevedel-deftest mevedel-session-publication-publish/tombstone-cost (:quiet t)
   (test-mevedel-session-publication--with-published
    "publication-tombstones" "mevedel-tombstones-" ?c

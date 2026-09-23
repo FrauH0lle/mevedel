@@ -585,7 +585,7 @@ priorities."
           (when (eq window (plist-get state :selected-window))
             (goto-char (window-point window)))))))
   (when-let* ((mark (plist-get state :mark)))
-    (set-mark (min (point-max) mark)))
+    (set-marker (mark-marker) (min (point-max) mark)))
   (setq mark-active (plist-get state :mark-active)
         deactivate-mark (plist-get state :deactivate-mark)))
 

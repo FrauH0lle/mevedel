@@ -28,8 +28,12 @@ repeated sealing preserves the first trigger. Stable fork-point identities defin
 coverage, so Rewind's repeated turn numbers cannot alias old work. Capture coverage
 survives public digest expiry. Discovery batches fresh expiry probes and bounded
 public-entry reads in groups of 16; coverage reads are similarly batched and
-still fail closed. No observation survives its inspection call. Digest inference uses frozen model policy without a
-live session or tools; accepted output is published before source pins are released.
+still fail closed. Storage authority observations do not survive their inspection
+call. Advisory prompt discovery separately reuses validated local entries while
+public-record and expiry-marker source attributes remain unchanged, with a
+ten-second refresh throttle and age filtering on every use. Remote discovery
+retains throttled fresh reads. Digest inference uses frozen model policy without
+a live session or tools; accepted output is published before source pins are released.
 
 Consolidation captures bounded memory, instructions, source observations, and
 selected digest evidence. It uses scoped read-only tools in a sessionless request.
@@ -96,7 +100,10 @@ Obsolete settled control pairs are pruned after their deadlines while preserving
 the newest generation and all retained references. Claim admission, settlement,
 and pruning share the target lock and verify the generation within it. Idle
 batches remove at most 200 pairs and 50 content groups, scheduling another batch
-only after progress. Minimal coverage and retirement identities remain.
+only after progress. A fresh listing can rule out pruning in a directory that
+contains only the newest or referenced generations. It cannot authorize a deletion;
+candidates still require fresh claim/deadline checks and locked byte verification.
+Minimal coverage and retirement identities remain.
 
 Expiry accepts a hash-bound manifest before deletion,
 hides expired entries before removing bytes, and deletes complete dependency
@@ -127,6 +134,16 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+- **Retained-only claim directories caused needless cleanup work.** A copied
+  September 22 multi-agent journal fixture took about 14 seconds per cleanup
+  pass, even after all eligible pairs were gone. Filtering retained generations
+  from a fresh listing before reading records and yielding removed 122 target
+  programs and about 2.3 seconds per pass in the isolated replay. The first pass
+  removed the same 17 pairs; later passes reported no further work. Ownership
+  checks before actual resumed work and locked deletion remain unchanged. This
+  reduces child-process work; it is not a measurement of editor input latency.
+
 
 The amendments to **ADR 0117** are consolidated below. These are the failures,
 measurements, and constraints that explain the current boundaries; the manual
@@ -479,3 +496,19 @@ publication and lease handling still run synchronously. A separate unsealed-capt
 digest-opportunity replay reduced median timer delay from 175 ms to below 1 ms,
 and editor allocation from 5.0 to 0.28 MB, while total time rose from 195 to 369 ms.
 These are isolated storage replays, not a new graphical typing measurement.
+
+### 2026-09-23: reuse unchanged local discovery snapshots
+
+The next graphical capture recorded 79 journal-index refreshes with a median
+128 ms. The ten-second throttle prevented per-event reads but still reread an
+unchanged journal throughout long requests. Local discovery now compares source
+attributes for public records and expiry markers before refreshing validated
+entries; a second observation detects changes during the read. Access times are
+excluded so reading does not invalidate the snapshot. Missing observations and
+remote storage keep the ordinary read path. Age limits still apply on every use;
+evidence and mutation authority still read storage freshly.
+
+Alternating trials on a copied 40-entry journal reduced warm refreshes from
+134 ms to 0.33 ms with identical results. Cold reads remained about 134 ms.
+Regressions cover edits with restored modification times, replacements, expiry,
+corruption, read failures, source races, root changes and cached-only discovery.

@@ -11,6 +11,11 @@
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-session-test-support"))
 
+(require 'mevedel-journal-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-journal-test-support"))
+
 (mevedel-deftest mevedel-session-persistence-autosave-buffer
 		 (:quiet t)
 		 ,test
@@ -68,7 +73,13 @@
 					session "segment-0001.chat.org" t)))
 			     (should (string-search "Partial response" text))
 			     (should (string-search "GPTEL_BOUNDS" text)))
-			   (should-not (buffer-modified-p))
+                   (should-not (buffer-modified-p))
+                   (when (eq type 'project)
+                     (should-not (file-exists-p buffer-file-name))
+                     (should (= 0 (visited-file-modtime)))
+                     (let ((head (plist-get (mevedel-session-publication session) :head)))
+                       (should (mevedel-session-persistence-autosave-buffer buffer))
+                       (should (equal head (plist-get (mevedel-session-publication session) :head)))))
 			   ;; A checkpoint must not turn an unfinished response into a
 			   ;; completed turn or emit a completed-turn journal capture.
 			   (should (zerop (mevedel-session-turn-count session)))
@@ -123,6 +134,9 @@
 				      (lambda (&optional _frame)
 					(list bad-buffer good-buffer))))
 			     (run-hooks 'auto-save-hook)
+                             (with-timeout (2 (ert-fail "Auto-save remained queued"))
+                               (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                                 (sleep-for .002)))
 			     (should (buffer-local-value
 				      'mevedel-session--save-failed bad-buffer))
 			     (should (string-search
@@ -133,6 +147,9 @@
 			     ;; sidecar failed; retry must not depend on modified-p.
 			     (delete-directory path)
 			     (run-hooks 'auto-save-hook)
+                             (with-timeout (2 (ert-fail "Auto-save remained queued"))
+                               (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                                 (sleep-for .002)))
 			     (should-not (buffer-local-value
 					  'mevedel-session--save-failed bad-buffer))
 			     (should (file-regular-p path)))))
@@ -172,6 +189,75 @@
 			    (mevedel-session-save-path session)))))
 		     (test-mevedel-session-persistence--release-and-kill buffer session)
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence-autosave/responsiveness ()
+  (let ((first (generate-new-buffer " *autosave-first*"))
+        (second (generate-new-buffer " *autosave-second*"))
+        (mevedel-transport--background-resume-at 0)
+        (saved nil) input-timer input saw-input)
+    (unwind-protect
+        (progn
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer
+              (setq-local mevedel--session (mevedel-session--create))
+              (insert "Changed")))
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _) (list first second)))
+                    ((symbol-function 'mevedel-session-persistence-autosave-buffer)
+                     (lambda (buffer)
+                       (if saved (setq saw-input input)
+                         (setq input-timer
+                               (run-at-time 0 nil (lambda () (setq input t)))))
+                       (push buffer saved)
+                       (with-current-buffer buffer (set-buffer-modified-p nil)))))
+            (mevedel-session-persistence-autosave)
+            (mevedel-session-persistence-autosave)
+            (should-not saved)
+            (with-timeout (2 (ert-fail "Auto-save did not finish"))
+              (while (< (length saved) 2) (sleep-for .002)))
+            (should (= 2 (length saved)))
+            (should saw-input)))
+      (mevedel-transport-cancel-idle
+       mevedel-session-persistence--autosaves 'conversation-autosave)
+      (when input-timer (cancel-timer input-timer))
+      (dolist (buffer (list first second))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))))))
+
+(mevedel-deftest mevedel-session-persistence-autosave-buffer/agent-transaction (:quiet t)
+  (mevedel-test-journal-capture--with-portable-session
+   (lambda (session root)
+     (with-current-buffer root
+       (insert "Root prompt\n" (propertize "Response\n" 'gptel 'response))
+       (mevedel-session-artifacts-save session root))
+     (let* ((child (generate-new-buffer " *autosave-agent*"))
+            (invocation (mevedel-agent-invocation--create
+                         :agent (mevedel-agent--create :name "worker")
+                         :agent-id "worker--test" :path "/root/worker"
+                         :buffer child :parent-session session :parent-data-buffer root))
+            (publish (symbol-function 'mevedel-session-publication-publish))
+            (publications 0))
+       (unwind-protect
+           (progn
+             (mevedel-agent-runtime--setup-transcript invocation child)
+             (with-current-buffer child
+               (setq-local mevedel--session session mevedel--agent-invocation invocation)
+               (insert "Partial agent response"))
+             ;; Ordinary transcript changes do not mark the registry dirty.
+             (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
+             (cl-letf (((symbol-function 'mevedel-session-publication-publish)
+                        (lambda (&rest args)
+                          (cl-incf publications) (apply publish args))))
+               (should (mevedel-session-persistence-autosave-buffer child)))
+             (should (= publications 1))
+             (should-not (mevedel-session-publication-uncommitted-batches session))
+             (should (equal "Partial agent response"
+                            (mevedel-session-artifacts-read-artifact
+                             session (mevedel-agent-invocation-transcript-relative-path invocation) t))))
+         (with-current-buffer child
+           (set-buffer-modified-p nil) (setq-local kill-buffer-hook nil))
+         (kill-buffer child))))))
 
 (provide 'test-mevedel-session-persistence-autosave)
 ;;; test-mevedel-session-persistence-autosave.el ends here

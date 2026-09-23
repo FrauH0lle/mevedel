@@ -161,21 +161,34 @@
   :doc "matches string parsing, widens safely, and bounds retained decode keys"
   (with-temp-buffer
     (insert "literal <!-- mevedel-hook-audit -->\n")
-    (dotimes (n 140)
+    (dotimes (n 1050)
       (insert (mevedel--format-hook-audit-record (list :type 'tool-context :number n))))
     (let ((expected (mevedel-transcript-audit-spans (buffer-string))) actual)
       (save-restriction
         (narrow-to-region 1 2)
         (setq actual (mevedel-transcript-audit-buffer-spans 'tool-context))
         (should (= 2 (point-max))))
-      (should (= 140 (length actual)))
+      (should (= 1050 (length actual)))
       (cl-mapc (lambda (string-span buffer-span)
                  (should (equal (plist-get string-span :record) (plist-get buffer-span :record)))
                  (should (= (1+ (plist-get string-span :start)) (plist-get buffer-span :start)))
                  (should (= (1+ (plist-get string-span :end)) (plist-get buffer-span :end))))
                expected actual)
-      (should (<= (hash-table-count mevedel-transcript-audit--buffer-records) 128))
+      (should (<= (hash-table-count mevedel-transcript-audit--buffer-records) 1024))
       (should (<= mevedel-transcript-audit--buffer-record-bytes (* 4 1024 1024)))))
+  :doc "reuses decoding across scans of a long request"
+  (with-temp-buffer
+    ;; Just beyond the former record limit; the encoded data fits easily.
+    (dotimes (n 129)
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'injected-reminders :items (list (list :body (number-to-string n)))))))
+    (let ((expected (mevedel-transcript-audit-buffer-spans))
+          (decode (symbol-function 'mevedel-transcript-audit--decode))
+          (misses 0))
+      (cl-letf (((symbol-function 'mevedel-transcript-audit--decode)
+                 (lambda (text) (cl-incf misses) (funcall decode text))))
+        (should (equal expected (mevedel-transcript-audit-buffer-spans))))
+      (should (= 0 misses))))
   :doc "bounded scans match string positions and ignore records outside or crossing bounds"
   (with-temp-buffer
     (insert (mevedel--format-hook-audit-record '(:type fork-point :fork-point-id "outside")))

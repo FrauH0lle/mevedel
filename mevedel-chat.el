@@ -381,8 +381,7 @@ enables `gptel-mode'.  The major-mode change calls
 `kill-all-local-variables', so buffer-locals set before this call are
 wiped unless permanent-local."
   (let ((org-agenda-file-menu-enabled nil)
-        (org-element-use-cache nil)
-        (org-element-cache-persistent nil))
+        (org-element-use-cache nil))
     (mevedel--transcript-org-mode))
   (mevedel--chat-buffer-disable-org-element-cache)
   (setq-local gptel-org-convert-response nil)

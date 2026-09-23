@@ -522,20 +522,22 @@ blocks that still carry stale tool properties."
       (goto-char start)
       (while (mevedel-transcript--search-control-line "^#\\+begin_tool\\b" end)
         (let ((block-start (match-beginning 0)))
+          ;; Candidates advance in source order. Earlier disjoint property
+          ;; runs and validated blocks cannot prove this or any later block.
+          (while (and base-segments
+                      (<= (caddr (car base-segments)) block-start))
+            (setq base-segments (cdr base-segments)))
+          (while (and tool-ranges
+                      (<= (caddr (car tool-ranges)) block-start))
+            (setq tool-ranges (cdr tool-ranges)))
           (if (mevedel-transcript--search-control-line "^#\\+end_tool[^\n]*\n?" end)
               (let ((block-end (match-end 0)))
                 (when (and
-                       (cl-find-if
-                        (lambda (seg)
-                          (and (eq (car seg) 'tool)
-                               (< (cadr seg) block-end)
-                               (> (caddr seg) block-start)))
-                        base-segments)
-                       (not (cl-find-if
-                             (lambda (range)
-                               (and (<= (cadr range) block-start)
-                                    (<= block-end (caddr range))))
-                             tool-ranges)))
+                       (mevedel-transcript--tool-block-overlaps-tool-segment-p
+                        base-segments block-start block-end)
+                       (not (when-let* ((range (car tool-ranges)))
+                              (and (<= (cadr range) block-start)
+                                   (<= block-end (caddr range))))))
                   (push (list 'ignored block-start block-end) ranges)))
             (goto-char (1+ block-start))))))
     (nreverse ranges)))
@@ -1033,6 +1035,11 @@ runs."
     (save-excursion
       (goto-char (point-min))
       (while (mevedel-transcript--search-control-line "^#\\+begin_tool\\b" end)
+        ;; Keep the containing property run, but discard completed prefixes.
+        ;; Raw property segments are disjoint and ordered by source position.
+        (while (and segments
+                    (<= (caddr (car segments)) (match-beginning 0)))
+          (setq segments (cdr segments)))
         (let* ((block-start (match-beginning 0))
                (marker-end (match-end 0))
                (block-end
@@ -1073,30 +1080,30 @@ runs."
 
 (defun mevedel-transcript--tool-block-overlaps-tool-segment-p
     (segments block-start block-end)
-  "Return non-nil when SEGMENTS overlap BLOCK-START..BLOCK-END."
-  (cl-some (lambda (seg)
-             (and (eq (car seg) 'tool)
-                  (< (cadr seg) block-end)
-                  (> (caddr seg) block-start)))
-           segments))
+  "Return non-nil when ordered SEGMENTS overlap BLOCK-START..BLOCK-END."
+  (catch 'overlap
+    (while (and segments (< (cadr (car segments)) block-end))
+      (let ((seg (pop segments)))
+        (when (and (eq (car seg) 'tool) (> (caddr seg) block-start))
+          (throw 'overlap t))))))
 
 (defun mevedel-transcript--tool-block-inside-ignore-segment-p
     (segments block-start block-end)
-  "Return non-nil when an ignore entry in SEGMENTS spans BLOCK-START..BLOCK-END."
-  (cl-some (lambda (seg)
-             (and (eq (car seg) 'ignored)
-                  (<= (cadr seg) block-start)
-                  (<= block-end (caddr seg))))
-           segments))
+  "Return non-nil when ordered SEGMENTS has an ignore entry spanning the block.
+The block is bounded by BLOCK-START and BLOCK-END."
+  (catch 'contains
+    (while (and segments (<= (cadr (car segments)) block-start))
+      (let ((seg (pop segments)))
+        (when (and (eq (car seg) 'ignored) (<= block-end (caddr seg)))
+          (throw 'contains t))))))
 
 (defun mevedel-transcript--first-tool-segment-start-after (segments pos limit)
-  "Return the first tool segment start in SEGMENTS after POS and before LIMIT."
-  (cl-some (lambda (seg)
-             (and (eq (car seg) 'tool)
-                  (> (cadr seg) pos)
-                  (< (cadr seg) limit)
-                  (cadr seg)))
-           segments))
+  "Return the first tool start in ordered SEGMENTS after POS and before LIMIT."
+  (catch 'start
+    (while (and segments (< (cadr (car segments)) limit))
+      (let ((seg (pop segments)))
+        (when (and (eq (car seg) 'tool) (> (cadr seg) pos))
+          (throw 'start (cadr seg)))))))
 
 (defun mevedel-transcript--org-tool-block-start-p (pos)
   "Return non-nil when POS is at a persisted org tool block start.

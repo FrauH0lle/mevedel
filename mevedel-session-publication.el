@@ -1242,13 +1242,19 @@ component and retries once."
   "Publish every staged artifact in BATCH while SESSION remains owner."
   (let ((artifacts (plist-get batch :artifacts)))
     (dolist (artifact artifacts)
-      ;; Tombstones change only the manifest.  File-history bytes are read
-      ;; from immutable publications, so they need no additional fixed copy.
-      ;; Neither owes a lease renewal before a nonexistent cache write.
+      ;; Transcripts and file history are read through the immutable
+      ;; publication (or owned staging before its marker), never fixed files.
+      ;; Keep the small discovery sidecar and ordinary artifact files.
       (unless (or (plist-get artifact :delete)
-                  (and (plist-get artifact :logical)
-                       (string-prefix-p "file-history/"
-                                        (plist-get artifact :logical))))
+                  (when-let* ((logical (plist-get artifact :logical)))
+                    (or (string-prefix-p "file-history/" logical)
+                        (and (string-match-p
+                              "\\`\\(?:segment-[0-9]+\\|agents/.+\\)\\.chat\\.org\\'"
+                              logical)
+                             ;; Numbered archives are crash recovery files
+                             ;; written before the live compaction rewrite.
+                             (not (string-match-p
+                                   "\\.compact-[0-9]+\\.chat\\.org\\'" logical))))))
         (unless (mevedel-session-durability--renew-publication-lease session)
           (user-error "Portable session lease was lost during publication"))
         (mevedel-session-publication--publish-artifact artifact)))
@@ -1384,49 +1390,53 @@ in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
 reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
 that error so their lifecycle owner can classify it."
-  (mevedel-session-recovery-refresh session)
-  (when (mevedel-session-pending-publication session)
-    (user-error "Session has pending publication; retry or abandon it first"))
-  (when (and require-commit
-             (mevedel-session-publication-active-p session))
-    (user-error "Required session publication cannot be queued"))
-  (let ((batch (mevedel-session-publication--stage-artifacts
-                session artifacts))
-        (publication-before (mevedel-session-publication session)))
-    (condition-case err
-        (progn
-          (unless (or (mevedel-session-publication-active-p session)
-                      (mevedel-session-durability-lease-renew session))
-            (user-error
-             "Portable session lease could not be renewed for publication"))
-          (unless (mevedel-session-durability-lease-owned-p session)
-            (user-error "Portable session mutation requires its live lease"))
-          (if (mevedel-session-publication-active-p session)
-              (progn
-                (setf (mevedel-session-publication-queue session)
-                      (append (mevedel-session-publication-queue session)
-                              (list batch)))
-                'queued)
-            (mevedel-session-publication--publish-critical-batches
-             session (list batch))))
-      (error
-       (let ((committed-p
-              (not (equal publication-before
-                          (mevedel-session-publication session)))))
-         (unless (mevedel-session-pending-publication session)
-           (if (not committed-p)
-               (mevedel-session-publication--record-pending
-                session (list batch) err)
-             (mevedel-session-publication--delete-batch batch)))
-         (if (and committed-p require-commit)
-             (progn
-               (display-warning
-                'mevedel
-                (format "Session publication committed before cleanup failed: %s"
-                        (error-message-string err))
-                :warning)
-               (mevedel-session-publication session))
-           (signal (car err) (cdr err))))))))
+  ;; Admission, reservation and commit are one publication transaction.
+  ;; Reuse its bounded target clock and recovery observations, including for
+  ;; agent callers that do not enter through the root save wrapper.
+  (mevedel-session-durability-with-transaction
+    (mevedel-session-recovery-refresh session)
+    (when (mevedel-session-pending-publication session)
+      (user-error "Session has pending publication; retry or abandon it first"))
+    (when (and require-commit
+               (mevedel-session-publication-active-p session))
+      (user-error "Required session publication cannot be queued"))
+    (let ((batch (mevedel-session-publication--stage-artifacts
+                  session artifacts))
+          (publication-before (mevedel-session-publication session)))
+      (condition-case err
+          (progn
+            (unless (or (mevedel-session-publication-active-p session)
+                        (mevedel-session-durability-lease-renew session))
+              (user-error
+               "Portable session lease could not be renewed for publication"))
+            (unless (mevedel-session-durability-lease-owned-p session)
+              (user-error "Portable session mutation requires its live lease"))
+            (if (mevedel-session-publication-active-p session)
+                (progn
+                  (setf (mevedel-session-publication-queue session)
+                        (append (mevedel-session-publication-queue session)
+                                (list batch)))
+                  'queued)
+              (mevedel-session-publication--publish-critical-batches
+               session (list batch))))
+        (error
+         (let ((committed-p
+                (not (equal publication-before
+                            (mevedel-session-publication session)))))
+           (unless (mevedel-session-pending-publication session)
+             (if (not committed-p)
+                 (mevedel-session-publication--record-pending
+                  session (list batch) err)
+               (mevedel-session-publication--delete-batch batch)))
+           (if (and committed-p require-commit)
+               (progn
+                 (display-warning
+                  'mevedel
+                  (format "Session publication committed before cleanup failed: %s"
+                          (error-message-string err))
+                  :warning)
+                 (mevedel-session-publication session))
+             (signal (car err) (cdr err)))))))))
 
 (defun mevedel-session-publication-retry (&optional session)
   "Retry SESSION's pending critical publication."

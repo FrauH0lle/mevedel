@@ -918,6 +918,9 @@ header and its body can share one source start) and offset into the run. A
 raw position saved across a delete-and-re-render lands in different content
 whenever lengths shift. Anchors that cannot be resolved after the redraw fall back to the
 clamped raw position.
+Restoring an existing mark updates its marker directly, preserving activation
+state without running mark-activation hooks. A redraw must not schedule editor
+mode transitions for the next user command.
 Restoration also runs when a writer exits with an error. Managed-zone updates
 retain fragment-relative selections inside the changed zone and use advancing
 markers for positions in neighboring zones. Growing or removing status rows
@@ -1574,7 +1577,7 @@ partial records at either boundary and preserve the caller's narrowing. All audi
 readers share bounded pure decoding within the current buffer across projections,
 in addition to sharing decoding within one projection. Every scan still checks
 current provenance and positions. The
-memo retains at most 128 encoded payloads totaling 4 MiB, and does not retain an
+memo retains at most 1024 encoded payloads totaling 4 MiB, and does not retain an
 individual encoded payload larger than 1 MiB. It does not grant trust to quoted
 or edited audit-looking text.
 

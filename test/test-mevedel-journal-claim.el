@@ -161,6 +161,25 @@
           (should (equal current (mevedel-journal-claim-current directory)))
           (mevedel-journal-claim-settle current 'completed "")
           (should (= 4 (plist-get (mevedel-journal-claim-acquire directory 120) :generation))))
+      (delete-directory directory t)))
+
+  :doc "retained-only claim directories need one listing and no resumptions"
+  (let ((directory (make-temp-file "mevedel-claim-retained-" t)))
+    (unwind-protect
+        (let* ((first (mevedel-journal-claim-acquire directory 120))
+               (_ (mevedel-journal-claim-settle first 'completed "retained"))
+               (current (mevedel-journal-claim-acquire directory 120))
+               (run (symbol-function 'mevedel-session-control-fs-run-program))
+               (calls 0) (yields 0))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args) (cl-incf calls) (apply run args))))
+            (should (= 0 (iter-do (_ (mevedel-journal-claim-prune
+                                      directory (list (plist-get first :generation)) 200))
+                           (cl-incf yields)))))
+          (should (= calls 1))
+          (should (= yields 0))
+          (should (equal current (mevedel-journal-claim-current directory)))
+          (should (equal "retained" (plist-get (mevedel-journal-claim-outcome first) :payload))))
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-journal-claim-pruning-race ()

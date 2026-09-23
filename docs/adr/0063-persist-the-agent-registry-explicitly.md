@@ -5,6 +5,14 @@ Status: accepted
 The root session persists an explicit agent registry rather than reconstructing identities from rendered root transcript events. Each record owns its opaque storage ID, canonical and parent paths, role and configuration snapshot, current activity, unread mailbox, and session-relative conversation location. Root and child transcript records remain presentation, context, and audit history; compaction or rendering changes cannot alter addressability or topology.
 
 
+## Live transitions
+
+Published records remain serializable while provider setup yields. A retained
+follow-up clears its prior result before entering `starting`, and restores it
+on dispatch error or quit. Execution mail delivered during that interval remains
+queued independently of the follow-up outcome. Active records never serialize a
+previous settled result; validation retains that invariant.
+
 ## Conversation residency
 
 Restoring a registry does not load its idle conversations. Follow-up, history
@@ -22,3 +30,10 @@ and registry restoration to 46 ms, preserving all identities and the rendered ro
 view. This replaces eager idle hydration while retaining eager abandoned-turn
 recovery. Inspection/no-save markers are restored after Org mode setup, and owned
 follow-ups acquire writable buffers instead of reusing inspection snapshots.
+
+On 2026-09-23, a graphical multi-agent capture exposed execution completion
+during reviewer follow-up startup. The old result remained attached to the
+`starting` record until invocation admission, causing an unrelated root mailbox
+save to fail with `Invalid live agent registry entry`. Clearing it at startup,
+with rollback on dispatch failure, replaces that transient invalid state. A
+regression delivers execution mail through registry serialization during setup.

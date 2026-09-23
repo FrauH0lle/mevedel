@@ -31,7 +31,7 @@
 (autoload 'mevedel-telemetry-record-workspace "mevedel-telemetry")
 
 ;; `mevedel-transport'
-(declare-function mevedel-transport-cancel-idle "mevedel-transport" (table tag &optional path-of-key))
+(declare-function mevedel-transport-cancel-idle "mevedel-transport" (table tag))
 (declare-function mevedel-transport-schedule-idle "mevedel-transport" (table key tag path thunk))
 (autoload 'mevedel-transport-cancel-idle "mevedel-transport")
 (autoload 'mevedel-transport-schedule-idle "mevedel-transport")

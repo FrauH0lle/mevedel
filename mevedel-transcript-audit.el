@@ -73,7 +73,7 @@ OBJECT is a string or buffer and defaults to the current buffer."
 (defun mevedel--read-hook-audit-record (text)
   "Read one encoded hook audit record from TEXT, or nil.
 Reuse pure decoding within a projection and across calls in this buffer.
-Keep at most 128 payloads totaling 4 MiB, with a 1 MiB per-payload limit.
+Keep at most 1024 payloads totaling 4 MiB, with a 1 MiB per-payload limit.
 Trust checks always belong to callers; cached records convey no authority."
   (unless mevedel-transcript-audit--buffer-records
     (setq mevedel-transcript-audit--buffer-records (make-hash-table :test #'equal)))
@@ -85,7 +85,7 @@ Trust checks always belong to callers; cached records convey no authority."
       (setq entry (cons t (mevedel-transcript-audit--decode text)))
       (let ((bytes (string-bytes (or text ""))))
         (when (<= bytes (* 1024 1024))
-          (when (or (>= (hash-table-count memo) 128)
+          (when (or (>= (hash-table-count memo) 1024)
                     (> (+ mevedel-transcript-audit--buffer-record-bytes bytes)
                        (* 4 1024 1024)))
             (clrhash memo)

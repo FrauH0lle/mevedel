@@ -123,7 +123,7 @@
     (let ((start (point)))
       (insert "Agent response.\n")
       (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
+    (should (mevedel-agent-conversation-save invocation))
     (let ((target (mevedel-compact-target-agent-target invocation)))
       (should (eq agent-buffer (plist-get target :buffer)))
       (should (eq invocation (plist-get target :invocation)))
@@ -158,7 +158,7 @@
     (let ((start (point)))
       (insert "Agent response.\n")
       (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
+    (should (mevedel-agent-conversation-save invocation))
     (let ((target (mevedel-compact-target-agent-target invocation)))
       (should target)
       (should (string-match-p "Inherited prompt"
@@ -180,7 +180,7 @@
     (let ((tool-start (point)))
       (insert "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nresult\n")
       (put-text-property tool-start (point) 'gptel '(tool . "call-1"))
-      (basic-save-buffer)
+      (should (mevedel-agent-conversation-save invocation))
       (let ((target (mevedel-compact-target-agent-target invocation)))
         (should target)
         (should (= tool-start (plist-get target :body-start)))
@@ -195,8 +195,8 @@
     (let ((start (point)))
       (insert "Agent response.\n")
       (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (delete-file canonical-path)
+    (should (mevedel-agent-conversation-save invocation))
+    (should-not (file-exists-p canonical-path))
     (let ((save-path (mevedel-session-save-path session))
           seen)
       (cl-letf (((symbol-function 'file-remote-p)
@@ -285,7 +285,7 @@
     (let ((start (point)))
       (insert "Old response.\n")
       (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
+    (should (mevedel-agent-conversation-save invocation))
     (setf (mevedel-session-workspace-instruction-hashes session)
           '((("/root" "/workspace/root/AGENTS.md") . "root")
             (("/root/explorer" "/workspace/nested/AGENTS.md") . "agent")))
@@ -338,7 +338,8 @@
                   (mevedel-agent-record-conversation-buffer record)))
       (should (equal (buffer-string)
                      (with-temp-buffer
-                       (insert-file-contents canonical-path)
+                       (insert (mevedel-session-artifacts-read-artifact
+                        session (file-relative-name canonical-path (mevedel-session-save-path session))))
                        (buffer-string))))
       (should
        (equal (mevedel-session-workspace-instruction-hashes session)
@@ -354,13 +355,15 @@
       (let ((start (point)))
         (insert "Old response.\n")
         (put-text-property start (point) 'gptel 'response))
-      (basic-save-buffer)
+      (should (mevedel-agent-conversation-save invocation))
+      (mevedel-session-artifacts-save session parent-buffer)
       (let* ((target (mevedel-compact-target-agent-target invocation))
              (directory (file-name-directory canonical-path))
              (original-live (buffer-string))
              (original-canonical
               (with-temp-buffer
-                (insert-file-contents canonical-path)
+                (insert (mevedel-session-artifacts-read-artifact
+                        session (file-relative-name canonical-path (mevedel-session-save-path session))))
                 (buffer-string))))
         (unwind-protect
             (progn
@@ -374,7 +377,8 @@
         (should (equal original-live (buffer-string)))
         (should (equal original-canonical
                        (with-temp-buffer
-                         (insert-file-contents canonical-path)
+                         (insert (mevedel-session-artifacts-read-artifact
+                        session (file-relative-name canonical-path (mevedel-session-save-path session))))
                          (buffer-string))))
         (should-not
          (directory-files directory nil
@@ -388,7 +392,7 @@
     (let ((start (point)))
       (insert "Old response.\n")
       (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
+    (should (mevedel-agent-conversation-save invocation))
     (let* ((original (buffer-string))
            (target (mevedel-compact-target-agent-target invocation)))
       (add-hook
@@ -731,9 +735,11 @@
           (let ((segment-path
                  (mevedel-session-artifacts-segment-path
                   (mevedel-session-save-path session) 3)))
-            (should (file-exists-p segment-path))
+            (should (mevedel-session-artifacts-artifact-present-p
+                     session (file-name-nondirectory segment-path) t))
             (with-temp-buffer
-              (insert-file-contents segment-path)
+              (insert (mevedel-session-artifacts-read-artifact
+                       session (file-name-nondirectory segment-path) t))
               (org-mode)
               (mevedel-transcript-restore-properties)
               (should (string-match-p "summary again" (buffer-string)))

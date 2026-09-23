@@ -229,8 +229,7 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
       (setq default-directory
             (mevedel-agent-conversation--working-directory
              parent-session parent-workspace))
-      (let ((org-element-use-cache nil)
-            (org-element-cache-persistent nil))
+      (let ((org-element-use-cache nil))
         (mevedel--transcript-org-mode))
       (when (fboundp 'org-element-cache-reset)
         (let ((org-element-use-cache t))
@@ -811,7 +810,7 @@ Return nil when INVOCATION has no live conversation buffer."
                                     (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
                                 (mevedel-session-artifacts-publish-text
                                  session buffer-file-name content 'utf-8-unix)))
-                            (set-visited-file-modtime)
+                            (set-visited-file-modtime 0)
                             (set-buffer-modified-p nil)
                             (run-hooks 'after-save-hook))
                         (basic-save-buffer))))

@@ -609,6 +609,30 @@
 (mevedel-deftest mevedel-view--spinner-tick ()
   ,test
   (test)
+  :doc "progress ticks preserve selection without reactivating mark hooks"
+  (dolist (active '(nil t))
+    (mevedel-view-stream-test--with-buffers
+      (with-current-buffer view-buf
+        (setq-local transient-mark-mode t)
+        (mevedel-view--start-spinner "Working...")
+        (mevedel-view-stream-test--insert-composer-draft
+         "> quoted\nsecond line" 3)
+        (set-mark (+ (mevedel-view--input-start) 8))
+        (setq mark-active active deactivate-mark nil)
+        (let* ((activations 0)
+               (activate-mark-hook (list (lambda () (cl-incf activations)))))
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                     (lambda (&rest _) nil)))
+            (dotimes (_ 3) (mevedel-view--spinner-tick))
+            (mevedel-view--update-spinner "Checking completed work..."))
+          (should (= activations 0))
+          (should (eq active mark-active))
+          (should-not deactivate-mark)
+          (should (= 3 (- (point) (mevedel-view--input-start))))
+          (should (= 8 (- (mark) (mevedel-view--input-start))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))
+        (mevedel-view--stop-spinner))))
+
   :doc "an unattended tick leaves text, properties, and the composer untouched"
   (mevedel-view-stream-test--with-buffers
     (let ((draft "> quoted\nsecond line"))

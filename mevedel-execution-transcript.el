@@ -228,34 +228,31 @@ RENDER-DATA is retained in the hidden transcript audit record."
           (when (hash-table-p marker-table)
             (remhash tool-use-id marker-table)))))))
 
-(defun mevedel-execution-transcript--archived-render-data
-    (data-buffer tool-use-id)
-  "Return archived render data for TOOL-USE-ID in DATA-BUFFER."
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (save-restriction
-        (widen)
-        (when-let* ((record
-                     (cl-find-if
-                      (lambda (candidate)
-                        (equal (plist-get candidate :tool-use-id)
-                               tool-use-id))
-                      (mevedel-transcript-audit-records
-                       (buffer-substring
-                        (point-min) (point-max))
-                       'execution-archive))))
-          (copy-tree (plist-get record :render-data)))))))
-
 (defun mevedel-execution-transcript-prepare-archive
     (data-buffer tool-use-ids)
-  "Return a compaction plan for TOOL-USE-IDS removed from DATA-BUFFER."
-  (let (live completed)
+  "Return a compaction plan for TOOL-USE-IDS removed from DATA-BUFFER.
+Inspect archived records once per call, only when a live row is missing."
+  (let (archived live completed)
     (dolist (tool-use-id tool-use-ids)
       (when-let* ((render-data
                    (or (mevedel-tool-render-data-for-tool
                         data-buffer tool-use-id)
-                       (mevedel-execution-transcript--archived-render-data
-                        data-buffer tool-use-id)))
+                       (when (buffer-live-p data-buffer)
+                         (unless archived
+                           (setq archived (make-hash-table :test #'equal))
+                           (with-current-buffer data-buffer
+                             (save-restriction
+                               (widen)
+                               (dolist (record
+                                        (mevedel-transcript-audit-records
+                                         (buffer-substring (point-min) (point-max))
+                                         'execution-archive))
+                                 (let ((id (plist-get record :tool-use-id)))
+                                   (unless (gethash id archived)
+                                     (puthash id record archived)))))))
+                         (copy-tree
+                          (plist-get (gethash tool-use-id archived)
+                                     :render-data)))))
                   ((or (plist-get render-data :execution-id)
                        (plist-get render-data :live-execution-p))))
         (if (plist-get render-data :live-execution-p)
