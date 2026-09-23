@@ -285,15 +285,16 @@
     (should (timerp lost))
     (should-not (mevedel--timer-pending-p lost)))
 
-  :doc "rejects a listed timer Emacs already triggered"
-  ;; Emacs skips such a timer, so it never fires again.
-  (let ((timer (run-at-time 3600 nil #'ignore)))
-    (unwind-protect
-        (progn
-          (setf (timer--triggered timer) t)
-          (should (memq timer timer-list))
-          (should-not (mevedel--timer-pending-p timer)))
-      (cancel-timer timer)))
+  :doc "recognizes a repeating timer from inside its own function"
+  ;; Emacs marks it triggered while it runs; a caller that re-arms an
+  ;; unscheduled timer from there must not start a duplicate.
+  (let (timer inside)
+    (setq timer (run-at-time 0 0.01 (lambda ()
+                                      (setq inside (mevedel--timer-pending-p timer))
+                                      (cancel-timer timer))))
+    (with-timeout (2 (cancel-timer timer) (ert-fail "Repeating timer never ran"))
+      (while (memq timer timer-list) (accept-process-output nil 0.01)))
+    (should inside))
 
   :doc "counts a timer an exclusive section suspended"
   (require 'mevedel-transport)

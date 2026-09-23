@@ -343,8 +343,7 @@ rather than dropped.
 same way. `mevedel--timer-pending-p` counts a suspended timer as armed. A
 pending retry is therefore not activated a second time on the section's
 temporary list. Otherwise that copy could fire there and leave the suspended
-original marked triggered, which Emacs skips forever. A listed timer already
-marked triggered is not pending.
+original marked triggered, which Emacs skips forever.
 
 Replacing a remote file with `mevedel--write-file-atomically` (ApplyPatch,
 skill and plugin files, persisted state) is one pinned control program: the

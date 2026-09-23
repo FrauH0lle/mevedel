@@ -668,14 +668,12 @@ hook inside that window is discarded with the binding and never fires.
 Only presence on `timer-list', on a list an enclosing
 `mevedel-transport-with-exclusive-connection' suspended, or being held by
 `mevedel-transport-run-at-time' until TRAMP returns, means the timer is
-actually scheduled.  A listed timer already marked triggered is not: Emacs
-skips it, so it never fires again."
+actually scheduled.  The triggered flag is no evidence either way: Emacs
+sets it on a repeating timer while that timer's own function runs."
   (and (timerp timer)
-       (or (memq timer (bound-and-true-p mevedel-transport--held-timers))
-           (and (not (timer--triggered timer))
-                (or (memq timer timer-list)
-                    (memq timer (bound-and-true-p
-                                 mevedel-transport--suspended-timers)))))
+       (or (memq timer timer-list)
+           (memq timer (bound-and-true-p mevedel-transport--suspended-timers))
+           (memq timer (bound-and-true-p mevedel-transport--held-timers)))
        t))
 
 (defun mevedel--cycle-list-around (element list)
