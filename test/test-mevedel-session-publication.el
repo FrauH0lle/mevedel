@@ -472,23 +472,38 @@ and its segment path."
            (should (= 0 (hash-table-count (plist-get plan :keep))))))))))
 
 (mevedel-deftest mevedel-session-publication-collect-step/freshness ()
-  (test-mevedel-session-publication--with-published
-   "publication-plan-freshness" "mevedel-plan-freshness-" ?e
-   (lambda (session directory segment)
-     (let* ((old (test-mevedel-session-persistence--publish-generation session directory segment "old" 1))
-            (current (test-mevedel-session-persistence--publish-generation session directory segment "new" 1))
-            (summaries (mevedel-session-publication-generation-summaries directory most-positive-fixnum))
-            (plan (mevedel-session-publication-collection-plan session summaries))
-            (capture (make-string 64 ?f)))
-       (while (not (plist-get plan :marked))
-         (mevedel-session-publication-collect-step session plan))
-       (mevedel-journal-pins-retain directory capture (list old))
-       (should-error (mevedel-session-publication-collect-step session plan))
-       (should (mevedel-session-publication-read directory old))
-       (should (mevedel-session-publication-read directory current))
-       (mevedel-journal-pins-release directory capture)
-       (test-mevedel-session-persistence--publish-generation session directory segment "later" 2)
-       (should-error (mevedel-session-publication-collect-step session plan))))))
+  ;; Three same-turn generations beside the current head: whatever order their
+  ;; names sort in, retention keeps two and collection reaches a deletion.
+  (let ((mevedel-session-publication-keep-recent-generations 1))
+    (test-mevedel-session-publication--with-published
+     "publication-plan-freshness" "mevedel-plan-freshness-" ?e
+     (lambda (session directory segment)
+       (let* ((old (test-mevedel-session-persistence--publish-generation session directory segment "old" 1))
+              (_ (test-mevedel-session-persistence--publish-generation session directory segment "mid" 1))
+              (current (test-mevedel-session-persistence--publish-generation session directory segment "new" 1))
+              (summaries (mevedel-session-publication-generation-summaries directory most-positive-fixnum))
+              (plan (mevedel-session-publication-collection-plan session summaries))
+              (capture (make-string 64 ?f))
+              (original (symbol-function 'mevedel-session-control-fs-run-program))
+              (programs 0))
+         ;; Reading a retained manifest is one program: no clock or pin proof.
+         (should (plist-get plan :heads))
+         (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                    (lambda (&rest args) (cl-incf programs) (apply original args))))
+           (mevedel-session-publication-collect-step session plan))
+         (should (= 1 programs))
+         (while (not (plist-get plan :marked))
+           (mevedel-session-publication-collect-step session plan))
+         (mevedel-journal-pins-retain directory capture (list old))
+         ;; Steps that only read may continue; the first that would delete
+         ;; proves the pin set on the target and refuses.
+         (should-error (while (mevedel-session-publication-collect-step session plan)))
+         (should (plist-get plan :operations))
+         (should (mevedel-session-publication-read directory old))
+         (should (mevedel-session-publication-read directory current))
+         (mevedel-journal-pins-release directory capture)
+         (test-mevedel-session-persistence--publish-generation session directory segment "later" 2)
+         (should-error (mevedel-session-publication-collect-step session plan)))))))
 
 (mevedel-deftest mevedel-session-publication-collect-step/unreadable ()
   (test-mevedel-session-publication--with-published

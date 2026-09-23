@@ -900,7 +900,10 @@ mark their exact referenced files. All obsolete manifests are retired before
 any unreferenced payloads are removed, so interruption cannot leave discoverable
 heads whose bytes have been collected. Each deletion batch contains at most
 eight operations under a reserved lease; directory enumeration also yields
-between generations. A changed journal pin set stops the plan before deletion.
+between generations. The target proofs of lease ownership and of an unchanged
+journal pin set run only in steps that delete. Steps that read manifests or list
+generations check local state and cost only their own read. A changed pin set
+stops the plan before deletion.
 Failure warns without breaking settlement or restore.
 
 Collection follows references rather than age: manifests can retain unchanged

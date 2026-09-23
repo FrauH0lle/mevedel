@@ -760,8 +760,11 @@ the idle collection owner, which reports them and discards the plan."
   (let ((directory (mevedel-session-save-path session))
         (root (plist-get plan :root))
         (keep (plist-get plan :keep)))
+    ;; Local state is checked before every step.  The target proofs --
+    ;; the lease clock and the journal pin set -- guard deletion, so only
+    ;; the step that deletes pays them; reading a manifest or listing a
+    ;; generation changes nothing a later proof would miss.
     (unless (and (mevedel-session-codec-portable-authority-p session)
-                 (mevedel-session-durability-lease-owned-p session)
                  (not (mevedel-session-pending-publication session))
                  (null (mevedel-session-publication-uncommitted-batches session))
                  (null (mevedel-session-publication-queue session))
@@ -770,8 +773,13 @@ the idle collection owner, which reports them and discards the plan."
                         (plist-get (mevedel-session-publication session) :head))
                  (equal root (file-name-as-directory
                               (mevedel-session-control-fs-physical-path directory)))
-                 (equal (plist-get plan :pins)
-                        (sort (mevedel-journal-pins-heads directory) #'string<)))
+                 (or (plist-get plan :heads)
+                     (not (plist-get plan :marked))
+                     (not (plist-get plan :operations))
+                     (and (mevedel-session-durability-lease-owned-p session)
+                          (equal (plist-get plan :pins)
+                                 (sort (mevedel-journal-pins-heads directory)
+                                       #'string<)))))
       (error "Publication collection ownership or retained sources changed"))
     (cond
      ((plist-get plan :heads)
