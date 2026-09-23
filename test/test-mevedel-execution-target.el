@@ -147,11 +147,34 @@
   (dolist (case '(("/srv/project/" . "local")
                   ("/ssh:user@host:/srv/project/" . "ssh:user@host")
                   ("/docker:dev:/workspace/" . "docker:dev")
-                  ("/podman:dev:/workspace/" . "podman:dev")))
+                  ("/podman:dev:/workspace/" . "podman:dev")
+                  ("/ssh:jump|ssh:user@host:/srv/project/" . "ssh:user@host")))
     (should
      (equal (cdr case)
             (mevedel-execution-target-label
-             (mevedel-execution-target-create (car case)))))))
+             (mevedel-execution-target-create (car case))))))
+
+  :doc "derives directory and default-directory labels without target discovery"
+  (cl-letf (((symbol-function 'mevedel-execution-target-create)
+             (lambda (&rest _) (error "Unexpected target creation")))
+            ((symbol-function 'process-file)
+             (lambda (&rest _) (error "Unexpected process")))
+            ((symbol-function 'tramp-send-command)
+             (lambda (&rest _) (error "Unexpected remote command"))))
+    (dolist (case '(("/srv/project/" . "local")
+                    ("/ssh:user@host:/srv/project/" . "ssh:user@host")
+                    ("/docker:dev:/workspace/" . "docker:dev")
+                    ("/podman:dev:/workspace/" . "podman:dev")
+                    ("/ssh:jump|ssh:user@host:/srv/project/" . "ssh:user@host")))
+      (should (equal (cdr case)
+                     (mevedel-execution-target-label nil (car case))))
+      (let ((default-directory (car case)))
+        (should (equal (cdr case) (mevedel-execution-target-label nil))))))
+
+  :doc "prefers the supplied target over the directory"
+  (let ((target (mevedel-execution-target-create "/ssh:user@host:/srv/")))
+    (should (equal "ssh:user@host"
+                   (mevedel-execution-target-label target "/tmp/")))))
 
 (mevedel-deftest mevedel-execution-target--process-output ()
   ,test

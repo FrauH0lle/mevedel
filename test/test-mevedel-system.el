@@ -419,6 +419,7 @@
     (should (string-match-p "BASE PROMPT CONTENT" prompt))
     (should (string-match-p "Persistent memory" prompt))
     (should (string-match-p "## Environment" prompt))
+    (should (string-match-p "Execution target: local\nWorking directory:" prompt))
     (should (string-match-p "Emacs version:" prompt))
     (should (string-match-p (regexp-quote emacs-version) prompt))
     (should (string-match-p "<env>" prompt)))
@@ -441,6 +442,7 @@
              (mevedel-system-build-prompt
               '(:workspace-aware nil :components (environment))
               :workspace ws :session session)))
+        (should (string-match-p "Execution target: ssh:user@host\n" prompt))
         (should (string-match-p "Working directory: .*mevedel-sys-" prompt))
         (should (string-match-p "Platform: linux" prompt))
         (should (string-match-p "OS Version: 6.8.0-cached" prompt)))))

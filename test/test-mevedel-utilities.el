@@ -540,10 +540,50 @@
                :root "/ssh:user@host:/srv/project/")
               "/ssh:user@host:/srv/project/lib/"
               target)))
+        (should (string-prefix-p "Execution target: ssh:user@host\n" result))
         (should (string-match-p "Working directory: /srv/project/lib/"
                                 result))
         (should (string-match-p "Platform: linux" result))
-        (should (string-match-p "OS Version: 6.8.0-target" result))))))
+        (should (string-match-p "OS Version: 6.8.0-target" result)))))
+
+  :doc "identifies remote directories with or without a target and no readiness"
+  (dolist (case '(("/ssh:user@host:/workspace/" . "ssh:user@host")
+                  ("/docker:dev:/workspace/" . "docker:dev")
+                  ("/podman:dev:/workspace/" . "podman:dev")
+                  ("/ssh:jump|ssh:user@host:/workspace/" . "ssh:user@host")))
+    (let ((target (mevedel-execution-target-create (car case)))
+          unexpected-io)
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (&rest _)
+                   (push 'executable-find unexpected-io)
+                   (error "Unexpected executable lookup")))
+                ((symbol-function 'process-file)
+                 (lambda (&rest _)
+                   (push 'process-file unexpected-io)
+                   (error "Unexpected target process")))
+                ((symbol-function 'tramp-send-command)
+                 (lambda (&rest _)
+                   (push 'tramp-send-command unexpected-io)
+                   (error "Unexpected remote command")))
+                ((symbol-function 'file-attributes)
+                 (lambda (&rest _)
+                   (push 'file-attributes unexpected-io)
+                   (error "Unexpected filesystem probe"))))
+        (dolist (supplied-target (list target nil))
+          (let ((result (mevedel--environment-info-string
+                         nil (car case) supplied-target)))
+            (should (string-prefix-p
+                     (format "Execution target: %s\nWorking directory: /workspace/\n"
+                             (cdr case))
+                     result))
+            (should (string-match-p "Platform: unknown" result))
+            (should (string-match-p "OS Version: unknown" result))))
+        (should-not unexpected-io))))
+
+  :doc "identifies a local directory without a session target"
+  (let ((result (mevedel--environment-info-string nil temporary-file-directory)))
+    (should (string-prefix-p "Execution target: local\nWorking directory: " result))
+    (should (string-match-p (regexp-quote emacs-version) result))))
 
 (mevedel-deftest mevedel--clear-user-turn-gptel-properties ()
   ,test

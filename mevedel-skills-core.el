@@ -28,7 +28,7 @@
 (declare-function mevedel-execution-target-identity
                   "mevedel-execution-target" (cl-x) t)
 (declare-function mevedel-execution-target-label
-                  "mevedel-execution-target" (target))
+                  "mevedel-execution-target" (target &optional directory))
 (declare-function mevedel-execution-target-prefix
                   "mevedel-execution-target" (cl-x) t)
 (declare-function mevedel-execution-target-same-path-domain-p
