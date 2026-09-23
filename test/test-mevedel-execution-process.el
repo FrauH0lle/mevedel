@@ -323,8 +323,12 @@
            :command '("sh" "-c" "exit 0") :coding 'utf-8-unix)
           (setq watch (mevedel-execution-process--child-watch-timer child))
           (let ((process (mevedel-execution-process--child-process child)))
-            (test-mevedel-execution-process--wait
-             (lambda () (memq (process-status process) '(exit signal))))
+            ;; Observe the exit only from the simulated remote command: no
+            ;; sentinel, and a wait that runs neither timers nor sentinels.
+            (set-process-sentinel process #'ignore)
+            (with-timeout (5 (ert-fail "Child did not exit"))
+              (while (process-live-p process)
+                (accept-process-output process 0.01 nil 1)))
             (mevedel-transport--handler-advice
              (lambda ()
                (let (timer-list timer-idle-list)
