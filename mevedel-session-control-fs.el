@@ -579,22 +579,24 @@ parent must not turn into a `Setting current directory' failure."
           payload
           (if (plist-get op :optional) "1" "0"))))
 
-(defun mevedel-session-control-fs--program-request (fields)
-  "Encode FIELDS for stdin, with a byte length before each payload.
-A trailing NUL proves a complete field before a streamed write commits."
-  (mapconcat
-   #'identity
-   ;; Flatten the small field lists before joining: joining each operation
-   ;; first would copy every large payload into an intermediate string.
-   (append
-    (mapcan
-     (lambda (row)
-       (let ((payload (nth 3 row)))
-         (list (nth 0 row) (nth 1 row) (nth 2 row) (nth 4 row)
-               (number-to-string (string-bytes payload)) payload)))
-     fields)
-    (list ""))
-   "\0"))
+(defun mevedel-session-control-fs--write-program-request (fields file)
+  "Write FIELDS to FILE for stdin, with a byte length before each payload.
+A trailing NUL proves a complete field before a streamed write commits.
+The request is assembled in a buffer rather than as a string: a
+request-sized string, and then its encoded copy, used to double every large
+payload before it reached the target."
+  (with-temp-buffer
+    (dolist (row fields)
+      (let ((payload (nth 3 row)))
+        (dolist (field (list (nth 0 row) (nth 1 row) (nth 2 row) (nth 4 row)
+                             (number-to-string (string-bytes payload))
+                             payload))
+          (insert field 0))))
+    ;; The buffer's own representation is already the UTF-8 the target
+    ;; reads, raw bytes included.  Writing it unconverted streams an ASCII
+    ;; request, and base64 payloads always are, without an encoded copy.
+    (let ((coding-system-for-write 'no-conversion))
+      (write-region nil nil file nil 'silent))))
 
 (defconst mevedel-session-control-fs--argument-budget 3072
   "Largest physical line, in bytes, that the argument list may contribute.
@@ -860,13 +862,8 @@ signal contract of the single-operation wrappers per operation."
         (unwind-protect
             (progn
               (when input
-                (let ((coding-system-for-write 'no-conversion)
-                      (request (mevedel-session-control-fs--program-request
-                                fields)))
-                  (with-temp-buffer
-                    (set-buffer-multibyte nil)
-                    (insert (encode-coding-string request 'utf-8-unix))
-                    (write-region (point-min) (point-max) input nil 'silent))))
+                (mevedel-session-control-fs--write-program-request
+                 fields input))
               (catch 'read-result
                 (dotimes (_attempt 2)
                   (with-current-buffer output (erase-buffer))

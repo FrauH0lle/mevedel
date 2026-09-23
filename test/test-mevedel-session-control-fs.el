@@ -14,23 +14,56 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-(mevedel-deftest mevedel-session-control-fs--program-request ()
+(mevedel-deftest mevedel-session-control-fs--write-program-request ()
   ,test
   (test)
-  (let* ((payload (make-string (* 1024 1024) ?x))
+  :doc "writes each field NUL-terminated, copying no payload"
+  (let* ((file (make-temp-file "mevedel-control-request-"))
+         (payload (make-string (* 1024 1024) ?x))
          (fields (list (list "write" "/tmp" "first" payload "0")
-                       (list "read" "/tmp" "second" "" "1")))
-         (before (nth 4 (memory-use-counts)))
-         (request (mevedel-session-control-fs--program-request fields))
-         (allocated (- (nth 4 (memory-use-counts)) before)))
-    ;; Large payloads need one request-sized string, not one per nesting level.
-    (should (< allocated (+ (length payload) 4096)))
-    (should (equal request
-                   (mapconcat #'identity
-                              (list "write" "/tmp" "first" "0" "1048576" payload
-                                    "read" "/tmp" "second" "1" "0" "" "") "\0")))
-    (should (equal payload (nth 3 (car fields)))))
-  (should (equal "" (mevedel-session-control-fs--program-request nil))))
+                       (list "read" "/tmp" "second" "" "1"))))
+    (unwind-protect
+        (let* ((before (nth 4 (memory-use-counts)))
+               (_ (mevedel-session-control-fs--write-program-request fields file))
+               (allocated (- (nth 4 (memory-use-counts)) before)))
+          (should (< allocated 4096))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally file)
+            (should (equal (mapconcat #'identity
+                                      (list "write" "/tmp" "first" "0"
+                                            "1048576" payload
+                                            "read" "/tmp" "second" "1" "0" "" "")
+                                      "\0")
+                           (buffer-string))))
+          (should (equal payload (nth 3 (car fields)))))
+      (delete-file file)))
+
+  :doc "writes non-ASCII and raw-byte fields as their UTF-8 bytes"
+  (let* ((file (make-temp-file "mevedel-control-request-"))
+         (parent (concat "/tmp/\u00fc \u03bb \U0001F600"
+                         (string (unibyte-char-to-multibyte 200))))
+         (fields (list (list "read" parent "leaf" "" "0"))))
+    (unwind-protect
+        (progn
+          (mevedel-session-control-fs--write-program-request fields file)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally file)
+            (should (equal (encode-coding-string
+                            (concat "read\0" parent "\0leaf\0" "0\0" "0\0" "\0")
+                            'utf-8-unix)
+                           (buffer-string)))))
+      (delete-file file)))
+
+  :doc "writes an empty request for no fields"
+  (let ((file (make-temp-file "mevedel-control-request-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "stale"))
+          (mevedel-session-control-fs--write-program-request nil file)
+          (should (= 0 (file-attribute-size (file-attributes file)))))
+      (delete-file file))))
 
 (mevedel-deftest mevedel-session-control-fs--program-arguments/large-field ()
   (let* ((field (make-string (1+ mevedel-session-control-fs--argument-field-budget) ?x))

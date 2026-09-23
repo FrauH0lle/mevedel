@@ -44,7 +44,9 @@ and the richer resource-scope fields restricted to `permission-log.el`.
 Telemetry may be disabled with `mevedel-telemetry-enabled`. Events emitted
 before a new session has a directory are held in the session and flushed as
 soon as it is materialized. Persistence failures warn but never fail the user
-workflow.
+workflow. Local session events are appended synchronously as UTF-8, one write
+per event; the session directory is created only when an append finds it
+missing.
 
 ## Data policy
 

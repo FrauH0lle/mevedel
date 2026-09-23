@@ -438,6 +438,46 @@
                          (mevedel-telemetry-path session))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-telemetry--persist-content ()
+  ,test
+  (test)
+  :doc "creates a missing directory once, then appends without probing it"
+  (let* ((root (make-temp-file "mevedel-telemetry-persist-" t))
+         (session (test-mevedel-telemetry--session root))
+         (make (symbol-function 'make-directory))
+         (probes 0))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session)
+                (file-name-concat root "late"))
+          (cl-letf (((symbol-function 'make-directory)
+                     (lambda (&rest args) (cl-incf probes) (apply make args))))
+            (should (mevedel-telemetry--persist-content session "(:a 1)\n"))
+            (should (= 1 probes))
+            (should (mevedel-telemetry--persist-content session "(:b 2)\n"))
+            (should (= 1 probes)))
+          (should (equal '((:a 1) (:b 2))
+                         (test-mevedel-telemetry--read
+                          (mevedel-telemetry-path session)))))
+      (delete-directory root t)))
+
+  :doc "writes UTF-8 whatever the ambient buffer's coding system"
+  (let* ((root (make-temp-file "mevedel-telemetry-persist-" t))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) root)
+          (with-temp-buffer
+            (setq buffer-file-coding-system 'latin-1-unix)
+            (should (mevedel-telemetry--persist-content
+                     session "(:note \"\u00fc \u03bb\")\n")))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally (mevedel-telemetry-path session))
+            (should (equal (encode-coding-string "(:note \"\u00fc \u03bb\")\n" 'utf-8)
+                           (buffer-string)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-telemetry--monotonic-now
   (:doc "returns a numeric monotonic-clock reading")
   (let ((first (mevedel-telemetry--monotonic-now))
