@@ -899,8 +899,9 @@ After a complete scan, retained manifests are validated one per idle step and
 mark their exact referenced files. All obsolete manifests are retired before
 any unreferenced payloads are removed, so interruption cannot leave discoverable
 heads whose bytes have been collected. Each deletion batch contains at most
-eight operations under a reserved lease; directory enumeration also yields
-between generations. The target proofs of lease ownership and of an unchanged
+eight operations under a reserved lease. Wholly unreferenced generation
+directories need no listing and share a batch. A partially retained generation
+is listed on its own step, yielding between generations. The target proofs of lease ownership and of an unchanged
 journal pin set run only in steps that delete. Steps that read manifests or list
 generations check local state and cost only their own read. A changed pin set
 stops the plan before deletion.
