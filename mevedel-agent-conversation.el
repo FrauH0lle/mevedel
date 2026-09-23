@@ -123,6 +123,11 @@
 (autoload 'mevedel-transcript-restore-gptel-state
   "mevedel-transcript-restore")
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel delay))
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--insert-user-role-block-at-marker
                   "mevedel-utilities" (block &optional marker))
@@ -822,6 +827,16 @@ Return nil when INVOCATION has no live conversation buffer."
                     (setf (mevedel-agent-invocation-sidecar-dirty invocation)
                           nil))
                   t)
+              (mevedel-session-control-fs-busy
+               ;; Reached from a timer or sentinel inside a remote command:
+               ;; the control filesystem refused to nest and nothing was
+               ;; written, so write again once the transport is free.
+               (mevedel-transport-run-when-idle
+                (list 'agent-conversation-save
+                      (mevedel-agent-invocation-agent-id invocation))
+                (mevedel-session-save-path session)
+                (lambda () (mevedel-agent-conversation--write invocation)))
+               nil)
               (error
                (message "mevedel: conversation save failed for %s: %S"
                         (mevedel-agent-invocation-agent-id invocation) err)

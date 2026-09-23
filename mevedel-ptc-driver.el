@@ -58,6 +58,11 @@
 (autoload 'mevedel-tool-ensure "mevedel-tool-registry")
 (autoload 'mevedel-tool-name "mevedel-tool-registry")
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-handle-tool-progress
                   "mevedel-view-stream" (event))
@@ -490,8 +495,10 @@ ERROR-KIND is the interpreter's typed failure category when available."
                         (if typed-p (nth 1 err) 'script)))))))
                (schedule
                 (lambda ()
-                  (run-at-time
-                   0 nil
+                  ;; A nested result can arrive from a sentinel inside a
+                  ;; remote command; a plain timer armed there is dropped.
+                  (mevedel-transport-run-at-time
+                   0
                    (lambda ()
                      (funcall guard (lambda () (funcall tick)))))))
                (tick
@@ -682,8 +689,8 @@ ERROR-KIND is the interpreter's typed failure category when available."
                           (lambda ()
                             (unless (or scheduled joined aborted)
                               (setq scheduled t)
-                              (run-at-time
-                               0 nil
+                              (mevedel-transport-run-at-time
+                               0
                                (lambda ()
                                  (funcall
                                   guard

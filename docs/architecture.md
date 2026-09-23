@@ -326,6 +326,17 @@ timers delivered after TRAMP restores a suspended timer list. Bulk cancellation
 retires its batch before invoking cleanup callbacks, so reentrantly scheduled
 replacement work keeps its own pending entry and cancellation callback.
 
+TRAMP let-binds the timer lists to nil around its critical sections, and a
+process filter or sentinel can run inside one: a plain timer armed there is
+discarded with the binding. Continuations armed from that context -- pipeline
+yields, the ToolCall trampoline, WaitAgent timeouts, and stream-bridge flushes
+-- use `mevedel-transport-run-at-time`. Inside a TRAMP handler frame it holds
+the timer and arms it when the outermost frame returns, so the continuation
+neither disappears nor runs nested inside the remote command. A held timer
+cancelled before arming still fires once; its callers check that their work is
+current. Agent conversation saves refused as busy are requeued through
+`mevedel-transport-run-when-idle` rather than dropped.
+
 `mevedel-session-durability.el` owns portable project lease and storage
 primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
 `mevedel-session-transfer.el` owns cooperative control-transfer records, and
@@ -546,6 +557,14 @@ style, skill dispatch, memory-use policy and a short memory-manual retrieval
 requirement. Named workspace configuration, environment, memory indexes, skill
 catalogs, resource availability, the main journal map and root Goal context are
 delivered after current input through the existing reminder transaction.
+
+Environment context identifies the execution target as `local` or a TRAMP
+method and destination, such as `ssh:alice@build` or `podman:dev`, before the
+target-native working directory. Multi-hop connections name the final
+destination. Local mounts such as SSHFS remain `local`; the label describes
+execution relative to Emacs. Labels use existing target metadata or parse the
+working directory without probing. Container, VM, and WSL environments beyond
+what the TRAMP method identifies are not detected.
 
 Environment, active Goal, skills, memory, journal and resource availability are
 retained as independent current-state sections. If one selected section changes, the next

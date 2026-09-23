@@ -20,6 +20,7 @@
 (require 'mevedel-tool-repair)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
+(require 'mevedel-transport)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-workspace)
@@ -949,6 +950,54 @@
 			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
 			   (should (string-match-p "durable conversation"
 					   (buffer-string)))))
+		     (when (buffer-live-p buffer)
+		       (with-current-buffer buffer
+			 (set-buffer-modified-p nil)
+			 (setq-local kill-buffer-hook nil))
+		       (kill-buffer buffer))
+		     (delete-directory root t)))
+
+		 :doc "writes again once a remote command no longer holds the transport"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-agent-conversation-save-" t)))
+			(workspace
+			 (mevedel-workspace--create
+			  :type 'project :id root :root root :name "conversation"))
+			(session (mevedel-session-create "main" workspace))
+			(relative "agents/test.chat.org")
+			(absolute (expand-file-name relative root))
+			(buffer (generate-new-buffer " *agent-conversation-save*"))
+			(invocation
+			 (mevedel-agent-invocation--create
+			  :agent-id "default--busy"
+			  :buffer buffer
+			  :parent-session session
+			  :transcript-relative-path relative))
+			(key '(agent-conversation-save "default--busy")))
+		   (unwind-protect
+		       (progn
+			 (make-directory (file-name-directory absolute) t)
+			 (setf (mevedel-session-save-path session) root)
+			 (with-current-buffer buffer
+			   (org-mode)
+			   (insert "* Agent Task: busy\n\nkept conversation\n")
+			   (set-visited-file-name absolute t t)
+			   (set-buffer-modified-p t))
+			 ;; A save timer firing inside a remote command: the control
+			 ;; filesystem refuses to nest.
+			 (let ((mevedel-transport--depth 1))
+			   (should-not (mevedel-agent-conversation-save invocation)))
+			 (should (gethash key mevedel-transport--pending))
+			 (with-timeout (2 (ert-fail "Refused save was never retried"))
+			   (while (gethash key mevedel-transport--pending)
+			     (accept-process-output nil 0.01)))
+			 (should-not (buffer-modified-p buffer))
+			 (should (string-match-p
+				  "kept conversation"
+				  (decode-coding-string
+				   (mevedel-session-artifacts-read-artifact session relative)
+				   'utf-8-unix))))
+		     (mevedel-transport-cancel-pending key)
 		     (when (buffer-live-p buffer)
 		       (with-current-buffer buffer
 			 (set-buffer-modified-p nil)

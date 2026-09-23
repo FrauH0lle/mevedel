@@ -630,7 +630,11 @@ launcher and use one effective policy: required in Edits, off in Full Access,
 and the session's configured `mevedel-sandbox-mode` in Ask. On Linux, the backend resolves
 `bwrap` with `executable-find` and caches a real probe of the core mount, user,
 process, and network namespaces. Each probe attempt defaults to a 500 ms bound
-and retains at most 64 KiB of combined diagnostics. If the full probe fails,
+and retains at most 64 KiB of combined diagnostics. The probe waits for its own
+process only, running no timers or other process output that would charge
+their time to the bound. A probe that times out or cannot start says nothing
+about the backend, so it is cached as retryable and the next launch probes
+again. If the full probe fails,
 Mevedel retries without replacing `/proc`. A successful retry retains the
 mount, user, process, and network boundary while exposing the host `/proc`
 view; pending and execution facts record `proc: host` instead of treating the

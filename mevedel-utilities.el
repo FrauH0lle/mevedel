@@ -30,10 +30,13 @@
 (autoload 'mevedel-execution-run-helper "mevedel-execution")
 
 ;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-label
+                  "mevedel-execution-target" (target &optional directory))
 (declare-function mevedel-execution-target-readiness
                   "mevedel-execution-target" (cl-x) t)
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-label "mevedel-execution-target")
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
@@ -51,6 +54,9 @@
 (declare-function mevedel-transcript-restore-ignored-properties
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-restore-ignored-properties "mevedel-transcript")
+
+;; `mevedel-transport'
+(defvar mevedel-transport--held-timers)
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -645,8 +651,13 @@ A timer object proves nothing by itself: `run-at-time' pushes onto the
 current binding of `timer-list', and TRAMP let-binds that list to nil
 around every remote command, so a timer created from a process filter or
 hook inside that window is discarded with the binding and never fires.
-Only presence on `timer-list' means the timer is actually scheduled."
-  (and (timerp timer) (memq timer timer-list) t))
+Only presence on `timer-list', or being held by
+`mevedel-transport-run-at-time' until TRAMP returns, means the timer is
+actually scheduled."
+  (and (timerp timer)
+       (or (memq timer timer-list)
+           (memq timer (bound-and-true-p mevedel-transport--held-timers)))
+       t))
 
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
@@ -834,6 +845,7 @@ WORKSPACE defaults to current `mevedel-workspace'.  WORKING-DIRECTORY
 overrides the workspace root.  EXECUTION-TARGET supplies cached target
 readiness facts; remote directories are never probed here.
 The string includes:
+- Execution target (local or TRAMP method and destination)
 - Working directory
 - Platform (operating system type)
 - OS version
@@ -881,7 +893,8 @@ The string includes:
           (or (file-remote-p dir 'localname 'never)
               (expand-file-name dir)))
          (date (format-time-string "%Y-%m-%d")))
-    (format "Working directory: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
+    (format "Execution target: %s\nWorking directory: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
+            (mevedel-execution-target-label execution-target dir)
             display-directory
             platform
             os-version

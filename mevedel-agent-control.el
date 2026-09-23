@@ -162,6 +162,11 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--clamped-integer
                   "mevedel-utilities" (value default minimum maximum))
@@ -526,8 +531,8 @@ Return the caller path when suspended, and nil after an immediate release."
                 (mevedel-agent-control-block-turn session path 'waiting))
           (condition-case err
               (setf (mevedel-agent-waiter-timer waiter)
-                    (run-at-time
-                     (/ timeout 1000.0) nil
+                    (mevedel-transport-run-at-time
+                     (/ timeout 1000.0)
                      #'mevedel-agent-control--wait-timeout
                      session path waiter))
             (error
