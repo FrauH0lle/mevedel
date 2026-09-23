@@ -30,6 +30,11 @@
 (autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--warn-once
@@ -166,15 +171,16 @@ chunk when that stale transformer fails."
   (plist-put info :mevedel-stream-insert-parts
              (cons response
                    (plist-get info :mevedel-stream-insert-parts)))
-  ;; Test presence on `timer-list', not the stored object: this runs inside
-  ;; the curl stream filter, which can execute while TRAMP has timers
-  ;; suspended, and a timer armed in that window is silently discarded.
+  ;; This runs inside the curl stream filter, which can execute while TRAMP
+  ;; has timers suspended; the transport holds a timer armed in that window
+  ;; until the remote command returns.
   (unless (mevedel--timer-pending-p
            (plist-get info :mevedel-stream-insert-timer))
     (plist-put
      info :mevedel-stream-insert-timer
-     (run-at-time mevedel-gptel-stream-bridge-insert-batch-delay nil
-                  #'mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
+     (mevedel-transport-run-at-time
+      mevedel-gptel-stream-bridge-insert-batch-delay
+      #'mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
                   info))))
 
 (defun mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch (info)
@@ -232,14 +238,14 @@ was a leading allocator in a profiled session."
 
 (defun mevedel-gptel-stream-bridge--schedule-gptel-stream-filter-flush (process)
   "Schedule a deferred gptel stream filter flush for PROCESS."
-  ;; Same wedge hazard as the insert-batch timer: this is armed from the
-  ;; stream filter, so verify the stored timer is actually scheduled.
+  ;; Same hazard as the insert-batch timer: this is armed from the stream
+  ;; filter, so let the transport hold it across a remote command.
   (unless (mevedel--timer-pending-p
            (process-get process 'mevedel-gptel-stream-bridge--filter-timer))
     (process-put
      process 'mevedel-gptel-stream-bridge--filter-timer
-     (run-at-time 0 nil
-                  #'mevedel-gptel-stream-bridge--flush-gptel-stream-filter process))))
+     (mevedel-transport-run-at-time
+      0 #'mevedel-gptel-stream-bridge--flush-gptel-stream-filter process))))
 
 (defun mevedel-gptel-stream-bridge--flush-gptel-stream-filter (process)
   "Flush buffered early stream chunks for PROCESS once gptel is ready."
@@ -267,9 +273,9 @@ was a leading allocator in a profiled session."
           (process-put process 'mevedel-gptel-stream-bridge--filter-retries retries)
           (process-put
            process 'mevedel-gptel-stream-bridge--filter-timer
-           (run-at-time 0.01 nil
-                        #'mevedel-gptel-stream-bridge--flush-gptel-stream-filter
-                        process))))))))
+           (mevedel-transport-run-at-time
+            0.01 #'mevedel-gptel-stream-bridge--flush-gptel-stream-filter
+            process))))))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-filter-advice (orig-fn process output)
   "Delay ORIG-FN until gptel has registered PROCESS's FSM.

@@ -189,10 +189,15 @@
                   "mevedel-transport" (&optional key))
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-nested-p "mevedel-transport" ())
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-nested-p "mevedel-transport")
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-turn'
@@ -671,13 +676,21 @@ ignoring duplicate outcome"
                       (error
                        (funcall signal-failure (car-safe err) 'pipeline-error
                                 (mevedel-resource-error-message err))))))))
-           (if (or noninteractive
-                   (and (not (input-pending-p))
-                        (< (- (float-time) mevedel-pipeline--slice-start)
-                           mevedel-pipeline--slice-seconds)))
+           ;; A step never runs inside a remote command.  A process sentinel
+           ;; can start or continue a tool call while another operation is
+           ;; mid-command; a nested step's own target I/O is then refused as
+           ;; busy, or TRAMP hands it a reply that belongs to the outer one.
+           (if (and (not (mevedel-transport-nested-p))
+                    (or noninteractive
+                        (and (not (input-pending-p))
+                             (< (- (float-time) mevedel-pipeline--slice-start)
+                                mevedel-pipeline--slice-seconds))))
                (funcall execute)
              ;; Cancellation owns this pending step just as it owns a primitive
              ;; awaiting an async result.  Resume inside the same error boundary.
+             ;; The chain can reach here from a process sentinel inside a remote
+             ;; command, where a plain timer would be discarded with TRAMP's
+             ;; suspended timer list and the tool call would never finish.
              (letrec ((resume
                        (lambda ()
                          ;; A timer may become due during GC or another
@@ -686,11 +699,12 @@ ignoring duplicate outcome"
                          (if (and (not settled)
                                   (or (not cancel-cell)
                                       (eq (car cancel-cell) cancel-cont))
-                                  (input-pending-p))
-                             (setq timer (run-at-time 0.01 nil resume))
+                                  (or (input-pending-p)
+                                      (mevedel-transport-nested-p)))
+                             (setq timer (mevedel-transport-run-at-time 0.01 resume))
                            (let ((mevedel-pipeline--slice-start (float-time)))
                              (funcall execute))))))
-               (setq timer (run-at-time 0.001 nil resume))))))))))
+               (setq timer (mevedel-transport-run-at-time 0.001 resume))))))))))
 
 
 ;;

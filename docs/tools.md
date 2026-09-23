@@ -245,7 +245,10 @@ continuation from the cancelled primitive is ignored.
 
 Interactive pipeline chains yield between steps after 20 ms of elapsed work
 or when input is pending, using an ordinary timer so Emacs can process input
-before the next step. A due timer checks input again and waits while keystrokes
+before the next step. A step never runs inside a remote command: a chain that
+a process sentinel starts or continues while another TRAMP operation is in
+flight yields until that operation returns, through a transport-held timer
+that TRAMP's suspended timer list cannot discard. A due timer checks input again and waits while keystrokes
 are pending, since GC or another callback may have used up its original delay.
 A single step may take longer. The pending step retains its cancellation handler
 and native error boundary; cancelling removes its timer before side effects

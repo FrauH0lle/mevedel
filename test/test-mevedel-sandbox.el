@@ -180,7 +180,31 @@
           (setq result (mevedel-sandbox-probe))
           (should-not (plist-get result :available))
           (should (string-match-p "timed out" (plist-get result :reason)))
+          ;; A probe that never finished proves nothing about the backend.
+          (should (plist-get result :retry-on-execution))
           (should (< (- (float-time) started) 0.5)))
+      (delete-directory root t)))
+  :doc "isolated wait:
+`mevedel-sandbox-probe' runs no timers while it waits for the candidate"
+  (let* ((root (make-temp-file "mevedel-sandbox-probe-isolated-" t))
+         (executable (file-name-concat root "bwrap"))
+         (exec-path (list root))
+         (mevedel-sandbox--probe-cache nil)
+         (mevedel-sandbox-probe-timeout 2)
+         ran timer result)
+    (skip-unless (eq system-type 'gnu/linux))
+    (unwind-protect
+        (progn
+          (with-temp-file executable
+            (insert "#!/bin/sh\nexec /bin/sleep 0.05\n"))
+          (set-file-modes executable #o700)
+          ;; Stands in for a remote command that a timer would run here and
+          ;; charge to the probe's deadline.
+          (setq timer (run-at-time 0 nil (lambda () (setq ran t))))
+          (setq result (mevedel-sandbox-probe))
+          (should (plist-get result :available))
+          (should-not ran))
+      (cancel-timer timer)
       (delete-directory root t)))
   :doc "bounded diagnostics:
 `mevedel-sandbox-probe' caps output from a noisy Bubblewrap candidate"

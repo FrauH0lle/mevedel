@@ -212,14 +212,18 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
                          :filter filter
                          :noquery t
                          :sentinel #'ignore))))
+              ;; Wait for this process alone: running timers or other
+              ;; processes here charges their work -- a remote command can
+              ;; take seconds -- to the probe's deadline, and a timeout would
+              ;; then report a working Bubblewrap as unavailable.
               (while (and (process-live-p process)
                           (< (float-time) deadline))
                 (accept-process-output
-                 process (max 0 (- deadline (float-time)))))
+                 process (max 0 (- deadline (float-time))) nil 1))
               (when (process-live-p process)
                 (setq timed-out t)
                 (delete-process process))
-              (accept-process-output process 0.01)
+              (accept-process-output process 0.01 nil 1)
               (setq result
                     (list :status (process-exit-status process)
                           :output (with-current-buffer output-buffer
@@ -291,10 +295,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                              :mount-proc t))
                       ((or (plist-get probe :timed-out-p)
                            (plist-get probe :error))
+                       ;; A probe that did not finish says nothing about the
+                       ;; backend, so the next launch probes again.
                        (list :available nil
                              :executable executable
                              :reason
-                             (mevedel-sandbox--probe-failure-reason probe)))
+                             (mevedel-sandbox--probe-failure-reason probe)
+                             :retry-on-execution t))
                       (t
                        (let ((without-proc
                               (mevedel-sandbox--run-probe
@@ -303,11 +310,15 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                          (if (mevedel-sandbox--probe-succeeded-p without-proc)
                              (list :available t :executable executable
                                    :mount-proc nil)
-                           (list :available nil
-                                 :executable executable
-                                 :reason
-                                 (mevedel-sandbox--probe-failure-reason
-                                  without-proc)))))))))))
+                           (append
+                            (list :available nil
+                                  :executable executable
+                                  :reason
+                                  (mevedel-sandbox--probe-failure-reason
+                                   without-proc))
+                            (when (or (plist-get without-proc :timed-out-p)
+                                      (plist-get without-proc :error))
+                              (list :retry-on-execution t))))))))))))
            facts)))))
 
 (defun mevedel-sandbox--canonical-directories (roots)

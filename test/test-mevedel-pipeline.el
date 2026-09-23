@@ -17,6 +17,7 @@
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-transport)
 (require 'mevedel-tool-patch)
 (require 'mevedel-plan-mode)
 (require 'mevedel-patch-review)
@@ -5007,7 +5008,36 @@ cover, so the permission step's warning about it is captured here."
       (while (not results) (accept-process-output nil 0.01)))
     (should (= (length results) 1))
     (should (string-match-p "Delayed step failed" (plist-get (car results) :result)))
-    (should-not (car cell))))
+    (should-not (car cell)))
+  :doc "a step deferred from inside a remote command still finishes"
+  (let ((noninteractive nil)
+        (mevedel-pipeline--slice-seconds 0)
+        result)
+    ;; A process sentinel can start a tool call inside a remote command,
+    ;; while TRAMP has the timer lists bound away.
+    (mevedel-transport--handler-advice
+     (lambda ()
+       (let (timer-list timer-idle-list)
+         (mevedel-pipeline--run
+          (list (lambda (ctx next _fail) (funcall next (plist-put ctx :result "done"))))
+          (lambda (settlement) (setq result settlement)) nil))))
+    (should-not result)
+    (with-timeout (2 (ert-fail "Deferred step was lost with TRAMP's timer list"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal (plist-get result :result) "done")))
+  :doc "never runs a step inside a remote command, even in batch"
+  (let (inside result)
+    (mevedel-transport--handler-advice
+     (lambda ()
+       (mevedel-pipeline--run
+        (list (lambda (ctx next _fail) (funcall next (plist-put ctx :result "later"))))
+        (lambda (settlement) (setq result settlement)) nil)
+       (accept-process-output nil 0.03)
+       (setq inside result)))
+    (should-not inside)
+    (with-timeout (2 (ert-fail "Step deferred from a remote command never ran"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal (plist-get result :result) "later"))))
 
 (mevedel-deftest mevedel-pipeline--run/late-error ()
   (let ((noninteractive nil)

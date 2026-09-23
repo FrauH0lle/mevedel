@@ -70,7 +70,8 @@ retry timer that was created inside and discarded with the temporary list."
         (mevedel-transport--depth (1+ mevedel-transport--depth)))
     (unwind-protect (apply original args)
       (when outermost
-        (mevedel-transport--rearm-pending-timers)))))
+        (mevedel-transport--rearm-pending-timers)
+        (mevedel-transport--release-held-timers)))))
 
 (defun mevedel-transport-install ()
   "Begin counting TRAMP handler frames."
@@ -226,6 +227,46 @@ this macro suspended, because it is not on the bound list; that timer is
 restored on exit as though the cancel never happened."
   (declare (indent 0) (debug t))
   `(mevedel-transport--call-with-exclusive-connection (lambda () ,@body)))
+
+
+;;
+;;; Continuation timers
+
+(defvar mevedel-transport--held-timers nil
+  "Timers requested inside a TRAMP handler, newest first, not yet armed.")
+
+(defun mevedel-transport-run-at-time (seconds function &rest args)
+  "Call FUNCTION with ARGS once, SECONDS from now, even from inside TRAMP.
+
+A process filter or sentinel can run inside a remote command while TRAMP has
+let-bound `timer-list' to nil, and a timer `run-at-time' arms there is
+discarded with that binding: whatever continuation it carried never runs.
+Inside a TRAMP handler frame the timer is therefore held and armed only once
+the outermost frame has returned and the real list is back, which also keeps
+FUNCTION from running nested inside the remote command.  Outside one this is
+plain `run-at-time'.  Return the timer.
+
+A held timer cancelled before it is armed still fires once, as a suspended
+timer does after `mevedel-transport-with-exclusive-connection', so FUNCTION
+must check that its work is still current."
+  (if (not (mevedel-transport-nested-p))
+      (apply #'run-at-time seconds nil function args)
+    (let ((timer (timer-create)))
+      (timer-set-time timer (time-add nil seconds))
+      (timer-set-function timer function args)
+      (push timer mevedel-transport--held-timers)
+      timer)))
+
+(defun mevedel-transport-held-timer-p (timer)
+  "Return non-nil when TIMER is held for arming after the TRAMP handler."
+  (and (memq timer mevedel-transport--held-timers) t))
+
+(defun mevedel-transport--release-held-timers ()
+  "Arm the timers held while a TRAMP handler was on the stack, oldest first."
+  (let ((held (nreverse mevedel-transport--held-timers)))
+    (setq mevedel-transport--held-timers nil)
+    (dolist (timer held)
+      (timer-activate timer))))
 
 
 ;;

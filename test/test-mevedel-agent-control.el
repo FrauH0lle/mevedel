@@ -18,6 +18,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
+(require 'mevedel-transport)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -2180,6 +2181,19 @@
       (should (equal '(mailbox) reasons))
       (apply (car scheduled) (cdr scheduled))
       (should (equal '(mailbox) reasons))))
+
+  :doc "a wait started inside a remote command keeps its timeout"
+  (let ((session (mevedel-agent-control-test--session))
+        timer)
+    (mevedel-transport--handler-advice
+     (lambda ()
+       (let (timer-list timer-idle-list)
+         (mevedel-agent-control-wait session #'ignore 10000))))
+    (setq timer (mevedel-agent-waiter-timer
+                 (mevedel-session-agent-root-waiter session)))
+    (should (memq timer timer-list))
+    (mevedel-agent-control-cancel-wait session "/root")
+    (should-not (memq timer timer-list)))
 
   :doc "retains the waiter when its callback fails after durable enqueue"
   (let ((session (mevedel-agent-control-test--session))

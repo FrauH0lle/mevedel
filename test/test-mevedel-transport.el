@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -49,6 +50,56 @@
         (require feature nil t))
       (setq tramp-methods methods)
       (mevedel-transport-install))))
+
+(mevedel-deftest mevedel-transport-run-at-time ()
+  ,test
+  (test)
+  :doc "arms an ordinary timer outside a remote command"
+  (let ((timer (mevedel-transport-run-at-time 60 #'ignore)))
+    (unwind-protect
+        (progn
+          (should (memq timer timer-list))
+          (should-not mevedel-transport--held-timers))
+      (cancel-timer timer)))
+
+  :doc "survives TRAMP's suspended timer list and fires after the handler"
+  (let (timer lost fired)
+    (mevedel-transport--handler-advice
+     (lambda ()
+       ;; What `with-tramp-suspended-timers' does around a remote command.
+       (let (timer-list timer-idle-list)
+         (setq lost (run-at-time 60 nil #'ignore))
+         (setq timer (mevedel-transport-run-at-time 0 (lambda () (setq fired t))))
+         (should (mevedel--timer-pending-p timer)))))
+    (should-not (memq lost timer-list))
+    (should (memq timer timer-list))
+    (should-not mevedel-transport--held-timers)
+    (with-timeout (2 (ert-fail "Held timer never fired"))
+      (while (not fired) (accept-process-output nil 0.01))))
+
+  :doc "never runs its function nested inside the remote command"
+  (let (fired inside)
+    (mevedel-transport--handler-advice
+     (lambda ()
+       (mevedel-transport-run-at-time 0 (lambda () (setq fired t)))
+       (accept-process-output nil 0.03)
+       (setq inside fired)))
+    (should-not inside)
+    (with-timeout (2 (ert-fail "Held timer never fired"))
+      (while (not fired) (accept-process-output nil 0.01))))
+
+  :doc "releases held timers only when the outermost frame returns"
+  (let (timer released-inside)
+    (mevedel-transport--handler-advice
+     (lambda ()
+       (mevedel-transport--handler-advice
+        (lambda () (setq timer (mevedel-transport-run-at-time 60 #'ignore))))
+       (setq released-inside (memq timer timer-list))))
+    (unwind-protect
+        (progn
+          (should-not released-inside)
+          (should (memq timer timer-list)))
+      (cancel-timer timer))))
 
 (mevedel-deftest mevedel-transport-nested-p ()
   ,test
