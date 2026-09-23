@@ -46,6 +46,14 @@
                   (start end binding &optional object))
 (autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
 
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-physical-path
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-run-program
+                  "mevedel-session-control-fs" (operations &optional lock-directory))
+(autoload 'mevedel-session-control-fs-physical-path "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
+
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -84,6 +92,11 @@
 
 ;; `subr'
 (defvar read-eval)
+
+;; `tramp'
+(declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
+(declare-function tramp-file-name-localname "tramp" (vec))
+(declare-function tramp-flush-file-properties "tramp-cache" (key file))
 
 
 ;;
@@ -1292,6 +1305,34 @@ batched section.  Both are raised, and neither is ever lowered."
          (gc-cons-percentage (max gc-cons-percentage 0.5)))
      ,@body))
 
+(defun mevedel--write-remote-file-atomically (path content coding mode)
+  "Replace remote PATH with CONTENT in one pinned target program, or return nil.
+
+The target program writes a temporary file beside PATH, sets MODE on it and
+renames it over PATH, which is the same same-directory replacement TRAMP's
+file operations perform in about twenty round trips.  Nil means the program
+refused -- a symlinked leaf or parent spelling, a missing directory, a busy
+transport -- and the caller falls back to those file operations, which also
+own creating missing parents.  CODING and MODE follow
+`mevedel--write-file-atomically'."
+  (condition-case nil
+      (let* ((bytes (if (eq coding 'no-conversion)
+                        content
+                      (encode-coding-string content (or coding 'utf-8-unix))))
+             (result
+              (car (mevedel-session-control-fs-run-program
+                    (list (list :op 'write-mode
+                                :path (mevedel-session-control-fs-physical-path path)
+                                :content (concat (format "%o\n" mode) bytes)
+                                :coding 'no-conversion))))))
+        (when (eq 'ok (plist-get result :status))
+          ;; The replacement bypassed TRAMP, whose cached attributes for PATH
+          ;; and its directory would otherwise describe the old file.
+          (let ((vec (tramp-dissect-file-name path)))
+            (tramp-flush-file-properties vec (tramp-file-name-localname vec)))
+          t))
+    (error nil)))
+
 (defun mevedel--write-file-atomically (path content &optional coding mode)
   "Replace PATH with string CONTENT through a same-directory rename.
 
@@ -1305,7 +1346,16 @@ CODING is the coding system to write with; nil means `utf-8-unix', and
 result's file modes; nil applies `default-file-modes', matching what an
 ordinary write would have produced (`make-temp-file' creates 0600,
 which must not leak into the destination).  PATH's parent directory is
-created when missing."
+created when missing.  A remote PATH is replaced in one target program when
+the target allows it."
+  (unless (and (file-remote-p path)
+               (mevedel--write-remote-file-atomically
+                path content coding (or mode (default-file-modes))))
+    (mevedel--write-file-atomically-1 path content coding mode)))
+
+(defun mevedel--write-file-atomically-1 (path content coding mode)
+  "Replace PATH with CONTENT through TRAMP or local file operations.
+CODING and MODE follow `mevedel--write-file-atomically'."
   (let ((directory (file-name-directory (expand-file-name path))))
     (make-directory directory t)
     (let ((temporary (make-temp-file

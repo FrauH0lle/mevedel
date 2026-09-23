@@ -1079,7 +1079,8 @@ Markdown rendering adds small view-only affordances:
 
 Markdown links, local images, paths, and fenced source-panel projection are
 isolated in `mevedel-view-markdown.el`, deferred target path verification in
-`mevedel-view-path.el`; the table engine lives in
+`mevedel-view-path.el` (remote paths wait for an idle transport, and the paths
+pending on one target share one existence command); the table engine lives in
 `mevedel-view-table.el`, adapted from agent-shell's renderer with
 attribution.
 

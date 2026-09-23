@@ -35,6 +35,27 @@
   ,test
   (test)
 
+  :doc "remote paths on one target share one existence command"
+  (let* ((host "view-path-batch-host")
+         (root (file-name-as-directory (make-temp-file "mevedel-view-batch-" t)))
+         (process (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (write-region "" nil (file-name-concat root "a.el") nil 'silent)
+          (write-region "" nil (file-name-concat root "b c.el") nil 'silent)
+          (let ((remote (lambda (name) (format "/mevedelmock:%s:%s%s" host root name))))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args) (cl-incf calls) (apply process args))))
+              (should (equal '(t nil t nil)
+                             (mevedel-view--path-existences
+                              (list (funcall remote "a.el")
+                                    (funcall remote "missing.el")
+                                    (funcall remote "b c.el")
+                                    (file-name-concat root "local-missing.el"))))))
+            (should (= 1 calls))))
+      (delete-directory root t)))
+
   :doc "verification defers and memoizes both outcomes"
   (let* ((root (make-temp-file "mevedel-view-paths-" t))
          (there (file-name-concat root "there.py"))

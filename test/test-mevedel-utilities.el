@@ -6,6 +6,7 @@
 
 (require 'saveplace)
 (require 'mevedel-execution-target)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript)
@@ -1095,6 +1096,55 @@ rejects trailing binary operators"
                            (insert-file-contents path)
                            (buffer-string))))
           (should-not (directory-files root nil "mevedel-write")))
+      (delete-directory root t)))
+
+  :doc "replaces a remote file in one target program with the requested mode"
+  (let* ((host "atomic-remote-host")
+         (root (file-name-as-directory (make-temp-file "mevedel-atomic-remote-" t)))
+         (local (file-name-concat root "script.sh"))
+         (program (symbol-function 'mevedel-session-control-fs-run-program))
+         (programs 0))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let ((path (format "/mevedelmock:%s:%s" host local)))
+            (write-region "old\n" nil local nil 'silent)
+            ;; Prime TRAMP's attribute cache with the old file.
+            (should (file-exists-p path))
+            (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                       (lambda (&rest args) (cl-incf programs) (apply program args)))
+                      ((symbol-function 'rename-file)
+                       (lambda (&rest _) (ert-fail "Fell back to TRAMP file operations"))))
+              (mevedel--write-file-atomically path "#!/bin/sh\n" nil #o755))
+            (should (= 1 programs))
+            (should (equal "#!/bin/sh\n"
+                           (with-temp-buffer (insert-file-contents local) (buffer-string))))
+            (should (= #o755 (file-modes local)))
+            ;; TRAMP no longer answers from the old file's attributes.
+            (should (= #o755 (file-modes path)))
+            (should-not (directory-files root nil "mevedel-control-fs"))))
+      (delete-directory root t)))
+
+  :doc "falls back to TRAMP file operations where the program refuses"
+  (let* ((host "atomic-remote-fallback-host")
+         (root (file-name-as-directory (make-temp-file "mevedel-atomic-fallback-" t)))
+         (target (file-name-concat root "target.txt"))
+         (link (file-name-concat root "link.txt"))
+         (nested (file-name-concat root "new" "dir" "file.txt")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (write-region "target\n" nil target nil 'silent)
+          (make-symbolic-link target link)
+          ;; A symlinked leaf is replaced as a file, as before.
+          (mevedel--write-file-atomically
+           (format "/mevedelmock:%s:%s" host link) "replaced\n")
+          (should-not (file-symlink-p link))
+          (should (equal "target\n"
+                         (with-temp-buffer (insert-file-contents target) (buffer-string))))
+          ;; Missing parents are still created.
+          (mevedel--write-file-atomically
+           (format "/mevedelmock:%s:%s" host nested) "nested\n")
+          (should (equal "nested\n"
+                         (with-temp-buffer (insert-file-contents nested) (buffer-string)))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel--warn-once ()

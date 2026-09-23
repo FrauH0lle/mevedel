@@ -349,16 +349,16 @@ TARGET restores portable target paths when non-nil.  Reads are cached; see
 (defun mevedel-permission--read-store-file-uncached (file &optional target)
   "Return FILE's permission store status and normalized contents.
 TARGET restores portable target paths when non-nil."
-  (cond
-   ((not (file-exists-p file)) '(:status missing))
-   ((not (file-readable-p file))
-    '(:status invalid :reason "file is not readable"))
-   (t
+  ;; A missing store is the common case and one existence probe answers it.
+  ;; The read reports an unreadable file itself, which saved a remote
+  ;; workspace store a readability probe on every refresh.
+  (if (not (file-exists-p file))
+      '(:status missing)
     (condition-case err
-        (with-temp-buffer
+	(with-temp-buffer
           (insert-file-contents file)
           (let* ((raw (read (current-buffer)))
-                 (store
+		 (store
                   (if (and target
                            (mevedel-permission--valid-plist-p
                             raw '(:rules :resource-grants)
@@ -368,15 +368,17 @@ TARGET restores portable target paths when non-nil."
                        (plist-get raw :resource-grants)
                        target)
                     (mevedel-permission--normalize-store raw)))
-                 (single-form-p
+		 (single-form-p
                   (condition-case nil
                       (progn (read (current-buffer)) nil)
                     (end-of-file t))))
             (if (and store single-form-p)
-                (list :status 'valid :store store)
+		(list :status 'valid :store store)
               '(:status invalid :reason "invalid store shape or value"))))
+      (file-missing '(:status missing))
+      (permission-denied '(:status invalid :reason "file is not readable"))
       (error
-       (list :status 'invalid :reason (error-message-string err)))))))
+       (list :status 'invalid :reason (error-message-string err))))))
 
 (defun mevedel-permission--read-store-file (file &optional target)
   "Read the permission store plist from FILE, or nil when invalid.
