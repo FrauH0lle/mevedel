@@ -505,6 +505,28 @@ and its segment path."
          (test-mevedel-session-persistence--publish-generation session directory segment "later" 2)
          (should-error (mevedel-session-publication-collect-step session plan)))))))
 
+(mevedel-deftest mevedel-session-publication-collect-step/batched-directories ()
+  ;; Wholly unreferenced generations need no listing, so their deletion shares
+  ;; one step -- one reservation and one set of proofs -- instead of one each.
+  (let ((mevedel-session-publication-keep-recent-generations 1))
+    (test-mevedel-session-publication--with-published
+     "publication-batched-directories" "mevedel-batched-directories-" ?d
+     (lambda (session directory segment)
+       (dotimes (n 5)
+         (test-mevedel-session-persistence--publish-generation
+          session directory segment (format "draft %d" n) 1))
+       (let ((original (symbol-function 'mevedel-session-control-fs-run-program))
+             (batches nil))
+         (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                    (lambda (operations &rest args)
+                      (let ((deleted (cl-count 'delete-directory operations
+                                               :key (lambda (op) (plist-get op :op)))))
+                        (when (> deleted 0) (push deleted batches)))
+                      (apply original operations args))))
+           (should (>= (test-mevedel-publication--collect session) 3)))
+         (should (= 1 (length batches)))
+         (should (>= (car batches) 3)))))))
+
 (mevedel-deftest mevedel-session-publication-collect-step/unreadable ()
   (test-mevedel-session-publication--with-published
    "publication-unreadable" "mevedel-publication-unreadable-" ?b
