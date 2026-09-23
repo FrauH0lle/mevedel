@@ -12,9 +12,12 @@
 ;;; Code:
 
 (require 'ert)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-control-fs)
+(require 'mevedel-session-control-transfer)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
 (require 'mevedel-telemetry)
 (require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
@@ -76,12 +79,12 @@
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-artifacts-save session buffer))))
-            (should (<= processes 17)))
+            (should (<= processes 7)))
           ;; A save with nothing to record owes the target no transaction.
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-artifacts-save session buffer))))
-            (should (<= processes 4)))
+            (should (<= processes 2)))
           ;; Forcing publishes even when the state is already committed.
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
@@ -149,9 +152,82 @@
                         (test-mevedel-session-persistence-cost--measure
                           (mevedel-session-artifacts-save
                            session buffer))))
-                (should (<= processes 17))
+                (should (<= processes 7))
                 (should (= 0 raw-reads)))
               (should (mevedel-session-telemetry-pending session)))))
+      (when session
+        (ignore-errors
+          (mevedel-session-durability--cancel-renewal session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry))))
+
+;; Each count below is an upper bound on control programs, which are one
+;; remote round trip each and block input while they run.
+(mevedel-deftest mevedel-session-durability/cost ()
+  ,test
+  (test)
+  :doc "ordinary remote durability operations stay within their round-trip budgets"
+  (let* ((host "durability-cost-host")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-durability-cost-" t)))
+         (buffer (generate-new-buffer " *durability-cost*"))
+         session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let* ((remote-root (format "/mevedelmock:%s:%s" host local-root))
+                 (workspace (progn
+                              (mevedel-workspace-clear-registry)
+                              (mevedel-workspace-get-or-create
+                               'project remote-root remote-root "durability-cost"))))
+            (mevedel-workspace-identity-ensure remote-root)
+            (setq session (mevedel-session-create "main" workspace))
+            (mevedel-execution-target-probe
+             (mevedel-session-execution-target session) t 'off)
+            (puthash (mevedel-execution-target-identity
+                      (mevedel-session-execution-target session))
+                     t mevedel-session-durability--disclosed-targets)
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "*** First prompt\n")
+              (mevedel-session-artifacts-save session buffer)
+              ;; A tool call's admission: transfer state, recovery markers,
+              ;; the PID-lock proof and the ownership clock.
+              (should (<= (test-mevedel-session-persistence-cost--measure
+                            (mevedel-session-artifacts-assert-new-mutation-authority
+                             session))
+                          2))
+              ;; The owner's transfer poll observes lease and requests at once.
+              (should (= 1 (test-mevedel-session-persistence-cost--measure
+                             (mevedel-session-control-transfer-poll
+                              session buffer nil))))
+              ;; Arming and settling the latch claim a generation each.
+              (should (<= (test-mevedel-session-persistence-cost--measure
+                            (should (mevedel-session-durability-set-unsettled-mutation
+                                     session t)))
+                          3))
+              (should (<= (test-mevedel-session-persistence-cost--measure
+                            (should (mevedel-session-durability-set-unsettled-mutation
+                                     session nil)))
+                          3))
+              ;; A diagnostic flush proves ownership inside its append.
+              (mevedel-telemetry-record session 'cost-probe)
+              (should (<= (test-mevedel-session-persistence-cost--measure
+                            (mevedel-telemetry-flush session))
+                          2))
+              (should-not (mevedel-session-telemetry-pending session))
+              ;; An agent transcript only stages bytes for the next commit.
+              (should (<= (test-mevedel-session-persistence-cost--measure
+                            (mevedel-session-artifacts-publish-text
+                             session "agents/cost.chat.org" "transcript"
+                             'utf-8-unix))
+                          1))
+              (should (mevedel-session-publication-uncommitted-artifact
+                       session "agents/cost.chat.org")))))
       (when session
         (ignore-errors
           (mevedel-session-durability--cancel-renewal session)))

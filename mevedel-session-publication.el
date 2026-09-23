@@ -1238,38 +1238,64 @@ component and retries once."
             (car mevedel-session-publication--ensured-directories)))
     (mevedel-session-control-fs-program-value result)))
 
+(defun mevedel-session-publication--fixed-artifact-p (artifact)
+  "Return non-nil when ARTIFACT is also written to its fixed target file.
+
+Transcripts and file history are read through the immutable publication (or
+owned staging before its marker), never fixed files.  The small discovery
+sidecar and ordinary artifact files keep their fixed path."
+  (not (or (plist-get artifact :delete)
+           (when-let* ((logical (plist-get artifact :logical)))
+             (or (string-prefix-p "file-history/" logical)
+                 (and (string-match-p
+                       "\\`\\(?:segment-[0-9]+\\|agents/.+\\)\\.chat\\.org\\'"
+                       logical)
+                      ;; Numbered archives are crash recovery files
+                      ;; written before the live compaction rewrite.
+                      (not (string-match-p
+                            "\\.compact-[0-9]+\\.chat\\.org\\'" logical))))))))
+
+(defvar mevedel-session-publication--proved nil
+  "Cons cell whose car is non-nil while ownership was proved since a write.
+
+A drain binds it.  A lease commit that just proved ownership makes the next
+artifact write's own proof redundant: no target write happened in between.
+Every artifact write clears it, so the next write, and the end of a batch
+that does not commit, prove ownership again.")
+
+(defun mevedel-session-publication--prove-ownership (session)
+  "Prove SESSION still owns its reserved lease, unless that was just proved."
+  (unless (car mevedel-session-publication--proved)
+    (unless (mevedel-session-durability--renew-publication-lease session)
+      (user-error "Portable session lease was lost during publication"))
+    (when mevedel-session-publication--proved
+      (setcar mevedel-session-publication--proved t))))
+
 (defun mevedel-session-publication--publish-batch (session batch)
   "Publish every staged artifact in BATCH while SESSION remains owner."
-  (let ((artifacts (plist-get batch :artifacts)))
-    (dolist (artifact artifacts)
-      ;; Transcripts and file history are read through the immutable
-      ;; publication (or owned staging before its marker), never fixed files.
-      ;; Keep the small discovery sidecar and ordinary artifact files.
-      (unless (or (plist-get artifact :delete)
-                  (when-let* ((logical (plist-get artifact :logical)))
-                    (or (string-prefix-p "file-history/" logical)
-                        (and (string-match-p
-                              "\\`\\(?:segment-[0-9]+\\|agents/.+\\)\\.chat\\.org\\'"
-                              logical)
-                             ;; Numbered archives are crash recovery files
-                             ;; written before the live compaction rewrite.
-                             (not (string-match-p
-                                   "\\.compact-[0-9]+\\.chat\\.org\\'" logical))))))
-        (unless (mevedel-session-durability--renew-publication-lease session)
-          (user-error "Portable session lease was lost during publication"))
-        (mevedel-session-publication--publish-artifact artifact)))
+  (let (wrote)
+    (dolist (artifact (plist-get batch :artifacts))
+      (when (mevedel-session-publication--fixed-artifact-p artifact)
+        (mevedel-session-publication--prove-ownership session)
+        (mevedel-session-publication--publish-artifact artifact)
+        (setq wrote t)
+        (when mevedel-session-publication--proved
+          (setcar mevedel-session-publication--proved nil))))
     ;; Ownership is proved immediately before every write and once after the
-    ;; last one.  Renewing after each write as well only repeated the next
-    ;; iteration's proof, with no target write in between, and a renewal is
-    ;; itself several target round trips.
-    (when artifacts
-      (unless (mevedel-session-durability--renew-publication-lease session)
-        (user-error "Portable session lease was lost during publication"))))
+    ;; last one.  A batch that commits proves it again through the head
+    ;; commit's own exact-generation check, which follows the last write with
+    ;; only the immutable generation in between.
+    (when (and wrote
+               (not (mevedel-session-publication--batch-marker batch)))
+      (mevedel-session-publication--prove-ownership session)))
   batch)
 
-(defun mevedel-session-publication--drain (session batches)
-  "Publish BATCHES and any batches queued reentrantly for SESSION."
+(defun mevedel-session-publication--drain (session batches &optional proved)
+  "Publish BATCHES and any batches queued reentrantly for SESSION.
+PROVED is non-nil when the caller's last lease commit just proved ownership,
+as the reservation that opens a publication does."
   (let ((remaining batches)
+        (mevedel-session-publication--proved (list proved))
         (mevedel-session-publication--ensured-directories (list nil))
         ;; One drain is one transaction: the per-artifact lease renewals
         ;; inside it share the clock reading and the pid-lock assertions,
@@ -1308,6 +1334,8 @@ component and retries once."
                             (mevedel-session-publication--commit-marker-publication
                              session transaction marker)
                             committed t)
+                    ;; The head commit proved ownership after every write.
+                    (setcar mevedel-session-publication--proved committed)
                     ;; A changed head commits this transaction even if its
                     ;; callback fails before returning.  Later queued batches
                     ;; still need recovery; these sources must not be replayed.
@@ -1346,7 +1374,8 @@ component and retries once."
                session
                (lambda ()
                  (setf (mevedel-session-pending-publication session) nil)
-                 (mevedel-session-publication--drain session batches))))
+                 ;; The reservation that just ran proved ownership.
+                 (mevedel-session-publication--drain session batches t))))
       (error
        (unless (mevedel-session-pending-publication session)
          (let* ((committed-p
@@ -1405,20 +1434,33 @@ that error so their lifecycle owner can classify it."
           (publication-before (mevedel-session-publication session)))
       (condition-case err
           (progn
+            ;; The reservation below renews an owned lease itself; a
+            ;; separate renewal only matters for one that needs reclaiming.
             (unless (or (mevedel-session-publication-active-p session)
+                        (mevedel-session-durability-lease-owned-p session)
                         (mevedel-session-durability-lease-renew session))
               (user-error
                "Portable session lease could not be renewed for publication"))
             (unless (mevedel-session-durability-lease-owned-p session)
               (user-error "Portable session mutation requires its live lease"))
-            (if (mevedel-session-publication-active-p session)
-                (progn
-                  (setf (mevedel-session-publication-queue session)
-                        (append (mevedel-session-publication-queue session)
-                                (list batch)))
-                  'queued)
+            (cond
+             ((mevedel-session-publication-active-p session)
+              (setf (mevedel-session-publication-queue session)
+                    (append (mevedel-session-publication-queue session)
+                            (list batch)))
+              'queued)
+             ;; A batch that writes no fixed file and commits nothing only
+             ;; stages bytes for the next commit, which proves ownership
+             ;; itself; reserving the lease for it wrote nothing at all.
+             ((not (or (mevedel-session-publication--batch-marker batch)
+                       (seq-some #'mevedel-session-publication--fixed-artifact-p
+                                 (plist-get batch :artifacts))))
+              (mevedel-session-publication--retain-uncommitted-batch
+               session batch)
+              'published)
+             (t
               (mevedel-session-publication--publish-critical-batches
-               session (list batch))))
+               session (list batch)))))
         (error
          (let ((committed-p
                 (not (equal publication-before
@@ -1517,20 +1559,32 @@ reserved lease and its appends should write straight to the target.
 `unavailable' means the caller established that SESSION's lease cannot carry
 diagnostics now, so its appends decline without re-testing.")
 
+(defun mevedel-session-publication--diagnostic-ready-p (session)
+  "Return non-nil when SESSION's lease can carry diagnostics right now.
+
+Its owned lease must also be one whose committed bytes this client knows, so
+each append can prove ownership in its own program; a renewal supplies them."
+  (mevedel-session-recovery-refresh session)
+  (not (or (mevedel-session-pending-publication session)
+           (mevedel-session-publication-active-p session)
+           (not (or (and (mevedel-session-durability-lease-owned-p session)
+                         (plist-get (mevedel-session-lease session) :bytes))
+                    (mevedel-session-durability-lease-renew session)))
+           (not (mevedel-session-durability-lease-owned-p session)))))
+
 (defun mevedel-session-publication-call-with-diagnostic-batch (session function)
-  "Call FUNCTION with SESSION's diagnostic appends sharing one lease.
+  "Call FUNCTION with SESSION's diagnostic appends sharing one admission.
 
-Each `mevedel-session-publication-append-diagnostic\' otherwise pays a
-whole transaction of its own: a recovery refresh, a lease renewal, an
-ownership reading, then a reservation that renews the lease again on entry
-and commits it again on exit.  That is several control-filesystem programs
-per append, and a flush point appends once per diagnostic log.  A profiled
-remote turn put 96% of its lease reservations here, and those reservations
-at 21% of the session\'s CPU -- to persist data this module itself
-describes as best-effort and read by nobody live.
+The recovery refresh and lease check run once, and each append then proves
+ownership inside its own target program.  Diagnostics used to reserve the
+lease around the appends -- a renewal, a reservation write, and a release
+write around one or a few appends of best-effort data nothing reads live --
+which cost several control programs per flush point on a remote target.
 
-The preamble runs once, the appends run inside one reservation, and the
-publication queue drains once at the end instead of after each append.
+Publication is held active while FUNCTION runs, so a critical publisher
+reached from a sentinel during an append queues instead of nesting inside
+it; its batches are published through the ordinary reserved path once
+FUNCTION returns.
 
 An append that fails inside the batch declines rather than signalling, so
 one unwritable log cannot abort the others; its caller retains the content
@@ -1539,30 +1593,26 @@ for the next flush, which is what a nil return already means to it."
    ((eq (car-safe mevedel-session-publication--diagnostic-batch) session)
     (funcall function))
    ;; A session that does not publish through the lease writes its
-   ;; diagnostics directly, so reserving one would renew a lease nothing
-   ;; here is going to use -- target I/O, and a warning when the session
-   ;; has no lease to renew.
+   ;; diagnostics directly, so there is no lease to prove.
    ((not (mevedel-session-codec-portable-authority-p session))
     (funcall function))
-   ((progn (mevedel-session-recovery-refresh session)
-           (or (mevedel-session-pending-publication session)
-               (mevedel-session-publication-active-p session)
-               (not (mevedel-session-durability-lease-renew session))
-               (not (mevedel-session-durability-lease-owned-p session))))
-    (let ((mevedel-session-publication--diagnostic-batch
-           (cons session 'unavailable)))
-      (funcall function)))
    (t
-    (mevedel-session-durability-call-with-reserved-lease
-     session
-     (lambda ()
-       (prog1 (let ((mevedel-session-publication--diagnostic-batch
-                     (cons session 'open)))
-                (funcall function))
-         ;; A critical publisher may have queued while TRAMP handled the
-         ;; diagnostic I/O.  It retains precedence.
-         (when (mevedel-session-publication-queue session)
-           (mevedel-session-publication--drain session nil))))))))
+    (mevedel-session-durability-with-transaction
+      (if (not (mevedel-session-publication--diagnostic-ready-p session))
+          (let ((mevedel-session-publication--diagnostic-batch
+                 (cons session 'unavailable)))
+            (funcall function))
+        (prog1 (mevedel-session-durability-call-with-held-lease
+                session
+                (lambda ()
+                  (let ((mevedel-session-publication--diagnostic-batch
+                         (cons session 'open)))
+                    (funcall function))))
+          ;; A critical publisher may have queued while TRAMP handled the
+          ;; diagnostic I/O.  It retains precedence.
+          (when (mevedel-session-publication-queue session)
+            (mevedel-session-publication--publish-critical-batches
+             session nil))))))))
 
 (defun mevedel-session-publication-append-diagnostic (session path content)
   "Append diagnostic CONTENT to PATH for portable project SESSION.
@@ -1574,75 +1624,49 @@ later retry.  A diagnostic is best-effort data nothing reads live, so an
 unavailable moment is a quiet retry, not an error echoed per attempt.
 Diagnostic failure never creates critical pending publication.
 
-The append is one pinned target operation carrying only the delta.
-Republishing the whole file per flush was quadratic in stream size and
-dominated remote-save allocations once a log grew to megabytes."
+The append is one pinned target operation carrying only the delta, behind
+an ownership proof in the same program.  Republishing the whole file per
+flush was quadratic in stream size and dominated remote-save allocations
+once a log grew to megabytes."
   (unless (and (stringp path) (stringp content))
     (error "Diagnostic publication requires string path and content"))
-  (cond
-   ((and (eq (car-safe mevedel-session-publication--diagnostic-batch) session)
-         (eq (cdr mevedel-session-publication--diagnostic-batch) 'unavailable))
-    nil)
-   ((and (eq (car-safe mevedel-session-publication--diagnostic-batch) session)
-         (eq (cdr mevedel-session-publication--diagnostic-batch) 'open))
-    ;; The caller holds the reservation and drains the queue itself.
-    (mevedel-session-publication--artifact-for-session
-     session (list :path path :content content))
-    (condition-case err
-        (progn (mevedel-session-control-fs-append-file path content) t)
-      (error
-       (mevedel--warn-once
-        (list 'diagnostic-append path)
-        "Diagnostic append failed for %s, retaining for retry: %s"
-        path (error-message-string err))
-       nil)))
-   ((progn
-      (mevedel-session-recovery-refresh session)
-      (or (mevedel-session-pending-publication session)
-          (mevedel-session-publication-active-p session)
-          (not (mevedel-session-durability-lease-renew session))
-          (not (mevedel-session-durability-lease-owned-p session))))
-    nil)
-   (t
-    ;; Validate that the path stays inside the session before any
-    ;; target I/O; :content is not staged, only checked for shape.
-    (mevedel-session-publication--artifact-for-session
-     session (list :path path :content content))
-    (let (diagnostic-error)
-      (prog1
-          (condition-case err
-              (mevedel-session-durability-call-with-reserved-lease
-               session
-               (lambda ()
-                 (condition-case diagnostic-err
-                     (mevedel-session-control-fs-append-file path content)
-                   (error
-                    (setq diagnostic-error diagnostic-err)))
-                 ;; A critical publisher may have queued while TRAMP
-                 ;; handled the diagnostic I/O.  It retains precedence.
-                 (when (mevedel-session-publication-queue session)
-                   (mevedel-session-publication--drain session nil))
-                 (not diagnostic-error)))
-            (error
-             (unless (mevedel-session-pending-publication session)
-               (let ((recovery
-                      (cl-remove-if-not
-                       #'mevedel-session-publication--batch-live-p
-                       (delete-dups
-                        (append
-                         (mevedel-session-publication-uncommitted-batches
-                          session)
-                         (mevedel-session-publication-queue session))))))
-                 (setf
-                  (mevedel-session-publication-uncommitted-batches session)
-                  nil
-                  (mevedel-session-publication-queue session) nil)
-                 (when recovery
-                   (mevedel-session-publication--record-pending
-                    session recovery err))))
-             (signal (car err) (cdr err))))
-        (when diagnostic-error
-          (signal (car diagnostic-error) (cdr diagnostic-error))))))))
+  (let ((batch mevedel-session-publication--diagnostic-batch))
+    (cond
+     ((not (eq (car-safe batch) session))
+      (let (appended)
+        (mevedel-session-publication-call-with-diagnostic-batch
+         session
+         (lambda ()
+           (setq appended
+                 (mevedel-session-publication-append-diagnostic
+                  session path content))))
+        appended))
+     ((eq (cdr batch) 'unavailable) nil)
+     (t
+      ;; Validate that the path stays inside the session before any
+      ;; target I/O; :content is not staged, only checked for shape.
+      (mevedel-session-publication--artifact-for-session
+       session (list :path path :content content))
+      (condition-case err
+          (if-let* ((results
+                     (mevedel-session-durability-run-owned-program
+                      session
+                      (list (list :op 'append
+                                  :path (mevedel-session-control-fs-physical-path
+                                          path)
+                                  :content content)))))
+              (progn (mevedel-session-control-fs-program-value (car results))
+                     t)
+            ;; The lease no longer holds the bytes this client committed;
+            ;; the rest of the batch waits for the next flush.
+            (setcdr batch 'unavailable)
+            nil)
+        (error
+         (mevedel--warn-once
+          (list 'diagnostic-append path)
+          "Diagnostic append failed for %s, retaining for retry: %s"
+          path (error-message-string err))
+         nil))))))
 
 (defun mevedel-session-publication-status (session)
   "Return SESSION's stable read-only publication status plist."

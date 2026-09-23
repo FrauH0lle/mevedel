@@ -302,6 +302,45 @@ the variables are in."
       (push session-dir
             (car mevedel-session-durability--asserted-directories)))))
 
+(defun mevedel-session-durability--pid-lock-operation (session-dir)
+  "Return the program operation proving SESSION-DIR has no PID lock, or nil.
+
+Nil means this transaction already proved it.  A caller that runs the
+operation inside its own program settles it with
+`mevedel-session-durability--settle-pid-lock', which raises exactly as
+`mevedel-session-durability--assert-no-pid-lock' would."
+  (let ((physical (mevedel-session-control-fs-physical-path session-dir)))
+    (unless (member physical
+                    (car mevedel-session-durability--asserted-directories))
+      (list :op 'path-exists-p
+            :path (file-name-concat physical ".lock")
+            :optional t))))
+
+(defun mevedel-session-durability--settle-pid-lock (session-dir result)
+  "Interpret RESULT of SESSION-DIR's PID-lock operation."
+  (pcase (plist-get result :status)
+    ('absent (mevedel-session-durability-note-no-pid-lock session-dir))
+    ('ok (error "Portable session has a PID lock: %s"
+                (mevedel-session-control-fs-physical-path session-dir)))
+    (_ (mevedel-session-control-fs-program-value result))))
+
+(defun mevedel-session-durability--clock-operation (directory)
+  "Return an operation reading DIRECTORY's target clock for this transaction.
+
+Nil outside a transaction, where the reading would have nowhere to be kept,
+and while the transaction's reading is still fresh.  The reading comes from
+the target in the same process as the caller's other operations, so it is as
+authoritative as a separate clock program."
+  (and mevedel-session-durability--transaction-clock
+       (not (mevedel-session-durability--target-time-cached-p directory))
+       (list :op 'target-time :path directory :optional t)))
+
+(defun mevedel-session-durability--settle-clock (directory result)
+  "Record RESULT of DIRECTORY's clock operation when the target answered."
+  (when (eq 'ok (plist-get result :status))
+    (mevedel-session-durability--note-target-time
+     directory (plist-get result :value))))
+
 (defun mevedel-session-durability-note-no-pid-lock (session-dir)
   "Record SESSION-DIR as already proved free of a PID lock.
 
@@ -532,24 +571,34 @@ the lease directory cannot present itself as a newer generation."
   (let ((copy (copy-sequence lease)))
     (plist-put copy :bytes nil)))
 
-(defun mevedel-session-durability--observe-lease (directory generation)
+(defun mevedel-session-durability--observe-lease
+    (directory generation &optional extra)
   "Observe DIRECTORY's clock, records, and GENERATION's own record at once.
 
-Return a plist with `:now', `:names', `:bytes', and `:record'.  The three
-observations are one target process rather than four, and the record read is
-last so an absent record still leaves the clock and the listing answered."
-  (let* ((operations
-          (append
-           (list (list :op 'target-time :path directory)
-                 (list :op 'list-directory :path directory))
-           (when (natnump generation)
-             (list (list :op 'read
-                         :path (mevedel-session-durability--generation-path
-                                directory generation))))))
-         (results (mevedel-session-control-fs-run-program operations))
-         (clock (nth 0 results))
-         (listing (nth 1 results))
-         (record (nth 2 results))
+Return a plist with `:now', `:names', `:bytes', `:record', and `:extra'.  The
+three observations are one target process rather than four, and the record
+read is optional so an absent record still leaves the clock, the listing, and
+the rest answered.  EXTRA is a list of further optional observations riding in
+the same process; `:extra' holds their results in order."
+  (let* ((clocked (not (mevedel-session-durability--target-time-cached-p
+                        directory)))
+         (reading (and (natnump generation)
+                       (list :op 'read
+                             :path (mevedel-session-durability--generation-path
+                                    directory generation)
+                             :optional t)))
+         (results
+          (mevedel-session-control-fs-run-program
+           (append
+            ;; A transaction whose reading is still fresh answers `:now'
+            ;; through the clock seam instead.
+            (when clocked (list (list :op 'target-time :path directory)))
+            (list (list :op 'list-directory :path directory))
+            (when reading (list reading))
+            extra)))
+         (clock (and clocked (pop results)))
+         (listing (pop results))
+         (record (and reading (pop results)))
          (bytes (and record
                      (eq 'ok (plist-get record :status))
                      (plist-get record :value))))
@@ -567,7 +616,8 @@ last so an absent record still leaves the clock and the listing answered."
           (and bytes
                (condition-case nil
                    (car (read-from-string bytes))
-                 (error nil))))))
+                 (error nil)))
+          :extra results)))
 
 (defun mevedel-session-durability--commit-lease
     (directory generation expected record)
@@ -726,7 +776,7 @@ otherwise mutate the session lease."
 (defun mevedel-session-durability--claim-next
     (directory expected buffer-name
                &optional status unsettled-mutation-p unsettled-mutation
-               transfer-generation)
+               transfer-generation observed)
   "Claim DIRECTORY's next generation after EXPECTED for BUFFER-NAME.
 
 The candidate fences older writers as soon as its exclusive generation file
@@ -735,15 +785,20 @@ otherwise it is marked aborted and removed best-effort.  STATUS defaults to
 `active'.  When UNSETTLED-MUTATION-P is non-nil, the successor records
 UNSETTLED-MUTATION instead of preserving EXPECTED's value.
 TRANSFER-GENERATION explicitly opens that request round; otherwise a
-same-owner successor preserves EXPECTED's round."
+same-owner successor preserves EXPECTED's round.  OBSERVED is a lease
+observation the caller already took of DIRECTORY, which replaces this
+function's own."
   (let* ((status (or status 'active))
          ;; One observation answers the clock and the known generations.
          ;; Any record created after it is a foreign claim at the same
          ;; next generation, which collides with the exclusive create
          ;; below and fails it -- no generation older than the candidate
          ;; can appear in between, so the observed name set is the
-         ;; complete predecessor universe.
-         (observed (mevedel-session-durability--observe-lease directory nil))
+         ;; complete predecessor universe.  That holds for any observation
+         ;; taken before the create, including the caller's.
+         (observed (or observed
+                       (mevedel-session-durability--observe-lease
+                        directory nil)))
          ;; The observed reading flows through the clock seam, so a test
          ;; that stubs the seam still governs every deadline.
          (now (let ((mevedel-session-durability--observed-time
@@ -969,7 +1024,9 @@ When SESSION is non-nil, record the resulting lease state on it."
                   (mevedel-session-transfer-release-fence
                    directory (plist-get current :generation))))
            'foreign)
-          (t 'expired))))
+          (t 'expired))
+         ;; An owned head is the record this client's claim just wrote.
+         (and owned (mevedel-session-durability--record-bytes current))))
       (and owned t))))
 
 (defun mevedel-session-durability-call-with-abandoned-lease (session function)
@@ -1183,10 +1240,16 @@ Return non-nil only when the current owned lease generation commits VALUE."
           (if-let* ((successor
                     (mevedel-session-durability--claim-next
                      directory existing (plist-get existing :buffer)
-                     status t value)))
+                     status t value nil
+                     ;; Its listing is only a predecessor universe when
+                     ;; the observation actually listed the directory.
+                     (and (plist-get observed :listed) observed))))
               (progn
+                ;; The claim wrote exactly these bytes, so a later
+                ;; renewal or ownership proof can state them.
                 (mevedel-session-durability--bind-lease
-                 session successor 'owned)
+                 session successor 'owned
+                 (mevedel-session-durability--record-bytes successor))
                 t)
             (let ((latest (mevedel-session-durability--lease-head directory)))
               (mevedel-session-durability--bind-lease
@@ -1443,6 +1506,87 @@ manifest, or drain SESSION's publication queue."
     (when failure
       (signal (car failure) (cdr failure)))
     result))
+
+(defun mevedel-session-durability-call-with-held-lease (session function)
+  "Call FUNCTION while SESSION's publication is held active, reserving nothing.
+
+Like `mevedel-session-durability-call-with-reserved-lease', timer renewal
+performs no target I/O and a critical publisher reached meanwhile queues
+instead of nesting.  No lease record is written on entry or exit: FUNCTION
+proves ownership inside each of its own programs through
+`mevedel-session-durability-run-owned-program', so the window it holds needs
+no bounded extension.  A release requested meanwhile runs on exit."
+  (let (failure result)
+    (setf (mevedel-session-publication-active-p session) t)
+    (unwind-protect
+        (condition-case err
+            (setq result (funcall function))
+          (error (setq failure err)))
+      (setf (mevedel-session-publication-active-p session) nil)
+      (when (plist-get (mevedel-session-lease session) :release-pending)
+        (condition-case err
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session)
+          (error
+           (unless failure
+             (setq failure err))))))
+    (when failure
+      (signal (car failure) (cdr failure)))
+    result))
+
+(defun mevedel-session-durability-run-owned-program (session operations)
+  "Run OPERATIONS behind a proof that SESSION still owns its lease generation.
+
+The proof is a `verify' of the exact bytes this client last committed for
+its bound generation, first in the same target process, so a program whose
+ownership no longer holds stops before any of OPERATIONS runs.  Like a lease
+commit, the proof is a precondition and not an election: another client can
+claim the next generation in between, so the same program lists the lease
+directory and a newer live generation ends this client's assumption
+afterwards.  Return the results of OPERATIONS, or nil when this client knows
+no committed bytes or the proof failed; a failed proof drops the remembered
+bytes so the next renewal observes the target instead of assuming."
+  (let* ((lease (mevedel-session-lease session))
+         (bytes (plist-get lease :bytes))
+         (generation (plist-get lease :generation))
+         (session-dir (mevedel-session-save-path session)))
+    (when (and session-dir bytes (natnump generation)
+               (eq 'owned (plist-get lease :state)))
+      (let* ((directory (mevedel-session-durability--lease-path session-dir))
+             (results
+              (mevedel-session-control-fs-run-program
+               (append
+                (list (list :op 'verify
+                            :path (mevedel-session-durability--generation-path
+                                   directory generation)
+                            :content bytes)
+                      (list :op 'list-directory :path directory :optional t))
+                operations)))
+             (proof (car results))
+             (listing (cadr results)))
+        (pcase (plist-get proof :status)
+          ('ok
+           (when (and (eq 'ok (plist-get listing :status))
+                      (> (mevedel-session-durability--newest-generation
+                          (plist-get listing :value))
+                         generation))
+             ;; A newer generation appeared.  An aborted claim leaves this
+             ;; client the head; anything else is decided by the next
+             ;; renewal, which observes instead of assuming.
+             (let ((head (mevedel-session-durability--lease-head
+                          directory (plist-get listing :value))))
+               (unless (mevedel-session-durability--same-generation-p
+                        head lease)
+                 (mevedel-session-durability--bind-lease
+                  session (mevedel-session-durability--strip-assumption lease)
+                  (plist-get lease :state)))))
+           (cddr results))
+          ((or 'mismatch 'absent)
+           (mevedel-session-durability--bind-lease
+            session (mevedel-session-durability--strip-assumption lease)
+            (plist-get lease :state))
+           nil)
+          (_ (mevedel-session-control-fs-program-value proof)))))))
 
 (defun mevedel-session-durability-adopt-owned-lease (session source)
   "Move SOURCE's verified owned lease and path into SESSION.
