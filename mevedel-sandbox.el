@@ -184,8 +184,12 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
             (progn
               (with-current-buffer output-buffer
                 (set-buffer-multibyte nil)
-                (when workdir
-                  (setq default-directory workdir)))
+                ;; A local probe must not inherit a remote session buffer's
+                ;; directory: `make-process' would then run the local
+                ;; executable's path on the remote target.
+                (setq default-directory
+                      (or workdir (file-name-as-directory
+                                   temporary-file-directory))))
               (let ((filter
                      (lambda (_process output)
                        (when (buffer-live-p output-buffer)

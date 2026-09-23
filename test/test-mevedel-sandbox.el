@@ -154,6 +154,18 @@
                   '("sh" "-c" "sleep 0.05") remote-root)))
             (should-not (plist-get result :timed-out-p))))
       (delete-directory root t)))
+  :doc "local target:
+`mevedel-sandbox--run-probe' runs a local probe locally from a remote buffer"
+  (let ((default-directory "/ssh:user@host:/srv/project/")
+        (make (symbol-function 'make-process))
+        directory)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq directory default-directory)
+                 (apply make args))))
+      (mevedel-sandbox--run-probe '("true")))
+    (should (stringp directory))
+    (should-not (file-remote-p directory)))
   :doc "host probe:
 `mevedel-sandbox-probe' always returns explicit availability facts"
   (let ((mevedel-sandbox--probe-cache nil))
