@@ -190,7 +190,10 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel delay))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
@@ -1395,16 +1398,29 @@ it briefly so repeated owner polls return the same result."
       (mevedel-execution--notify-state-change record)
       (mevedel-execution--release-runtime record)
       (mevedel-execution--release-scheduler record)
-      (if (mevedel-execution--record-yielded-p record)
-          (if (mevedel-execution--record-observer record)
-              (mevedel-execution--deliver-observer record)
-            (when mevedel-execution-mailbox-delivery-function
-              (mevedel-execution--deliver-independent record)))
-        (let ((callback (mevedel-execution--record-callback record)))
-          (unless (eq (mevedel-execution--record-delivery-state record)
-                      'discarded)
-            (funcall callback
-                     (mevedel-execution--observation record t))))))))
+      (let ((deliver
+             (lambda ()
+               (if (mevedel-execution--record-yielded-p record)
+                   (if (mevedel-execution--record-observer record)
+                       (mevedel-execution--deliver-observer record)
+                     (when mevedel-execution-mailbox-delivery-function
+                       (mevedel-execution--deliver-independent record)))
+                 (let ((callback (mevedel-execution--record-callback record)))
+                   (unless (eq (mevedel-execution--record-delivery-state record)
+                               'discarded)
+                     (funcall callback
+                              (mevedel-execution--observation record t)))))))
+            (workdir (mevedel-execution--record-workdir record)))
+        ;; Delivery publishes remote output and enqueues durable mail.  Its
+        ;; settlement is reached from a sentinel that can run inside another
+        ;; remote command, where the control filesystem refuses to nest and
+        ;; the result would be lost with a warning; deliver once it is free.
+        (unless (and (mevedel-transport-busy-p workdir)
+                     (mevedel-transport-run-when-idle
+                      (list 'execution-delivery
+                            (mevedel-execution--record-token record))
+                      workdir deliver))
+          (funcall deliver))))))
 
 (defun mevedel-execution--publish-yielded-artifact (record)
   "Publish RECORD's spool without moving a file still being appended.

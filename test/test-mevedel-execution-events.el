@@ -11,6 +11,7 @@
 (require 'mevedel-execution-process)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
+(require 'mevedel-transport)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -768,6 +769,32 @@
                       (lambda (event)
                         (eq (plist-get event :type) 'terminal))
                       events))))
+      (delete-directory root t)))
+  :doc "independent completion settled inside a remote command delivers once it returns"
+  (let* ((root (make-temp-file "mevedel-managed-mailbox-busy-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (finish (symbol-function 'mevedel-execution--finish-managed))
+         nested-deliveries mailbox-calls)
+    (unwind-protect
+        (let ((mevedel-execution-mailbox-delivery-function
+               (lambda (_event _context)
+                 (when (mevedel-transport-busy-p) (setq nested-deliveries t))
+                 (setq mailbox-calls (1+ (or mailbox-calls 0)))
+                 t)))
+          ;; Settlement runs from a sentinel, which can fire while another
+          ;; remote command is in flight.
+          (cl-letf (((symbol-function 'mevedel-execution--finish-managed)
+                     (lambda (record)
+                       (let ((mevedel-transport--depth 1))
+                         (funcall finish record)))))
+            (test-mevedel-execution--start-managed
+             session root '("sh" "-c" "sleep .05; printf done")
+             :tool-use-id "call-independent-busy")
+            (test-mevedel-execution--wait (lambda () mailbox-calls)))
+          (should (= 1 mailbox-calls))
+          (should-not nested-deliveries))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)))
   :doc "mailbox and passive event mutations are isolated from each other"
   (let* ((root (make-temp-file "mevedel-managed-event-isolation-" t))
