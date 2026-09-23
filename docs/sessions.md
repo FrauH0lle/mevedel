@@ -449,6 +449,11 @@ Reads never create control directories:
 an absent transfer mailbox holds no requests, so a polling observer performs no
 target mutation. Publication proves lease ownership immediately before every
 artifact write and once after the last one; those proofs may share a control program.
+A proof counts for the next write only while no target write came between:
+the reservation that opens a publication proves ownership for its first fixed
+write, and a batch that commits proves it after its last write through the head
+commit's exact-generation check, with only the immutable generation written in
+between.
 Enumerating a workspace's sessions obeys the same budget. Every candidate
 directory's control artifacts are probed in one program and every lease
 directory is listed in one more, and both observations are then shared with
@@ -846,7 +851,12 @@ an invalid recovery marker.
 Critical publication changes the owned generation to `publishing` and reserves
 a one-hour ownership window before each fixed artifact write. Timer callbacks perform no
 target I/O while publication is active, avoiding reentrant TRAMP calls; the
-serialized publisher renews before each such write and after the final write.
+serialized publisher renews before each such write that no fresher proof
+precedes, and after the final write of a batch that does not commit. An owned
+lease is reserved directly; a separate renewal first runs only for a lease that
+needs reclaiming. A batch that writes no fixed file and carries no marker --
+agent and segment transcripts, file history, tombstones -- only stages its
+bytes for the next commit and reserves nothing.
 When a renewal would reproduce identical lease bytes, it verifies the target
 bytes and observes the generation listing without rewriting the record. A fresh
 transaction clock reading also avoids another target clock marker; reuse never
@@ -957,7 +967,14 @@ already-possible re-delivery.  See ADR 0112.
 Diagnostic streams (telemetry, hook, permission, and repair logs) reach a
 remote target as one pinned `append` operation carrying only the delta.  The
 append works in place, so a crash mid-operation can tear one trailing line of
-a stream nothing reads at resume.
+a stream nothing reads at resume.  A flush admits once -- recovery refresh and
+lease check -- and each append then runs in a program that first verifies the
+exact lease bytes this client last committed and lists the lease directory; a
+failed proof retains the content for the next flush, and a newer live
+generation ends the client's assumption.  No lease record is rewritten for
+diagnostics.  Publication is held active meanwhile, so a critical publisher
+reached from a sentinel queues and is published through the ordinary reserved
+path afterwards.
 
 Local Fork and Rewind retain their same-filesystem directory transactions and
 rollback trees.  Portable project lifecycle commits use the immutable

@@ -51,12 +51,20 @@
                   "mevedel-session-control-transfer" (session))
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-durability--assert-no-pid-lock
+(declare-function mevedel-session-durability--clock-operation
+                  "mevedel-session-durability" (directory))
+(declare-function mevedel-session-durability--lease-path
+                  "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability--pid-lock-operation
                   "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability--portable-session-p
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability--read-plist
                   "mevedel-session-durability" (path))
+(declare-function mevedel-session-durability--settle-clock
+                  "mevedel-session-durability" (directory result))
+(declare-function mevedel-session-durability--settle-pid-lock
+                  "mevedel-session-durability" (session-dir result))
 (declare-function mevedel-session-durability--valid-relative-path-p
                   "mevedel-session-durability" (path))
 (declare-function mevedel-session-durability--write-plist
@@ -163,16 +171,33 @@ An abandonment marker may outlive its explicitly discarded directory."
           :kind (plist-get marker :kind)
           :created-at (plist-get marker :created-at))))
 
-(defun mevedel-session-recovery--markers (session-dir)
+(defun mevedel-session-recovery--markers (session-dir &optional preamble)
   "Return validated specialized recovery markers below SESSION-DIR.
 
 One directory operation answers existence and kind together, so the
-common no-recovery case costs one target process instead of two."
+common no-recovery case costs one target process instead of two.  With
+PREAMBLE, the same process also proves SESSION-DIR has no PID lock and,
+inside a durable transaction, reads the target clock the lease checks that
+follow will need."
   (let* ((root (mevedel-session-control-fs-physical-path
                 (mevedel-session-recovery--root session-dir)))
-         (result (car (mevedel-session-control-fs-run-program
-                       (list (list :op 'directory-p :path root
-                                   :optional t))))))
+         (lease (and preamble
+                     (mevedel-session-durability--lease-path session-dir)))
+         (pid-lock (and preamble
+                        (mevedel-session-durability--pid-lock-operation
+                         session-dir)))
+         (clock (and preamble
+                     (mevedel-session-durability--clock-operation lease)))
+         (results (mevedel-session-control-fs-run-program
+                   (append (and pid-lock (list pid-lock))
+                           (list (list :op 'directory-p :path root
+                                       :optional t))
+                           (and clock (list clock)))))
+         (result (nth (if pid-lock 1 0) results)))
+    (when pid-lock
+      (mevedel-session-durability--settle-pid-lock session-dir (car results)))
+    (when clock
+      (mevedel-session-durability--settle-clock lease (car (last results))))
     (pcase (plist-get result :status)
       ('absent nil)
       ('ok
@@ -190,8 +215,7 @@ common no-recovery case costs one target process instead of two."
 The result is a plist containing `:marker', `:directory', `:reason', and
 `:created-at', or nil when no durable recovery marker is installed."
   (let ((remote-file-name-inhibit-cache t))
-    (mevedel-session-durability--assert-no-pid-lock session-dir)
-    (car (mevedel-session-recovery--markers session-dir))))
+    (car (mevedel-session-recovery--markers session-dir t))))
 
 (defun mevedel-session-recovery--id (session reason)
   "Return a fresh target-side recovery id for SESSION and REASON."

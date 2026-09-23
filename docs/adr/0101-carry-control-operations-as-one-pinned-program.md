@@ -59,7 +59,10 @@ operations share one dispatch while retaining per-operation descriptor proof.
 A steady-state renewal can carry verification, writes, listing, and an optional
 clock observation together. Cold, contested, or stale-clock renewal still needs
 a preceding observation. Publication continues to prove ownership before every
-artifact write and after the last, even when those operations share a process.
+artifact write and after the last, even when those operations share a process;
+an adjacent lease commit with no target write in between -- the reservation, or
+a committing batch's head commit -- is that proof. A diagnostic append carries
+its own proof as the first operation of its program instead of a reservation.
 Identical lease bytes need verification and listing but no replacement write.
 Renewals omit the trailing clock operation while the transaction's existing
 reading is fresh, without refreshing its age. Once that reading expires, the
@@ -79,6 +82,29 @@ an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Remote sessions still blocked input on several programs per operation.** A
+  September 23 capture of a real remote session (LAN target, 13-21 ms per bare
+  TRAMP command, about 50 ms per control program) spent 76.5 s of a 384 s request
+  blocked in 2,266 TRAMP round trips. A mock-target replay counting programs per
+  operation found proofs repeated back to back rather than weak ones: a save used
+  11 programs, a diagnostic flush 9 for one append, an agent transcript 10 to stage
+  bytes it never wrote to the target, and each tool admission 5. The recovery
+  marker read now carries the PID-lock proof and, inside a transaction, the clock
+  reading the ownership checks that follow need; a lease observation reads the
+  clock only when the transaction's reading is stale; transfer requests are listed
+  in the lease observation; admission is one transaction; a latch claim reuses its
+  caller's observation. Publication counts the reservation as the proof before the
+  first fixed write and the head commit's exact-generation check as the proof
+  after the last write of a committing batch, because no target write intervenes
+  in either case; an owned lease is reserved without a preceding renewal; a batch
+  with no fixed write and no marker only stages. Diagnostics no longer reserve:
+  each append runs behind a `verify` of the committed lease bytes and a listing in
+  its own program, with publication held active so critical publishers queue. The
+  replay moved a save from 11 to 6 programs, admission from 5 to 2, a transfer poll
+  from 2 to 1, a latch change from 4 to 3, a diagnostic flush from 9 to 2 and agent
+  staging from 10 to 1. Every fixed write still follows a proof with no target
+  write in between, and there is still no cross-operation authority cache.
 
 - **Repeated renewals still performed redundant target work.** A September 22
   captured-transcript replay spent 142 ms in publication and 211 ms in a small

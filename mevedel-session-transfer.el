@@ -54,7 +54,7 @@
 (declare-function mevedel-session-durability--newest-generation
                   "mevedel-session-durability" (names))
 (declare-function mevedel-session-durability--observe-lease
-                  "mevedel-session-durability" (directory generation))
+                  "mevedel-session-durability" (directory generation &optional extra))
 (declare-function mevedel-session-durability--observed-names
                   "mevedel-session-durability" (observed))
 (declare-function mevedel-session-durability--owned-lease-record-p
@@ -298,9 +298,19 @@ target directories would mutate the session on behalf of an observer."
                               (emacs-pid) mevedel-session-durability--client-id)))
    0 32))
 
+(defun mevedel-session-transfer--requests-operation (directory)
+  "Return the optional program operation listing DIRECTORY's requests."
+  (list :op 'list-directory
+        :path (mevedel-session-transfer--path directory "requests")
+        :optional t))
+
 (defun mevedel-session-transfer--current-request
-    (directory lease session-id &optional now)
+    (directory lease session-id &optional now listing)
   "Read DIRECTORY's newest live request for SESSION-ID, or nil.
+
+LISTING, when non-nil, is the result of
+`mevedel-session-transfer--requests-operation' run by the caller's own
+program, and replaces the listing round trip.
 
 The owner's lease generation legitimately advances while a request is
 pending: settling the durable mutation latch and publication both rotate
@@ -310,11 +320,24 @@ as its owner, so a request left over from an earlier ownership cannot
 cross a release."
   (let* ((generation (plist-get lease :generation))
          (now (or now (mevedel-session-durability--target-time directory)))
+         (regexp "\\`request-[0-9]\\{20\\}\\.el\\'")
          (path
-          (car (sort (mevedel-session-control-fs-list-directory
-                      (mevedel-session-transfer--path directory "requests")
-                      "\\`request-[0-9]\\{20\\}\\.el\\'")
-                     #'string>))))
+          (car (sort
+                (if listing
+                    (let ((requests (mevedel-session-transfer--path
+                                     directory "requests")))
+                      (unless (eq 'absent (plist-get listing :status))
+                        (delq nil
+                              (mapcar
+                               (lambda (name)
+                                 (and (string-match-p regexp name)
+                                      (expand-file-name name requests)))
+                               (mevedel-session-control-fs-program-value
+                                listing)))))
+                  (mevedel-session-control-fs-list-directory
+                   (mevedel-session-transfer--path directory "requests")
+                   regexp))
+                #'string>))))
     (when path
       (let ((request (mevedel-session-durability--read-plist path)))
         (unless (mevedel-session-transfer--valid-request-p request now)
@@ -496,7 +519,9 @@ transfer authority."
            ;; own target process on every tick.
            (observed (and directory
                           (mevedel-session-durability--observe-lease
-                           directory (plist-get bound :generation))))
+                           directory (plist-get bound :generation)
+                           (list (mevedel-session-transfer--requests-operation
+                                  directory)))))
            (current
             (and observed
                  (let ((record (plist-get observed :record)))
@@ -525,7 +550,8 @@ transfer authority."
                (> (plist-get current :expires-at) now))
       (let* ((request
               (mevedel-session-transfer--current-request
-               directory current session-id now))
+               directory current session-id now
+               (car (plist-get observed :extra))))
              (observed-at
               (and request
                    (mevedel-session-transfer--observed-at

@@ -10,6 +10,7 @@
 
 (eval-when-compile
   (require 'mevedel-agents)
+  (require 'mevedel-session-durability)
   (require 'mevedel-structs)
   (require 'mevedel-transport)
   (require 'mevedel-utilities))
@@ -1200,15 +1201,18 @@ authority gate; callers use this narrower guard at admission boundaries."
   (let ((state (plist-get (mevedel-session-control-transfer session) :state)))
     (when (memq state '(quiescing released))
       (user-error "Session is quiescing for cooperative control transfer")))
-  (when (and (mevedel-session-codec-portable-authority-p session)
-             (mevedel-session-save-path session)
-             (mevedel-session-session-id session))
-    (let ((state
-           (plist-get
-            (mevedel-session-control-transfer-observe session) :state)))
-      (when (memq state '(quiescing released))
-        (user-error "Session is quiescing for cooperative control transfer"))))
-  (mevedel-session-artifacts-assert-mutation-authority session))
+  ;; One admission is one durable transaction: the transfer observation's
+  ;; target clock answers the ownership checks that follow it.
+  (mevedel-session-durability-with-transaction
+    (when (and (mevedel-session-codec-portable-authority-p session)
+               (mevedel-session-save-path session)
+               (mevedel-session-session-id session))
+      (let ((state
+             (plist-get
+              (mevedel-session-control-transfer-observe session) :state)))
+        (when (memq state '(quiescing released))
+          (user-error "Session is quiescing for cooperative control transfer"))))
+    (mevedel-session-artifacts-assert-mutation-authority session)))
 
 
 ;;
@@ -1684,7 +1688,9 @@ Portable project writes enter the session publication queue.  File-workspace
 writes retain the existing same-filesystem temporary-file and rename
 behavior.  Return the publication outcome, or PATH after a direct write."
   (if (mevedel-session-codec-portable-authority-p session)
-      (progn
+      ;; Admission and publication share one transaction's recovery and
+      ;; clock observations.
+      (mevedel-session-durability-with-transaction
         (mevedel-session-artifacts-assert-mutation-authority session)
         (mevedel-session-publication-publish
          session (list (list :path path :content content :coding coding))))

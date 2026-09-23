@@ -2001,6 +2001,150 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
+(mevedel-deftest mevedel-session-durability-run-owned-program ()
+  ,test
+  (test)
+  :doc "runs operations behind a proof of the bytes this client committed"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-owned-program-" t)))
+         (session-dir (file-name-as-directory (file-name-concat root "session")))
+         (session (test-mevedel-session-durability--local-session root))
+         (log (file-name-concat session-dir "diagnostic.log"))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          (should (plist-get (mevedel-session-lease session) :bytes))
+          (should (equal '((:status ok :value nil))
+                         (mapcar (lambda (result)
+                                   (list :status (plist-get result :status)
+                                         :value (plist-get result :value)))
+                                 (mevedel-session-durability-run-owned-program
+                                  session (list (list :op 'append :path log
+                                                      :content "one\n"))))))
+          (should (equal "one\n" (mevedel-session-control-fs-read-file log))))
+      (mevedel-session-durability--cancel-renewal session)
+      (ignore-errors (mevedel-session-durability-lease-release session-dir session))
+      (delete-directory root t)))
+
+  :doc "stops before its operations when the committed bytes changed"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-owned-program-" t)))
+         (session-dir (file-name-as-directory (file-name-concat root "session")))
+         (session (test-mevedel-session-durability--local-session root))
+         (log (file-name-concat session-dir "diagnostic.log"))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          ;; Another writer replaced this client's record behind its back.
+          (let* ((lease (mevedel-session-lease session))
+                 (path (mevedel-session-durability--generation-path
+                        (mevedel-session-durability--lease-path session-dir)
+                        (plist-get lease :generation))))
+            (mevedel-session-control-fs-write-file
+             path (concat (mevedel-session-control-fs-read-file path) " ")))
+          (should-not (mevedel-session-durability-run-owned-program
+                       session (list (list :op 'append :path log :content "x"))))
+          (should-not (file-exists-p log))
+          ;; The stale belief is dropped so the next renewal observes.
+          (should-not (plist-get (mevedel-session-lease session) :bytes)))
+      (mevedel-session-durability--cancel-renewal session)
+      (delete-directory root t)))
+
+  :doc "stops assuming ownership when a newer live generation appears"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-owned-program-" t)))
+         (session-dir (file-name-as-directory (file-name-concat root "session")))
+         (session (test-mevedel-session-durability--local-session root))
+         (log (file-name-concat session-dir "diagnostic.log"))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          (let* ((lease (mevedel-session-lease session))
+                 (directory (mevedel-session-durability--lease-path session-dir))
+                 (next (1+ (plist-get lease :generation))))
+            ;; A foreign claim activated the next generation while this
+            ;; client's record survived its best-effort pruning.
+            (mevedel-session-durability--write-plist
+             (mevedel-session-durability--generation-path directory next)
+             (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+               (mevedel-session-durability--lease-record
+                "*foreign*" next 'active nil nil
+                (mevedel-session-durability--target-time directory)))))
+          ;; The precondition held at the proof, so the append ran ...
+          (should (mevedel-session-durability-run-owned-program
+                   session (list (list :op 'append :path log :content "x"))))
+          ;; ... but this client no longer assumes it owns the lease.
+          (should-not (plist-get (mevedel-session-lease session) :bytes)))
+      (mevedel-session-durability--cancel-renewal session)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-durability-call-with-held-lease ()
+  ,test
+  (test)
+  :doc "holds publication active without writing the lease"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-held-lease-" t)))
+         (session-dir (file-name-as-directory (file-name-concat root "session")))
+         (session (test-mevedel-session-durability--local-session root))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (program (symbol-function 'mevedel-session-control-fs-run-program))
+         (programs 0)
+         active)
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args) (cl-incf programs) (apply program args))))
+            (should (eq 'done
+                        (mevedel-session-durability-call-with-held-lease
+                         session
+                         (lambda ()
+                           (setq active (mevedel-session-publication-active-p session))
+                           'done)))))
+          (should active)
+          (should-not (mevedel-session-publication-active-p session))
+          (should (= 0 programs)))
+      (mevedel-session-durability--cancel-renewal session)
+      (ignore-errors (mevedel-session-durability-lease-release session-dir session))
+      (delete-directory root t)))
+
+  :doc "releases a lease requested while held, and rethrows the function's error"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-held-lease-" t)))
+         (session-dir (file-name-as-directory (file-name-concat root "session")))
+         (session (test-mevedel-session-durability--local-session root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          (should-error
+           (mevedel-session-durability-call-with-held-lease
+            session
+            (lambda ()
+              ;; Release defers itself behind the active publication.
+              (mevedel-session-durability-lease-release session-dir session)
+              (should (plist-get (mevedel-session-lease session) :release-pending))
+              (error "Injected failure"))))
+          (should-not (mevedel-session-publication-active-p session))
+          (should-not (mevedel-session-lease session))
+          (should (eq 'available
+                      (mevedel-session-durability-lease-state session-dir))))
+      (mevedel-session-durability--cancel-renewal session)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-durability-call-with-reserved-lease ()
   ,test
   (test)
@@ -3545,9 +3689,9 @@
             (let* ((save-path (mevedel-session-save-path session))
                    (log-path (file-name-concat save-path "hook-log.el"))
                    (entry '(:event Stop :status completed))
-                   (append-file
+                   (run-program
                     (symbol-function
-                     'mevedel-session-control-fs-append-file))
+                     'mevedel-session-control-fs-run-program))
                    (diagnostic-publications 0)
                    warning)
               (make-directory log-path)
@@ -3573,11 +3717,15 @@
               (delete-directory log-path)
               (cl-letf
                   (((symbol-function
-                     'mevedel-session-control-fs-append-file)
-                    (lambda (path content &optional coding-system)
-                      (when (equal log-path path)
-                        (cl-incf diagnostic-publications))
-                      (funcall append-file path content coding-system))))
+                     'mevedel-session-control-fs-run-program)
+                    (lambda (operations &rest args)
+                      (dolist (op operations)
+                        (when (and (eq 'append (plist-get op :op))
+                                   (equal (file-name-nondirectory log-path)
+                                          (file-name-nondirectory
+                                           (plist-get op :path))))
+                          (cl-incf diagnostic-publications)))
+                      (apply run-program operations args))))
                 (should (mevedel-session-artifacts-save
                          session (current-buffer)))
                 (let ((deadline (+ (float-time) 2)))
@@ -3611,6 +3759,12 @@
         (progn
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*owner*" session))
+          ;; Without the bytes it last committed, this client must renew
+          ;; before an append can prove ownership in its own program.
+          (mevedel-session-durability--bind-lease
+           session (mevedel-session-durability--strip-assumption
+                    (mevedel-session-lease session))
+           'owned)
           (mevedel-test--with-captured-diagnostics captured
             (cl-letf (((symbol-function
                         'mevedel-session-durability-lease-renew)
@@ -3643,8 +3797,8 @@
          (session
           (test-mevedel-session-durability--remote-session host local-root))
          (mevedel-session-durability--client-id (make-string 64 ?a))
-         (append-file
-          (symbol-function 'mevedel-session-control-fs-append-file))
+         (run-program
+          (symbol-function 'mevedel-session-control-fs-run-program))
          (finish-publication
           (symbol-function
            'mevedel-session-durability--finish-publication-lease))
@@ -3658,10 +3812,14 @@
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*diagnostic*" session))
           (cl-letf
-              (((symbol-function 'mevedel-session-control-fs-append-file)
-                (lambda (path content &optional coding-system)
-                  (prog1 (funcall append-file path content coding-system)
-                    (unless injected
+              (((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (operations &rest args)
+                  (prog1 (apply run-program operations args)
+                    ;; A critical publisher reached from a sentinel while
+                    ;; the diagnostic append was in flight.
+                    (when (and (not injected)
+                               (seq-some (lambda (op) (eq 'append (plist-get op :op)))
+                                         operations))
                       (setq injected t
                             fail-finish t)
                       (should
