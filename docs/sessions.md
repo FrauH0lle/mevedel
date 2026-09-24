@@ -1121,10 +1121,15 @@ back into live session state on resume.  Pre-materialization entries wait in
 a transient session queue and flush with the other diagnostic logs.  Failed
 hook, repair, permission, and telemetry appends stay queued and retry after
 the next successful session save; they never block critical publication.
-Portable project diagnostic appends share one reservation only with appends
-owned by the same session and send only their queued delta. A nested flush for
-another session reserves that session's lease independently. A crash may tear
-the final line; failed appends leave the in-memory entries queued.
+Portable project diagnostic appends are collected per session batch and sent
+as their queued delta in one program after the batch body. On targets that
+support direct-async spawns the program runs in the background: its callback
+touches only in-memory state, and at most one runs per session. Appends
+collected meanwhile, and appends the program did not write, wait in an 8 MiB
+per-session backlog for the next batch; a failed append warns once per path.
+Other targets, and the flush at Emacs exit, run the program synchronously. A
+nested flush for another session proves that session's lease independently. A
+crash may tear the final line.
 
 For mevedel chat buffers, save-time advice around `gptel--save-state`
 strips every gptel request-config Org property (`GPTEL_BACKEND`,

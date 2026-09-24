@@ -133,6 +133,7 @@
 (autoload 'mevedel-session-collection-schedule "mevedel-session-collection")
 
 ;; `mevedel-session-control-fs'
+(defvar mevedel-session-control-fs--async-wait)
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
@@ -197,6 +198,10 @@
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-read-batch
                   "mevedel-session-publication" (directories listings))
+(declare-function mevedel-session-publication-diagnostic-backlog-p
+                  "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-diagnostic-backlog-p
+  "mevedel-session-publication")
 (autoload 'mevedel-session-publication-call-with-diagnostic-batch
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-publish "mevedel-session-publication")
@@ -513,7 +518,8 @@ reads live."
     (if (or (mevedel-session-telemetry-pending session)
             (mevedel-session-hook-log-pending session)
             (mevedel-session-repair-log-pending session)
-            (mevedel-session-permission-log-pending session))
+            (mevedel-session-permission-log-pending session)
+            (mevedel-session-publication-diagnostic-backlog-p session))
         (mevedel-session-publication-call-with-diagnostic-batch
          session flush)
       (funcall flush))))
@@ -2826,10 +2832,12 @@ bad buffer can't block exit."
                 (mevedel-journal-capture-seal-and-schedule
                  mevedel--session buf 'session-end))
               ;; An unmodified buffer still owes its queued diagnostics: a
-              ;; deferred remote flush never fires once Emacs is exiting.
+              ;; deferred remote flush never fires once Emacs is exiting,
+              ;; and an asynchronous append would die with it.
               (ignore-errors
-                (mevedel-session-persistence--flush-diagnostic-logs-now
-                 mevedel--session))
+                (let ((mevedel-session-control-fs--async-wait t))
+                  (mevedel-session-persistence--flush-diagnostic-logs-now
+                   mevedel--session)))
               (when-let* ((dir (mevedel-session-save-path mevedel--session)))
                 (cl-pushnew dir lock-dirs :test #'equal))))))
       ;; Keep live locks through cleanup so an exit-save failure cannot expose

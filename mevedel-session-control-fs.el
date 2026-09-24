@@ -1050,6 +1050,102 @@ as such, so this only raises the classifications no caller can continue past."
                      (or (plist-get result :diagnostic)
                          (format "%s" (plist-get result :status))))))))
 
+(defvar mevedel-session-control-fs--async-wait nil
+  "Non-nil makes `mevedel-session-control-fs-run-program-async' synchronous.
+Bound where the editor is about to exit, so an asynchronous program cannot
+be killed with it before its result is known.")
+
+(defun mevedel-session-control-fs-run-program-async (operations callback)
+  "Run OPERATIONS as one control program, then call CALLBACK.
+
+CALLBACK receives RESULTS, as `mevedel-session-control-fs-run-program'
+returns them, and ERROR, condition data when the program failed as a whole;
+exactly one is non-nil.  Where a direct pipe to the target is allowed the
+program runs on its own channel and nothing waits for it: CALLBACK then runs
+from a process sentinel, which can be inside another remote command, so it
+must not start target I/O itself.  Elsewhere, and while
+`mevedel-session-control-fs--async-wait' is non-nil, the program runs
+synchronously and CALLBACK runs before this returns.  Return the process
+when the program runs asynchronously, and nil otherwise.
+
+Nothing orders an asynchronous program against other programs on the same
+target: callers serialize the ones that touch the same files."
+  (let ((remote (file-remote-p (plist-get (car operations) :path))))
+    (if (or mevedel-session-control-fs--async-wait
+            (not (mevedel-session-control-fs--pipe-capable-p remote)))
+        (let (results failure)
+          (condition-case err
+              (setq results (mevedel-session-control-fs-run-program operations))
+            (error (setq failure err)))
+          (funcall callback results failure)
+          nil)
+      (mevedel-session-control-fs--assert-idle (or remote "/"))
+      (let* ((default-directory
+              (mevedel-session-control-fs--connection-directory (or remote "/")))
+             (bash (car (mevedel-session-control-fs--programs remote)))
+             (output (generate-new-buffer " *mevedel-control-fs-async*"))
+             (stderr (generate-new-buffer " *mevedel-control-fs-async-stderr*"))
+             (release (lambda ()
+                        (when-let* ((pipe (get-buffer-process stderr)))
+                          (delete-process pipe))
+                        (dolist (buffer (list output stderr))
+                          (when (buffer-live-p buffer) (kill-buffer buffer)))))
+             settled process)
+        (with-current-buffer output (set-buffer-multibyte nil))
+        (condition-case err
+            (progn
+              (setq process
+                    (mevedel-transport-call-with-spawn-channel
+                     remote t
+                     (lambda ()
+                       (make-process
+                        :name "mevedel-control-fs-async" :buffer output
+                        :stderr stderr
+                        :command (list bash "-p" "-c"
+                                       mevedel-session-control-fs--pipe-bootstrap
+                                       bash "" "" "0")
+                        :connection-type 'pipe :coding 'no-conversion
+                        :file-handler t :noquery t
+                        :sentinel
+                        (lambda (process _event)
+                          (unless (or settled (process-live-p process))
+                            (setq settled t)
+                            (let ((status (process-exit-status process))
+                                  (text (with-current-buffer output (buffer-string))))
+                              (funcall release)
+                              (if (eql 0 status)
+                                  (let (results failure)
+                                    (condition-case err
+                                        (setq results
+                                              (mevedel-session-control-fs--program-results
+                                               operations text))
+                                      (error (setq failure err)))
+                                    (funcall callback results failure))
+                                (remhash (or remote "") mevedel-session-control-fs--programs)
+                                (funcall callback nil
+                                         (list 'file-error
+                                               "Portable control program failed"
+                                               (plist-get (car operations) :path)
+                                               (format "exit status %s" status)))))))))))
+              (process-send-string
+               process
+               (concat (encode-coding-string
+                        mevedel-session-control-fs--program-script 'utf-8-unix)
+                       "\0"))
+              (with-temp-buffer
+                (mevedel-session-control-fs--insert-program-request
+                 (mapcar #'mevedel-session-control-fs--program-fields operations))
+                (process-send-region process (point-min) (point-max)))
+              (process-send-eof process)
+              process)
+          (error
+           (unless settled
+             (setq settled t)
+             (when (process-live-p process) (delete-process process))
+             (funcall release)
+             (funcall callback nil err))
+           nil))))))
+
 (defun mevedel-session-control-fs-physical-path (path)
   "Return the absolute control spelling PATH must resolve to on the target.
 

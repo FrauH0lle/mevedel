@@ -1574,12 +1574,24 @@ state or publication head."
   t)
 
 (defvar mevedel-session-publication--diagnostic-batch nil
-  "The session and state of a caller-held diagnostic reservation.
+  "The session, state and collected appends of a diagnostic batch.
 
-The value is (SESSION . STATE).  `open' means the caller holds SESSION's
-reserved lease and its appends should write straight to the target.
-`unavailable' means the caller established that SESSION's lease cannot carry
-diagnostics now, so its appends decline without re-testing.")
+The value is (SESSION STATE . APPENDS).  `open' means SESSION's lease can
+carry diagnostics: each append is collected, newest first, as (PATH .
+CONTENT), and the batch writes them together when it ends.  `unavailable'
+means the batch established that SESSION's lease cannot carry diagnostics
+now, so its appends decline without re-testing.")
+
+(defvar mevedel-session-publication--diagnostic-backlog
+  (make-hash-table :test #'eq :weakness 'key)
+  "Session to (IN-FLIGHT . APPENDS): its diagnostics not yet on the target.
+APPENDS, oldest first, are appends a program did not write and appends
+collected while an earlier program was still running; the next batch
+writes them first.")
+
+(defconst mevedel-session-publication--diagnostic-backlog-max-bytes
+  (* 8 1024 1024)
+  "Largest diagnostic backlog kept for a session whose appends keep failing.")
 
 (defun mevedel-session-publication--diagnostic-ready-p (session)
   "Return non-nil when SESSION's lease can carry diagnostics right now.
@@ -1608,9 +1620,10 @@ reached from a sentinel during an append queues instead of nesting inside
 it; its batches are published through the ordinary reserved path once
 FUNCTION returns.
 
-An append that fails inside the batch declines rather than signalling, so
-one unwritable log cannot abort the others; its caller retains the content
-for the next flush, which is what a nil return already means to it."
+The appends are written together once FUNCTION returns, as one program
+that `mevedel-session-publication--write-diagnostics' runs without the
+editor waiting for it where the target allows.  An append it does not
+write stays in the session's backlog for the next batch."
   (cond
    ((eq (car-safe mevedel-session-publication--diagnostic-batch) session)
     (funcall function))
@@ -1622,19 +1635,91 @@ for the next flush, which is what a nil return already means to it."
     (mevedel-session-durability-with-transaction
       (if (not (mevedel-session-publication--diagnostic-ready-p session))
           (let ((mevedel-session-publication--diagnostic-batch
-                 (cons session 'unavailable)))
+                 (list session 'unavailable)))
             (funcall function))
-        (prog1 (mevedel-session-durability-call-with-held-lease
-                session
-                (lambda ()
-                  (let ((mevedel-session-publication--diagnostic-batch
-                         (cons session 'open)))
-                    (funcall function))))
-          ;; A critical publisher may have queued while TRAMP handled the
-          ;; diagnostic I/O.  It retains precedence.
-          (when (mevedel-session-publication-queue session)
-            (mevedel-session-publication--publish-critical-batches
-             session nil))))))))
+        (let ((batch (list session 'open)))
+          (prog1 (mevedel-session-durability-call-with-held-lease
+                  session
+                  (lambda ()
+                    (prog1 (let ((mevedel-session-publication--diagnostic-batch batch))
+                             (funcall function))
+                      ;; Started inside the hold: where the program runs
+                      ;; synchronously, a critical publisher reached from a
+                      ;; sentinel meanwhile still queues instead of nesting.
+                      (mevedel-session-publication--write-diagnostics
+                       session (reverse (cddr batch))))))
+            ;; A critical publisher may have queued meanwhile.  It retains
+            ;; precedence.
+            (when (mevedel-session-publication-queue session)
+              (mevedel-session-publication--publish-critical-batches
+               session nil)))))))))
+
+(defun mevedel-session-publication--write-diagnostics (session appends)
+  "Write SESSION's diagnostic backlog, then APPENDS, as one program.
+
+Each (PATH . CONTENT) is an optional append behind the lease proof, so one
+unwritable log does not stop the others.  On a target that allows a direct
+pipe nothing waits for the program; an append it did not write, and every
+append collected while it runs, joins the backlog the next batch writes
+first, which keeps each log in order.  The backlog is bounded: past
+`mevedel-session-publication--diagnostic-backlog-max-bytes' the oldest
+appends are dropped with a warning."
+  (let* ((state (or (gethash session mevedel-session-publication--diagnostic-backlog)
+                    (puthash session (cons nil nil)
+                             mevedel-session-publication--diagnostic-backlog)))
+         (entries (append (cdr state) appends)))
+    (cond
+     ((null entries))
+     ((car state) (setcdr state entries))
+     (t
+      (setcar state t)
+      (setcdr state nil)
+      (mevedel-session-durability-run-owned-program-async
+       session
+       (mapcar (lambda (entry)
+                 (list :op 'append
+                       :path (mevedel-session-control-fs-physical-path (car entry))
+                       :content (cdr entry)
+                       :optional t))
+               entries)
+       (lambda (results error)
+         (when error
+           (mevedel--warn-once
+            (list 'diagnostic-append (mevedel-session-save-path session))
+            "Diagnostic append failed, retaining for retry: %s"
+            (error-message-string error)))
+         (cl-loop for entry in entries
+                  for result in results
+                  when (eq 'failed (plist-get result :status))
+                  do (mevedel--warn-once
+                      (list 'diagnostic-append (car entry))
+                      "Diagnostic append failed for %s, retaining for retry: %s"
+                      (car entry)
+                      (or (plist-get result :diagnostic) "target refused the append")))
+         (let ((unwritten (cl-loop for entry in entries
+                                   for index from 0
+                                   unless (eq 'ok (plist-get (nth index results) :status))
+                                   collect entry)))
+           (setcar state nil)
+           (setcdr state (mevedel-session-publication--bound-backlog
+                          session (append unwritten (cdr state)))))))))))
+
+(defun mevedel-session-publication-diagnostic-backlog-p (session)
+  "Return non-nil when SESSION has diagnostics waiting for the next batch."
+  (and (cdr (gethash session mevedel-session-publication--diagnostic-backlog)) t))
+
+(defun mevedel-session-publication--bound-backlog (session entries)
+  "Return SESSION's diagnostic backlog ENTRIES, oldest dropped past its bound."
+  (let ((bytes 0) kept)
+    (dolist (entry (reverse entries))
+      (setq bytes (+ bytes (string-bytes (cdr entry))))
+      (if (<= bytes mevedel-session-publication--diagnostic-backlog-max-bytes)
+          (push entry kept)
+        (mevedel--warn-once
+         (list 'diagnostic-backlog (mevedel-session-save-path session))
+         "Dropping diagnostics that could not be written to %s"
+         (mevedel-session-save-path session))))
+    kept))
 
 (defun mevedel-session-publication-append-diagnostic (session path content)
   "Append diagnostic CONTENT to PATH for portable project SESSION.
@@ -1646,8 +1731,10 @@ later retry.  A diagnostic is best-effort data nothing reads live, so an
 unavailable moment is a quiet retry, not an error echoed per attempt.
 Diagnostic failure never creates critical pending publication.
 
-The append is one pinned target operation carrying only the delta, behind
-an ownership proof in the same program.  Republishing the whole file per
+Otherwise the append is taken, returning non-nil: it is written with the
+rest of its batch as one pinned program carrying only the deltas, behind an
+ownership proof in the same program, and an append that program does not
+write is retried with the next batch.  Republishing the whole file per
 flush was quadratic in stream size and dominated remote-save allocations
 once a log grew to megabytes."
   (unless (and (stringp path) (stringp content))
@@ -1663,32 +1750,14 @@ once a log grew to megabytes."
                  (mevedel-session-publication-append-diagnostic
                   session path content))))
         appended))
-     ((eq (cdr batch) 'unavailable) nil)
+     ((eq (cadr batch) 'unavailable) nil)
      (t
       ;; Validate that the path stays inside the session before any
       ;; target I/O; :content is not staged, only checked for shape.
       (mevedel-session-publication--artifact-for-session
        session (list :path path :content content))
-      (condition-case err
-          (if-let* ((results
-                     (mevedel-session-durability-run-owned-program
-                      session
-                      (list (list :op 'append
-                                  :path (mevedel-session-control-fs-physical-path
-                                          path)
-                                  :content content)))))
-              (progn (mevedel-session-control-fs-program-value (car results))
-                     t)
-            ;; The lease no longer holds the bytes this client committed;
-            ;; the rest of the batch waits for the next flush.
-            (setcdr batch 'unavailable)
-            nil)
-        (error
-         (mevedel--warn-once
-          (list 'diagnostic-append path)
-          "Diagnostic append failed for %s, retaining for retry: %s"
-          path (error-message-string err))
-         nil))))))
+      (setcdr (cdr batch) (cons (cons path content) (cddr batch)))
+      t))))
 
 (defun mevedel-session-publication-status (session)
   "Return SESSION's stable read-only publication status plist."

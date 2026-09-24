@@ -1624,6 +1624,55 @@ bytes so the next renewal observes the target instead of assuming."
            nil)
           (_ (mevedel-session-control-fs-program-value proof)))))))
 
+(defun mevedel-session-durability-run-owned-program-async
+    (session operations callback)
+  "Run OPERATIONS behind SESSION's ownership proof, then call CALLBACK.
+
+As `mevedel-session-durability-run-owned-program', through
+`mevedel-session-control-fs-run-program-async': where the target allows it
+nothing waits for the program.  CALLBACK receives the RESULTS of OPERATIONS,
+or nil when this client knows no committed bytes or the proof failed, and
+ERROR for a program that failed as a whole.
+
+The callback can run inside another remote command, so it changes nothing
+but the remembered bytes: a failed proof, or a newer generation in the
+listing, strips them from the lease -- when it still carries the bytes the
+program proved -- and the next renewal observes the target instead of
+assuming."
+  (let* ((lease (mevedel-session-lease session))
+         (bytes (plist-get lease :bytes))
+         (generation (plist-get lease :generation))
+         (session-dir (mevedel-session-save-path session)))
+    (if (not (and session-dir bytes (natnump generation)
+                  (eq 'owned (plist-get lease :state))))
+        (funcall callback nil nil)
+      (let ((directory (mevedel-session-durability--lease-path session-dir)))
+        (mevedel-session-control-fs-run-program-async
+         (append
+          (list (list :op 'verify
+                      :path (mevedel-session-durability--generation-path
+                             directory generation)
+                      :content bytes)
+                (list :op 'list-directory :path directory :optional t))
+          operations)
+         (lambda (results error)
+           (let* ((proof (car results))
+                  (listing (cadr results))
+                  (proved (eq 'ok (plist-get proof :status)))
+                  (superseded
+                   (and proved
+                        (eq 'ok (plist-get listing :status))
+                        (> (mevedel-session-durability--newest-generation
+                            (plist-get listing :value))
+                           generation))))
+             (when (and (not error) (or (not proved) superseded)
+                        (equal bytes (plist-get (mevedel-session-lease session)
+                                                :bytes)))
+               (setf (mevedel-session-lease session)
+                     (mevedel-session-durability--strip-assumption
+                      (mevedel-session-lease session))))
+             (funcall callback (and proved (cddr results)) error))))))))
+
 (defun mevedel-session-durability-adopt-owned-lease (session source)
   "Move SOURCE's verified owned lease and path into SESSION.
 

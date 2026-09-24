@@ -857,11 +857,17 @@ and its segment path."
                (lambda (_s) t))
               ((symbol-function 'mevedel-session-publication--artifact-for-session)
                (lambda (&rest _) t))
-              ((symbol-function 'mevedel-session-durability-run-owned-program)
-               (lambda (_s operations)
-                 (let ((op (car operations)))
-                   (push (cons (plist-get op :path) (plist-get op :content)) appends))
-                 (list '(:status ok :value nil))))
+              ((symbol-function 'mevedel-session-control-fs-physical-path)
+               #'identity)
+              ((symbol-function 'mevedel-session-durability-run-owned-program-async)
+               (lambda (_s operations callback)
+                 (push (mapcar (lambda (op)
+                                 (cons (plist-get op :path) (plist-get op :content)))
+                               operations)
+                       appends)
+                 (funcall callback
+                          (mapcar (lambda (_) '(:status ok :value nil)) operations)
+                          nil)))
               ((symbol-function 'mevedel-session-durability-call-with-held-lease)
                (lambda (_s fn) (cl-incf holds) (funcall fn))))
       (mevedel-session-publication-call-with-diagnostic-batch
@@ -873,8 +879,9 @@ and its segment path."
                   session "/x/b.log" "b"))))
       (should (= 1 admissions))
       (should (= 1 holds))
-      (should (equal '(("/x/a.log" . "a") ("/x/b.log" . "b"))
-                     (nreverse appends)))))
+      ;; Both appends travel in one program, in order.
+      (should (equal '((("/x/a.log" . "a") ("/x/b.log" . "b"))) appends))
+      (should-not (mevedel-session-publication-diagnostic-backlog-p session))))
 
   :doc "a nested batch for another session holds its own lease"
   (let ((outer (mevedel-session--create :authority-mode 'portable))
@@ -887,8 +894,13 @@ and its segment path."
                (lambda (_) t))
               ((symbol-function 'mevedel-session-publication--artifact-for-session)
                (lambda (&rest _) t))
-              ((symbol-function 'mevedel-session-durability-run-owned-program)
-               (lambda (&rest _) (list '(:status ok :value nil))))
+              ((symbol-function 'mevedel-session-control-fs-physical-path)
+               #'identity)
+              ((symbol-function 'mevedel-session-durability-run-owned-program-async)
+               (lambda (_s operations callback)
+                 (funcall callback
+                          (mapcar (lambda (_) '(:status ok :value nil)) operations)
+                          nil)))
               ((symbol-function 'mevedel-session-durability-call-with-held-lease)
                (lambda (session function)
                  (push session holds)
@@ -905,9 +917,10 @@ and its segment path."
                      inner "/inner.log" "inner"))))))
       (should (equal (list outer inner) (nreverse holds)))))
 
-  :doc "a failed ownership proof declines the rest of the batch"
+  :doc "a failed ownership proof keeps the batch for the next one, in order"
   (let ((session (mevedel-session--create :authority-mode 'portable))
-        (proofs 0))
+        (programs nil)
+        (prove nil))
     (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
               ((symbol-function 'mevedel-session-durability-lease-renew)
                (lambda (_s) t))
@@ -915,18 +928,72 @@ and its segment path."
                (lambda (_s) t))
               ((symbol-function 'mevedel-session-publication--artifact-for-session)
                (lambda (&rest _) t))
-              ((symbol-function 'mevedel-session-durability-run-owned-program)
-               (lambda (&rest _) (cl-incf proofs) nil))
+              ((symbol-function 'mevedel-session-control-fs-physical-path)
+               #'identity)
+              ((symbol-function 'mevedel-session-durability-run-owned-program-async)
+               (lambda (_s operations callback)
+                 (push (mapcar (lambda (op) (plist-get op :content)) operations)
+                       programs)
+                 (funcall callback
+                          (and prove
+                               (mapcar (lambda (_) '(:status ok :value nil))
+                                       operations))
+                          nil)))
               ((symbol-function 'mevedel-session-durability-call-with-held-lease)
                (lambda (_s fn) (funcall fn))))
       (mevedel-session-publication-call-with-diagnostic-batch
        session
        (lambda ()
-         (should-not (mevedel-session-publication-append-diagnostic
-                      session "/x/a.log" "a"))
-         (should-not (mevedel-session-publication-append-diagnostic
-                      session "/x/b.log" "b"))))
-      (should (= 1 proofs))))
+         (should (mevedel-session-publication-append-diagnostic
+                  session "/x/a.log" "a"))
+         (should (mevedel-session-publication-append-diagnostic
+                  session "/x/b.log" "b"))))
+      (should (mevedel-session-publication-diagnostic-backlog-p session))
+      (setq prove t)
+      (mevedel-session-publication-call-with-diagnostic-batch
+       session
+       (lambda ()
+         (should (mevedel-session-publication-append-diagnostic
+                  session "/x/a.log" "c"))))
+      (should (equal '(("a" "b") ("a" "b" "c")) (nreverse programs)))
+      (should-not (mevedel-session-publication-diagnostic-backlog-p session))))
+
+  :doc "appends collected while a program runs wait for the next batch"
+  (let ((session (mevedel-session--create :authority-mode 'portable))
+        (pending nil)
+        (programs nil))
+    (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
+              ((symbol-function 'mevedel-session-durability-lease-renew)
+               (lambda (_s) t))
+              ((symbol-function 'mevedel-session-durability-lease-owned-p)
+               (lambda (_s) t))
+              ((symbol-function 'mevedel-session-publication--artifact-for-session)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-session-control-fs-physical-path)
+               #'identity)
+              ((symbol-function 'mevedel-session-durability-run-owned-program-async)
+               (lambda (_s operations callback)
+                 (push (mapcar (lambda (op) (plist-get op :content)) operations)
+                       programs)
+                 (setq pending (lambda ()
+                                 (funcall callback
+                                          (mapcar (lambda (_) '(:status ok))
+                                                  operations)
+                                          nil)))))
+              ((symbol-function 'mevedel-session-durability-call-with-held-lease)
+               (lambda (_s fn) (funcall fn))))
+      (dolist (content '("first" "second"))
+        (mevedel-session-publication-call-with-diagnostic-batch
+         session
+         (lambda ()
+           (mevedel-session-publication-append-diagnostic
+            session "/x/log" content))))
+      ;; Only one program is ever in flight; the second append waits.
+      (should (equal '(("first")) programs))
+      (funcall pending)
+      (should (mevedel-session-publication-diagnostic-backlog-p session))
+      (mevedel-session-publication-call-with-diagnostic-batch session #'ignore)
+      (should (equal '(("first") ("second")) (nreverse programs)))))
 
   :doc "an unavailable lease declines every append without re-testing"
   (let ((session (mevedel-session--create :authority-mode 'portable))
@@ -943,8 +1010,7 @@ and its segment path."
                       session "/x/b.log" "b"))))
       (should (= 1 renewals))))
 
-  :doc "one failing append declines without aborting the others"
-  ;; Its caller retains the content, which is what nil already means to it.
+  :doc "one failing append is retained without holding back the others"
   (let ((session (mevedel-session--create :authority-mode 'portable))
         (written nil))
     (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
@@ -954,24 +1020,34 @@ and its segment path."
                (lambda (_s) t))
               ((symbol-function 'mevedel-session-publication--artifact-for-session)
                (lambda (&rest _) t))
-              ((symbol-function 'mevedel-session-durability-run-owned-program)
-               (lambda (_s operations)
-                 (let ((op (car operations)))
-                   (if (equal (plist-get op :path) "/x/bad.log")
-                       (error "Target refused")
-                     (push (plist-get op :content) written)
-                     (list '(:status ok :value nil))))))
+              ((symbol-function 'mevedel-session-control-fs-physical-path)
+               #'identity)
+              ((symbol-function 'mevedel-session-durability-run-owned-program-async)
+               (lambda (_s operations callback)
+                 (funcall callback
+                          (mapcar (lambda (op)
+                                    (if (equal (plist-get op :path) "/x/bad.log")
+                                        '(:status failed :diagnostic "refused")
+                                      (push (plist-get op :content) written)
+                                      '(:status ok)))
+                                  operations)
+                          nil)))
               ((symbol-function 'mevedel-session-durability-call-with-held-lease)
                (lambda (_s fn) (funcall fn))))
-      (mevedel-test--with-captured-diagnostics nil
-        (mevedel-session-publication-call-with-diagnostic-batch
-         session
-         (lambda ()
-           (should-not (mevedel-session-publication-append-diagnostic
-                        session "/x/bad.log" "bad"))
-           (should (mevedel-session-publication-append-diagnostic
-                    session "/x/good.log" "good")))))
-      (should (equal '("good") written))))
+      (let (warnings)
+        (mevedel-test--with-captured-diagnostics warnings
+          (mevedel-session-publication-call-with-diagnostic-batch
+           session
+           (lambda ()
+             (should (mevedel-session-publication-append-diagnostic
+                      session "/x/bad.log" "bad"))
+             (should (mevedel-session-publication-append-diagnostic
+                      session "/x/good.log" "good")))))
+        (should (string-match-p "bad\\.log" warnings)))
+      (should (equal '("good") written))
+      (should (equal '(("/x/bad.log" . "bad"))
+                     (cdr (gethash session
+                                   mevedel-session-publication--diagnostic-backlog))))))
 
   :doc "a session that does not publish through the lease holds nothing"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock))
