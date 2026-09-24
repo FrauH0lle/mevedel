@@ -94,6 +94,35 @@ cover, so the permission step's warning about it is captured here."
 ;;
 ;;; Pipeline runner
 
+(mevedel-deftest mevedel-pipeline-handler-resumable ()
+  ,test
+  (test)
+  :doc "continues an asynchronous handler in its buffer and bindings"
+  (let (resume seen)
+    (with-temp-buffer
+      (let ((buffer (current-buffer))
+            (mevedel-pipeline--active-tool-use-id "tool-7")
+            (mevedel-pipeline--canonical-path-map '(("a" . "b"))))
+        (setq resume (mevedel-pipeline-handler-resumable
+                      (lambda (value)
+                        (setq seen (list value
+                                         mevedel-pipeline--active-tool-use-id
+                                         mevedel-pipeline--canonical-path-map
+                                         (eq buffer (current-buffer)))))))))
+    (should-not mevedel-pipeline--active-tool-use-id)
+    (funcall resume 'result)
+    (should (equal '(result "tool-7" (("a" . "b")) nil) seen))
+    (should-not mevedel-pipeline--active-tool-use-id))
+
+  :doc "restores the dispatch buffer while it is live"
+  (let (resume seen)
+    (with-temp-buffer
+      (let ((buffer (current-buffer)))
+        (setq resume (mevedel-pipeline-handler-resumable
+                      (lambda () (setq seen (eq buffer (current-buffer))))))
+        (with-temp-buffer (funcall resume))))
+    (should seen)))
+
 (mevedel-deftest mevedel-pipeline--provider-result
   ()
   ,test

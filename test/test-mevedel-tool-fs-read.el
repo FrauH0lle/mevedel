@@ -27,6 +27,35 @@
                byte-compile-current-file))
           "helpers"))
 
+(defun test-mevedel-tool-fs-read--as-start-helper (run)
+  "Return a `mevedel-execution-start-helper' stub delivering RUN's result.
+RUN takes the arguments of `mevedel-execution-run-helper'."
+  (lambda (callback &rest args)
+    (funcall callback (apply run args))
+    #'ignore))
+
+(defun test-mevedel-tool-fs-read--settle (body)
+  "Run Read BODY, which takes a continuation, and return its settled result.
+An error result is signalled, as a Read that failed before waiting does."
+  (let (settled)
+    (mevedel-tool-fs-read--run body (lambda (value) (setq settled (list value))))
+    (with-timeout (30 (ert-fail "Read never settled"))
+      (while (not settled) (accept-process-output nil 0.02)))
+    (let ((value (car settled)))
+      (if (and (listp value) (eq 'error (plist-get value :status)))
+          (error "%s" (string-remove-prefix "Error: " (plist-get value :result)))
+        value))))
+
+(defun test-mevedel-tool-fs-read--file (args)
+  "Return the settled result of reading ARGS."
+  (test-mevedel-tool-fs-read--settle
+   (lambda (k) (mevedel-tool-fs-read--file args k))))
+
+(defun test-mevedel-tool-fs-read--list (path &optional max-entries)
+  "Return the settled listing of directory PATH, capped at MAX-ENTRIES."
+  (test-mevedel-tool-fs-read--settle
+   (lambda (k) (mevedel-tool-fs-read-list-directory path k max-entries))))
+
 (defmacro test-mevedel-tool-fs-read--with-file (suffix content &rest body)
   "Run BODY with tmp bound to a temporary file with SUFFIX and CONTENT."
   (declare (indent 2) (debug t))
@@ -166,35 +195,72 @@
   :doc "rejects ranges over 20 pages"
   (should-error (mevedel-tool-fs-read--parse-pages "1-21") :type 'error))
 
+(mevedel-deftest mevedel-tool-fs-read--run ()
+  ,test
+  (test)
+  :doc "settles once with an error raised after a helper, releasing copies"
+  (let (delivered released pending)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (lambda (callback &rest _) (setq pending callback) #'ignore)))
+      (mevedel-tool-fs-read--run
+       (lambda (_k)
+         (push (lambda () (setq released t)) (car mevedel-tool-fs-read--cleanups))
+         (mevedel-tool-fs-read--helper
+          (lambda (_exit _output) (error "Converter exploded"))
+          "helper" '("helper") nil))
+       (lambda (value) (push value delivered))))
+    (should-not delivered)
+    (should-not released)
+    (funcall pending '(:exit-code 0 :output ""))
+    (should released)
+    (should (equal '((:result "Error: Converter exploded" :status error))
+                   delivered)))
+
+  :doc "lets an error before any helper propagate to the pipeline"
+  (let (released)
+    (should-error
+     (mevedel-tool-fs-read--run
+      (lambda (_k)
+        (push (lambda () (setq released t)) (car mevedel-tool-fs-read--cleanups))
+        (error "Not a readable file"))
+      (lambda (_) (ert-fail "No result for a synchronous error"))))
+    (should released))
+
+  :doc "continues in the Read's context once the helper settles"
+  (let (pending seen)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (lambda (callback &rest _) (setq pending callback) #'ignore)))
+      (with-temp-buffer
+        (let ((buffer (current-buffer)))
+          (mevedel-tool-fs-read--run
+           (lambda (k)
+             (let ((mevedel-tool-fs-read--resource-address "memory://notes"))
+               (mevedel-tool-fs-read--helper
+                (lambda (exit output)
+                  (setq seen (list exit output
+                                   mevedel-tool-fs-read--resource-address
+                                   (eq buffer (current-buffer))))
+                  (funcall k "done"))
+                "helper" '("helper") nil)))
+           #'ignore)
+          (with-temp-buffer
+            (funcall pending '(:exit-code 3 :output "out"))))))
+    (should (equal '(3 "out" "memory://notes" t) seen))))
+
 (mevedel-deftest mevedel-tool-fs-read--bounded-pdf-page-range ()
   ,test
   (test)
   :doc "limits open-ended ranges to the actual PDF page count"
-  (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-             (lambda (_path) 1)))
-    (should (equal '(1 . 1)
-                   (mevedel-tool-fs-read--bounded-pdf-page-range
-                    "/tmp/doc.pdf" "1-"))))
+  (should (equal '(1 . 1) (mevedel-tool-fs-read--bounded-pdf-page-range "1-" 1)))
   :doc "limits closed ranges to the actual PDF page count"
-  (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-             (lambda (_path) 1)))
-    (should (equal '(1 . 1)
-                   (mevedel-tool-fs-read--bounded-pdf-page-range
-                    "/tmp/doc.pdf" "1-5"))))
+  (should (equal '(1 . 1) (mevedel-tool-fs-read--bounded-pdf-page-range "1-5" 1)))
   :doc "falls back to the 20-page cap when the page count is unavailable"
-  (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-             (lambda (_path) nil)))
-    (should (equal '(3 . 22)
-                   (mevedel-tool-fs-read--bounded-pdf-page-range
-                    "/tmp/doc.pdf" "3-"))))
+  (should (equal '(3 . 22) (mevedel-tool-fs-read--bounded-pdf-page-range "3-" nil)))
   :doc "rejects ranges that start after the last page"
-  (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-             (lambda (_path) 2)))
-    (let ((err (should-error
-                (mevedel-tool-fs-read--bounded-pdf-page-range
-                 "/tmp/doc.pdf" "3-4")
-                :type 'error)))
-      (should (string-match-p "starts after last page" (cadr err))))))
+  (let ((err (should-error
+              (mevedel-tool-fs-read--bounded-pdf-page-range "3-4" 2)
+              :type 'error)))
+    (should (string-match-p "starts after last page" (cadr err)))))
 
 (mevedel-deftest mevedel-tool-fs-read-large-pdf-p ()
   ,test
@@ -202,25 +268,20 @@
   :doc "large when page count exceeds one Read page chunk"
   (let ((tmp (make-temp-file "mevedel-large-pdf-" nil ".pdf" "%PDF-1.4\n")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-                   (lambda (_path) (1+ mevedel-tool-fs-read--max-pages))))
-          (should (mevedel-tool-fs-read-large-pdf-p tmp)))
+        (should (mevedel-tool-fs-read-large-pdf-p
+                 tmp (1+ mevedel-tool-fs-read--max-pages)))
       (delete-file tmp)))
   :doc "large when page count is unavailable but attachment size is high"
   (let ((tmp (make-temp-file "mevedel-large-pdf-" nil ".pdf" "%PDF-1.4\npayload")))
     (unwind-protect
         (let ((mevedel-tool-fs-read--large-attachment-reminder-bytes 1))
-          (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-                     (lambda (_path) nil)))
-            (should (mevedel-tool-fs-read-large-pdf-p tmp))))
+          (should (mevedel-tool-fs-read-large-pdf-p tmp nil)))
       (delete-file tmp)))
   :doc "small PDFs do not trigger bounded-page guidance"
   (let ((tmp (make-temp-file "mevedel-large-pdf-" nil ".pdf" "%PDF-1.4\n")))
     (unwind-protect
         (let ((mevedel-tool-fs-read--large-attachment-reminder-bytes 1024))
-          (cl-letf (((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-                     (lambda (_path) 3)))
-            (should-not (mevedel-tool-fs-read-large-pdf-p tmp))))
+          (should-not (mevedel-tool-fs-read-large-pdf-p tmp 3)))
       (delete-file tmp))))
 
 (mevedel-deftest mevedel-tool-fs-read--normalize-read-args ()
@@ -284,19 +345,22 @@
 
                    ((symbol-function 'mevedel-tool-fs-read--imagemagick-command)
                     (lambda () "magick"))
-                   ((symbol-function 'mevedel-execution-run-helper)
-                    (lambda (_name command _read-paths _writable-roots
-                                   &rest keys)
-                      (setq converter-input (nth 1 command)
-                            converter-output (car (last command)))
-                      (should-not (file-remote-p converter-input))
-                      (should-not (file-remote-p converter-output))
-                      (should-not (plist-get keys :session))
-                      (test-mevedel-tool-fs-read--write-bytes
-                       converter-output test-mevedel-tool-fs-read--png-bytes)
-                      '(:exit-code 0 :output ""))))
-                (let* ((result (mevedel-tool-fs-read--media-file
-                                remote-path '(:max_width 64)))
+                   ((symbol-function 'mevedel-execution-start-helper)
+                    (test-mevedel-tool-fs-read--as-start-helper
+                     (lambda (_name command _read-paths _writable-roots
+                                    &rest keys)
+                       (setq converter-input (nth 1 command)
+                             converter-output (car (last command)))
+                       (should-not (file-remote-p converter-input))
+                       (should-not (file-remote-p converter-output))
+                       (should-not (plist-get keys :session))
+                       (test-mevedel-tool-fs-read--write-bytes
+                        converter-output test-mevedel-tool-fs-read--png-bytes)
+                       '(:exit-code 0 :output "")))))
+                (let* ((result (test-mevedel-tool-fs-read--settle
+                                (lambda (k)
+                                  (mevedel-tool-fs-read--media-file
+                                   remote-path '(:max_width 64) k))))
                        (body (plist-get result :result))
                        (media (car (plist-get result :media))))
                   (should (string-match-p
@@ -341,26 +405,29 @@
                     (lambda (mime &optional _model)
                       (equal mime "image/png")))
 
-                   ((symbol-function 'mevedel-execution-run-helper)
-                    (lambda (_name command _read-paths _writable-roots
-                                   &rest keys)
-                      (should-not (plist-get keys :session))
-                      (pcase (car command)
-                        ("pdfinfo"
-                         (push (nth 1 command) transient-paths)
-                         '(:exit-code 0 :output "Pages: 1\n"))
-                        ("pdftoppm"
-                         (let ((input (nth 7 command))
-                               (output (concat (car (last command)) ".png")))
-                           (should-not (file-remote-p input))
-                           (push input transient-paths)
-                           (push output transient-paths)
-                           (test-mevedel-tool-fs-read--write-bytes
-                            output test-mevedel-tool-fs-read--png-bytes)
-                           '(:exit-code 0 :output "")))
-                        (_ '(:exit-code 1 :output "unexpected"))))))
-                (let* ((result (mevedel-tool-fs-read--pdf-pages
-                                remote-path "1" nil))
+                   ((symbol-function 'mevedel-execution-start-helper)
+                    (test-mevedel-tool-fs-read--as-start-helper
+                     (lambda (_name command _read-paths _writable-roots
+                                    &rest keys)
+                       (should-not (plist-get keys :session))
+                       (pcase (car command)
+                         ("pdfinfo"
+                          (push (nth 1 command) transient-paths)
+                          '(:exit-code 0 :output "Pages: 1\n"))
+                         ("pdftoppm"
+                          (let ((input (nth 7 command))
+                                (output (concat (car (last command)) ".png")))
+                            (should-not (file-remote-p input))
+                            (push input transient-paths)
+                            (push output transient-paths)
+                            (test-mevedel-tool-fs-read--write-bytes
+                             output test-mevedel-tool-fs-read--png-bytes)
+                            '(:exit-code 0 :output "")))
+                         (_ '(:exit-code 1 :output "unexpected")))))))
+                (let* ((result (test-mevedel-tool-fs-read--settle
+                                (lambda (k)
+                                  (mevedel-tool-fs-read--pdf-pages
+                                   remote-path "1" nil k))))
                        (body (plist-get result :result))
                        (media (car (plist-get result :media))))
                   (should (string-match-p
@@ -646,15 +713,19 @@
   :doc "reads full file with line numbers"
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp (insert "line one\nline two\nline three\n"))
-    (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
       (should (string-match-p "1\tline one" result))
       (should (string-match-p "2\tline two" result))
       (should (string-match-p "3\tline three" result))))
   :doc "reads with offset"
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp (insert "a\nb\nc\nd\ne\n"))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 3 :limit 2))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 3 :limit 2) k)))))
       (should (string-match-p "3\tc" result))
       (should (string-match-p "4\td" result))
       (should-not (string-match-p "\\b1\ta" result))
@@ -662,8 +733,10 @@
   :doc "reads with limit only"
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp (insert "a\nb\nc\nd\ne\n"))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 1 :limit 2))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 1 :limit 2) k)))))
       (should (string-match-p "1\ta" result))
       (should (string-match-p "2\tb" result))
       (should-not (string-match-p "3\tc" result))))
@@ -673,15 +746,21 @@
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp (insert "a\nb\nc\n"))
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp :limit -5))
-     :type 'error)
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp :limit -5) k)))
+      :type 'error)
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp :offset -3))
-     :type 'error)
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp :offset -3) k)))
+      :type 'error)
     ;; A negative float must not slip past an integer-only check.
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp :offset -3.0))
-     :type 'error))
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp :offset -3.0) k)))
+      :type 'error))
   :doc "reports a range that starts after the last line"
   ;; An empty success is indistinguishable from an empty file, and this
   ;; tool explicitly annotates the genuinely-empty case.  Line four of a
@@ -690,29 +769,41 @@
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp (insert "a\nb\nc\n"))
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp :offset 99))
-     :type 'error)
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp :offset 99) k)))
+      :type 'error)
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp :offset 4))
-     :type 'error)
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp :offset 4) k)))
+      :type 'error)
     ;; The last real line still reads.
     (should (string-match-p
              "3\tc"
-             (mevedel-tool-fs-read--file
-              (list :file_path tmp :offset 3)))))
+             (test-mevedel-tool-fs-read--settle
+              (lambda (k)
+                (mevedel-tool-fs-read--file
+                 (list :file_path tmp :offset 3) k))))))
   :doc "errors on non-existent file"
   (should-error
-   (mevedel-tool-fs-read--file (list :file_path "/nonexistent/file.txt"))
-   :type 'error)
+   (test-mevedel-tool-fs-read--settle
+    (lambda (k)
+      (mevedel-tool-fs-read--file (list :file_path "/nonexistent/file.txt") k)))
+    :type 'error)
   :doc "errors on directory"
   (should-error
-   (mevedel-tool-fs-read--file (list :file_path "/tmp"))
-   :type 'error)
+   (test-mevedel-tool-fs-read--settle
+    (lambda (k)
+      (mevedel-tool-fs-read--file (list :file_path "/tmp") k)))
+    :type 'error)
   :doc "errors on binary extension"
   (test-mevedel-tool-fs-read--with-file ".zip" nil
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp))
-     :type 'error))
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+      :type 'error))
   :doc "reads supported image media with base64 envelope when media-capable"
   (test-mevedel-tool-fs-read--with-file ".png" nil
     (test-mevedel-tool-fs-read--write-bytes
@@ -723,7 +814,9 @@
                (lambda (mime &optional _model)
                  (equal mime "image/png")))
               )
-      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (let ((result (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
         (should (listp result))
         (should (string-match-p "<media-file>"
                                 (plist-get result :result)))
@@ -744,9 +837,11 @@
                (lambda (mime &optional _model)
                  (equal mime "image/png")))
               )
-      (let ((result (mevedel-tool-fs-read--file
-                     (list :file_path tmp :offset 0 :limit 2000
-                           :pages ""))))
+      (let ((result (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file
+                        (list :file_path tmp :offset 0 :limit 2000
+                              :pages "") k)))))
         (should (listp result))
         (should (equal (plist-get (car (plist-get result :media)) :mime)
                        "image/png")))))
@@ -760,9 +855,11 @@
                (lambda (mime &optional _model)
                  (equal mime "image/png"))))
       (let ((err (should-error
-                  (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 1))
-                  :type 'error)))
+                  (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 1) k)))
+                   :type 'error)))
         (should (string-match-p "offset and limit"
                                 (cadr err))))))
   :doc "rejects media reads when current model cannot accept media"
@@ -770,8 +867,10 @@
     (cl-letf (((symbol-function 'gptel--model-capable-p)
                (lambda (&rest _) nil)))
       (let ((err (should-error
-                  (mevedel-tool-fs-read--file (list :file_path tmp))
-                  :type 'error)))
+                  (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+                   :type 'error)))
         (should (string-match-p "does not support media"
                                 (cadr err))))))
   :doc "rejects media reads when current model cannot accept MIME type"
@@ -781,8 +880,10 @@
               ((symbol-function 'gptel--model-mime-capable-p)
                (lambda (_mime &optional _model) nil)))
       (let ((err (should-error
-                  (mevedel-tool-fs-read--file (list :file_path tmp))
-                  :type 'error)))
+                  (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+                   :type 'error)))
         (should (string-match-p "does not support media type application/pdf"
                                 (cadr err))))))
   :doc "adds bounded-page reminder when reading a large PDF without pages"
@@ -793,12 +894,14 @@
                (lambda (_mime &optional _model) t))
 
               ((symbol-function 'mevedel-tool-fs-read-large-pdf-p)
-               (lambda (_path) t))
+               (lambda (_path _page-count) t))
               ((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-               (lambda (_path) 42))
+               (lambda (_path k) (funcall k 42)))
               ((symbol-function 'mevedel-tool-fs-read--base64-file)
                (lambda (&rest _) "JVBERg==")))
-      (let* ((result (mevedel-tool-fs-read--file (list :file_path tmp)))
+      (let* ((result (test-mevedel-tool-fs-read--settle
+                      (lambda (k)
+                        (mevedel-tool-fs-read--file (list :file_path tmp) k))))
              (body (plist-get result :result)))
         (should (listp result))
         (should (plist-get result :media))
@@ -824,8 +927,9 @@
                       ((symbol-function 'executable-find)
                        (lambda (name &optional _remote)
                          (and (equal name "pdfinfo") name)))
-                      ((symbol-function 'mevedel-execution-run-helper)
-                       (lambda (&rest _) '(:exit-code 0 :output "Pages: 42\n")))
+                      ((symbol-function 'mevedel-execution-start-helper)
+                       (test-mevedel-tool-fs-read--as-start-helper
+                        (lambda (&rest _) '(:exit-code 0 :output "Pages: 42\n"))))
                       ((symbol-function 'copy-file)
                        (lambda (file newname &optional ok-if-exists
                                      keep-time preserve-uid-gid
@@ -835,7 +939,9 @@
                                   keep-time preserve-uid-gid
                                   preserve-extended-attributes))))
               (let ((result
-                     (mevedel-tool-fs-read--file (list :file_path remote))))
+                     (test-mevedel-tool-fs-read--settle
+                      (lambda (k)
+                        (mevedel-tool-fs-read--file (list :file_path remote) k)))))
                 (should (string-match-p "42 pages"
                                         (plist-get result :result)))
                 (should (= 1 copies))))))
@@ -848,11 +954,13 @@
                 ((symbol-function 'gptel--model-mime-capable-p)
                  (lambda (_mime &optional _model) t))
                 ((symbol-function 'mevedel-tool-fs-read--pdf-page-count)
-                 (lambda (_path) 42)))
+                 (lambda (_path k) (funcall k 42))))
         (let ((err (should-error
-                    (mevedel-tool-fs-read--file
-                     (list :file_path tmp))
-                    :type 'error)))
+                    (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file
+                        (list :file_path tmp) k)))
+                     :type 'error)))
           (should (string-match-p "Media file is too large"
                                   (cadr err)))
           (should (string-match-p "<system-reminder>"
@@ -868,7 +976,9 @@
               ((symbol-function 'gptel--model-mime-capable-p)
                (lambda (_mime &optional _model) t))
               )
-      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (let ((result (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
         (should (listp result))
         (should (string-match-p "<media-file>"
                                 (plist-get result :result)))
@@ -894,10 +1004,12 @@
                        (equal mime "image/jpeg")))
 
                     ((symbol-function 'mevedel-tool-fs-read--maybe-transform-media)
-                     (lambda (_path _args)
-                       (cons prepared "image/jpeg"))))
-            (let ((result (mevedel-tool-fs-read--file
-                           (list :file_path tmp :max_tokens 512))))
+                     (lambda (_path _args k)
+                       (funcall k (cons prepared "image/jpeg")))))
+            (let ((result (test-mevedel-tool-fs-read--settle
+                           (lambda (k)
+                             (mevedel-tool-fs-read--file
+                              (list :file_path tmp :max_tokens 512) k)))))
               (should (listp result))
               (should (string-match-p "mime_type: image/jpeg"
                                       (plist-get result :result)))
@@ -913,8 +1025,10 @@
                (lambda (_mime &optional _model) t))
               )
       (let ((err (should-error
-                  (mevedel-tool-fs-read--file (list :file_path tmp))
-                  :type 'error)))
+                  (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+                   :type 'error)))
         (should (string-match-p "contents do not match media type"
                                 (cadr err))))))
   :doc "rejects image transform arguments on full PDF reads"
@@ -924,9 +1038,11 @@
               ((symbol-function 'gptel--model-mime-capable-p)
                (lambda (_mime &optional _model) t)))
       (let ((err (should-error
-                  (mevedel-tool-fs-read--file
-                   (list :file_path tmp :max_width 1000))
-                  :type 'error)))
+                  (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :max_width 1000) k)))
+                   :type 'error)))
         (should (string-match-p "PDF page images" (cadr err))))))
   :doc "errors when PDF page extraction needs missing pdftoppm"
   (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
@@ -942,25 +1058,28 @@
                    (and (not (equal cmd "pdftoppm"))
                         (funcall orig-executable-find cmd remote)))))
         (let ((err (should-error
-                    (mevedel-tool-fs-read--file
-                     (list :file_path tmp :pages "1"))
-                    :type 'error)))
+                    (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file
+                        (list :file_path tmp :pages "1") k)))
+                     :type 'error)))
           (should (string-match-p "poppler-utils" (cadr err)))))))
   :doc "caps aggregate base64 payload for rendered PDF pages"
   (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
     (let ((mevedel-tool-fs-read--pdf-pages-max-base64-chars 8))
       (cl-letf (((symbol-function 'executable-find)
                  (lambda (cmd) (and (equal cmd "pdftoppm") t)))
-                ((symbol-function 'mevedel-execution-run-helper)
-                 (lambda (_name command _read-paths _writable-roots
-                                &rest _)
-                   (if (equal (car command) "pdftoppm")
-                       (progn
-                         (test-mevedel-tool-fs-read--write-bytes
-                          (concat (car (last command)) ".png")
-                          test-mevedel-tool-fs-read--png-bytes)
-                         '(:exit-code 0 :output ""))
-                     '(:exit-code 1 :output ""))))
+                ((symbol-function 'mevedel-execution-start-helper)
+                 (test-mevedel-tool-fs-read--as-start-helper
+                  (lambda (_name command _read-paths _writable-roots
+                                 &rest _)
+                    (if (equal (car command) "pdftoppm")
+                        (progn
+                          (test-mevedel-tool-fs-read--write-bytes
+                           (concat (car (last command)) ".png")
+                           test-mevedel-tool-fs-read--png-bytes)
+                          '(:exit-code 0 :output ""))
+                      '(:exit-code 1 :output "")))))
                 ((symbol-function 'gptel--model-capable-p)
                  (lambda (cap &optional _model) (eq cap 'media)))
                 ((symbol-function 'gptel--model-mime-capable-p)
@@ -969,9 +1088,11 @@
                 ((symbol-function 'mevedel-tool-fs-read--base64-file)
                  (lambda (&rest _) "aaaaaaaaa")))
         (let ((err (should-error
-                    (mevedel-tool-fs-read--file
-                     (list :file_path tmp :pages "1"))
-                    :type 'error)))
+                    (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file
+                        (list :file_path tmp :pages "1") k)))
+                     :type 'error)))
           (should (string-match-p "aggregate media size limit"
                                   (cadr err)))))))
   :doc "file-not-found suggests same basename with different extension"
@@ -983,9 +1104,11 @@
         (progn
           (with-temp-file actual (insert "notes"))
           (let ((err (should-error
-                      (mevedel-tool-fs-read--file
-                       (list :file_path missing))
-                      :type 'error)))
+                      (test-mevedel-tool-fs-read--settle
+                       (lambda (k)
+                         (mevedel-tool-fs-read--file
+                          (list :file_path missing) k)))
+                       :type 'error)))
             (should (string-match-p "Did you mean" (cadr err)))
             (should (string-match-p (regexp-quote actual) (cadr err)))))
       (delete-directory tmp-dir t)))
@@ -1000,26 +1123,34 @@
           (make-directory (file-name-directory actual) t)
           (with-temp-file actual (insert "content"))
           (let ((err (should-error
-                      (mevedel-tool-fs-read--file
-                       (list :file_path missing))
-                      :type 'error)))
+                      (test-mevedel-tool-fs-read--settle
+                       (lambda (k)
+                         (mevedel-tool-fs-read--file
+                          (list :file_path missing) k)))
+                       :type 'error)))
             (should (string-match-p "Did you mean" (cadr err)))
             (should (string-match-p (regexp-quote actual) (cadr err)))))
       (delete-directory parent t)))
   :doc "errors on blocked device path"
   (should-error
-   (mevedel-tool-fs-read--file (list :file_path "/dev/zero"))
-   :type 'error)
+   (test-mevedel-tool-fs-read--settle
+    (lambda (k)
+      (mevedel-tool-fs-read--file (list :file_path "/dev/zero") k)))
+    :type 'error)
   :doc "returns system-reminder for empty file"
   (test-mevedel-tool-fs-read--with-file nil nil
-    (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
       (should (string-match-p "system-reminder" result))
       (should (string-match-p "empty" result))))
   :doc "truncates long lines"
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp
       (insert (make-string 3000 ?x) "\nshort\n"))
-    (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
       (should (string-match-p "\\[\\.\\.\\.]" result))
       (should (string-match-p "2\tshort" result))))
   :doc "caps default text reads with continuation guidance"
@@ -1029,7 +1160,9 @@
       (with-temp-file tmp
         (dotimes (i 5)
           (insert (format "line %d\n" (1+ i)))))
-      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (let ((result (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
         (should (string-match-p "1\tline 1" result))
         (should (string-match-p "3\tline 3" result))
         (should-not (string-match-p "4\tline 4" result))
@@ -1052,8 +1185,10 @@
                    (mevedel--session
                     (mevedel-session-create "main" workspace))
                    (mevedel-tool-fs-read--default-limit 2)
-                   (result (mevedel-tool-fs-read--file
-                            (list :file_path remote-path))))
+                   (result (test-mevedel-tool-fs-read--settle
+                            (lambda (k)
+                              (mevedel-tool-fs-read--file
+                               (list :file_path remote-path) k)))))
               (should (string-match-p
                        (regexp-quote (file-name-concat root "notes.txt"))
                        result))
@@ -1065,7 +1200,9 @@
           (mevedel-tool-fs-read--max-output-chars 25))
       (with-temp-file tmp
         (insert "one\ntwo\nthree\nfour\nfive\n"))
-      (let ((result (mevedel-tool-fs-read--file (list :file_path tmp))))
+      (let ((result (test-mevedel-tool-fs-read--settle
+                     (lambda (k)
+                       (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
         (should (string-match-p "1\tone" result))
         (should-not (string-match-p "5\tfive" result))
         (should (string-match-p "Read output truncated" result))
@@ -1075,15 +1212,19 @@
     (with-temp-file tmp
       (insert (make-string (* 600 1024) ?x)))
     (should-error
-     (mevedel-tool-fs-read--file (list :file_path tmp))
-     :type 'error))
+     (test-mevedel-tool-fs-read--settle
+      (lambda (k)
+        (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+      :type 'error))
   :doc "reads oversized file with offset/limit"
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp
       (dotimes (i 100)
         (insert (format "line %d: %s\n" (1+ i) (make-string 6000 ?x)))))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 50 :limit 5))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 50 :limit 5) k)))))
       (should (string-match-p "50\tline 50" result))
       (should (string-match-p "54\tline 54" result))))
   :doc "preserves a UTF-8 character split across input chunks"
@@ -1092,8 +1233,10 @@
       (with-temp-file tmp
         (insert (make-string (- (* 512 1024) 4) ?x)
                 "\nab\u00e9\n")))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 2 :limit 1))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 2 :limit 1) k)))))
       (should (string-match-p
                (regexp-quote "2\tab\u00e9") result))))
   :doc "preserves a UTF-16 surrogate pair split across input chunks"
@@ -1103,8 +1246,10 @@
        (concat (make-string (/ (- (* 512 1024) 8) 2) ?x)
                "\na\U0001f600\n")
        nil tmp nil 'silent))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 2 :limit 1))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 2 :limit 1) k)))))
       (should (string-match-p
                (regexp-quote "2\ta\U0001f600") result))))
   :doc "ignores newline bytes spanning UTF-16 code units"
@@ -1112,8 +1257,10 @@
     (let ((coding-system-for-write 'utf-16le-with-signature))
       (write-region "\u0a41\u0100\nsecond\n"
                     nil tmp nil 'silent))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 2 :limit 1))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 2 :limit 1) k)))))
       (should (string-match-p "2\tsecond" result))))
   :doc "counts a bare LF after a DOS-coded input chunk"
   (test-mevedel-tool-fs-read--with-file nil nil
@@ -1122,8 +1269,10 @@
        (concat "one\r\n" (make-string (* 512 1024) ?x)
                "\nthree\r\n")
        nil tmp nil 'silent))
-    (let ((result (mevedel-tool-fs-read--file
-                   (list :file_path tmp :offset 3 :limit 1))))
+    (let ((result (test-mevedel-tool-fs-read--settle
+                   (lambda (k)
+                     (mevedel-tool-fs-read--file
+                      (list :file_path tmp :offset 3 :limit 1) k)))))
       (should (string-match-p "3\tthree" result))))
   :doc "follows symlinks"
   (let ((tmp (make-temp-file "mevedel-test-"))
@@ -1133,7 +1282,9 @@
           (with-temp-file tmp (insert "real content\n"))
           (delete-file link)
           (make-symbolic-link tmp link)
-          (let ((result (mevedel-tool-fs-read--file (list :file_path link))))
+          (let ((result (test-mevedel-tool-fs-read--settle
+                         (lambda (k)
+                           (mevedel-tool-fs-read--file (list :file_path link) k)))))
             (should (string-match-p "real content" result))))
       (delete-file tmp)
       (when (file-exists-p link) (delete-file link))))
@@ -1144,7 +1295,9 @@
                  (error "Read handler re-resolved its authorized path"))))
       (should (string-match-p
                "content"
-               (mevedel-tool-fs-read--file (list :file_path tmp))))))
+               (test-mevedel-tool-fs-read--settle
+                (lambda (k)
+                  (mevedel-tool-fs-read--file (list :file_path tmp) k)))))))
   :doc "records session interaction and workspace cache entry"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
          (ws (mevedel-workspace--create
@@ -1159,13 +1312,15 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (mevedel-tool-fs-read--file (list :file_path tmp))
-          (let ((entry (gethash (expand-file-name tmp)
-                                (mevedel-session-touched-files session))))
-            (should entry)
-            (should (= 5 (mevedel-file-interaction-read-turn entry))))
-          (should (mevedel-file-cache-get
-                   (mevedel-workspace-file-cache ws) tmp)))
+          (test-mevedel-tool-fs-read--settle
+           (lambda (k)
+             (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+           (let ((entry (gethash (expand-file-name tmp)
+                                 (mevedel-session-touched-files session))))
+             (should entry)
+             (should (= 5 (mevedel-file-interaction-read-turn entry))))
+           (should (mevedel-file-cache-get
+                    (mevedel-workspace-file-cache ws) tmp)))
       (delete-file tmp)))
   :doc "returns stub on duplicate media read when mtime unchanged"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".png"))
@@ -1189,12 +1344,16 @@
                       ((symbol-function 'gptel--model-mime-capable-p)
                        (lambda (_mime &optional _model) t))
                       )
-              (let ((first (mevedel-tool-fs-read--file
-                            (list :file_path tmp))))
+              (let ((first (test-mevedel-tool-fs-read--settle
+                            (lambda (k)
+                              (mevedel-tool-fs-read--file
+                               (list :file_path tmp) k)))))
                 (should (listp first))
                 (should (plist-get first :media)))
-              (let ((second (mevedel-tool-fs-read--file
-                             (list :file_path tmp))))
+              (let ((second (test-mevedel-tool-fs-read--settle
+                             (lambda (k)
+                               (mevedel-tool-fs-read--file
+                                (list :file_path tmp) k)))))
                 (should (string-match-p "unchanged since last read"
                                         second))
                 (should-not (string-match-p "<media-file>" second))))))
@@ -1213,9 +1372,13 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (let ((first (mevedel-tool-fs-read--file (list :file_path tmp))))
+          (let ((first (test-mevedel-tool-fs-read--settle
+                        (lambda (k)
+                          (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
             (should (string-match-p "hello world" first)))
-          (let ((second (mevedel-tool-fs-read--file (list :file_path tmp))))
+          (let ((second (test-mevedel-tool-fs-read--settle
+                         (lambda (k)
+                           (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
             (should (string-match-p "unchanged since last read" second))
             (should-not (string-match-p "hello world" second))))
       (delete-file tmp)))
@@ -1233,21 +1396,29 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (let ((first (mevedel-tool-fs-read--file (list :file_path tmp))))
+          (let ((first (test-mevedel-tool-fs-read--settle
+                        (lambda (k)
+                          (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
             (should (string-match-p "agent content" first)))
-          (let ((second (mevedel-tool-fs-read--file (list :file_path tmp))))
+          (let ((second (test-mevedel-tool-fs-read--settle
+                         (lambda (k)
+                           (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
             (should (string-match-p "unchanged since last read" second)))
           (setq-local mevedel--agent-invocation t)
-          (let ((agent-read (mevedel-tool-fs-read--file
-                             (list :file_path tmp))))
+          (let ((agent-read (test-mevedel-tool-fs-read--settle
+                             (lambda (k)
+                               (mevedel-tool-fs-read--file
+                                (list :file_path tmp) k)))))
             (should (string-match-p "agent content" agent-read))
             (should-not (string-match-p "unchanged since last read"
                                         agent-read)))
           (setq-local mevedel--agent-invocation nil)
           ;; The parent session still sees its own dedup state; the
           ;; agent read did not replace or clear it.
-          (let ((after-agent (mevedel-tool-fs-read--file
-                              (list :file_path tmp))))
+          (let ((after-agent (test-mevedel-tool-fs-read--settle
+                              (lambda (k)
+                                (mevedel-tool-fs-read--file
+                                 (list :file_path tmp) k)))))
             (should (string-match-p "unchanged since last read"
                                     after-agent))))
       (delete-file tmp)))
@@ -1267,18 +1438,24 @@
           (setq-local mevedel--session session)
           ;; A script sees only its own tool results, so a reuse stub is
           ;; unusable there even when the conversation read the file first.
-          (let ((first (mevedel-tool-fs-read--file (list :file_path tmp))))
+          (let ((first (test-mevedel-tool-fs-read--settle
+                        (lambda (k)
+                          (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
             (should (string-match-p "ptc content" first)))
           (let ((mevedel-pipeline--active-call-source 'ptc))
             (dotimes (_ 2)
-              (let ((nested (mevedel-tool-fs-read--file
-                             (list :file_path tmp))))
+              (let ((nested (test-mevedel-tool-fs-read--settle
+                             (lambda (k)
+                               (mevedel-tool-fs-read--file
+                                (list :file_path tmp) k)))))
                 (should (string-match-p "ptc content" nested))
                 (should-not (string-match-p "unchanged since last read"
                                             nested)))))
           ;; The nested reads recorded nothing: the conversation's own
           ;; dedup state is exactly what its first read left behind.
-          (let ((after (mevedel-tool-fs-read--file (list :file_path tmp))))
+          (let ((after (test-mevedel-tool-fs-read--settle
+                        (lambda (k)
+                          (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
             (should (string-match-p "unchanged since last read" after))))
       (delete-file tmp)))
   :doc "does not dedupe after external modification"
@@ -1295,14 +1472,16 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (mevedel-tool-fs-read--file (list :file_path tmp))
-          (let ((future (time-add (current-time) 2)))
-            (with-temp-file tmp (insert "goodbye\n"))
-            (set-file-times tmp future))
-          (let ((second (mevedel-tool-fs-read--file (list :file_path tmp))))
-            (should (string-match-p "goodbye" second))
-            (should-not (string-match-p "unchanged since last read" second))))
-      (delete-file tmp)))
+          (test-mevedel-tool-fs-read--settle
+           (lambda (k)
+             (mevedel-tool-fs-read--file (list :file_path tmp) k)))
+           (let ((future (time-add (current-time) 2)))
+             (with-temp-file tmp (insert "goodbye\n"))
+             (set-file-times tmp future))
+           (let ((second (test-mevedel-tool-fs-read--settle (lambda (k) (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
+                 (should (string-match-p "goodbye" second))
+                 (should-not (string-match-p "unchanged since last read" second))))
+           (delete-file tmp)))
   :doc "does not dedupe when range differs"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt"
                               "a\nb\nc\nd\ne\nf\n"))
@@ -1318,12 +1497,14 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (mevedel-tool-fs-read--file
-           (list :file_path tmp :offset 1 :limit 2))
-          (let ((second (mevedel-tool-fs-read--file
-                         (list :file_path tmp :offset 4 :limit 2))))
-            (should (string-match-p "4\td" second))
-            (should-not (string-match-p "unchanged since last read" second))))
+          (test-mevedel-tool-fs-read--settle
+           (lambda (k)
+             (mevedel-tool-fs-read--file
+              (list :file_path tmp :offset 1 :limit 2) k)))
+           (let ((second (test-mevedel-tool-fs-read--file
+                          (list :file_path tmp :offset 4 :limit 2))))
+             (should (string-match-p "4\td" second))
+             (should-not (string-match-p "unchanged since last read" second))))
       (delete-file tmp)))
   :doc "remote session artifacts ignore poisoned fixed caches and file-state dedup"
   (let* ((host "read-artifact")
@@ -1366,16 +1547,20 @@
                        (lambda (&rest _)
                          (setq dedup-called t))))
               (let ((result
-                     (mevedel-tool-fs-read--file
-                      (list :file_path fixed :offset 2 :limit 1))))
+                     (test-mevedel-tool-fs-read--settle
+                      (lambda (k)
+                        (mevedel-tool-fs-read--file
+                         (list :file_path fixed :offset 2 :limit 1) k)))))
                 (should (string-match-p "2\tsecond line" result))
                 (should-not (string-match-p "poisoned" result))
                 (should-not dedup-called)))
             (delete-file fixed)
             (should (string-match-p
                      "1\tcommitted plan"
-                     (mevedel-tool-fs-read--file
-                      (list :file_path fixed :offset 1 :limit 1))))))
+                     (test-mevedel-tool-fs-read--settle
+                      (lambda (k)
+                        (mevedel-tool-fs-read--file
+                         (list :file_path fixed :offset 1 :limit 1) k)))))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
   :doc "remote session artifacts never fall back when the manifest omits them"
@@ -1402,8 +1587,10 @@
           (with-temp-buffer
             (setq-local mevedel--session session)
             (should-error
-             (mevedel-tool-fs-read--file (list :file_path fixed))
-             :type 'error)))
+             (test-mevedel-tool-fs-read--settle
+              (lambda (k)
+                (mevedel-tool-fs-read--file (list :file_path fixed) k)))
+              :type 'error)))
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
@@ -1445,7 +1632,7 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "alpha.txt") (insert "a"))
           (with-temp-file (file-name-concat tmp-dir "beta.txt") (insert "b"))
-          (let* ((result (mevedel-tool-fs-read-list-directory tmp-dir))
+          (let* ((result (test-mevedel-tool-fs-read--list tmp-dir))
                  (entries (car result)))
             (should (= 2 (length entries)))
             (should (member "alpha.txt" entries))
@@ -1460,7 +1647,7 @@
           (dotimes (i 5)
             (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
               (insert "x")))
-          (let* ((result (mevedel-tool-fs-read-list-directory tmp-dir 3))
+          (let* ((result (test-mevedel-tool-fs-read--list tmp-dir 3))
                  (entries (car result))
                  (truncated (cdr result)))
             (should (= 3 (length entries)))
@@ -1482,7 +1669,7 @@
           (with-temp-file (file-name-concat outside "secret.txt")
             (insert "secret"))
           (make-symbolic-link outside (file-name-concat root "linked"))
-          (let ((entries (car (mevedel-tool-fs-read-list-directory root))))
+          (let ((entries (car (test-mevedel-tool-fs-read--list root))))
             (should (member "inside.txt" entries))
             (should-not (member "linked/secret.txt" entries))))
       (delete-directory base t)))
@@ -1490,7 +1677,7 @@
   :doc "returns empty list for empty directory"
   (let ((tmp-dir (make-temp-file "mevedel-list-" t)))
     (unwind-protect
-        (let ((result (mevedel-tool-fs-read-list-directory tmp-dir)))
+        (let ((result (test-mevedel-tool-fs-read--list tmp-dir)))
           (should (null (car result)))
           (should (null (cdr result))))
       (delete-directory tmp-dir t)))
@@ -1498,7 +1685,7 @@
   :doc "errors on non-directory path"
   (let ((tmp (make-temp-file "mevedel-list-" nil ".txt" "x")))
     (unwind-protect
-        (should-error (mevedel-tool-fs-read-list-directory tmp) :type 'error)
+        (should-error (test-mevedel-tool-fs-read--list tmp) :type 'error)
       (delete-file tmp))))
 
 (mevedel-deftest mevedel-tool-fs-read-render ()

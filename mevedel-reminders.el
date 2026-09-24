@@ -145,7 +145,7 @@
                   "mevedel-utilities" (info))
 (declare-function mevedel-generate-diff
                   "mevedel-utilities"
-                  (original modified filepath &optional labels-real))
+                  (original modified filepath callback &optional labels-real))
 (autoload 'mevedel--active-response-marker "mevedel-utilities")
 (autoload 'mevedel--plain-data-p "mevedel-utilities")
 (autoload 'mevedel--split-open-reasoning-before-user-input
@@ -1183,12 +1183,89 @@ see the changes)"
               (format "\n... (%d more lines truncated)"
                       (- (length lines) max-lines))))))
 
-(defun mevedel-reminders--format-edited-file-change (change max-diff-lines)
+(defvar mevedel-reminders--prepared-edits nil
+  "Edited-file changes and diffs prepared for the dispatch in progress.
+An alist from a workspace file cache to (CHANGES . DIFFS), where DIFFS is
+an alist from a change in CHANGES to its unified diff.  Bound only while
+`mevedel-reminders-prepare-edited-files' continues a dispatch, so the
+reminder reports exactly the changes whose diffs were prepared.")
+
+(defun mevedel-reminders--diffable-change-p (change)
+  "Return non-nil when edited-file CHANGE is reported with a diff."
+  (and (eq 'modified (plist-get change :status))
+       (not (plist-get change :content-omitted))
+       (<= (length (or (plist-get change :old) ""))
+           mevedel-reminders-edited-file-max-diff-bytes)
+       (<= (length (or (plist-get change :new) ""))
+           mevedel-reminders-edited-file-max-diff-bytes)))
+
+(defun mevedel-reminders-prepare-edited-files (fsm continuation)
+  "Call CONTINUATION with FSM once its edited-file diffs are prepared.
+
+The `edited-file' reminder reports external changes with unified diffs,
+and a diff is a helper process.  Waiting for one inside the dispatch
+re-entered the event loop from wherever the transition ran, including
+gptel's process callbacks, where quitting is inhibited.  The changes are
+therefore detected and diffed here first, and CONTINUATION stages the
+reminder from them.  A dispatch with nothing to diff continues at once.
+
+Return nil when CONTINUATION has already run.  Otherwise return a
+cancellation function: it stops the pending diffs, guarantees
+CONTINUATION never runs, and returns non-nil when it stopped a wait."
+  (let* ((buffer (plist-get (gptel-fsm-info fsm) :buffer))
+         (session (and (buffer-live-p buffer)
+                       (buffer-local-value 'mevedel--session buffer)))
+         (cache (and session
+                     (seq-some (lambda (reminder)
+                                 (eq 'edited-file (mevedel-reminder-type reminder)))
+                               (mevedel-session-reminders session))
+                     (mevedel-session-workspace session)
+                     (mevedel-workspace-file-cache
+                      (mevedel-session-workspace session))))
+         (changes (and cache (mevedel-file-cache-detect-external-changes cache)))
+         (pending (seq-filter #'mevedel-reminders--diffable-change-p changes))
+         diffs cancel done)
+    (cl-labels
+        ((finish ()
+           (setq done t)
+           (let ((mevedel-reminders--prepared-edits
+                  (cons (cons cache (cons changes diffs))
+                        mevedel-reminders--prepared-edits)))
+             (funcall continuation fsm)))
+         (next ()
+           (if (null pending)
+               (finish)
+             (let ((change (pop pending)))
+               (setq cancel
+                     (mevedel-generate-diff
+                      (or (plist-get change :old) "")
+                      (or (plist-get change :new) "")
+                      (plist-get change :path)
+                      (lambda (diff _error)
+                        ;; A failed diff reports the change without one.
+                        (unless done
+                          (when diff (push (cons change diff) diffs))
+                          (next)))))))))
+      (if (not cache)
+          (progn (funcall continuation fsm) nil)
+        (next)
+        (unless done
+          (lambda ()
+            (unless done
+              (setq done t)
+              (when (functionp cancel) (funcall cancel))
+              t)))))))
+
+(defun mevedel-reminders--prepared-changes (cache)
+  "Return (CHANGES . DIFFS) prepared for CACHE in this dispatch, or nil."
+  (alist-get cache mevedel-reminders--prepared-edits nil nil #'eq))
+
+(defun mevedel-reminders--format-edited-file-change (change max-diff-lines &optional diff)
   "Render CHANGE (plist from detect-external-changes) as a reminder block body.
-MAX-DIFF-LINES caps the unified diff size."
+MAX-DIFF-LINES caps the unified diff size.  DIFF is CHANGE's prepared
+unified diff; a modified file without one is reported without a diff."
   (let ((path (plist-get change :path))
         (status (plist-get change :status))
-        (old (plist-get change :old))
         (new (plist-get change :new)))
     (pcase status
       ('deleted (format "DELETED: %s" path))
@@ -1199,29 +1276,29 @@ MAX-DIFF-LINES caps the unified diff size."
       ((guard (plist-get change :content-omitted))
        (mevedel-reminders--format-omitted-diff-change
         path (plist-get change :stat-size)))
-      ((guard (or (> (length (or old ""))
-                     mevedel-reminders-edited-file-max-diff-bytes)
-                  (> (length (or new ""))
-                     mevedel-reminders-edited-file-max-diff-bytes)))
+      ((guard (not (mevedel-reminders--diffable-change-p change)))
+       (mevedel-reminders--format-omitted-diff-change
+        path (length (or new ""))))
+      ((guard (not diff))
        (mevedel-reminders--format-omitted-diff-change
         path (length (or new ""))))
       ('modified
        (concat (format "MODIFIED: %s\n" path)
-               (mevedel-reminders--truncate-diff
-                (mevedel-generate-diff (or old "") (or new "") path)
-                max-diff-lines))))))
+               (mevedel-reminders--truncate-diff diff max-diff-lines))))))
 
-(defun mevedel-reminders--format-edited-files (changes max-diff-lines)
+(defun mevedel-reminders--format-edited-files (changes max-diff-lines &optional diffs)
   "Return edited-file reminder body for the change list.
-The argument `CHANGES' supplies the edited files.
-MAX-DIFF-LINES caps each file's diff size."
+The argument `CHANGES' supplies the edited files, DIFFS their prepared
+diffs as an alist keyed by change.  MAX-DIFF-LINES caps each file's diff
+size."
   (concat "Files you previously read or edited have been modified \
 outside of your tools since you last saw them. Review the changes \
 before making further edits; re-read any file whose diff is truncated \
 or unavailable.\n\n"
           (mapconcat (lambda (change)
                        (mevedel-reminders--format-edited-file-change
-                        change max-diff-lines))
+                        change max-diff-lines
+                        (alist-get change diffs nil nil #'eq)))
                      changes "\n\n")))
 
 (defun mevedel-reminders-make-edited-file (&optional max-diff-lines)
@@ -1259,17 +1336,23 @@ workspace file cache refuses those paths (see
        (setq memo nil)
        (when-let* ((ws (mevedel-session-workspace session))
                    (cache (mevedel-workspace-file-cache ws)))
-         (with-memoization memo
-           (mevedel-file-cache-detect-external-changes cache))))
+         (car (or (mevedel-reminders--prepared-changes cache)
+                  (with-memoization memo
+                    (list (mevedel-file-cache-detect-external-changes cache)))))))
      :content
      (lambda (session)
        (let* ((ws (mevedel-session-workspace session))
               (cache (mevedel-workspace-file-cache ws))
-              (changes (with-memoization memo
-                         (mevedel-file-cache-detect-external-changes cache))))
+              ;; A prepared dispatch's changes carry their diffs, so they
+              ;; win over whatever an earlier trigger memoized.
+              (prepared (or (mevedel-reminders--prepared-changes cache)
+                            (with-memoization memo
+                              (list (mevedel-file-cache-detect-external-changes
+                                     cache)))))
+              (changes (car prepared)))
          (setq memo nil)
          (list :body (mevedel-reminders--format-edited-files
-                      changes max-diff-lines)
+                      changes max-diff-lines (cdr prepared))
                :commit
                (lambda ()
                  (mevedel-file-cache-consume-external-changes

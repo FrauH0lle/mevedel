@@ -266,7 +266,7 @@
 		  "mevedel-utilities" nil)
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-generate-diff "mevedel-utilities"
-                  (original modified filepath &optional labels-real))
+                  (original modified filepath callback &optional labels-real))
 (autoload 'mevedel--insert-user-turn "mevedel-utilities")
 (autoload 'mevedel--optimize-transcript-buffer "mevedel-utilities")
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
@@ -918,26 +918,23 @@ if none found."
      ;; The workspace scan already preserves most-recent buffer order.
      (cdar (mevedel--workspace-sessions workspace)))))
 
-(defun mevedel--generate-final-patch (&optional workspace request)
-  "Generate final diffs for all tracked files in REQUEST.
+(defun mevedel--generate-final-patch (workspace request callback)
+  "Generate final diffs for all tracked files in REQUEST, then call CALLBACK.
 
-Return a unified diff string showing original -> final state for each
-file.  Uses REQUEST's snapshots -- defaulting to `mevedel--current-request\'
--- to compare original states with current file contents in WORKSPACE.
+CALLBACK receives PATCH and ERROR: PATCH is a unified diff string showing
+original -> final state for each file, compared from REQUEST's snapshots
+against current file contents in WORKSPACE, and nil exactly when ERROR
+carries the first failed diff's condition data.  The files are read up
+front and diffed one after another; CALLBACK may run before this returns.
 
-REQUEST is resolved once, at entry.  Reading the buffer-local on each
-iteration instead was a use-after-settle: the loop reads every touched
-file, and on a remote workspace `insert-file-contents\' hands control to
-TRAMP\'s wait loop, which runs timers and process sentinels.  One of those
-settles the turn and clears `mevedel--current-request\', so an iteration
-that began with a live request could reach the next one holding nil and
-signal `wrong-type-argument\'.  A caller that already knows the request --
-because it captured it while the turn was live -- should pass it."
-  (let* ((workspace-root (mevedel-workspace-root
-                          (or workspace (mevedel-workspace))))
-         (request (or request mevedel--current-request))
+REQUEST is resolved by the caller while the turn is still live.  Reading
+the buffer-local instead was a use-after-settle: the loop reads every
+touched file, and on a remote workspace `insert-file-contents\' hands
+control to TRAMP\'s wait loop, which runs timers and process sentinels.
+One of those settles the turn and clears `mevedel--current-request\'."
+  (let* ((workspace-root (mevedel-workspace-root workspace))
          (snapshots (and request (mevedel-request-file-snapshots request)))
-         paths parts)
+         paths entries parts)
     (when snapshots
       (maphash (lambda (filepath _original) (push filepath paths)) snapshots))
     (dolist (filepath (sort paths #'string<))
@@ -947,34 +944,42 @@ because it captured it while the turn was live -- should pass it."
                           (insert-file-contents filepath)
                           (buffer-string))))
              (relpath (file-relative-name filepath workspace-root)))
-
         ;; Generate diff if file changed, was deleted, or was created
         (when (and (not (and (listp original)
                              (plist-get original :gap)))
                    (or
-               ;; Modified
-               (and original current (not (string= original current)))
-               ;; Deleted
-               (and original (not current))
-               ;; Created
-               (and (not original) current)))
-          ;; Collect per-file parts and join once: appending to one
-          ;; growing string reallocated the whole patch per file.
-          (push (concat (format "diff --git a/%s b/%s\n" relpath relpath)
-                        (cond
-                         ((and (or (not original) (string-empty-p original))
-                               (and current (not (string-empty-p current))))
-                          "new file mode 100644\n")
-                         ((and (and original (not (string-empty-p original)))
-                               (or (not current) (string-empty-p current)))
-                          "deleted file mode 100644\n"))
-                        (mevedel-generate-diff
-                         (or original "")
-                         (or current "")
-                         relpath)
-                        "\n")
-                parts))))
-    (apply #'concat (nreverse parts))))
+                    ;; Modified
+                    (and original current (not (string= original current)))
+                    ;; Deleted
+                    (and original (not current))
+                    ;; Created
+                    (and (not original) current)))
+          (push (list (concat (format "diff --git a/%s b/%s\n" relpath relpath)
+                              (cond
+                               ((and (or (not original) (string-empty-p original))
+                                     (and current (not (string-empty-p current))))
+                                "new file mode 100644\n")
+                               ((and (and original (not (string-empty-p original)))
+                                     (or (not current) (string-empty-p current)))
+                                "deleted file mode 100644\n")))
+                      (or original "") (or current "") relpath)
+                entries))))
+    (setq entries (nreverse entries))
+    (cl-labels
+        ((next ()
+           (if (null entries)
+               ;; Collect per-file parts and join once: appending to one
+               ;; growing string reallocated the whole patch per file.
+               (funcall callback (apply #'concat (nreverse parts)) nil)
+             (pcase-let ((`(,header ,original ,current ,relpath) (pop entries)))
+               (mevedel-generate-diff
+                original current relpath
+                (lambda (diff error)
+                  (if error
+                      (funcall callback nil error)
+                    (push (concat header diff "\n") parts)
+                    (next))))))))
+      (next))))
 
 (defun mevedel--directive-capture (request)
   "Return file coverage metadata captured by REQUEST."

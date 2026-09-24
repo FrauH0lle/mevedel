@@ -618,7 +618,12 @@
 					     #'ignore))
 					 (mevedel-test--with-captured-messages
 					  nil
-					  (gptel-abort captured-chat)))))
+					  (gptel-abort captured-chat)
+					  ;; The final patch's diffs run as helpers;
+					  ;; the turn settles once they return.
+					  (with-timeout (10 (ert-fail "Aborted turn never settled"))
+					    (while (not failure-called)
+					      (accept-process-output nil 0.02)))))))
 				 (setf (gptel-fsm-state captured-fsm) 'ERRS
 				       (gptel-fsm-info captured-fsm)
 				       (plist-put

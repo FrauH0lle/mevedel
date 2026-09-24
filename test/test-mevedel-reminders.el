@@ -33,6 +33,24 @@
 ;;
 ;;; Helpers
 
+(defun test-mevedel-reminders--prepared-content (reminder session)
+  "Return REMINDER's body for SESSION inside a prepared dispatch.
+The `edited-file' reminder reports diffs only for changes whose diffs
+`mevedel-reminders-prepare-edited-files' prepared before staging."
+  (unless (memq reminder (mevedel-session-reminders session))
+    (mevedel-session-add-reminder session reminder))
+  (with-temp-buffer
+    (setq-local mevedel--session session)
+    (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer))))
+          content ran)
+      (mevedel-reminders-prepare-edited-files
+       fsm (lambda (_)
+             (setq content (test-mevedel-reminders--content reminder session)
+                   ran t)))
+      (with-timeout (10 (ert-fail "Edited-file diffs were never prepared"))
+        (while (not ran) (accept-process-output nil 0.02)))
+      content)))
+
 (defun test-mevedel-reminders--content (reminder ctx)
   "Return REMINDER's body for CTX, applying any staged commit.
 Content returns either a body string or a `:body'/`:commit' plist, so
@@ -1625,7 +1643,7 @@ this collapses both shapes to the delivered text."
                      (lambda (&rest _) (ert-fail "Unexpected encoding prompt"))))
             (let* ((noninteractive nil)
                    (coding-system-for-write nil)
-                   (content (test-mevedel-reminders--content r session)))
+                   (content (test-mevedel-reminders--prepared-content r session)))
               (should (string-match-p "MODIFIED:" content))
               (should (string-match-p (regexp-quote (expand-file-name file))
                                       content))
@@ -1695,7 +1713,7 @@ this collapses both shapes to the delivered text."
               (dotimes (i 40)
                 (insert (format "changed %d\n" i))))
             (set-file-times file future))
-          (let ((content (test-mevedel-reminders--content r session)))
+          (let ((content (test-mevedel-reminders--prepared-content r session)))
             (should (string-match-p "more lines truncated" content))))
       (delete-directory tmp-root t)))
 
@@ -1746,6 +1764,83 @@ this collapses both shapes to the delivered text."
           (let ((content (test-mevedel-reminders--content r session)))
             (should (string-match-p "no diff available" content))
             (should-not (string-match-p "zzzz" content))))
+      (delete-directory tmp-root t)))
+
+  :doc "reports a modified file without a diff outside a prepared dispatch"
+  (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
+         (file (expand-file-name "foo.txt" tmp-root))
+         (ws (mevedel-workspace-get-or-create
+              'project tmp-root tmp-root "ef"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-edited-file)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "hello\n"))
+          (mevedel-file-cache-put
+           (mevedel-workspace-file-cache ws)
+           (mevedel-file-state-from-file file))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file file (insert "goodbye\n"))
+            (set-file-times file future))
+          (cl-letf (((symbol-function 'mevedel-generate-diff)
+                     (lambda (&rest _) (ert-fail "Diff started while staging"))))
+            (let ((content (test-mevedel-reminders--content r session)))
+              (should (string-match-p "MODIFIED:" content))
+              (should (string-match-p "no diff available" content)))))
+      (delete-directory tmp-root t)))
+
+  :doc "continues at once when nothing needs a diff"
+  (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
+         (ws (mevedel-workspace-get-or-create
+              'project tmp-root tmp-root "ef"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-edited-file))
+         ran)
+    (unwind-protect
+        (with-temp-buffer
+          (mevedel-session-add-reminder session r)
+          (setq-local mevedel--session session)
+          (should-not (mevedel-reminders-prepare-edited-files
+                       (gptel-make-fsm :info (list :buffer (current-buffer)))
+                       (lambda (_) (setq ran t))))
+          (should ran))
+      (delete-directory tmp-root t)))
+
+  :doc "a cancelled preparation stops its diff and never continues"
+  (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
+         (file (expand-file-name "foo.txt" tmp-root))
+         (ws (mevedel-workspace-get-or-create
+              'project tmp-root tmp-root "ef"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-edited-file))
+         diff-callback stopped ran)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "hello\n"))
+          (mevedel-file-cache-put
+           (mevedel-workspace-file-cache ws)
+           (mevedel-file-state-from-file file))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file file (insert "goodbye\n"))
+            (set-file-times file future))
+          (with-temp-buffer
+            (mevedel-session-add-reminder session r)
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-generate-diff)
+                       (lambda (_old _new _path callback)
+                         (setq diff-callback callback)
+                         (lambda () (setq stopped t)))))
+              (let ((cancel (mevedel-reminders-prepare-edited-files
+                             (gptel-make-fsm :info (list :buffer (current-buffer)))
+                             (lambda (_) (setq ran t)))))
+                (should (functionp cancel))
+                (should-not ran)
+                (should (funcall cancel))
+                (should stopped)
+                (should-not (funcall cancel))
+                ;; A late settlement cannot revive the dispatch.
+                (funcall diff-callback "late diff" nil)
+                (should-not ran)))))
       (delete-directory tmp-root t)))
 
   :doc "memoizes detect-external-changes across trigger and content"

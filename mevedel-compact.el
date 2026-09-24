@@ -69,12 +69,21 @@
                   "mevedel-reminders" (fsm type body &optional commit))
 (declare-function mevedel-reminders-stage-plan-mode
                   "mevedel-reminders" (fsm))
+(declare-function mevedel-reminders-prepare-edited-files
+                  "mevedel-reminders" (fsm continuation))
 (autoload 'mevedel-reminders--handle-inject "mevedel-reminders")
+(autoload 'mevedel-reminders-prepare-edited-files "mevedel-reminders")
 (autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
 (autoload 'mevedel-reminders-stage-plan-mode "mevedel-reminders")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-turn'
+(defvar mevedel--current-request)
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
+(autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
@@ -137,13 +146,33 @@
                             gptel-reasoning-effort))
            :continuation (and (mevedel--compact-continuation-wait-p fsm)
                               t)))))
-    ;; This is the final dispatch seam for both ordinary and rebuilt
-    ;; continuation payloads.  Committing reminders any earlier lets
-    ;; successful auto-compaction discard their injected message.
-    (mevedel-context-delivery-stage fsm)
-    (mevedel-reminders--handle-inject fsm)
-    (mevedel-history-note-dispatch info)
-    (gptel--handle-wait fsm)))
+    ;; Edited-file diffs are helper processes, prepared before staging so
+    ;; this transition never waits on one.  A cancelled request stops a
+    ;; pending preparation and ends the turn, since nothing else would move
+    ;; a machine that has not yet sent its request out of WAIT.
+    (let ((cancel (mevedel-reminders-prepare-edited-files
+                   fsm #'mevedel--compact-provider-dispatch))
+          (request (and (listp info)
+                        (or (plist-get info :mevedel-request)
+                            (and (buffer-live-p chat-buffer)
+                                 (buffer-local-value 'mevedel--current-request
+                                                     chat-buffer))))))
+      (when (and cancel request)
+        (mevedel-request-push-canceller
+         request
+         (lambda ()
+           (when (funcall cancel)
+             (gptel--fsm-transition fsm 'ABRT))))))))
+
+(defun mevedel--compact-provider-dispatch (fsm)
+  "Stage context and reminders into FSM's payload, then send it."
+  ;; This is the final dispatch seam for both ordinary and rebuilt
+  ;; continuation payloads.  Committing reminders any earlier lets
+  ;; successful auto-compaction discard their injected message.
+  (mevedel-context-delivery-stage fsm)
+  (mevedel-reminders--handle-inject fsm)
+  (mevedel-history-note-dispatch (gptel-fsm-info fsm))
+  (gptel--handle-wait fsm))
 
 
 (defcustom mevedel-compact-auto t

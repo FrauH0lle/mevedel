@@ -267,6 +267,14 @@ of the `mevedel-file-cache-max-bytes` budget. Content past
 `mevedel-reminders-edited-file-max-diff-lines` lines that survive. Both cases
 report the change and its size and tell the model to re-read the file.
 
+The diffs are prepared before the request is dispatched: the provider-wait
+handler detects the changes, runs one `diff` helper per changed file, and
+stages the reminder from those changes once the diffs return. The dispatch
+does not block while it waits. A cancelled request stops a pending
+preparation and ends the turn. A diff that fails leaves its file reported
+without one, as does any evaluation of the reminder outside a prepared
+dispatch.
+
 Diff spooling explicitly uses UTF-8, encoding decoded text while preserving
 literal bytes from the file cache. It never asks the user to choose a coding
 system during prompt preparation, even when cached files contain non-ASCII text.

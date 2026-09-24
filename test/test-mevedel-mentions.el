@@ -965,10 +965,14 @@ Returns (buffer . overlay)."
                   ((symbol-function 'gptel--model-mime-capable-p)
                    (lambda (mime &optional _model)
                      (equal mime "application/pdf")))
+                  ((symbol-function 'mevedel-tool-fs-read-pdf-page-count-now)
+                   (lambda (_path) 42))
                   ((symbol-function 'mevedel-tool-fs-read-large-pdf-p)
-                   (lambda (_path) t))
+                   (lambda (_path page-count) (eql 42 page-count)))
                   ((symbol-function 'mevedel-tool-fs-read-format-large-pdf-reminder)
-                   (lambda (_path) "large PDF guidance")))
+                   (lambda (_path page-count)
+                     (should (eql 42 page-count))
+                     "large PDF guidance")))
           (let ((result (mevedel--handle-file-mention
                          (list :match-text (concat "@file:" tmp)
                                :capture tmp
@@ -990,9 +994,11 @@ Returns (buffer . overlay)."
                     ((symbol-function 'gptel--model-mime-capable-p)
                      (lambda (mime &optional _model)
                        (equal mime "application/pdf")))
+                    ((symbol-function 'mevedel-tool-fs-read-pdf-page-count-now)
+                     (lambda (_path) nil))
                     ((symbol-function
                       'mevedel-tool-fs-read-format-large-pdf-reminder)
-                     (lambda (_path) "large PDF guidance")))
+                     (lambda (_path _page-count) "large PDF guidance")))
             (let ((result (mevedel--handle-file-mention
                            (list :match-text (concat "@file:" tmp)
                                  :capture tmp
