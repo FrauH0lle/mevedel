@@ -121,7 +121,7 @@ Return nil for an intent whose source pass has been retired."
 
 (defun mevedel-memory-write--before-p (proposal before)
   "Whether BEFORE preserves PROPOSAL's captured targets and non-index bytes.
-The index may incorporate confirmed earlier decisions from this pass. Its
+The index may incorporate unrelated edits to other entries or prose. Its
 complete bounded snapshot is retained in the independently hashed intent."
   (and (proper-list-p before)
        (equal (mapcar #'car before) (mapcar #'car (plist-get proposal :before)))
@@ -132,11 +132,15 @@ complete bounded snapshot is retained in the independently hashed intent."
             (or (equal snapshot original)
                 (and (equal (car row) "MEMORY.md")
                      (equal (plist-get snapshot :path) (plist-get original :path))
-                     (eq (plist-get snapshot :exists) t)
-                     (stringp (plist-get snapshot :bytes))
-                     (<= (string-bytes (plist-get snapshot :bytes)) mevedel-memory-scope--max-file-bytes)
-                     (equal (secure-hash 'sha256 (plist-get snapshot :bytes)) (plist-get snapshot :hash))
-                     (integerp (plist-get snapshot :mode)))))) before)))
+                     (or (equal snapshot (list :path (plist-get original :path) :exists nil))
+                         (and (eq (plist-get snapshot :exists) t)
+                              (stringp (plist-get snapshot :bytes))
+                              (<= (string-bytes (plist-get snapshot :bytes)) mevedel-memory-scope--max-file-bytes)
+                              (equal (secure-hash 'sha256 (plist-get snapshot :bytes)) (plist-get snapshot :hash))
+                              (integerp (plist-get snapshot :mode))))
+                     (condition-case nil
+                         (not (mevedel-memory-apply--index-conflicts original snapshot proposal))
+                       (error nil)))))) before)))
 
 (defun mevedel-memory-write-state (intent)
   "Classify INTENT's current target against its retained snapshots.
@@ -197,7 +201,7 @@ marker is durable before any curated write; this function writes control only."
 
 (defun mevedel-memory-write-prepare (workspace claim target accepted proposal &optional scope)
   "Retain intent for PROPOSAL from ACCEPTED under WORKSPACE CLAIM and TARGET.
-Optional SCOPE and PROPOSAL may incorporate confirmed same-pass index edits
+Optional SCOPE and PROPOSAL may incorporate checked, unrelated index edits
 supplied by the decision owner. No curated file is written."
   (mevedel-memory-write--prepare
    workspace claim target accepted proposal (plist-get proposal :before)

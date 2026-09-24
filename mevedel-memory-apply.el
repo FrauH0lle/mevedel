@@ -13,6 +13,38 @@
 (require 'mevedel-memory-scope)
 (require 'url-util)
 
+(defun mevedel-memory-apply--index-lines (text)
+  "Parse index TEXT into (DESTINATION . LINE) rows, retaining all lines.
+Non-entry lines have a nil destination. Reject ambiguous or unsafe indexes."
+  (let (seen rows)
+    (dolist (line (split-string text "\n") (nreverse rows))
+      (let (target)
+        (if (string-match
+             (rx string-start "- [" (* (or (seq "\\" nonl) (not (any "]" "\\" "\n"))))
+                 "](" (group (+ (not (any ")" "\n")))) ")" (or " - " ": ") (+ nonl) string-end)
+             line)
+            (progn
+              (setq target (decode-coding-string (url-unhex-string (match-string 1 line)) 'utf-8-unix))
+              (unless (and (mevedel-memory-proposal--file-p target)
+                           (not (equal (file-name-nondirectory target) "MEMORY.md"))
+                           (not (member target seen)))
+                (error "Memory index has a duplicate or invalid destination"))
+              (push target seen))
+          (when (string-match-p "\\[.*\\](" line)
+            (error "Memory index has unsupported link syntax")))
+        (push (cons target line) rows)))))
+
+(defun mevedel-memory-apply--index-conflicts (before current proposal)
+  "Return PROPOSAL destinations whose entries differ in BEFORE and CURRENT.
+Both arguments are index snapshots. Absence means an empty index. Unrelated
+entries, prose, and entry positions do not participate in the comparison."
+  (let ((old (mevedel-memory-apply--index-lines
+              (decode-coding-string (or (plist-get before :bytes) "") 'utf-8-unix)))
+        (new (mevedel-memory-apply--index-lines
+              (decode-coding-string (or (plist-get current :bytes) "") 'utf-8-unix))))
+    (seq-filter (lambda (file) (not (equal (cdr (assoc file old)) (cdr (assoc file new)))))
+                (delete-dups (cons (plist-get proposal :file) (copy-sequence (plist-get proposal :merged-files)))))))
+
 (defun mevedel-memory-apply--index (text proposal)
   "Return index TEXT with PROPOSAL's entries replaced, merged, or removed.
 Preserve unrelated lines. Reject duplicate destinations, out-of-root links,
@@ -25,23 +57,11 @@ and unsupported link syntax instead of silently creating conflicting entries."
                         (format "- [%s](%s) - %s" label
                                 (mapconcat #'url-hexify-string (split-string file "/") "/")
                                 (plist-get proposal :hook))))
-         seen lines inserted)
-    (dolist (line (split-string text "\n"))
-      (if (string-match
-           (rx string-start "- [" (* (or (seq "\\" nonl) (not (any "]" "\\" "\n"))))
-               "](" (group (+ (not (any ")" "\n")))) ")" (or " - " ": ") (+ nonl) string-end)
-           line)
-          (let ((target (decode-coding-string (url-unhex-string (match-string 1 line)) 'utf-8-unix)))
-            (unless (and (mevedel-memory-proposal--file-p target)
-                         (not (equal (file-name-nondirectory target) "MEMORY.md"))
-                         (not (member target seen)))
-              (error "Memory index has a duplicate or invalid destination"))
-            (push target seen)
-            (if (member target affected)
-                (when (and replacement (not inserted)) (push replacement lines) (setq inserted t))
-              (push line lines)))
-        (when (string-match-p "\\[.*\\](" line) (error "Memory index has unsupported link syntax"))
-        (push line lines)))
+         lines inserted)
+    (dolist (row (mevedel-memory-apply--index-lines text))
+      (if (member (car row) affected)
+          (when (and replacement (not inserted)) (push replacement lines) (setq inserted t))
+        (push (cdr row) lines)))
     (let ((result (string-join (nreverse lines) "\n")))
       (if (or (not replacement) inserted) result
         (concat result (unless (or (string-empty-p result) (string-suffix-p "\n" result)) "\n") replacement "\n")))))

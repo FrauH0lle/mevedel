@@ -211,12 +211,13 @@ Check original root authority before disclosing private topic contents."
          (_ (mevedel-memory-scope--root scope (plist-get proposal :root)))
          (decision (mevedel-memory-decision-status workspace (plist-get item :id)))
          (intent (and decision (plist-get (mevedel-memory-decision--published workspace decision) :intent)))
-         (input (unless intent
-                  (if (eq (plist-get decision :status) 'rejected) (cons scope proposal)
-                    (mevedel-memory-decision--application-input workspace accepted proposal))))
-         (before (or (plist-get intent :before) (plist-get (cdr input) :before)))
+         (input (unless (or intent (eq (plist-get decision :status) 'rejected))
+                  (mevedel-memory-decision--application-input accepted proposal)))
+         (effective (if (eq (plist-get input :status) 'fresh) (plist-get input :proposal) proposal))
+         (effective-scope (if (eq (plist-get input :status) 'fresh) (plist-get input :scope) scope))
+         (before (or (plist-get intent :before) (plist-get effective :before)))
          (after (or (plist-get intent :after)
-                    (mevedel-memory-write--after before (mevedel-memory-apply-changes (car input) (cdr input))))))
+                    (mevedel-memory-write--after before (mevedel-memory-apply-changes effective-scope effective)))))
     (list
      :title "Memory proposal"
      :subtitle (format "%s · %s" (plist-get proposal :title) (plist-get item :status))
@@ -231,6 +232,7 @@ Check original root authority before disclosing private topic contents."
                     (list "Status" (plist-get item :status))
                     (list "Reason" (plist-get proposal :reason))
                     (list "Decision" (or (plist-get decision :reason) "Pending"))
+                    (when input (list "Current check" (or (plist-get input :reason) "Ready to apply")))
                     (list "History" (mevedel-memory-list--retention workspace accepted))))
        (list :id 'body :title "Proposed body" :mode 'markdown-mode
              :body (plist-get proposal :body)))

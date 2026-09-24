@@ -77,6 +77,14 @@ marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
 
+Index freshness is checked per affected destination: the proposal's topic and
+merge sources must retain their captured entries or absence. Unrelated manual
+edits and changes from other reviews are preserved without replaying write
+history. Application retains the complete current index snapshot as its expected
+before-state; exact file checks protect preparation through commit. Topics and
+instructions still require their original state, and reversal still requires
+the exact recorded after-state.
+
 Private journal records live at `.mevedel/state/journal/`, alongside other
 generated workspace state; public journal entries stay at `.mevedel/journal/`.
 Standard `.mevedel/memory/` roots coordinate through their sibling
@@ -200,9 +208,14 @@ pruning stops at its budget instead of checking the rest of an already-full batc
   around expected-holder comparison and mutation, without prompting background
   recovery to break a live mutation lock.
 - **One proposal's index update made another proposal in the same pass stale.**
-  Only confirmed, hash-verified same-pass index transitions now advance the next
-  expected snapshot. Current target bytes are never adopted as a new baseline;
-  external edits still block. Aborted reversals do not advance expectations.
+  Initially, confirmed, hash-verified same-pass index transitions advanced the
+  expected snapshot while external edits still blocked. On 2026-09-24, inspection
+  of six stale candidates showed that five were blocked solely by unrelated
+  index changes; bulk acceptance had made two older candidates stale itself.
+  Same-pass replay therefore failed at the user-facing cross-review boundary.
+  Entry-level comparisons replaced that replay: unrelated index changes from
+  any source survive, affected-entry and topic conflicts still block, and the
+  transaction retains exact current index bytes for commit, recovery, and undo.
 - **A private intent alone could misattribute external writes.** Recovery now
   reconciles verified marked attempts after accepted publication recovery.
   Complete applications, untouched attempts, partial writes, and foreign state

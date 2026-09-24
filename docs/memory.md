@@ -484,10 +484,10 @@ observation was stale. Journaling can be disabled while existing digests remain
 eligible for consolidation. Exit cancels queued and active review work.
 
 Auto applies proposals sequentially with fresh workspace and original-root
-ownership for each application. Shared-index expectations advance only through
-confirmed changes from the same pass. Intervening edits remain stale; cancelled
-application holds the remaining proposals. Completion reports the number of
-distinct files confirmed written by that run, counting a shared index once and
+ownership for each application. Unrelated index edits are preserved across
+reviews and manual changes. Changed topic files or affected index entries remain
+stale; cancelled application holds the remaining proposals. Completion reports
+the number of distinct files confirmed written by that run, counting a shared index once and
 excluding idempotently returned decisions from another call. A successful
 review can still leave held, stale, unavailable, or recovery-required proposals.
 Neither syntactic validation nor the updated-file count establishes that the
@@ -540,8 +540,15 @@ client-side ownership checks. Interrupted buffer
 synchronization rolls back before propagating a quit.
 
 `mevedel-memory-decision-apply` acquires the workspace claim and an independent
-claim at the original target root. It checks all captured dependencies, including
-unchanged indexes, before applying. Full before/after states live in private
+claim at the original target root. Topic and instruction files must still match
+their captured state. For `MEMORY.md`, only entries for the proposal's topic and
+merge sources must match, including entry absence. Unrelated entries, prose, and
+entry ordering may change. The shared index parser rejects duplicate destinations,
+invalid paths, and unsupported link syntax. A missing index has no entries.
+After these checks, application uses the complete current index snapshot and
+preserves its unrelated content and permissions. Exact file checks still protect
+the interval between preparation and writing, including unchanged dependencies.
+Full before/after states live in private
 `.mevedel/state/journal/writes/<intent-id>.el` records. Standard `.mevedel/memory/`
 roots keep a hash-only marker in the sibling `state/memory-write/pending/` before
 curated writes. Other memory and instruction roots use
@@ -561,10 +568,10 @@ host; acquisition waits at most 20 seconds and process death releases the lock.
 
 Application accepts an immutable decision before retiring the marker. Status
 ordering uses accepted claim generations, so retries in the same second still
-produce an unambiguous latest result. Remaining proposals in the same pass use
-confirmed earlier applications to advance their expected index bytes. The
-original pass stays immutable, topic expectations stay unchanged, and external
-index edits still make a later approval stale.
+produce an unambiguous latest result. Entry-level index checks work independently
+of review identity and retained write history. The original pass stays immutable;
+only the transaction's working copy receives the checked current index snapshot.
+Conflicting entries or topic files produce a stale decision naming the conflict.
 
 ### Recovery and reversal
 
@@ -586,10 +593,9 @@ review is needed for a new proposal.
 Reversal can also be interrupted: completed reverse writes become `reversed`
 when reconciled, untouched attempts leave the proposal `applied`, and partial
 attempts remain recovery-required. Explicitly rolling back a partial reversal
-restores the previously applied state. Same-pass index expectations follow only
-completed apply/reverse transitions. Consequently, an earlier proposal cannot
-be reversed through a later proposal's index edits; reverse those later changes
-first, or leave the current files intact.
+restores the previously applied state. Reversal retains exact whole-file checks:
+an earlier proposal cannot be reversed through a later proposal's index edits;
+reverse those later changes first, or leave the current files intact.
 
 `mevedel-memory-decision-recover-pending` discovers retained write records and
 reconciles their independently marked attempts without inference or file
@@ -657,9 +663,10 @@ visible while navigating. Each changed file and retained evidence entry has its
 own destination. `n`/`p` switch sections; `g` refreshes the same proposal; `q`
 closes both panes and returns to the table. Narrow windows stack the index above
 the reader. Evidence inspection still works if a public digest is unavailable.
-Pending diffs include confirmed
-same-pass index transitions; applied/reversed diffs come from the exact retained
-write intent. `a` accepts, `r` rejects, `A` accepts pending proposals sequentially,
+Pending diffs include unrelated current index edits when freshness checks pass.
+If they fail, inspection retains the captured diff and shows the current conflict
+or unavailable-state reason. Applied/reversed diffs come from the exact retained
+write intent. `a` accepts, `r` rejects, `A` accepts pending and stale proposals sequentially,
 and `R` rejects pending proposals. Rejection is one key; use a prefix argument to
 enter an optional reason. `u` performs checked reversal. `c` reconciles an
 interrupted write; `U` explicitly rolls back a known interrupted attempt.

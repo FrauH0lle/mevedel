@@ -16,6 +16,42 @@
 (require 'mevedel-tool-patch)
 (require 'mevedel-system)
 
+(mevedel-deftest mevedel-memory-apply--index-lines
+    ()
+  ,test
+  (test)
+  :doc "retains prose and order while decoding destinations and escaped labels"
+  (should (equal '((nil . "# Notes") ("a b.md" . "- [A \\[label\\]](a%20b.md) - Context") (nil . ""))
+                 (mevedel-memory-apply--index-lines "# Notes\n- [A \\[label\\]](a%20b.md) - Context\n")))
+  :doc "rejects duplicate decoded destinations, traversal, indexes, and unsupported links"
+  (dolist (text '("- [A](a.md) - A\n- [Alias](%61.md) - B\n"
+                  "- [Escape](../a.md) - Context\n"
+                  "- [Index](MEMORY.md) - Context\n"
+                  "See [Topic](a.md)\n"))
+    (should-error (mevedel-memory-apply--index-lines text))))
+
+(mevedel-deftest mevedel-memory-apply--index-conflicts
+    (:vars ((proposal '(:file "a.md" :merged-files ("b.md")))))
+  ,test
+  (test)
+  :doc "ignores unrelated edits, deletions, prose and reordered affected entries"
+  (should-not
+   (mevedel-memory-apply--index-conflicts
+    '(:bytes "- [A](a.md) - First\n- [Other](other.md) - Old\n- [B](b.md) - Second\n")
+    '(:bytes "# Manual heading\n- [B](b.md) - Second\n- [New](new.md) - Added\n- [A](a.md) - First\n") proposal))
+  :doc "reports added, removed, edited and encoded affected destinations"
+  (dolist (pair '(("" . "- [A](%61.md) - Added\n")
+                  ("- [A](a.md) - Removed\n" . "")
+                  ("- [A](a.md) - Old\n" . "- [A](a.md) - New\n")))
+    (should (equal '("a.md")
+                   (mevedel-memory-apply--index-conflicts (list :bytes (car pair)) (list :bytes (cdr pair)) proposal))))
+  :doc "includes merge sources in conflicts and treats an absent index as empty"
+  (progn
+    (should (equal '("b.md")
+                   (mevedel-memory-apply--index-conflicts nil '(:bytes "- [B](b.md) - Added\n") proposal)))
+    (should-not (mevedel-memory-apply--index-conflicts nil '(:bytes "# Notes\n") proposal))
+    (should-not (mevedel-memory-apply--index-conflicts '(:bytes "# Notes\n") nil proposal))))
+
 (mevedel-deftest mevedel-memory-apply-changes
     (:vars* ((root (make-temp-file "mevedel-memory-apply-" t))
              (memory (file-name-concat root ".agents" "memory"))
