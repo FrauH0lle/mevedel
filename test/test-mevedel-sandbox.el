@@ -1805,6 +1805,27 @@ the real grant refusal does not claim that the requested command started"
       (should (string-match-p "Process spawn failed"
                               (plist-get facts :reason))))))
 
+(mevedel-deftest mevedel-sandbox-directory-read-masked-p
+  (:doc "read scope accounts for containing masks, globs and canonical aliases")
+  (let* ((root (make-temp-file "mevedel-mask-scope-" t))
+         (tree (file-name-concat root "tree"))
+         (child (file-name-concat tree "child"))
+         (alias (file-name-concat root "alias")))
+    (unwind-protect
+        (progn
+          (make-directory child t)
+          (make-symbolic-link tree alias)
+          (dolist (pattern (list tree (concat tree "/**") alias
+                                "**/tree/**"))
+            (let ((mevedel-protected-paths (list (cons pattern 'inaccessible))))
+              (should (mevedel-sandbox-directory-read-masked-p child root))
+              (should (mevedel-sandbox-directory-read-masked-p
+                       (file-name-concat alias "child") root))
+              (should-not (mevedel-sandbox-directory-read-masked-p root root))))
+          (let ((mevedel-protected-paths (list (cons tree 'read-only))))
+            (should-not (mevedel-sandbox-directory-read-masked-p child root))))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-sandbox)
 
 ;;; test-mevedel-sandbox.el ends here

@@ -299,8 +299,10 @@
              :requested-additional-permissions
              (:network t
               :file-system
-              ((:path "/ssh:display:/input" :access read)
+             ((:path "/ssh:display:/input" :access read)
                (:path "/ssh:display:/output" :access write)))
+             :granted-additional-permissions
+             (:file-system ((:path "/ssh:display:/input" :access read)))
              :missing-additional-permissions
              (:network t
               :file-system
@@ -309,7 +311,22 @@
     (should (string-match-p "\\[ \\] Network" text))
     (should (string-match-p "\\[x\\] Read /input" text))
     (should (string-match-p "\\[ \\] Write /output" text))
-    (should-not (string-match-p "/ssh:" text))))
+    (should-not (string-match-p "/ssh:" text)))
+  :doc "selected trees require approval unless existing authority covers the tree"
+  (let* ((exact '(:path "/directory" :access write))
+         (tree '(:path "/directory" :access write :recursive t))
+         (entry (list :show-operation-authority t
+                      :requested-additional-permissions (list :file-system (list exact))
+                      :resource-selection-cell (list (list tree))
+                      :granted-additional-permissions (list :file-system (list exact)))))
+    (dolist (available (list (list exact) (list tree)))
+      (setq entry (plist-put entry :available-resource-grants available))
+      (let ((text (mevedel-permission--format-authority-capabilities entry)))
+        (should (string-match-p
+                 (regexp-quote (format "[%s] Write /directory (recursive)"
+                                       (if (equal available (list tree)) "x" " ")))
+                 text))
+        (should-not (string-match-p "(exact)" text))))))
 
 (mevedel-deftest mevedel-permission--format-remember-authority
   ()

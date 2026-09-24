@@ -261,6 +261,8 @@ Fall back to direct queue admission for callers outside the tool pipeline."
     (setq entry
           (plist-put entry :granted-additional-permissions
                      (plist-get state :granted)))
+    (setq entry (plist-put entry :available-resource-grants
+                           (plist-get state :available-file-system)))
     (setq entry
           (plist-put entry :resource-selection-cell
                      (plist-get request :resource-selection-cell)))
@@ -663,6 +665,7 @@ remembered direct user authority."
          (t (push grant missing-grants)))))
     (list
      :requested requested
+     :available-file-system grants
      :missing
      (mevedel-tool-exec-permission--additional-profile
       (and network (not network-granted))
@@ -816,6 +819,7 @@ caller stores and logs that authority, or with the denial result."
       :requested-additional-permissions (plist-get state :requested)
       :missing-additional-permissions missing
       :granted-additional-permissions (plist-get state :granted)
+      :available-resource-grants (plist-get state :available-file-system)
       :resource-selection-cell (plist-get request :resource-selection-cell)
       :resource-originals
       (copy-tree (plist-get (plist-get state :requested) :file-system))
@@ -1305,7 +1309,11 @@ describe the complete authority needed at settlement."
                                  (if (equal (plist-get entry :mode) "live")
                                      'live 'batch))
                  :additional-permissions
-                 (plist-get entry :requested-additional-permissions)))
+                 (if-let* ((selected (car (plist-get entry :resource-selection-cell))))
+                     (plist-put (copy-sequence
+                                 (plist-get entry :requested-additional-permissions))
+                                :file-system selected)
+                   (plist-get entry :requested-additional-permissions))))
          :operation-pattern detail)
         context)
        :outcome)))))

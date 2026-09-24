@@ -51,11 +51,22 @@
                   "mevedel-permission-queue" (event entry &optional session &rest props))
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+(declare-function mevedel-permission-queue-resource-needs-tree-p
+                  "mevedel-permission-queue" (entry grant))
+(declare-function mevedel-permission-queue-select-resource
+                  "mevedel-permission-queue" (entry previous selected))
 (declare-function mevedel-permission-queue-validate-approval
                   "mevedel-permission-queue" (entry outcome))
 (autoload 'mevedel-permission-queue--log "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
+(autoload 'mevedel-permission-queue-resource-needs-tree-p "mevedel-permission-queue")
+(autoload 'mevedel-permission-queue-select-resource "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue-validate-approval "mevedel-permission-queue")
+
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-rules-resource-granted-p
+                  "mevedel-permission-rules" (path access grants &optional recursive))
+(autoload 'mevedel-permission-rules-resource-granted-p "mevedel-permission-rules")
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get
@@ -156,22 +167,16 @@ Selection changes the visible card only; approval chooses its lifetime."
       (dolist (scope scopes)
         (dolist (choice-access (if (eq access 'write) '(write) '(read write)))
           (let ((grant (append scope (list :access choice-access))))
-            (push (cons (mevedel-permission--resource-label entry grant) grant)
-                  choices))))
+            (unless (mevedel-permission-queue-resource-needs-tree-p entry grant)
+              (cl-pushnew (cons (mevedel-permission--resource-label entry grant) grant)
+                          choices :test #'equal)))))
       (setq choices (nreverse choices))
       (when-let* ((selected
                    (cdr (assoc
                          (completing-read "Approve resource scope: "
                                           choices nil t)
                          choices))))
-        (setf (nth index (car cell)) selected)
-        (when-let* ((remember-cell (plist-get entry :remember-authority-cell)))
-          (dolist (key '(:file-system :resource-grants))
-            (setcar remember-cell
-                    (plist-put
-                     (car remember-cell) key
-                     (mapcar (lambda (grant) (if (equal grant previous) selected grant))
-                             (plist-get (car remember-cell) key))))))
+        (mevedel-permission-queue-select-resource entry previous selected)
         (mevedel-permission-queue--render-head (plist-get entry :session))))))
 
 (defun mevedel-permission--prompt-self-insert ()
@@ -538,7 +543,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
             (plist-get entry :requested-additional-permissions))
            (missing
             (plist-get entry :missing-additional-permissions))
-           (missing-grants (plist-get missing :file-system)))
+           (granted (plist-get (plist-get entry :granted-additional-permissions)
+                               :file-system)))
       (concat
        (propertize "Authority for this execution\n"
                    'font-lock-face '(:inherit bold))
@@ -553,9 +559,15 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
        (mapconcat
         (lambda (grant)
           (format "[%s] %s"
-                  (if (member grant missing-grants) " " "x")
+                  (if (and (mevedel-permission-rules-resource-granted-p
+                            (plist-get grant :path) (plist-get grant :access) granted)
+                           (mevedel-permission-rules-resource-granted-p
+                            (plist-get grant :path) (plist-get grant :access)
+                            (or (plist-get entry :available-resource-grants) granted)
+                            (plist-get grant :recursive)))
+                      "x" " ")
                   (mevedel-permission--resource-label entry grant)))
-        (plist-get requested :file-system)
+        (mevedel-permission--prompt-resources entry)
         "\n")
        (and (plist-get requested :file-system) "\n")
        "\n"))))
