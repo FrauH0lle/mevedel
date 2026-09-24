@@ -2,6 +2,24 @@
 function check(ok, message) {
   if (!ok) throw new Error(message);
 }
+export const imageSource = image => image.imageEdit?.src || image.src;
+export function validateImageContent(image) {
+  let pixels = validateImage(image.src);
+  const edit = image.imageEdit;
+  if (edit == null) return pixels;
+  check(edit && typeof edit === 'object' && !Array.isArray(edit) &&
+    Object.keys(edit).every(key => ['src', 'crop', 'rotation', 'flipX', 'flipY'].includes(key)),
+    'Invalid image edit');
+  const c = edit.crop;
+  check(Array.isArray(c) && c.length === 4 && c.every(Number.isFinite) &&
+    c[0] >= 0 && c[1] >= 0 && c[2] > 0 && c[3] > 0 &&
+    c[0] + c[2] <= 1.00000001 && c[1] + c[3] <= 1.00000001,
+    'Invalid image crop');
+  check([0, 90, 180, 270].includes(edit.rotation) &&
+    typeof edit.flipX === 'boolean' && typeof edit.flipY === 'boolean', 'Invalid image orientation');
+  pixels += validateImage(edit.src);
+  return pixels;
+}
 export function validateImage(src) {
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})$/.exec(src);
   check(match && src.length <= 6 * 1024 * 1024, 'Invalid embedded image');

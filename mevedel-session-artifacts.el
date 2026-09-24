@@ -37,6 +37,10 @@
 (declare-function mevedel-agent-invocation-sidecar-dirty "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-relative-path "mevedel-agents" (cl-x))
 
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-notify-history-changed
+                  "mevedel-collaboration" (data-buffer))
+
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-clear-baseline
                   "mevedel-compact-estimation" ())
@@ -2703,6 +2707,8 @@ nil if SESSION is not yet materialized."
                 ;; The DONE autosave will commit it together with the
                 ;; assistant response; failure/abort paths must not.
                 (set-buffer-modified-p nil))
+              (when (fboundp 'mevedel-collaboration-notify-history-changed)
+                (mevedel-collaboration-notify-history-changed buffer))
               new-segment)
           (error
            (when telemetry-span
@@ -2835,6 +2841,8 @@ absolute path on success, nil if SESSION is not yet materialized."
                   (mevedel-compact-estimation-clear-baseline)
                   (mevedel-session-persistence-notify-session-event
                    session 'rerender)
+                  (when (fboundp 'mevedel-collaboration-notify-history-changed)
+                    (mevedel-collaboration-notify-history-changed buffer))
                   new-segment)
               ((error quit)
                (let ((inhibit-quit t))

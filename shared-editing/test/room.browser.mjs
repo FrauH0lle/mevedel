@@ -143,8 +143,9 @@ test(
       await pages[0].locator('#composer-input').fill('> Browser draft\nsecond line');
       const chatPage = pages[0];
       // The room's explicit theme crosses the opaque iframe boundary on open.
-      await chatPage.locator('#theme-button').click();
-      await chatPage.locator('#theme-button').click();
+      await chatPage.locator('#appearance-menu > summary').click();
+      await chatPage.locator('#appearance').selectOption('dark');
+      await chatPage.locator('#appearance-menu > summary').click();
       const openingTab = chatPage.waitForEvent('popup');
       await chatPage.locator('[data-create-editor="whiteboard"]').click();
       pages[0] = await openingTab;
@@ -156,10 +157,29 @@ test(
       await pages[0].locator('#editing-box').evaluate((e) => (e.open = true));
       const frame = (p) => p.frameLocator('#editing-body iframe');
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
+      // Real request ownership publishes activity even without streamed text.
+      for(let cycle=0;cycle<2;cycle++) {
+        await agent('RequestState',{busy:true});
+        await chatPage.locator('#assistant-working').waitFor({state:'visible'});
+        await agent('RequestState',{busy:false});
+        await chatPage.locator('#assistant-working').waitFor({state:'hidden'});
+      }
+      // Compaction must publish the new archive without waiting for another turn.
+      await agent('CompactHistory');
+      await chatPage.getByText('Earlier conversation · Segment 1',{exact:true}).click();
+      await chatPage.locator('#history').getByText('A preserved earlier answer.',{exact:true}).waitFor();
+      assert.equal(await chatPage.locator('#composer-input').inputValue(),'> Browser draft\nsecond line');
+      const historyReader=await browser.newPage();
+      await historyReader.goto(links.view);
+      await historyReader.getByText('Earlier conversation · Segment 1',{exact:true}).click();
+      await historyReader.locator('#history').getByText('A preserved earlier answer.',{exact:true}).waitFor();
+      await historyReader.close();
       assert.equal(await frame(pages[0]).locator('html').getAttribute('data-theme'), 'dark');
       // Programmatic click reaches the room control under the editor panel,
       // exercising the same live theme forwarding without replacing the iframe.
-      await pages[0].locator('#theme-button').evaluate(button=>button.click());
+      await pages[0].locator('#appearance-menu > summary').click();
+      await pages[0].locator('#appearance').selectOption('system');
+      await pages[0].locator('#appearance-menu > summary').click();
       await until(async () => (await frame(pages[0]).locator('html').getAttribute('data-theme')) === null);
       await pages[0].evaluate(() => window.dispatchEvent(new Event('focus')));
       assert.match(await pages[0].title(), /Whiteboard/);
@@ -420,7 +440,8 @@ test(
       );
       await until(async () => (await documentText(pages[1])).includes('An agent added this.'));
       const captured = JSON.parse((await agent('SharedRead', { id: documentId })).result);
-      await frame(pages[0]).locator('#ask-toggle').click();
+      if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
+      await frame(pages[0]).locator('#whole-question').click();
       await frame(pages[0]).locator('#question').fill('Review the current notes');
       await frame(pages[0]).locator('#ask button').click();
       const queued = await until(async () => {
@@ -487,7 +508,7 @@ test(
       await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Separate private AI question'));
       await pages[0].reload();
       await frame(pages[0]).locator('.tiptap[contenteditable="true"]').waitFor();
-      await frame(pages[0]).locator('#ask-toggle').click();
+      if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Separate private AI question');
       await frame(pages[0]).locator('#comments-tab').click();
       await frame(pages[0]).locator('#comments .comment > summary').click();
@@ -607,14 +628,14 @@ test(
         JSON.parse((await agent('SharedRead', { id: imported[0].id })).result).content,
         JSON.parse(exported).content,
       );
-      await frame(pages[0]).locator('#ask-toggle').click();
+      if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#question').fill('Private recovered question');
       const capturedContext = await frame(pages[0]).locator('#context-detail').innerText();
       await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Private recovered question'));
       for (let reload = 0; reload < 2; reload++) {
         await pages[0].reload();
         await frame(pages[0]).locator('[data-tool="rect"]').waitFor({state:'visible'});
-        await frame(pages[0]).locator('#ask-toggle').click();
+        if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
         assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
         assert.equal(await frame(pages[0]).locator('#context-detail').innerText(),capturedContext);
       }
@@ -733,6 +754,88 @@ test(
       );
       await phone.close();
       await Promise.all(contexts.map((c) => c.close()));
+      // Repeated image movement must not fill durable history or saturate
+      // the relay with repeated before/after image bytes on every save.
+      const imageContext = await browser.newContext();
+      const imageWriter = await imageContext.newPage();
+      const src = await imageWriter.evaluate(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512; canvas.height = 512;
+        const ctx = canvas.getContext('2d'), pixels = ctx.createImageData(512,512);
+        let seed = 12345;
+        for (let i=0;i<pixels.data.length;i++) {
+          seed = (Math.imul(seed,1664525)+1013904223)>>>0;
+          pixels.data[i] = i%4===3 ? 255 : seed>>>24;
+        }
+        ctx.putImageData(pixels,0,0);
+        return canvas.toDataURL();
+      });
+      assert.ok(src.length>900000);
+      const imageBoard = JSON.parse((await agent('SharedCreate',{kind:'whiteboard',title:'Large image synchronization'})).result);
+      await agent('SharedEdit',{id:imageBoard.id,action:'patch',changes:[
+        {id:'large-image',before:null,after:{id:'large-image',type:'image',box:[100,100,300,300],src}}
+      ]});
+      const imageURL = new URL(links.full);
+      imageURL.searchParams.set('shared',imageBoard.id);
+      const imageReader = await browser.newPage();
+      await Promise.all([imageWriter.goto(imageURL.href),imageReader.goto(imageURL.href)]);
+      await frame(imageWriter).locator('#scene image').waitFor();
+      await frame(imageReader).locator('#scene image').waitFor();
+      await frame(imageWriter).locator('#scene image').click();
+      const moveLatencies=[];
+      for(let move=1;move<=12;move++) {
+        await frame(imageWriter).locator('#canvas').focus();
+        const started=performance.now();
+        await imageWriter.keyboard.press('ArrowRight');
+        await until(async()=>Number(await frame(imageReader).locator('#scene image').getAttribute('x'))===100+move);
+        await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
+        moveLatencies.push(performance.now()-started);
+      }
+      const medianMove=moveLatencies.toSorted((a,b)=>a-b)[Math.floor(moveLatencies.length/2)];
+      console.log(`Image board single-move median ${Math.round(medianMove)} ms; max ${Math.round(Math.max(...moveLatencies))} ms`);
+      assert.ok(medianMove<1200,`single moves must not stall in large pipe writes: ${moveLatencies.map(Math.round)}`);
+      await rectangle(imageWriter,400,250);
+      await until(async()=>await frame(imageReader).locator('#scene [data-shape]').count()===2);
+      await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
+      const imageState=JSON.parse((await agent('SharedRead',{id:imageBoard.id})).result);
+      assert.equal(imageState.content.length,2);
+      assert.ok(imageState.transactions.length<13,'image snapshots expire without blocking synchronization');
+      const typedShape=imageState.content.find(shape=>shape.type==='rect');
+      const moving=frame(imageWriter).locator(`#scene [data-shape="${typedShape.id}"]`);
+      const watching=frame(imageReader).locator(`#scene [data-shape="${typedShape.id}"]`);
+      const original=await watching.boundingBox(), handle=await moving.boundingBox();
+      await imageWriter.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2);
+      await imageWriter.mouse.down();
+      const previewAt=performance.now();
+      await imageWriter.mouse.move(handle.x+handle.width/2+70,handle.y+handle.height/2+30);
+      await until(async()=>await watching.getAttribute('data-live-preview')==='true',1500);
+      assert.ok(Math.abs((await watching.boundingBox()).x-original.x)>30,'other participant sees movement before release');
+      console.log(`Remote drag preview arrived in ${Math.round(performance.now()-previewAt)} ms before release`);
+      const whileDragging=JSON.parse((await agent('SharedRead',{id:imageBoard.id})).result);
+      assert.deepEqual(whileDragging.content.find(s=>s.id===typedShape.id).box,typedShape.box,'preview does not save a revision');
+      await frame(imageWriter).locator('#canvas').dispatchEvent('pointercancel');
+      await imageWriter.mouse.up();
+      await until(async()=>await watching.getAttribute('data-live-preview')==='false');
+      assert.ok(Math.abs((await watching.boundingBox()).x-original.x)<2,'cancel restores the saved geometry');
+      await imageWriter.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2);
+      await imageWriter.mouse.down();
+      await imageWriter.mouse.move(handle.x+handle.width/2+70,handle.y+handle.height/2+30);
+      await until(async()=>await watching.getAttribute('data-live-preview')==='true');
+      const previewBox=await watching.boundingBox();
+      await imageWriter.mouse.up();
+      await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
+      await until(async()=>await watching.getAttribute('data-live-preview')==='false');
+      assert.ok(Math.abs((await watching.boundingBox()).x-previewBox.x)<2,'saved geometry replaces the preview without a jump');
+      await frame(imageWriter).locator('#canvas').focus();
+      await imageWriter.keyboard.press('Enter');
+      await frame(imageWriter).locator('#shape-text').fill('');
+      await imageWriter.keyboard.type('test1234\n3333',{delay:350});
+      const typedAt=performance.now();
+      await until(async()=>/test1234\s*3333/.test(await frame(imageReader).locator('#scene').textContent()),8000);
+      await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host',8000);
+      console.log(`Image board typing caught up in ${Math.round(performance.now()-typedAt)} ms`);
+      await imageReader.close();
+      await imageContext.close();
       await agent('RestartHelper');
       const headless = {
         id: 'headless',

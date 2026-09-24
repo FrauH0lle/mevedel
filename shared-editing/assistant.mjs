@@ -28,11 +28,19 @@ export class AssistantPanel {
     $('comments-tab').onclick = () => this.toggle(true, 'comments');
     $('assistant-close').onclick = () => this.toggle(false);
     $('whole-question').onclick = () => this.begin('whole');
+    $('selected-question').onclick = () => {
+      if (!this.draft.selectionAttachment) return;
+      this.draft.attachment = this.draft.selectionAttachment;
+      this.draft.opId = crypto.randomUUID();
+      this.notice('');
+      this.toggle(true, 'assistant');
+    };
     $('show-resolved').onchange = () => this.setComments(this.comments);
     $('refresh-context').onclick = () => {
       try {
         const a = this.draft.attachment;
         this.draft.attachment = this.capture(a?.snapshot.scope || 'whole', a);
+        if (this.draft.attachment.snapshot.scope === 'selection') this.draft.selectionAttachment = this.draft.attachment;
         this.draft.opId = crypto.randomUUID();
         this.notice('Context refreshed. Review it before sending.');
         this.renderDraft();
@@ -45,7 +53,51 @@ export class AssistantPanel {
         this.renderDraft();
       } catch (error) { this.notice(error.message, true); }
     };
+    const handle = $('discussion-resize');
+    const limits = () => {
+      const min = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--discussion-min-width'));
+      return {min, max:Math.max(min, Math.floor(innerWidth / 2))};
+    };
+    const clamp = value => { const {min,max} = limits(); return Math.round(Math.max(min, Math.min(max, value))); };
+    const fitWidth = () => {
+      const {min,max} = limits(), width = clamp(Number.isFinite(this.drafts.discussionWidth) ? this.drafts.discussionWidth : min);
+      document.body.style.setProperty('--discussion-width', width + 'px');
+      handle.hidden = innerWidth < 800;
+      handle.setAttribute('aria-valuemin', min); handle.setAttribute('aria-valuemax', max);
+      handle.setAttribute('aria-valuenow', width); handle.setAttribute('aria-valuetext', width + ' pixels');
+      return width;
+    };
+    let resize;
+    const finishResize = (cancel = false) => {
+      if (!resize) return;
+      if (cancel) this.drafts.discussionWidth = resize.preferred;
+      resize = null; document.body.classList.remove('discussion-resizing');
+      fitWidth(); this.changed();
+    };
+    handle.onpointerdown = event => {
+      if (event.button !== 0 || innerWidth < 800) return;
+      event.preventDefault();
+      resize = {x:event.clientX, width:fitWidth(), preferred:this.drafts.discussionWidth};
+      handle.setPointerCapture(event.pointerId); document.body.classList.add('discussion-resizing');
+    };
+    handle.onpointermove = event => {
+      if (!resize) return;
+      this.drafts.discussionWidth = clamp(resize.width + resize.x - event.clientX); fitWidth();
+    };
+    handle.onpointerup = () => finishResize();
+    handle.onpointercancel = () => finishResize(true);
+    handle.onlostpointercapture = () => finishResize();
+    handle.ondblclick = () => { this.drafts.discussionWidth = limits().min; fitWidth(); this.changed(); };
+    handle.onkeydown = event => {
+      if (event.key === 'Escape' && resize) { event.stopPropagation(); finishResize(true); return; }
+      const {min,max} = limits(), current = fitWidth();
+      const width = {ArrowLeft:current+24, ArrowRight:current-24, Home:min, End:max}[event.key];
+      if (width === undefined) return;
+      event.preventDefault(); this.drafts.discussionWidth = clamp(width); fitWidth(); this.changed();
+    };
+    fitWidth();
     this.layout = () => {
+      fitWidth();
       const container = document.querySelector($('assistant').hidden ? 'footer' : '.assistant-compose');
       if ($('context-actions').parentElement !== container) container.prepend($('context-actions'));
       if (innerHeight < 500 && document.activeElement === $('question')) $('attached-context').open = false;
@@ -103,7 +155,12 @@ export class AssistantPanel {
   begin(scope, mode = 'question') {
     try {
       const draft = this.drafts[mode];
-      draft.attachment = this.capture(scope);
+      const attachment = this.capture(scope);
+      if (mode === 'question') {
+        if (scope === 'selection') draft.selectionAttachment = attachment;
+        else if (draft.attachment?.snapshot.scope === 'selection') draft.selectionAttachment = draft.attachment;
+      }
+      draft.attachment = attachment;
       draft.opId = crypto.randomUUID();
       this.notice('');
       this.toggle(true, mode === 'comment' ? 'comments' : 'assistant');
@@ -114,14 +171,24 @@ export class AssistantPanel {
     }
   }
   renderDraft() {
+    $('comments-empty').textContent = this.drafts.comment.attachment
+      ? 'Your comment will appear here after you post it.'
+      : 'Select text and choose Add comment to start a discussion.';
     const a = this.draft.attachment;
     $('context-title').textContent = a
       ? `${a.snapshot.scope === 'whole' ? 'Whole ' + a.snapshot.kind : 'Selected content'} · ${a.snapshot.title}`
       : 'Choose content to discuss';
+    $('attached-context').open = a?.snapshot.scope === 'selection';
     $('context-quote').textContent = a?.quote || '';
     $('context-detail').textContent = a ? JSON.stringify(a.snapshot, null, 2) : '';
-    $('whole-question').textContent = a?.snapshot.kind === 'document' ? 'Use whole document' : 'Ask about whole item';
-    $('ask').hidden = $('whole-question').hidden = this.state().readOnly;
+    const documentItem = document.body.dataset.kind === 'document';
+    $('whole-question').textContent = documentItem ? 'Whole document' : 'Whole whiteboard';
+    $('selected-question').textContent = documentItem ? 'Selected passage' : 'Selected objects';
+    $('whole-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'whole'));
+    $('selected-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'selection'));
+    $('selected-question').disabled = !this.draft.selectionAttachment && a?.snapshot.scope !== 'selection';
+    $('selected-question').title = $('selected-question').disabled ? 'Select content and choose Ask about selection first.' : 'Use the passage or objects already attached to this question.';
+    $('ask').hidden = $('context-scope').hidden = this.state().readOnly;
     $('comment-form').hidden = this.drafts.view !== 'comments' || !this.drafts.comment.attachment || this.state().readOnly;
     $('comment-post').disabled = this.sendingComments.has('new');
     $('comment-quote').textContent = this.drafts.comment.attachment?.quote || '';

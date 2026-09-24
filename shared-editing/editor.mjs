@@ -1,10 +1,12 @@
 /* Packaged editor in an opaque iframe. All host access uses the bound port. */
 import * as Y from 'yjs';
-import { BoardPresence } from './presence.mjs';
+import { BoardPresence, BoardPreviews } from './presence.mjs';
 import { AssistantPanel } from './assistant.mjs';
+import { documentControls } from './document-controls.mjs';
+import { imageTools } from './image-controls.mjs';
 import { captureContext, readComments } from './context.mjs';
 import { Editor, Extension } from '@tiptap/core';
-import { Plugin } from '@tiptap/pm/state';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
@@ -18,13 +20,14 @@ import {
   ySyncPluginKey,
 } from '@tiptap/y-tiptap';
 import { extensions, schema, seedEmptyText, selectionPositions, validateDocument } from './document.mjs';
-import { restore, encode, inspect, putShape, validateShape } from './model.mjs';
+import { restore, encode, inspect, putShape, validateShape, validate } from './model.mjs';
 import { validateImage } from './image.mjs';
-import { shapeSVG, definitions, escape, bounds, styleOf, FILLABLE, LINEAR } from './render.mjs';
+import { shapeSVG, escape, bounds, styleOf, FILLABLE, LINEAR } from './render.mjs';
 const $ = (id) => document.getElementById(id),
   remote = Symbol('remote'),
   local = Symbol('local');
 const bytes = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+const discussionHighlight = new PluginKey('discussionHighlight');
 const b64 = (data) => {
   let value = '';
   for (let i = 0; i < data.length; i += 8192)
@@ -55,6 +58,8 @@ let tool = 'select',
   presenceTimer = null,
   laserSamples = [],
   boardPresence,
+  boardPreviews,
+  outgoingPreview = null,
   refresh = () => {};
 /* Style of the next drawn shape; the panel edits it alongside the selection. */
 const current = {
@@ -88,23 +93,25 @@ let participant = 'You',
   textEditing = null,
   sceneSignature = '';
 const agentTargets = new Map();
+let seenRevision = null, highlightTimer;
+const highlightDuration = 8000;
 function status(text, error = false) {
   $('saved').textContent = text;
   $('saved').dataset.error = String(error);
 }
 function saved() {
+  if (failed) return;
   if (recoveryWarning) {
     status(recoveryWarning, true);
     return;
   }
-  if (failed) return;
   status(
     pending.length || updates.length
       ? online
         ? 'Saving…'
         : 'Offline · changes pending'
       : online
-        ? 'Saved on host'
+        ? boardPreviews?.people.size ? 'Live movement · not saved yet' : 'Saved on host'
         : 'Offline · saved copy',
   );
 }
@@ -132,7 +139,9 @@ function draft() {
   });
 }
 function flush() {
-  if (updates.length) {
+  // Keep accumulating while an earlier operation awaits acknowledgement.
+  // Its identity must stay stable for retries; unsent edits can share one save.
+  if (updates.length && !pending.length) {
     pending.push({ opId: bufferedId, update: b64(Y.mergeUpdates(updates)) });
     updates = [];
     bufferedId = null;
@@ -149,28 +158,67 @@ async function pump() {
     const result = await request({ action: 'update', ...next });
     revision = Math.max(revision, result.revision);
     pending.shift();
+    if (outgoingPreview?.opId === next.opId) {
+      outgoingPreview = null;
+      if (pointing) presence(pointing.point, pointing.mode);
+    }
     draft();
   } catch (error) {
     failed = online;
+    outgoingPreview = null;
+    if (pointing) presence(pointing.point, pointing.mode);
     status(error.message, true);
   } finally {
     inflight = false;
     saved();
-    if (!failed) pump();
+    if (!failed) flush();
   }
 }
+function refreshAgentHighlights() {
+  clearTimeout(highlightTimer);
+  const now = performance.now();
+  for (const [id, target] of agentTargets)
+    if (now - target.started >= highlightDuration) agentTargets.delete(id);
+  if (editor) {
+    editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+    // Decorations can reuse their DOM or be recreated after a toggle. Keep
+    // either animation at the edit's actual age, without restarting its timer.
+    for (const node of editor.view.dom.querySelectorAll('.agent-contribution'))
+      for (const animation of node.getAnimations())
+        if (animation.animationName === 'document-contribution')
+          animation.currentTime = now - Number(node.dataset.agentStart);
+  } else if (doc) draw();
+  if (agentTargets.size)
+    highlightTimer = setTimeout(refreshAgentHighlights,
+      Math.max(1, Math.min(...[...agentTargets.values()].map(t => t.started + highlightDuration - now))));
+}
 function history(transactions = []) {
+  boardPreviews?.reconcile(transactions);
+  const previous = new Map(agentTargets);
   agentTargets.clear();
   const seen = new Set();
   for (const tx of transactions)
     for (const change of tx.changes || []) {
-      if (!seen.has(change.id) && tx.actor.startsWith('Agent:') && change.after)
-        agentTargets.set(change.id, `${tx.actor} · revision ${tx.revision}`);
+      if (!seen.has(change.id) && tx.actor.startsWith('Agent:') && change.after) {
+        const prior = previous.get(change.id);
+        if (prior?.revision === tx.revision) agentTargets.set(change.id, prior);
+        else if (seenRevision !== null && tx.revision > seenRevision)
+          agentTargets.set(change.id, {revision: tx.revision, started: performance.now(),
+            label: `${tx.actor} · revision ${tx.revision}`});
+      }
       seen.add(change.id);
     }
-  if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
-  else if (doc) draw();
+  // Initial history is attribution, not a new edit. Duplicate syncs never
+  // restart the local timer, and host/browser wall-clock differences do not matter.
+  seenRevision = Math.max(seenRevision ?? 0, ...transactions.map(tx => tx.revision));
+  refreshAgentHighlights();
   $('contributions').replaceChildren();
+  if (transactions.length) {
+    const note = document.createElement('p');
+    note.className = 'hint';
+    note.textContent = `Retained contributions from revision ${transactions.at(-1).revision}. Older entries expire within count and size limits.`;
+    $('contributions').append(note);
+  }
   const groups = [];
   for (const tx of transactions) {
     const previous = groups.at(-1);
@@ -236,27 +284,35 @@ function dragGeometry(d) {
       : [...g.box.slice(0, 2), Math.max(10, d.end[0] - g.box[0]), Math.max(10, d.end[1] - g.box[1])]),
   ]);
 }
+function visibleGeometry(id) {
+  const geometry = doc.getMap('shapes').get(id).get('geometry');
+  const box = boardPreviews?.boxes().get(id);
+  return box ? transformGeometry(geometry,box) : geometry;
+}
 function draw() {
+  const live = boardPreviews?.boxes() || new Map();
   const preview = new Map(dragGeometry(drag));
-  const shapes = shapeList().map(s => preview.has(s.id) ? {...s, ...preview.get(s.id)} : s);
+  const shapes = shapeList().map(s => preview.has(s.id) ? {...s, ...preview.get(s.id)}
+    : live.has(s.id) ? {...s, ...transformGeometry(s,live.get(s.id))} : s);
   $('canvas').setAttribute('viewBox', view.join(' '));
   const scale = $('canvas').getScreenCTM()?.a || 1;
+  if ($('board-zoom')) $('board-zoom').textContent = `${Math.round(scale * 100)}%`;
   const signature = JSON.stringify([shapes, scale, [...agentTargets], $('show-agent').checked]);
   if (signature !== sceneSignature) {
     sceneSignature = signature;
-    $('scene').innerHTML = definitions + shapes.map((s) => shapeSVG(s, shapes)).join('');
+    $('scene').innerHTML = shapes.map((s) => shapeSVG(s, shapes)).join('');
     for (const [index, group] of $('scene').querySelectorAll('[data-shape]').entries()) {
       const shape = shapes[index];
       group.dataset.agent = String(agentTargets.has(shape.id) && $('show-agent').checked);
-      const label = agentTargets.get(shape.id);
-      if (label) {
+      const target = agentTargets.get(shape.id);
+      if (target) {
+        group.style.setProperty('--highlight-delay', `${target.started - performance.now()}ms`);
         const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-        title.textContent = label;
+        title.textContent = target.label;
         group.append(title);
       }
       if (LINEAR.includes(shape.type)) {
         const hit = group.querySelector('path').cloneNode();
-        hit.removeAttribute('marker-end');
         hit.setAttribute('stroke', 'transparent');
         hit.setAttribute('stroke-width', Math.max(shape.width || 2, 14 / scale));
         hit.style.pointerEvents = 'stroke';
@@ -270,14 +326,21 @@ function draw() {
     }
   }
   for (const group of $('scene').querySelectorAll('[data-shape]'))
-    group.dataset.editing = String(group.dataset.shape === textEditing);
+    {
+      group.dataset.editing = String(group.dataset.shape === textEditing);
+      group.dataset.livePreview = String(live.has(group.dataset.shape));
+    }
   layoutShapeText();
   for (const id of selected) if (!doc.getMap('shapes').has(id)) selected.delete(id);
+  const selectedImage = selected.size === 1 && shapes.find(s => selected.has(s.id) && s.type === 'image');
+  $('image-tools').hidden = readOnly || !selectedImage;
+  $('image-size').textContent = selectedImage ? `${Math.round(selectedImage.box[2])} × ${Math.round(selectedImage.box[3])} px` : '';
   $('selection').innerHTML = shapes
     .filter((s) => selected.has(s.id))
     .map((s) => {
       const [x, y, w, h] = s.box;
-      return `<rect x="${x - 4}" y="${y - 4}" width="${w + 8}" height="${h + 8}" fill="none" stroke="#6965db" stroke-dasharray="5 3"/><rect data-resize="${escape(s.id)}" x="${x + w - 5}" y="${y + h - 5}" width="10" height="10" fill="white" stroke="#6965db"/>`;
+      const gap = 4 / scale, handle = 10 / scale;
+      return `<rect x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" fill="none" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><rect data-resize="${escape(s.id)}" x="${x + w - handle / 2}" y="${y + h - handle / 2}" width="${handle}" height="${handle}" fill="white" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"/>`;
     })
     .join('');
   boardPresence?.animate();
@@ -306,6 +369,7 @@ function presence(point, mode = 'cursor') {
     presenceTimer = null;
     lastPresence = performance.now();
     if (pointing && online) port.postMessage({ type: 'presence', ...pointing,
+      preview: pointing.mode === 'cursor' && !failed ? outgoingPreview : null,
       trail: pointing.mode === 'laser' ? laserSamples.filter(s => lastPresence - s[2] < 550)
         .map(([x,y,time]) => [x,y,lastPresence-time]) : undefined });
   }, Math.max(0, 50 - (performance.now() - lastPresence)));
@@ -319,8 +383,10 @@ function stopPointing() {
   boardPresence?.clear('self');
 }
 function clearPresence() {
+  outgoingPreview = null;
   stopPointing();
   boardPresence?.clear();
+  boardPreviews?.clear();
 }
 function showPresence(data) {
   if (awareness && Number.isSafeInteger(data.clientId) && data.clientId !== doc.clientID) {
@@ -346,6 +412,7 @@ function showPresence(data) {
     }
   }
   boardPresence?.receive(data);
+  boardPreviews?.receive(data);
 }
 
 function selectTool(value) {
@@ -477,12 +544,7 @@ function imageControls() {
     input.hidden = true;
     $('menu').append(input);
     const choose = () => { $('menu').open = false; input.click(); };
-    button($('menu').querySelector('.menu-body'), 'Insert image…', choose);
-    if (editor) {
-      const insert = button($('formatting'), '▧', choose);
-      insert.title = 'Insert image';
-      insert.setAttribute('aria-label', 'Insert image');
-    }
+    if (!editor) $('board-image').onclick = choose;
     input.onchange = () => { const files = [...input.files]; input.value = ''; insertImages(files); };
   }
   surface.addEventListener('dragover', event => {
@@ -513,7 +575,24 @@ function imageControls() {
   }, true);
 }
 function board() {
+  document.body.dataset.kind = 'whiteboard';
   $('board').hidden = false;
+  imageTools($('image-tools'), () => {
+    const shape = selected.size === 1 && shapeList().find(s => selected.has(s.id) && s.type === 'image');
+    return !readOnly && shape ? {...shape,width:shape.box[2],height:shape.box[3]} : null;
+  }, (before, changes) => {
+    const current = shapeList().find(s => s.id === before.id);
+    if (readOnly || !current || ['src','imageEdit','box'].some(key =>
+      JSON.stringify(current[key]) !== JSON.stringify(before[key])))
+      throw new Error('This image changed while you were editing it. Reopen the image tools to try again.');
+    const after = {...current,imageEdit:changes.imageEdit,
+      box:[...current.box.slice(0,2),changes.width,changes.height]};
+    const candidate = restore(encode(doc));
+    try {putShape(candidate,after);validate(candidate);} finally {candidate.destroy();}
+    undo.stopCapturing();
+    doc.transact(() => putShape(doc,after),local);
+    undo.stopCapturing();
+  },message => status(message,true));
   const tools = [
     ['pan', 'Hand', 'H'],
     ['select', 'Selection', 'V'],
@@ -544,24 +623,43 @@ function board() {
     erase: 'm3 15 12-12 7 7-12 12H9Zm6-6 7 7M10 22h12',
     laser: 'm3 21 10-10 3 3L6 24ZM17 7l3-3M14 5V2M21 10h3',
   };
+  const commands = document.createElement('div');
+  commands.className = 'board-commands';
+  $('tools').append(commands);
+  const objectMenu = document.createElement('details');
+  objectMenu.className = 'popover board-menu';
+  objectMenu.id = 'object-menu';
+  objectMenu.innerHTML = '<summary>Objects</summary><div class="editor-menu"></div>';
+  commands.append(objectMenu);
   const strip = document.createElement('div');
   strip.className = 'drawing-tools';
+  strip.setAttribute('role', 'group');
+  strip.setAttribute('aria-label', 'Create and select');
   $('tools').append(strip);
   for (const [value, label, key] of tools) {
     if (readOnly && !['select', 'pan'].includes(value)) continue;
     const b = button(strip, '', () => selectTool(value));
     b.dataset.tool = value;
+    if (['rect', 'arrow', 'erase'].includes(value)) b.classList.add('tool-group-start');
     b.title = `${label} (${key})`;
     b.setAttribute('aria-label', label);
     b.setAttribute('aria-keyshortcuts', key);
     b.setAttribute('aria-pressed', String(value === 'select'));
     b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[value]}"/></svg><kbd>${key}</kbd>`;
   }
+  if (!readOnly) {
+    const imageButton = button(strip, '', () => {});
+    imageButton.id = 'board-image';
+    imageButton.title = 'Insert image (or drop an image on the canvas)';
+    imageButton.setAttribute('aria-label', 'Insert image');
+    imageButton.className = 'tool-group-start';
+    imageButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 18 6-6 4 4 3-4 5 6"/></svg>';
+  }
   const properties = document.createElement('details');
   properties.id = 'properties';
   properties.className = 'popover';
   properties.innerHTML = '<summary>Style</summary><div class="menu-body"></div>';
-  $('tools').append(properties);
+  commands.append(properties);
   const panel = properties.lastElementChild;
   const value = (key) => {
     for (const s of shapeList()) if (selected.has(s.id) && applies(key, s.type)) return styleOf(s)[key];
@@ -607,8 +705,6 @@ function board() {
     const icon = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
     const option = (key, v, label, body) =>
       `<button type="button" class="opt" data-prop="${key}" data-val="${v}" title="${label}" aria-label="${label}">${body}</button>`;
-    const action = (act, label, body) =>
-      `<button type="button" class="opt" data-act="${act}" title="${label}" aria-label="${label}">${body}</button>`;
     const swatch = (key, label, color) =>
       `<button type="button" class="swatch${color === 'none' ? ' transparent' : ''}"${color === 'none' ? '' : ` style="background:${color}"`} data-prop="${key}" data-val="${color}" aria-label="${label}: ${color === 'none' ? 'transparent' : color}"></button>`;
     const colors = (key, label, list) =>
@@ -669,30 +765,19 @@ function board() {
           .map(([v, label]) => option('fontSize', v, `Font size ${label}`, label))
           .join(''),
       ) +
-      section('opacity', 'Opacity', '<input type="range" min="0" max="100" step="5" aria-label="Opacity"><output>100</output>') +
-      section(
-        'layers',
-        'Layers',
-        action('back', 'Send to back', icon('<path d="M12 9v12M7.5 16.5l4.5 4.5 4.5-4.5M4 4.5h16M7 8.5h10"/>')) +
-          action('front', 'Bring to front', icon('<path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M4 19.5h16M7 15.5h10"/>')),
-      ) +
-      section(
-        'actions',
-        'Actions',
-        action('dup', 'Duplicate', icon('<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>')) +
-          action('del', 'Delete', icon('<path d="M4.5 7h15M9.5 7V4.5h5V7m-8 0 1 12.5h9l1-12.5M10 10.5v6M14 10.5v6"/>')),
-      );
+      section('opacity', 'Opacity', '<input type="range" min="0" max="100" step="5" aria-label="Opacity"><output>100</output>');
+    const caption = document.createElement('p');
+    caption.className = 'property-caption';
+    panel.prepend(caption);
     panel.onclick = (event) => {
       const b = event.target.closest('[data-prop]');
       if (b) {
         const key = b.dataset.prop;
+        undo.stopCapturing();
         style(key, ['width', 'rough', 'fontSize'].includes(key) ? +b.dataset.val : b.dataset.val);
+        undo.stopCapturing();
         return;
       }
-      const act = event.target.closest('[data-act]')?.dataset.act;
-      if (act === 'front' || act === 'back') reorder(act === 'front');
-      else if (act === 'dup') duplicate();
-      else if (act === 'del') remove();
     };
     for (const input of panel.querySelectorAll('input[data-color]'))
       input.oninput = () => style(input.dataset.color, input.value);
@@ -714,10 +799,11 @@ function board() {
         edges: kinds.has('rect'),
         fontSize: kinds.has('text') || kinds.has('sticky') || shapes.some((s) => s.text),
         opacity: kinds.size > 0,
-        layers: shapes.length > 0,
-        actions: shapes.length > 0,
       };
-      properties.hidden = !kinds.size;
+      properties.firstElementChild.setAttribute('aria-disabled', String(!kinds.size));
+      if (!kinds.size) properties.open = false;
+      const name = tools.find(([value]) => value === (shapes[0]?.type || tool))?.[1] || 'Image';
+      caption.textContent = shapes.length > 1 ? `${shapes.length} objects` : shapes.length ? name : `New ${name.toLowerCase()}`;
       for (const sec of panel.querySelectorAll('.sec')) sec.hidden = !show[sec.dataset.sec];
       for (const b of panel.querySelectorAll('[data-prop]'))
         b.setAttribute('aria-pressed', String(String(value(b.dataset.prop)) === b.dataset.val));
@@ -730,24 +816,114 @@ function board() {
     };
   }
   properties.hidden = readOnly;
+  const canvas = $('canvas');
+  const actions = [];
+  const all = () => { selected = new Set(shapeList().map(s => s.id)); selectTool('select'); };
+  const clear = () => { selected.clear(); selectTool('select'); };
+  const move = (dx, dy, step = 1) => doc.transact(() => {
+    for (const id of selected) {
+      const shape = doc.getMap('shapes').get(id), geometry = shape.get('geometry'), box = geometry.box;
+      shape.set('geometry', transformGeometry(geometry, [box[0] + dx * step, box[1] + dy * step, ...box.slice(2)]));
+    }
+  }, local);
+  const action = (parent, label, run, enabled, shortcut = '', keepOpen = false) => {
+    const b = button(parent, label, event => {
+      undo?.stopCapturing();
+      if (!keepOpen) { objectMenu.open = false; canvas.focus({preventScroll:true}); }
+      run(event);
+      undo?.stopCapturing();
+    });
+    b.setAttribute('aria-label', label);
+    if (shortcut) { const key = document.createElement('kbd'); key.textContent = shortcut; b.append(key); }
+    actions.push([b, enabled]);
+    return b;
+  };
+  const objectBody = objectMenu.lastElementChild;
+  action(objectBody, 'Select all', all, () => shapeList().length > 0, '⌘ / Ctrl A');
+  action(objectBody, 'Clear selection', clear, () => selected.size > 0, 'Esc');
+  if (!readOnly) {
+    action(objectBody, 'Edit text', () => editText([...selected][0]), () => selected.size === 1, 'Enter').classList.add('menu-divider');
+    action(objectBody, 'Duplicate', duplicate, () => selected.size > 0);
+    const arrange = document.createElement('details');
+    arrange.className = 'object-arrange';
+    arrange.innerHTML = '<summary>Arrange & move</summary><div></div>';
+    objectBody.append(arrange);
+    action(arrange.lastElementChild, 'Bring to front', () => reorder(true), () => selected.size > 0);
+    action(arrange.lastElementChild, 'Send to back', () => reorder(false), () => selected.size > 0);
+    const nudges = document.createElement('div'); nudges.className = 'board-nudges';
+    arrange.lastElementChild.append(nudges);
+    for (const [label, dx, dy, glyph] of [['Move left',-1,0,'←'],['Move up',0,-1,'↑'],['Move down',0,1,'↓'],['Move right',1,0,'→']]) {
+      const b = action(nudges, label, event => move(dx, dy, event.shiftKey ? 10 : 1), () => selected.size > 0, '', true);
+      b.textContent = glyph; b.title = `${label} 1px (Shift: 10px)`;
+    }
+    const help = document.createElement('p'); help.textContent = 'Move 1px. Hold Shift for 10px.'; arrange.lastElementChild.append(help);
+    action(objectBody, 'Delete', remove, () => selected.size > 0, 'Del').classList.add('danger');
+  }
+  const hints = {
+    select: 'Shift-click to select multiple objects. Double-click to edit text.',
+    pan: 'Drag to move around the canvas. Scroll to zoom.',
+    text: 'Click to place text. Ctrl / ⌘ Enter to finish.',
+    sticky: 'Click to place a note. Ctrl / ⌘ Enter to finish.',
+    arrow: 'Drag between objects to connect them. Connections follow the objects.',
+    erase: 'Click an object to erase it. Undo restores it.',
+    laser: 'Drag to point. The trail fades without changing the board.',
+  };
+  const refreshStyle = refresh;
+  refresh = () => {
+    refreshStyle();
+    for (const [b, enabled] of actions) b.disabled = !enabled();
+    const label = selected.size ? `${selected.size} object${selected.size === 1 ? '' : 's'} selected` : tools.find(([value]) => value === tool)?.[1];
+    if ($('document-stat').textContent !== label) $('document-stat').textContent = label;
+    $('hint').textContent = readOnly ? 'View only · Select objects or use the hand to explore.' : hints[tool] || 'Drag to draw. Choose Style to change the next object.';
+  };
+  for (const menu of [objectMenu, properties]) {
+    const summary = menu.firstElementChild;
+    summary.addEventListener('click', event => {
+      event.preventDefault();
+      if (summary.getAttribute('aria-disabled') === 'true') return;
+      menu.open = !menu.open;
+      if (!menu.open) return;
+      (menu === objectMenu ? properties : objectMenu).open = false;
+      const body = menu.lastElementChild;
+      body.style.marginLeft = '0px';
+      const rect = body.getBoundingClientRect();
+      body.style.marginLeft = `${Math.max(8 - rect.left, Math.min(0, innerWidth - 8 - rect.right))}px`;
+    });
+    menu.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.stopPropagation(); menu.open = false; summary.focus(); }
+    });
+  }
+  const shortcuts = document.createElement('dialog');
+  shortcuts.id = 'board-shortcuts'; shortcuts.className = 'editor-dialog';
+  shortcuts.setAttribute('aria-labelledby', 'board-shortcuts-title');
+  shortcuts.innerHTML = `<form method="dialog"><h2 id="board-shortcuts-title">Whiteboard shortcuts</h2>
+    <p>Click the canvas before using shortcuts.</p>
+    <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}</dl></section>
+    <section><h3>Working on the canvas</h3><dl>
+    <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
+    <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Pan</dt><dd>Middle-button drag</dd></div><div><dt>Zoom at pointer</dt><dd>Scroll</dd></div>
+    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div>'}
+    </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
+  document.body.append(shortcuts);
+  button($('tools'), 'Shortcuts', () => shortcuts.showModal()).className = 'board-help';
   const zoom = document.createElement('div');
   zoom.className = 'zoom-tools';
+  zoom.setAttribute('role', 'group'); zoom.setAttribute('aria-label', 'Canvas zoom');
   $('tools').append(zoom);
-  button(zoom, 'Fit', () => {
-    view = bounds(shapeList());
+  const zoomBy = factor => {
+    const next = Math.max(100, Math.min(100000, view[2] * factor));
+    factor = next / view[2];
+    view = [view[0] + view[2] * (1 - factor) / 2, view[1] + view[3] * (1 - factor) / 2, next, view[3] * factor];
     draw();
-  });
-  button(zoom, '−', () => {
-    view = [view[0], view[1], Math.min(100000, view[2] * 1.2), Math.min(100000, view[3] * 1.2)];
-    draw();
-  }).setAttribute('aria-label', 'Zoom out');
-  button(zoom, '+', () => {
-    view = [view[0], view[1], Math.max(100, view[2] / 1.2), Math.max(65, view[3] / 1.2)];
-    draw();
-  }).setAttribute('aria-label', 'Zoom in');
-  const canvas = $('canvas');
+  };
+  button(zoom, 'Fit', () => { view = bounds(shapeList()); draw(); }).title = 'Fit all objects';
+  button(zoom, '−', () => zoomBy(1.2)).setAttribute('aria-label', 'Zoom out');
+  const percentage = button(zoom, '100%', () => zoomBy(canvas.getScreenCTM()?.a || 1));
+  percentage.id = 'board-zoom'; percentage.title = 'Reset zoom to 100%'; percentage.setAttribute('aria-label', 'Reset zoom to 100%');
+  button(zoom, '+', () => zoomBy(1 / 1.2)).setAttribute('aria-label', 'Zoom in');
   boardPresence = new BoardPresence(canvas, $('presence'));
-  new ResizeObserver(() => { boardPresence.animate(); layoutShapeText(); }).observe(canvas);
+  boardPreviews = new BoardPreviews(()=>{ draw(); saved(); });
+  new ResizeObserver(() => draw()).observe(canvas);
   const hitAt = (event) =>
     document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
   canvas.onpointerdown = (event) => {
@@ -778,7 +954,7 @@ function board() {
           mode: 'resize',
           id: resize,
           start: point,
-          before: doc.getMap('shapes').get(resize).get('geometry'),
+          before: visibleGeometry(resize),
         };
         return;
       }
@@ -792,7 +968,7 @@ function board() {
         drag = {
           mode: 'move',
           start: point,
-          boxes: [...selected].map((key) => [key, doc.getMap('shapes').get(key).get('geometry')]),
+          boxes: [...selected].map((key) => [key, visibleGeometry(key)]),
         };
       return;
     }
@@ -811,14 +987,18 @@ function board() {
   };
   canvas.onpointermove = (event) => {
     const point = world(event);
+    if (drag && ['move','resize'].includes(drag.mode)) {
+      drag.end = point;
+      outgoingPreview = {shapes:dragGeometry(drag).slice(0,100).map(([id,g])=>({id,box:g.box}))};
+    }
     if (event.pointerType !== 'touch' || drag)
       presence(point, tool === 'laser' ? 'laser' : 'cursor');
     if (!drag) return;
     if (drag.mode === 'pan') {
-      const rect = canvas.getBoundingClientRect();
+      const scale = canvas.getScreenCTM().a;
       view = [
-        drag.view[0] - ((event.clientX - drag.start[0]) * drag.view[2]) / rect.width,
-        drag.view[1] - ((event.clientY - drag.start[1]) * drag.view[3]) / rect.height,
+        drag.view[0] - (event.clientX - drag.start[0]) / scale,
+        drag.view[1] - (event.clientY - drag.start[1]) / scale,
         ...drag.view.slice(2),
       ];
       draw();
@@ -883,12 +1063,17 @@ function board() {
           if (shape) shape.set('geometry', geometry);
         }
       }, local);
+      if (outgoingPreview) outgoingPreview.opId = bufferedId;
+      if (event.pointerType === 'touch') {
+        if (online && !failed) port.postMessage({type:'presence',mode:'cursor',point:null,preview:outgoingPreview});
+      } else presence(world(event));
     }
   };
   canvas.onpointerleave = () => {
     if (!drag) stopPointing();
   };
   canvas.onpointercancel = () => {
+    outgoingPreview = null;
     stopPointing();
     drag = null;
     draw();
@@ -914,8 +1099,7 @@ function board() {
     if (event.ctrlKey || event.metaKey) {
       if (event.key === 'a') {
         event.preventDefault();
-        selected = new Set(shapeList().map((s) => s.id));
-        draw();
+        all();
       }
       return;
     }
@@ -949,9 +1133,7 @@ function board() {
       selectTool(keys[event.key]);
     }
     if (event.key === 'Escape') {
-      selected.clear();
-      selectTool('select');
-      draw();
+      clear();
     }
     if (readOnly) return;
     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -967,19 +1149,7 @@ function board() {
     };
     if (moves[event.key]) {
       event.preventDefault();
-      const [dx, dy] = moves[event.key],
-        step = event.shiftKey ? 10 : 1;
-      doc.transact(() => {
-        for (const id of selected) {
-          const s = doc.getMap('shapes').get(id),
-            g = s.get('geometry'),
-            b = g.box;
-          s.set(
-            'geometry',
-            transformGeometry(g, [b[0] + dx * step, b[1] + dy * step, ...b.slice(2)]),
-          );
-        }
-      }, local);
+      move(...moves[event.key], event.shiftKey ? 10 : 1);
     }
   };
   undo = new Y.UndoManager(doc.getMap('shapes'), {
@@ -1019,12 +1189,13 @@ function documentEditor() {
                   const decorations = [];
                   if ($('show-agent').checked)
                     state.doc.forEach((node, offset) => {
-                      const label = agentTargets.get(node.attrs.id);
-                      if (label)
+                      const target = agentTargets.get(node.attrs.id);
+                      if (target)
                         decorations.push(
                           Decoration.node(offset, offset + node.nodeSize, {
                             class: 'agent-contribution',
-                            title: label,
+                            title: target.label,
+                            'data-agent-start': String(target.started),
                           }),
                         );
                     });
@@ -1043,6 +1214,32 @@ function documentEditor() {
                 },
               },
             }),
+            new Plugin({
+              key: discussionHighlight,
+              state: {
+                init: () => ({ range: null, markers: DecorationSet.empty }),
+                apply(transaction, previous, _previousState, state) {
+                  const update = transaction.getMeta(discussionHighlight);
+                  const range = update === undefined ? previous.range : update;
+                  // Map through edits in the current transaction, before Yjs updates its binding.
+                  // Yjs rebuilds the document for remote edits and undo, so resolve its anchors again.
+                  if (update === undefined && !transaction.getMeta(ySyncPluginKey)?.isChangeOrigin)
+                    return { range, markers: previous.markers.map(transaction.mapping, transaction.doc) };
+                  let markers = DecorationSet.empty;
+                  try {
+                    if (range) {
+                      const [from, to] = selectionPositions(doc, range,
+                        ySyncPluginKey.getState(state)?.binding);
+                      markers = DecorationSet.create(state.doc, [Decoration.inline(from, to, {
+                        class: 'discussion-anchor',
+                      })]);
+                    }
+                  } catch { /* The attached passage was deleted; keep its draft available. */ }
+                  return { range, markers };
+                },
+              },
+              props: { decorations: state => discussionHighlight.getState(state).markers },
+            }),
           ];
         },
       }),
@@ -1057,6 +1254,13 @@ function documentEditor() {
       }),
     ],
   });
+  editor.view.dom.setAttribute('aria-label', 'Document content');
+  const wordCount = () => {
+    const text = editor.getText().trim();
+    $('document-stat').textContent = `${text ? text.split(/\s+/u).length : 0} words`;
+  };
+  editor.on('update', wordCount);
+  wordCount();
   editor.on('create', () => provider.emit('synced', []));
   let presenceTimer;
   awareness.on('update', (_changes, origin) => {
@@ -1073,54 +1277,7 @@ function documentEditor() {
         });
     }, 60);
   });
-  const styles = document.createElement('select');
-  styles.setAttribute('aria-label', 'Paragraph style');
-  for (const [label, value] of [
-    ['Body', 0],
-    ['Title', 1],
-    ['Heading', 2],
-    ['Subheading', 3],
-  ])
-    styles.add(new Option(label, value));
-  styles.onchange = () => {
-    const c = editor.chain().focus();
-    (+styles.value ? c.setHeading({ level: +styles.value }) : c.setParagraph()).run();
-  };
-  $('formatting').append(styles);
-  const actions = [
-    ['Bold', 'B', 'bold', (c) => c.toggleBold()],
-    ['Italic', 'I', 'italic', (c) => c.toggleItalic()],
-    ['Underline', 'U', 'underline', (c) => c.toggleUnderline()],
-    ['Strike', 'S', 'strike', (c) => c.toggleStrike()],
-    ['Bullets', '☷', 'bulletList', (c) => c.toggleBulletList()],
-    ['Numbers', '≡', 'orderedList', (c) => c.toggleOrderedList()],
-    ['Quote', '❞', 'blockquote', (c) => c.toggleBlockquote()],
-    ['Code', '</>', 'codeBlock', (c) => c.toggleCodeBlock()],
-    ['Table', '▦', 'table', (c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true })],
-  ];
-  for (const [label, icon, node, run] of actions) {
-    const b = button($('formatting'), icon, () => run(editor.chain().focus()).run());
-    b.title = label;
-    b.setAttribute('aria-label', label);
-    b.dataset.format = node;
-  }
-  editor.on('transaction', () => {
-    styles.value = editor.isActive('heading') ? editor.getAttributes('heading').level : 0;
-    document
-      .querySelectorAll('[data-format]')
-      .forEach((b) => b.setAttribute('aria-pressed', String(editor.isActive(b.dataset.format))));
-  });
-  const link = button($('formatting'), '↗', () => {
-    $('link-dialog').showModal();
-    $('link-url').focus();
-    $('link-dialog').onclose = () => {
-      const url = $('link-url').value;
-      if ($('link-dialog').returnValue === 'save' && /^(https?:|mailto:)/i.test(url))
-        editor.chain().focus().setLink({ href: url }).run();
-    };
-  });
-  link.title = 'Link';
-  link.setAttribute('aria-label', 'Link');
+  documentControls(editor, undo, () => readOnly, message => status(message,true));
   captureDocumentSelection = () => {
     // Capture before focus leaves the editor. DOM selection changes can precede
     // ProseMirror's selection transaction by one browser event-loop turn.
@@ -1198,9 +1355,13 @@ function revealPassage(range) {
   const [from, to] = selectionPositions(doc, range);
   editor.chain().focus().setTextSelection({from, to}).scrollIntoView().run();
 }
-function setTheme(theme) {
-  if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
-  else delete document.documentElement.dataset.theme;
+function setAppearance(appearance) {
+  const {theme, palette, accents} = appearance || {};
+  const root = document.documentElement;
+  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
+  else delete root.dataset.theme;
+  root.dataset.palette = palette === 'warm' ? 'warm' : 'cool';
+  root.dataset.accents = accents === 'minimal' ? 'minimal' : 'selective';
 }
 async function start(event) {
   if (
@@ -1211,9 +1372,13 @@ async function start(event) {
   )
     return;
   initialized = true;
-  setTheme(event.data.theme);
+  setAppearance(event.data.appearance);
   port = event.ports[0];
   item = event.data.item;
+  document.documentElement.dataset.kind = item.kind;
+  $('discussion-title').textContent = item.kind === 'document' ? 'Document discussion' : 'Whiteboard assistant';
+  $('assistant').setAttribute('aria-label', $('discussion-title').textContent);
+  $('assistant-close').setAttribute('aria-label', 'Close discussion');
   participant = event.data.name || 'You';
   readOnly = event.data.readOnly;
   online = event.data.online !== false;
@@ -1230,8 +1395,8 @@ async function start(event) {
     }
   }
   port.onmessage = ({ data }) => {
-    if (data.type === 'theme') {
-      setTheme(data.theme);
+    if (data.type === 'appearance') {
+      setAppearance(data.appearance);
       return;
     }
     if (data.type === 'reply') {
@@ -1327,10 +1492,7 @@ async function start(event) {
   $('undo').setAttribute('aria-label', 'Undo');
   $('redo').textContent = '↷';
   $('redo').setAttribute('aria-label', 'Redo');
-  $('show-agent').onchange = () => {
-    if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
-    else draw();
-  };
+  $('show-agent').onchange = refreshAgentHighlights;
   $('undo').disabled = readOnly;
   $('redo').disabled = readOnly;
   $('retry').onclick = async () => {
@@ -1393,10 +1555,25 @@ async function start(event) {
     });
   };
   assistant = new AssistantPanel({
-    capture: captureAttachment, request, save: saveBeforeQuestion, changed: draft,
+    capture: captureAttachment, request, save: saveBeforeQuestion,
+    changed: () => {
+      draft();
+      if (editor) {
+        const attachment = !$('assistant').hidden && assistant.drafts[
+          assistant.drafts.view === 'comments' ? 'comment' : 'question'
+        ].attachment;
+        editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false)
+          .setMeta(discussionHighlight, attachment?.range || null));
+      }
+    },
     reveal: revealPassage, state: () => ({ readOnly, online }), restored: recovery?.assistant,
   });
   assistant.renderDraft();
+  if (editor && matchMedia('(min-width:1100px)').matches) {
+    if (assistant.draft.attachment) assistant.toggle(true);
+    else assistant.begin('whole');
+    document.activeElement?.blur();
+  } else if (!editor) requestAnimationFrame(() => { view = bounds(shapeList()); draw(); });
   setComments(item.comments || []);
   $('comment-selection').hidden = readOnly || !editor;
   $('selection-question').hidden = readOnly;

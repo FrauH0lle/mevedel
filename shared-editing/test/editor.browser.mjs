@@ -1,92 +1,126 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { chromium } from 'playwright';
-import { handle } from '../host.mjs';
+import {editorFixture} from './editor-fixture.mjs';
 
 // The real packaged iframe and port, without room setup, for interaction regressions.
 test('editor interaction regressions', async (t) => {
-  const server = createServer(async (req, res) => {
-    const name = req.url.slice(1);
-    if (name === 'menu') {
-      res.end((await readFile(new URL('../../relay/viewer/index.html', import.meta.url), 'utf8'))
-        .replace(/<script[\s\S]*?<\/script>/g, ''));
-    } else if (/^viewer[\w-]*\.css$/.test(name) || ['shared-editor.html', 'shared-editor.css', 'shared-editor.js', 'renderer.js'].includes(name)) {
-      res.setHeader(
-        'Content-Type',
-        name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html',
-      );
-      res.end(await readFile(new URL(`../../relay/viewer/${name}`, import.meta.url)));
-    } else
-      res.end(
-        '<style>body{margin:0}iframe{width:100vw;height:100dvh;border:0}</style><iframe sandbox="allow-scripts allow-forms" src="/shared-editor.html"></iframe>',
-      );
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const browser = await chromium.launch({ headless: true });
-  async function open(kind = 'whiteboard', viewport = { width: 1000, height: 700 }, assistantDraft, theme) {
-    const page = await browser.newPage({ viewport });
-    const created = await handle({
-      action: 'create',
-      id: 'test',
-      opId: 'create',
-      actor: 'Guest: Alice',
-      kind,
-      content:
-        kind === 'whiteboard'
-          ? [{ id: 'ellipse', type: 'ellipse', box: [100, 100, 300, 160] }]
-          : undefined,
+  const {open, browser, url} = await editorFixture(t);
+    await t.test('remote movement is visible before saving without changing content and expires safely', async () => {
+      const {page,frame}=await open();
+      await page.clock.install();
+      const shape=frame.locator('[data-shape="ellipse"]');
+      const before=await shape.boundingBox();
+      const show=()=>page.evaluate(()=>window.port.postMessage({type:'presence',peer:42,mode:'cursor',name:'Bob',point:[500,300],
+        preview:{opId:'moving',shapes:[{id:'ellipse',box:[140,130,300,160]}]}}));
+      await show();
+      await frame.locator('[data-live-preview="true"]').waitFor();
+      assert.ok((await shape.boundingBox()).x>before.x+50);
+      assert.equal(await frame.locator('#saved').innerText(),'Live movement · not saved yet');
+      assert.deepEqual((await page.evaluate(()=>window.apply({action:'read'}))).content[0].box,[100,100,300,160]);
+      const exported=await page.evaluate(()=>window.apply({action:'export',format:'native'}));
+      assert.deepEqual(JSON.parse(exported.text).content[0].box,[100,100,300,160]);
+      // Starting another gesture uses the position the participant can see.
+      const displayed=await shape.boundingBox();
+      await page.mouse.move(displayed.x+displayed.width/2,displayed.y+displayed.height/2);
+      await page.mouse.down();
+      await page.mouse.move(displayed.x+displayed.width/2+20,displayed.y+displayed.height/2);
+      assert.ok(Math.abs((await shape.boundingBox()).x-displayed.x-20)<2);
+      await frame.locator('#canvas').dispatchEvent('pointercancel');
+      await page.mouse.up();
+      await page.clock.runFor(5100);
+      assert.ok(Math.abs((await shape.boundingBox()).x-before.x)<1);
+      await show();
+      await frame.locator('[data-live-preview="true"]').waitFor();
+      await page.evaluate(()=>window.port.postMessage({type:'presence',peer:42,mode:'clear'}));
+      await frame.locator('[data-live-preview="true"]').waitFor({state:'hidden'});
+      await show();
+      await frame.locator('[data-live-preview="true"]').waitFor();
+      await page.evaluate(()=>window.port.postMessage({type:'changed',revision:2,
+        transactions:[{id:'moving',revision:2,actor:'Guest: Bob',changes:[{id:'ellipse',after:true}]}]}));
+      await frame.locator('[data-live-preview="true"]').waitFor({state:'hidden'});
+      await show(); // A late preview must not revive an acknowledged gesture.
+      await page.clock.runFor(100);
+      assert.equal(await frame.locator('[data-live-preview="true"]').count(),0);
+      await page.close();
     });
-    let state = created.state;
-    await page.exposeFunction('apply', async (args) => {
-      const reply = await handle({ ...args, action:args.action === 'ask' ? 'read' : args.action, question:args.action === 'ask', state, actor: 'Guest: Alice' });
-      state = reply.state || state;
-      return { ...reply.result, transactions: state.transactions };
+    await t.test('failed saves withdraw outgoing movement previews', async () => {
+      const {page,frame}=await open();
+      await page.evaluate(()=>{
+        const apply=window.apply;
+        window.apply=args=>args.action==='update' ? Promise.reject(new Error('Save refused')) : apply(args);
+      });
+      const shape=frame.locator('[data-shape="ellipse"]');
+      const box=await shape.boundingBox();
+      await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+      await page.mouse.down();
+      await page.mouse.move(box.x+box.width/2+50,box.y+box.height/2);
+      await page.waitForFunction(()=>window.messages.some(m=>m.type==='presence' && m.preview?.shapes.length));
+      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.type==='request'&&m.args.action==='update').length),0);
+      await page.mouse.up();
+      await frame.locator('#saved').getByText('Save refused',{exact:true}).waitFor();
+      await page.waitForFunction(()=>!window.messages.filter(m=>m.type==='presence').at(-1).preview);
+      await page.close();
     });
-    await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.evaluate(
-      ({item, assistantDraft, theme}) => {
-        const channel = new MessageChannel();
-        window.port = channel.port1;
-        window.messages = [];
-        channel.port1.onmessage = async ({ data }) => {
-          window.messages.push(data);
-          if (data.type === 'request') {
-            try {
-              if (window.rejectQuestion && data.args.action === 'ask') throw new Error('Host refused this submission');
-              const result = await window.apply(data.args);
-              channel.port1.postMessage({ type: 'changed', ...result });
-              channel.port1.postMessage({ type: 'reply', reqId: data.reqId, result });
-            } catch (error) {
-              channel.port1.postMessage({ type: 'reply', reqId: data.reqId, error:error.message });
-            }
-          }
+    for (const loseAck of [false,true]) await t.test(`typing during a slow save merges safely${loseAck ? ' after a lost acknowledgement' : ''}`, async () => {
+      const {page,frame}=await open();
+      await page.evaluate(loseAck=>{
+        const apply=window.apply;
+        window.updateCalls=0;
+        window.apply=async args=>{
+          const first=args.action==='update' && ++window.updateCalls===1;
+          if(first)
+            await new Promise(resolve=>{window.releaseSave=resolve;});
+          const result=await apply(args);
+          if(first && loseAck) throw new Error('No save acknowledgement');
+          return result;
         };
-        document
-          .querySelector('iframe')
-          .contentWindow.postMessage(
-            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly: false, name: 'Alice', theme },
-            '*',
-            [channel.port2],
-          );
-      },
-      {item:{ ...state, crdt: state.crdt }, assistantDraft, theme},
-    );
-    const frame = page.frameLocator('iframe');
-    await frame.locator(kind === 'whiteboard' ? '#scene [data-shape]' : '.tiptap').waitFor();
-    return { page, frame };
-  }
-  try {
+      },loseAck);
+      await frame.locator('[data-shape="ellipse"]').dblclick();
+      await frame.locator('#shape-text').fill('t');
+      await page.waitForFunction(()=>window.updateCalls===1);
+      for(const text of ['te','test','test1234','test1234\n3333']) {
+        await frame.locator('#shape-text').fill(text);
+        await page.waitForTimeout(350);
+      }
+      const drafts=await page.evaluate(()=>window.messages.filter(m=>m.type==='draft').at(-1).draft);
+      assert.equal(drafts.pending.length,2,'one in-flight save and one merged recoverable follow-up');
+      await page.evaluate(()=>window.releaseSave());
+      if(loseAck) {
+        await frame.locator('#saved').getByText('No save acknowledgement',{exact:true}).waitFor();
+        await frame.locator('#retry').evaluate(button=>button.click());
+      }
+      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      assert.equal(await page.evaluate(()=>window.updateCalls),loseAck ? 3 : 2,'no stale keystroke backlog');
+      const stored=await page.evaluate(()=>window.apply({action:'read'}));
+      assert.equal(stored.content.find(s=>s.id==='ellipse').text,'test1234\n3333');
+      assert.equal(stored.revision,3,'retry does not commit the in-flight operation twice');
+      await page.close();
+    });
+    await t.test('save failure remains visible above a recovery-storage warning', async () => {
+      const {page,frame}=await open({kind:'document'});
+      await page.evaluate(()=>{
+        const apply=window.apply;
+        window.apply=args=>args.action==='update'
+          ? Promise.reject(new Error('Shared content is too large')) : apply(args);
+      });
+      await frame.locator('.tiptap').click();
+      await page.keyboard.type('Keep this pending edit');
+      await frame.locator('#saved').getByText('Shared content is too large',{exact:true}).waitFor();
+      await page.evaluate(()=>window.port.postMessage({type:'storage-error',message:'Recovery storage unavailable'}));
+      await page.waitForTimeout(350);
+      assert.equal(await frame.locator('#saved').innerText(),'Shared content is too large');
+      assert.match(await frame.locator('.tiptap').innerText(),/Keep this pending edit/);
+      await page.close();
+    });
     await t.test('editor theme follows its trusted port without losing document or question drafts', async () => {
-      const {page, frame} = await open('document', {width:1280,height:800}, undefined, 'dark');
+      const {page, frame} = await open({kind:'document', viewport:{width:1280,height:800}, appearance:{theme:'dark'}});
       assert.equal(await frame.locator('html').getAttribute('data-theme'), 'dark');
       await frame.locator('.tiptap').click();
       await page.keyboard.type('Keep this document.');
-      await frame.locator('#ask-toggle').click();
+      if (!await frame.locator('#assistant').isVisible()) await frame.locator('#ask-toggle').click();
       await frame.locator('#question').fill('> Keep this question\nsecond line');
       for (const theme of ['light', 'dark', 'system', 'invalid']) {
-        await page.evaluate(theme => window.port.postMessage({type:'theme',theme}), theme);
+        await page.evaluate(theme => window.port.postMessage({type:'appearance',appearance:{theme,palette:'cool',accents:'selective'}}), theme);
         await frame.locator('html').evaluate((root, expected) => new Promise((resolve,reject) => {
           const deadline = Date.now()+1500;
           const check = () => root.getAttribute('data-theme') === expected ? resolve()
@@ -109,8 +143,8 @@ test('editor interaction regressions', async (t) => {
     });
     for (const kind of ['whiteboard', 'document']) {
       await t.test(`${kind} shows assistant activity and clears it on idle or disconnect`, async () => {
-        const {page, frame} = await open(kind);
-        await frame.locator('#ask-toggle').click();
+        const {page, frame} = await open({kind});
+        if (!await frame.locator('#assistant').isVisible()) await frame.locator('#ask-toggle').click();
         const state = frame.locator('#conversation-state');
         await frame.locator('#question').fill('> Preserved question\nsecond line');
         await page.evaluate(()=>window.port.postMessage({type:'conversation',connected:true,
@@ -129,7 +163,7 @@ test('editor interaction regressions', async (t) => {
         await page.close();
       });
       await t.test(`${kind} inserts images from picker, drop, and paste with undo`, async () => {
-        const {page, frame} = await open(kind);
+        const {page, frame} = await open({kind});
         const data = await page.evaluate(()=>{
           const canvas=document.createElement('canvas');canvas.width=80;canvas.height=40;
           canvas.getContext('2d').fillRect(0,0,80,40);return canvas.toDataURL().split(',')[1];
@@ -169,7 +203,8 @@ test('editor interaction regressions', async (t) => {
         if (kind === 'document') {
           // Ordinary HTML copy/paste must retain numeric image dimensions.
           await surface.click();
-          await page.keyboard.press('Control+End');
+          await surface.evaluate(element=>element.editor.commands.focus('end'));
+          await page.frames()[1].waitForFunction(()=>{const e=document.querySelector('.tiptap').editor;return e.state.selection.empty&&e.state.selection.from===e.state.doc.content.size-1;});
           await surface.evaluate((element,data)=>{
             const transfer=new DataTransfer();
             transfer.setData('text/html',`<img src="data:image/png;base64,${data}" width="80" height="40" alt="Copied">`);
@@ -217,7 +252,7 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('Shared controls retain readable proportions across item counts, viewport and zoom', async () => {
       const page = await browser.newPage();
-      await page.goto(`http://127.0.0.1:${server.address().port}/menu`);
+      await page.goto(`${url}/menu`);
       await page.evaluate(() => {
         for (const id of ['session-box','editing-box']) {
           const el = document.getElementById(id); el.hidden = false; el.open = true;
@@ -240,7 +275,7 @@ test('editor interaction regressions', async (t) => {
         }));
         for (const b of boxes) {
           assert.ok(b.x >= 0 && b.right <= width, JSON.stringify({width,zoom,count,b}));
-          assert.ok(b.height >= 40 * zoom && b.height <= 65 * zoom, JSON.stringify(b));
+          assert.ok(b.height >= (width <= 640 ? 40 : 32) * zoom && b.height <= 65 * zoom, JSON.stringify(b));
           assert.ok(b.width > b.height, JSON.stringify(b));
         }
         assert.equal(await page.locator('#composer-input').inputValue(), '> Draft\nsecond line');
@@ -250,7 +285,7 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('room session navigation sits beside wide conversations and above narrow composers', async () => {
       const page = await browser.newPage();
-      await page.goto(`http://127.0.0.1:${server.address().port}/menu`);
+      await page.goto(`${url}/menu`);
       await page.evaluate(() => {
         const menu = document.getElementById('session-box');
         menu.hidden = false; menu.open = true;
@@ -300,10 +335,10 @@ test('editor interaction regressions', async (t) => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
       await frame.locator('#selection-question').click();
-      const selection = await frame.locator('#selection-question').boundingBox();
+      const selection = await frame.locator('#selected-question').boundingBox();
       const whole = await frame.locator('#whole-question').boundingBox();
       assert.ok(Math.abs(selection.y - whole.y) < 45);
-      assert.equal(await frame.locator('#context-actions button:visible').count(), 2);
+      assert.equal(await frame.locator('#context-scope button:visible').count(), 2);
       assert.ok(Math.abs(selection.x - whole.x) < 200);
       assert.match(await frame.locator('#context-title').innerText(), /Selected content/);
       if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/context-buttons.png'});
@@ -313,6 +348,7 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('drawing a shape returns to selection for immediate text editing', async () => {
       const {page, frame} = await open();
+      await frame.locator('#board-zoom').click();
       await frame.locator('[data-tool="rect"]').click();
       const canvas = await frame.locator('#canvas').boundingBox();
       await page.mouse.move(canvas.x + 620, canvas.y + 220);
@@ -352,13 +388,14 @@ test('editor interaction regressions', async (t) => {
         ]});
         window.port.postMessage({type:'changed',...reply});
       });
-      const arrow = frame.locator('[data-shape="arrow"] path[marker-end]');
+      const arrow = frame.locator('[data-shape="arrow"] path[stroke="#242424"]');
       await arrow.waitFor({state:'attached'});
       const endpoints = () => arrow.evaluate(path => {
         const a = path.getPointAtLength(0), b = path.getPointAtLength(path.getTotalLength());
         return [[a.x,a.y],[b.x,b.y]];
       });
       assert.deepEqual(await endpoints(), [[400,180],[550,180]]);
+      await frame.getByRole('button',{name:'Fit',exact:true}).click();
       await frame.locator('[data-shape="target"]').click({position:{x:100,y:80}});
       await page.keyboard.press('Shift+ArrowRight');
       assert.deepEqual(await endpoints(), [[400,180],[560,180]]);
@@ -366,7 +403,7 @@ test('editor interaction regressions', async (t) => {
         await new Promise(resolve => setTimeout(resolve,400));
         return (await window.apply({action:'export',format:'svg'})).text;
       });
-      assert.match(exported, /refX="10"/);
+      assert.match(exported, /M560 180L546 187L546 173Z/);
       assert.match(exported, /560 180/);
       if (process.env.MEVEDEL_CONNECTOR_SCREENSHOTS)
         await page.screenshot({path:'.scratch/connector-borders/editor.png'});
@@ -390,7 +427,7 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('style panel changes selected shapes and subsequent drawings', async () => {
       const { page, frame } = await open();
-      assert.equal(await frame.locator('#properties').isHidden(), true, 'nothing to style');
+      assert.equal(await frame.locator('#properties > summary').getAttribute('aria-disabled'), 'true', 'nothing to style');
       await frame.locator('#scene [data-shape="ellipse"] path').click({ force: true });
       await frame.locator('#properties > summary').click();
       const shown = async () =>
@@ -402,8 +439,6 @@ test('editor interaction regressions', async (t) => {
         'Stroke style',
         'Sloppiness',
         'Opacity',
-        'Layers',
-        'Actions',
       ]);
       await frame.getByRole('button', { name: 'Background: #a5d8ff', exact: true }).click();
       assert.equal(
@@ -413,8 +448,12 @@ test('editor interaction regressions', async (t) => {
       assert.ok((await shown()).includes('Fill'), 'a filled shape offers fill patterns');
       await frame.getByRole('button', { name: 'Cartoonist', exact: true }).click();
       assert.equal(await frame.locator('#scene [data-shape="ellipse"] path').count(), 3);
+      await frame.locator('#properties > summary').click();
+      await frame.locator('#board-zoom').click();
       await frame.getByRole('button', { name: 'Rectangle', exact: true }).click();
+      await frame.locator('#properties > summary').click();
       assert.equal(await frame.locator('.sec[data-sec="edges"]').isHidden(), false);
+      await frame.locator('#properties > summary').click();
       const box = await frame.locator('#canvas').boundingBox();
       await page.mouse.move(box.x + 650, box.y + 180);
       await page.mouse.down();
@@ -423,13 +462,17 @@ test('editor interaction regressions', async (t) => {
       const rect = frame.locator('#scene [data-shape]:not([data-shape="ellipse"])');
       assert.equal(await rect.locator('clipPath').count(), 1, 'the new rectangle is hatched blue');
       assert.equal(await rect.locator('g > path').getAttribute('stroke'), '#a5d8ff');
+      await frame.locator('#object-menu > summary').click();
+      await frame.locator('.object-arrange > summary').click();
       await frame.getByRole('button', { name: 'Send to back', exact: true }).click();
       assert.equal(
         await frame.locator('#scene [data-shape]').first().getAttribute('data-shape'),
         await rect.getAttribute('data-shape'),
       );
+      await frame.locator('#object-menu > summary').click();
       await frame.getByRole('button', { name: 'Duplicate', exact: true }).click();
       assert.equal(await frame.locator('#scene [data-shape]').count(), 3);
+      await frame.locator('#object-menu > summary').click();
       await frame.getByRole('button', { name: 'Delete', exact: true }).click();
       assert.equal(await frame.locator('#scene [data-shape]').count(), 2);
       await page.close();
@@ -516,10 +559,64 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#scene [data-shape]').count(), 1);
       await page.close();
     });
+    for (const kind of ['whiteboard', 'document']) {
+      await t.test(`${kind} assistant highlights expire without content changes or replay`, async () => {
+        const {page, frame} = await open({kind, actor:'Agent: /root'});
+        await page.clock.install();
+        await page.clock.pauseAt(new Date());
+        const highlighted = frame.locator(kind === 'whiteboard' ? '#scene [data-agent="true"]' : '.agent-contribution');
+        assert.equal(await highlighted.count(),0,'opening an item does not highlight old edits');
+        await page.evaluate(async kind => {
+          const content = (await window.apply({action:'read'})).content;
+          const before = kind === 'whiteboard' ? content[0] : content.content[0];
+          const after = kind === 'whiteboard' ? {...before,text:'Assistant text'} :
+            {...before,content:[{type:'text',text:'Assistant text'}]};
+          const result = await window.apply({action:'patch',opId:'timed-edit',changes:[{
+            id:kind === 'whiteboard' ? before.id : before.attrs.id,before,after,
+          }]});
+          result.transactions[0].actor = 'Agent: /root';
+          window.agentChange = {type:'changed',...result};
+          window.port.postMessage(window.agentChange);
+        },kind);
+        await highlighted.waitFor();
+        if (process.env.MEVEDEL_EXPORT_SCREENSHOTS)
+          await page.screenshot({path:`.scratch/editor-polish/${kind}-highlight.png`});
+        const before = await page.evaluate(async () => (await window.apply({action:'read'})).content);
+        await page.clock.runFor(5000);
+        // Repeated publication must not extend the highlight's lifetime.
+        await page.evaluate(() => window.port.postMessage(window.agentChange));
+        await page.clock.runFor(3500);
+        assert.equal(await highlighted.count(),0,'assistant glow expires without a human edit');
+        await page.evaluate(() => window.port.postMessage(window.agentChange));
+        await page.clock.runFor(100);
+        assert.equal(await highlighted.count(),0,'old contribution does not light up again');
+        assert.deepEqual(await page.evaluate(async () => (await window.apply({action:'read'})).content),before);
+        if (process.env.MEVEDEL_EXPORT_SCREENSHOTS)
+          await page.screenshot({path:`.scratch/editor-polish/${kind}-expired.png`});
+        assert.match(await frame.locator('#contributions').textContent(),/Agent: \/root/,'attribution remains available');
+        for (const actor of ['Agent: /root', 'Guest: Bob']) {
+          await page.evaluate(async ({kind,actor}) => {
+            const content = (await window.apply({action:'read'})).content;
+            const before = kind === 'whiteboard' ? content[0] : content.content[0];
+            const after = kind === 'whiteboard' ? {...before,text:actor} :
+              {...before,content:[{type:'text',text:actor}]};
+            const result = await window.apply({action:'patch',opId:actor.startsWith('Agent:') ? 'renew-agent' : 'renew-human',changes:[{
+              id:kind === 'whiteboard' ? before.id : before.attrs.id,before,after,
+            }]});
+            result.transactions[0].actor = actor;
+            window.port.postMessage({type:'changed',...result});
+          },{kind,actor});
+          if (actor.startsWith('Agent:')) await highlighted.waitFor();
+          else await highlighted.waitFor({state:'detached'});
+        }
+        await frame.locator('#menu > summary').click();
+        await page.close();
+      });
+    }
     await t.test(
       'contributions group typing bursts and highlight assistant targets without changing exports',
       async () => {
-        const { page, frame } = await open('document');
+        const { page, frame } = await open({kind:'document'});
         await page.evaluate(async () => {
           const before = (await window.apply({ action: 'read' })).content.content[0];
           const result = await window.apply({
@@ -565,7 +662,7 @@ test('editor interaction regressions', async (t) => {
       },
     );
     await t.test('separate drafts, human replies, direct thread send and inline AI answers', async () => {
-      const {page, frame} = await open('document');
+      const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
       await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
@@ -638,8 +735,8 @@ test('editor interaction regressions', async (t) => {
       await page.close();
     });
     await t.test('unsupported discussion recovery is reported without preventing document editing', async () => {
-      const {page, frame} = await open('document', {width:1000,height:700}, {unrecognized:true});
-      await frame.locator('#ask-toggle').click();
+      const {page, frame} = await open({kind:'document', assistantDraft:{unrecognized:true}});
+      if (!await frame.locator('#assistant').isVisible()) await frame.locator('#ask-toggle').click();
       await frame.locator('#assistant-notice').getByText(/unsupported format/).waitFor();
       await frame.locator('#assistant-close').click();
       await frame.locator('.tiptap').click();
@@ -648,7 +745,7 @@ test('editor interaction regressions', async (t) => {
       await page.close();
     });
     await t.test('thread retries require explicit refresh after edits and remain available after queue retraction', async () => {
-      const {page, frame} = await open('document');
+      const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
       await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
@@ -680,7 +777,7 @@ test('editor interaction regressions', async (t) => {
       await page.close();
     });
     await t.test('document selection actions and comment drafts fit a phone with its keyboard', async () => {
-      const {page, frame} = await open('document',{width:375,height:500});
+      const {page, frame} = await open({kind:'document',viewport:{width:375,height:500}});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A data model.');
       await frame.locator('.tiptap p').evaluate(p=>document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,12));
@@ -727,11 +824,11 @@ test('editor interaction regressions', async (t) => {
       await page.close();
     });
     await t.test('phone assistant overlays the editor, keeps draft and preserves its scroll position', async () => {
-      const { page, frame } = await open('document', {width:375,height:500});
+      const { page, frame } = await open({kind:'document',viewport:{width:375,height:500}});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
       const before = await frame.locator('#document').boundingBox();
-      await frame.locator('#ask-toggle').click();
+      if (!await frame.locator('#assistant').isVisible()) await frame.locator('#ask-toggle').click();
       await frame.locator('#question').fill('Keep this question');
       const panel = await frame.locator('#assistant').boundingBox();
       const during = await frame.locator('#document').boundingBox();
@@ -748,15 +845,12 @@ test('editor interaction regressions', async (t) => {
       assert.ok(await frame.locator('#question-send').evaluate(e => e.getBoundingClientRect().bottom <= innerHeight), JSON.stringify(await frame.locator('#assistant').evaluate(e => ({height:innerHeight,active:document.activeElement.id,nodes:[...e.querySelectorAll('[id]')].map(n=>[n.id,n.getBoundingClientRect().y,n.getBoundingClientRect().height])}))));
       await page.keyboard.press('Escape');
       assert.equal(await frame.locator('#assistant').isHidden(), true);
-      await frame.locator('#ask-toggle').click();
+      if (!await frame.locator('#assistant').isVisible()) await frame.locator('#ask-toggle').click();
       assert.equal(await frame.locator('#question').inputValue(), 'Keep this question');
       await page.close();
     });
     await t.test('phone with keyboard leaves room for document and avoids input zoom', async () => {
-      const { page, frame } = await open('document', {
-        width: 375,
-        height: 340,
-      });
+      const { page, frame } = await open({kind:'document',viewport:{width:375,height:340}});
       await frame.locator('.tiptap').click();
       const bounds = await frame.locator('#document').boundingBox();
       assert.ok(bounds.height >= 150, `Only ${bounds.height}px left for typing`);
@@ -772,8 +866,4 @@ test('editor interaction regressions', async (t) => {
         });
       await page.close();
     });
-  } finally {
-    await browser.close();
-    await new Promise((r) => server.close(r));
-  }
 });

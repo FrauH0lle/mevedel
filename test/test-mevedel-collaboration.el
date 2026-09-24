@@ -33,6 +33,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-disclosure)
 (require 'mevedel-view-input-files)
 (require 'mevedel-view-render)
 (require 'mevedel-workspace)

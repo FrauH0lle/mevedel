@@ -25,7 +25,8 @@
   const skillChips = document.getElementById('skill-chips');
   const commandsBox = document.getElementById('commands-box');
   const commandsSummary = document.getElementById('commands-summary');
-  const themeButton = document.getElementById('theme-button');
+  const skillSearch = document.getElementById('skill-search');
+  const skillsButton = document.getElementById('skills-button');
   const modeline = document.getElementById('modeline');
   const sessionBox = document.getElementById('session-box');
   const sessionSummary = document.getElementById('session-summary');
@@ -94,6 +95,7 @@
   function setConnection(text, className) {
     connection.textContent = text;
     connection.className = `conn ${className || ''}`;
+    history.connection(className === 'connected');
     if (className !== 'connected') {
       state.connected = false;
       state.busy = null;
@@ -138,6 +140,7 @@
     sessionSummary.textContent = ['Session', ...bits].join(' · ');
     sessionSummary.dataset.warning =
       Object.values(summaryWarnings).some(Boolean) ? 'true' : 'false';
+    document.getElementById('activity').hidden = !summaryParts.agents && !summaryParts.tasks;
   }
   function plural(count, noun) {
     return `${count} ${noun}${count === 1 ? '' : 's'}`;
@@ -146,12 +149,16 @@
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
   });
+  const history = window.mevedelHistoryView.create({
+    send, el, onArtifacts:refreshFilter,
+    renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(record, directiveLabel, artifacts.open),
+  });
   const agents = window.mevedelAgentView.create({
     send, el, directiveLabel, openArtifact: artifacts.open,
     summarize: summarizeSession,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
-  const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession});
+  const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession, onVisibility: window.mevedelAppearance.editorVisible});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession});
@@ -183,6 +190,8 @@
   // One home for session state, the way the Emacs mode line reports it,
   // instead of the same facts scattered across three corners.
   function renderModeline() {
+    stopButton.hidden = !state.connected || !state.busy;
+    document.getElementById('assistant-working').hidden = !state.connected || !state.busy;
     if (!modeline) return;
     modeline.replaceChildren();
     modeline.append(connection);
@@ -190,7 +199,6 @@
       if (text) modeline.append(el('span', className || 'ml', text));
     };
     add(state.model);
-    if (state.connected && state.busy) add('Assistant working…', 'ml assistant-working');
     if (state.owner && state.mode) modeline.append(sessions.modePicker());
     else add(state.mode);
     // Plan is a mode a guest can enter from a chip, so it has to be
@@ -205,50 +213,6 @@
     }
     tail.textContent = bits.join(' · ');
     modeline.append(tail);
-  }
-
-  /* -- Colour theme -------------------------------------------------- */
-  // Three states, matching the stylesheet: no stamp follows the system,
-  // an explicit stamp wins over it in either direction.
-  const THEMES = ['system', 'light', 'dark'];
-  const THEME_GLYPH = {system: '◐', light: '☀', dark: '☾'};
-  const THEME_LABEL = {
-    system: 'Colour theme: follow system',
-    light: 'Colour theme: light',
-    dark: 'Colour theme: dark',
-  };
-
-  function storedTheme() {
-    let value = null;
-    try { value = localStorage.getItem('mevedel-theme'); }
-    catch (_error) { /* storage unavailable */ }
-    return THEMES.includes(value) ? value : 'system';
-  }
-
-  function applyTheme(theme) {
-    const root = document.documentElement;
-    if (theme === 'system') root.removeAttribute('data-theme');
-    else root.setAttribute('data-theme', theme);
-    // Artifacts render in an opaque-origin frame: the stamp is forwarded.
-    artifacts.setTheme(theme === 'system' ? null : theme);
-    editing.setTheme(theme);
-    if (themeButton) {
-      themeButton.textContent = THEME_GLYPH[theme];
-      themeButton.setAttribute('aria-label', THEME_LABEL[theme]);
-      themeButton.setAttribute('title', `${THEME_LABEL[theme]} — click to change`);
-      themeButton.className = `bell${theme === 'system' ? '' : ' on'}`;
-    }
-  }
-
-  function markContinuations() {
-    let previousRole = null;
-    for (const turn of [...transcript.children]) {
-      if (turn.hidden) continue;
-      const role = turn.dataset.role || 'ai';
-      const cont = role === 'ai' && previousRole === 'ai';
-      turn.className = `turn ${role}${cont ? ' cont' : ''}`;
-      previousRole = role;
-    }
   }
 
   function updateRecordElement(record, previous) {
@@ -280,7 +244,7 @@
     });
     refreshFilter();
     editing.refreshConversation();
-    markContinuations();
+    window.mevedelTranscriptRenderer.markContinuations(transcript);
     if (follow) scrollToLive();
     updateLiveAffordance();
   }
@@ -293,7 +257,7 @@
     if (!recordVisible(record)) state.unseen.add(record.directive || 'main');
     updateRecordElement(record);
     refreshFilter();
-    markContinuations();
+    window.mevedelTranscriptRenderer.markContinuations(transcript);
     if (follow) scrollToLive();
     updateLiveAffordance();
   }
@@ -309,7 +273,7 @@
     });
     refreshFilter();
     if (itemHistoryChanged) editing.refreshConversation();
-    markContinuations();
+    window.mevedelTranscriptRenderer.markContinuations(transcript);
   }
 
   /* -- Directive filter ---------------------------------------------- */
@@ -387,7 +351,7 @@
       const turn = state.elements.get(record.id);
       if (turn) turn.hidden = !recordVisible(record);
     });
-    artifacts.render(state.records);
+    artifacts.render([...history.artifacts(), ...state.records.values()]);
     editing.conversation();
     // The composer follows the filter, so say where a prompt will land.
     if (composerInput && !state.armed.length) {
@@ -545,13 +509,13 @@
     const card = el('section', 'request-card');
     card.frameKey = key;
     card.dataset.reqId = String(frame.reqId);
-    card.append(el('span', 'rhead', 'Pending interaction'));
+    card.append(el('span', 'rhead', 'Needs your decision'));
     if (frame.bodyKind === 'diff') {
       const body = window.mevedelTranscriptRenderer.renderDiff(frame.body || '');
       card.bodyEl = body;
       card.append(body);
     } else if (frame.body) {
-      const body = el('pre', 'request-body',
+      const body = el('div', 'request-body',
                       typeof frame.body === 'string' ? frame.body : '');
       card.bodyEl = body;
       card.append(body);
@@ -591,7 +555,9 @@
         }
       });
       feedbackRow.append(feedback, sendFeedback);
-      card.append(feedbackRow);
+      const disclosure = el('details', 'decision-feedback');
+      disclosure.append(el('summary', '', 'Suggest a change'), feedbackRow);
+      card.append(disclosure);
     }
     requests.append(card);
     // A changed body still keeps the reader where they were.
@@ -772,10 +738,48 @@
 
   /* -- Composer ------------------------------------------------------ */
 
-  function guestName() {
-    const name = (composerName && composerName.value.trim())
-      || localStorage.getItem('mevedel-guest-name')
-      || 'browser';
+  function generatedGuestName() {
+    const families = [
+      [['Brave', 'Bright', 'Breezy'], ['Badger', 'Bear', 'Bison']],
+      [['Calm', 'Clever', 'Curious'], ['Capybara', 'Crane', 'Cat']],
+      [['Daring', 'Dapper', 'Dreamy'], ['Dolphin', 'Duck', 'Deer']],
+      [['Eager', 'Earnest', 'Elegant'], ['Eagle', 'Egret', 'Elephant']],
+      [['Fair', 'Friendly', 'Fearless'], ['Fox', 'Finch', 'Falcon']],
+      [['Gentle', 'Graceful', 'Gallant'], ['Gecko', 'Gazelle', 'Gibbon']],
+      [['Happy', 'Helpful', 'Hopeful'], ['Hedgehog', 'Heron', 'Hare']],
+      [['Jolly', 'Jaunty', 'Joyful'], ['Jaguar', 'Jackal', 'Jay']],
+      [['Kind', 'Keen', 'Kingly'], ['Koala', 'Kestrel', 'Kiwi']],
+      [['Lively', 'Lucky', 'Loyal'], ['Lynx', 'Lemur', 'Lark']],
+      [['Merry', 'Mellow', 'Mindful'], ['Mongoose', 'Meerkat', 'Marmot']],
+      [['Patient', 'Playful', 'Plucky'], ['Panda', 'Puffin', 'Penguin']],
+      [['Quiet', 'Quick', 'Quirky'], ['Quokka', 'Quail', 'Quetzal']],
+      [['Ready', 'Radiant', 'Resourceful'], ['Robin', 'Raven', 'Raccoon']],
+      [['Sunny', 'Swift', 'Spirited'], ['Sparrow', 'Seal', 'Squirrel']],
+      [['Warm', 'Wise', 'Witty'], ['Wombat', 'Wolf', 'Wren']],
+    ];
+    const picks = crypto.getRandomValues(new Uint32Array(3));
+    const [adjectives, animals] = families[picks[0] % families.length];
+    return `${adjectives[picks[1] % adjectives.length]} ${animals[picks[2] % animals.length]}`;
+  }
+
+  let defaultGuestName;
+
+  function guestName(commit = false) {
+    if (!defaultGuestName) {
+      let stored;
+      try {
+        stored = localStorage.getItem('mevedel-guest-name');
+        defaultGuestName = localStorage.getItem('mevedel-guest-default-name');
+      } catch (_error) { /* Keep names for this page when storage is unavailable. */ }
+      defaultGuestName ||= generatedGuestName();
+      state.guestName = stored || defaultGuestName;
+      try { localStorage.setItem('mevedel-guest-default-name', defaultGuestName); }
+      catch (_error) { /* The generated fallback remains usable without storage. */ }
+    }
+    const name = commit ? (composerName.value.trim() || defaultGuestName) : state.guestName;
+    if (composerName && (commit || !composerName.value)) composerName.value = name;
+    try { localStorage.setItem('mevedel-guest-name', name); }
+    catch (_error) { /* The display name remains usable without storage. */ }
     if (state.guestName !== name) {
       state.guestName = name;
       renderModeline();
@@ -834,11 +838,13 @@
     if (commandsSummary) {
       commandsSummary.textContent = plural(state.roster.length, 'command');
     }
+    skillsButton.hidden = !state.roster.length;
     state.roster.forEach(entry => {
       const armed = state.armed.includes(entry);
       const chip = el('button', `skill-chip${armed ? ' armed' : ''}`,
                       `${sigilFor(entry.kind)}${entry.name}`);
       chip.type = 'button';
+      chip.hidden = !`${entry.name} ${entry.hint || ''}`.toLowerCase().includes(skillSearch.value.toLowerCase().trim());
       chip.setAttribute('aria-pressed', armed ? 'true' : 'false');
       chip.setAttribute(
         'title',
@@ -947,7 +953,11 @@
     refreshFilter();
     renderModeline();
     setConnection(connectionText, 'ended');
-    showNotice(noticeText);
+    showNotice('');
+    document.getElementById('terminal-title').textContent = connectionText;
+    document.getElementById('terminal-message').textContent = noticeText;
+    document.getElementById('terminal-state').hidden = false;
+    window.scrollTo({top: 0, behavior: 'instant'});
   }
 
   function handleFrame(frame) {
@@ -1009,6 +1019,8 @@
       tasks.show(frame);
     } else if (frame.t === 'agent') {
       agents.handle(frame);
+    } else if (frame.t === 'history-index' || frame.t === 'history') {
+      history.handle(frame);
     } else if (frame.t === 'artifact') {
       artifacts.handle(frame);
     } else if (frame.t === 'ui-request') {
@@ -1043,7 +1055,8 @@
     } else if (frame.t === 'room') {
       sessions.offerRoom({name: frame.name, link: frame.link});
     } else if (frame.t === 'bye') {
-      showTerminal('Session ended', 'The shared session has ended.');
+      showTerminal('Session ended', 'The host has ended this shared session. '
+                   + 'Ask the host for a new invitation to continue.');
     } else if (frame.t === 'error') {
       showTerminal(
         'Rejected',
@@ -1061,7 +1074,7 @@
       const text = composerInput.value;
       const armed = state.armed;
       const filter = state.filter;
-      const name = guestName();
+      const name = guestName(true);
       try {
         await attachmentWork;
         // An armed invocation may legitimately carry no arguments.
@@ -1070,7 +1083,6 @@
           flashNotice('Prompt too large.');
           return;
         }
-        localStorage.setItem('mevedel-guest-name', name);
         const frame = {t: 'prompt', name};
         if (armed.length) {
           // The name travels as its own field; the host resolves the
@@ -1124,19 +1136,34 @@
       });
     }
     if (composerName) {
-      composerName.value = localStorage.getItem('mevedel-guest-name') || '';
+      composerName.value = guestName();
+      const commitName = () => {
+        const previous = state.guestName;
+        const name = guestName(true);
+        if (name !== previous) send({t: 'set-name', name});
+      };
+      composerName.addEventListener('blur', commitName);
+      composerName.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.isComposing) {
+          event.preventDefault();
+          commitName();
+        }
+      });
     }
   }
 
-  applyTheme(storedTheme());
-  if (themeButton) {
-    themeButton.addEventListener('click', () => {
-      const next = THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length];
-      try { localStorage.setItem('mevedel-theme', next); }
-      catch (_error) { /* the choice then lasts for this page only */ }
-      applyTheme(next);
-    });
-  }
+  window.mevedelAppearance.bind(value => {
+    artifacts.setTheme(value.theme);
+    editing.setAppearance(value);
+  });
+  const desktopSidebar = window.matchMedia('(min-width:1100px)');
+  sessionBox.open = desktopSidebar.matches;
+  desktopSidebar.addEventListener('change', event => { sessionBox.open = event.matches; });
+  skillSearch.addEventListener('input', renderSkillChips);
+  skillsButton.addEventListener('click', () => {
+    sessionBox.open = commandsBox.open = true;
+    skillSearch.focus();
+  });
 
   notifications.bind();
 
@@ -1190,7 +1217,8 @@
         onFrame: handleFrame,
         onGiveUp: () => {
           showTerminal(
-            'Room closed', 'The room did not come back; the link is dead.');
+            'Room closed', 'This room is no longer available. '
+              + 'Ask the host for a new invitation to continue.');
         },
         onOpen: async () => {
           if (notifications.enabled()) await notifications.syncPush();

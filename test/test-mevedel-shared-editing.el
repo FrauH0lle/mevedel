@@ -13,6 +13,48 @@
           "helpers"))
 (require 'mevedel-shared-editing)
 
+(mevedel-deftest mevedel-shared-editing--send
+  (:doc "Large helper requests use small UTF-8 writes without changing JSON framing")
+  (let* ((args (list :title (concat (make-string 1020 ?x) "λ 🌱")
+                     :data (make-string 10000 ?é)))
+         (expected (concat (mevedel-shared-editing--json args) "\n"))
+         chunks)
+    (cl-letf (((symbol-function 'process-send-string)
+               (lambda (_process chunk)
+                 (should (<= (string-bytes (encode-coding-string chunk 'utf-8-unix)) 4096))
+                 (push chunk chunks))))
+      (mevedel-shared-editing--send nil args))
+    (should (> (length chunks) 1))
+    (should (equal expected (apply #'concat (nreverse chunks))))))
+
+(mevedel-deftest mevedel-shared-editing--process
+  (:doc "Helper replies frame fragmented Unicode, multiple lines, and bound unfinished bytes")
+  (let ((buffer (generate-new-buffer " *editing-framing*")) replies)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel-shared-editing--runtime
+                      (list :active (list :requestId 1 :callback #'ignore)))
+          (let* ((process (mevedel-shared-editing--process buffer))
+                 (filter (process-filter process))
+                 (line "{\"requestId\":1,\"result\":{\"title\":\"λ 🌱\"}}\n"))
+            (cl-letf (((symbol-function 'mevedel-shared-editing--accept)
+                       (lambda (_buffer _job reply) (push reply replies))))
+              (funcall filter process (substring line 0 12))
+              (should-not replies)
+              (funcall filter process (concat (substring line 12) line))
+              (sleep-for 0.01)
+              (should (= (length replies) 2))
+              (should (equal (plist-get (plist-get (car replies) :result) :title) "λ 🌱"))
+              (should-not (process-get process :partial))
+              (should (= (process-get process :partial-bytes) 0)))
+            ;; A UTF-8 fragment can exceed the byte limit before any newline.
+            (process-put process :partial-bytes (1- (* 64 1024 1024)))
+            (funcall filter process "λ")
+            (should-not (process-live-p process))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (mevedel-shared-editing-stop))
+        (kill-buffer buffer)))))
+
 (mevedel-deftest mevedel-shared-editing-call
 		 ()
   ,test (test)

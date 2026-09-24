@@ -1,7 +1,7 @@
 /* Trusted room controller. The opaque editor gets only an item-scoped port. */
 'use strict';
 window.mevedelEditingView = {
-  create({ state, send, el, flash, summarize }) {
+  create({ state, send, el, flash, summarize, onVisibility = () => {} }) {
     const box = document.getElementById('editing-box'),
       list = document.getElementById('editing-items');
     const panel = document.getElementById('editing-panel'),
@@ -18,13 +18,14 @@ window.mevedelEditingView = {
       frame = null,
       recovering = false,
       sequence = 0,
+      openingGeneration = 0,
       outbound = Promise.resolve();
-    let theme = null, archived = [], conversationTruncated = false, conversationError = null;
+    let appearance = null, archived = [], conversationTruncated = false, conversationError = null;
     let available = false, checking = false, availabilityGeneration = 0;
     let unavailableReason = 'Checking shared editing on the Emacs host…';
-    function setTheme(value) {
-      theme = value === 'light' || value === 'dark' ? value : null;
-      port?.postMessage({ type: 'theme', theme });
+    function setAppearance(value) {
+      appearance = value;
+      port?.postMessage({ type: 'appearance', appearance });
     }
     function reserveTab() {
       if (editorTab) return null;
@@ -189,11 +190,10 @@ window.mevedelEditingView = {
       recheck.textContent = checking ? 'Checking…' : 'Recheck availability';
       list.replaceChildren();
       for (const item of catalog.values()) {
-        const button = el(
-          'button',
-          'btn quiet',
-          `${item.kind === 'whiteboard' ? '▧' : '▤'} ${item.title}${item.local ? ' (local recovery)' : ''}`,
-        );
+        const button = el('button', 'btn quiet');
+        const symbol = el('span', `item-symbol${item.kind === 'whiteboard' ? ' board' : ''}`, item.kind === 'whiteboard' ? 'MAP' : 'DOC');
+        symbol.setAttribute('aria-hidden', 'true');
+        button.append(symbol, el('span', '', `${item.title}${item.local ? ' (local recovery)' : ''}`));
         button.dataset.itemId = item.id;
         button.type = 'button';
         button.disabled = !available && !(current === item.id && frame) && !readDraft(item.id);
@@ -246,6 +246,7 @@ window.mevedelEditingView = {
       setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
     async function open(id, committed) {
+      const generation = ++openingGeneration;
       if (editorTab) {
         const url = new URL(window.location.href);
         url.searchParams.set('shared', id);
@@ -253,6 +254,7 @@ window.mevedelEditingView = {
       }
       if (current === id && frame && !committed) {
         panel.hidden = false;
+        onVisibility(true);
         document.title =
           state.editorTitle = `${document.getElementById('editing-title').textContent} · mevedel`;
         return;
@@ -267,11 +269,13 @@ window.mevedelEditingView = {
         result = { ...draft, transactions: [] };
         recoveryOnly = true;
       }
+      if (generation !== openingGeneration) return;
       port?.close();
       recovering = recoveryOnly;
       current = id;
       setConversationHistory(result);
       panel.hidden = false;
+      onVisibility(true);
       document.getElementById('editing-title').textContent = result.title;
       document.title = state.editorTitle = `${result.title} · mevedel`;
       frame = el('iframe');
@@ -301,6 +305,7 @@ window.mevedelEditingView = {
               mode: data.mode,
               point: data.point,
               trail: data.trail,
+              preview: data.preview,
               cursor: data.cursor,
               clientId: data.clientId,
               clock: data.clock,
@@ -345,7 +350,7 @@ window.mevedelEditingView = {
             draft,
             readOnly: state.readOnly || recoveryOnly,
             online: connected && !recoveryOnly,
-            theme,
+            appearance,
             name: state.guestName || 'Participant',
           },
           '*',
@@ -353,12 +358,29 @@ window.mevedelEditingView = {
         );
       };
     }
+    function pendingView(message, retry = false) {
+      if (!requestedItem || current) return;
+      panel.hidden = false;
+      onVisibility(true);
+      document.getElementById('editing-title').textContent = catalog.get(requestedItem)?.title || 'Shared work';
+      document.title = state.editorTitle = 'Shared work · mevedel';
+      const note = el('p', 'panel-note', message);
+      note.setAttribute('role', retry ? 'alert' : 'status');
+      holder.replaceChildren(note);
+      if (retry) {
+        const button = el('button', 'btn quiet', 'Retry');
+        button.type = 'button';
+        button.onclick = recheck;
+        holder.append(button);
+      }
+    }
     async function welcome() {
       connected = true;
       available = false;
       checking = true;
       const generation = ++availabilityGeneration;
       unavailableReason = 'Checking shared editing on the Emacs host…';
+      pendingView(unavailableReason);
       render();
       // Room identity contains no bearer credentials. Never send the fragment to the editor.
       room = window.mevedelViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || '';
@@ -382,6 +404,7 @@ window.mevedelEditingView = {
       checking = true;
       available = false;
       unavailableReason = 'Checking shared editing on the Emacs host…';
+      pendingView(unavailableReason);
       render();
       try {
         const result = await request({ action: 'status' });
@@ -402,10 +425,14 @@ window.mevedelEditingView = {
       if (generation !== availabilityGeneration) return;
       try {
         if (requestedItem && !current) {
-          if (!available && !readDraft(requestedItem)) return;
+          if (!available && !readDraft(requestedItem)) {
+            pendingView(unavailableReason, true);
+            return;
+          }
           const id = requestedItem;
-          requestedItem = null;
+          pendingView('Opening shared work…');
           await open(id);
+          if (requestedItem === id) requestedItem = null;
           return;
         }
         if (current && available) {
@@ -419,6 +446,7 @@ window.mevedelEditingView = {
           });
         }
       } catch (error) {
+        pendingView(error.message, true);
         flash(error.message);
       }
     }
@@ -443,8 +471,12 @@ window.mevedelEditingView = {
       render();
       if (requestedItem && catalog.has(requestedItem) && !current) {
         const id = requestedItem;
-        requestedItem = null;
-        open(id).catch((error) => flash(error.message));
+        open(id).then(() => {
+          if (requestedItem === id) requestedItem = null;
+        }).catch((error) => {
+          pendingView(error.message, true);
+          flash(error.message);
+        });
       }
     }
     function receive(frame) {
@@ -590,7 +622,9 @@ window.mevedelEditingView = {
       }
     };
     document.getElementById('editing-close').onclick = () => {
+      openingGeneration++;
       panel.hidden = true;
+      onVisibility(false);
       state.editorTitle = null;
       document.title = 'mevedel live session';
       requestedItem = null;
@@ -606,6 +640,6 @@ window.mevedelEditingView = {
           point: null,
         });
     };
-    return { welcome, connection, receive, open, conversation, refreshConversation, setTheme };
+    return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance };
   },
 };

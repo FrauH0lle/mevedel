@@ -1,4 +1,5 @@
 /* Deterministic, data-only exports used by both browser and host. */
+import { imageSource } from './image.mjs';
 export const escape = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
@@ -279,14 +280,22 @@ export function shapeSVG(s, shapes) {
   const passes = style.rough > 0 && style.dash === 'solid' ? 2 : 1;
   let body = '';
   if (s.type === 'image')
-    body = `<image href="${escape(s.src)}" x="${x}" y="${y}" width="${w}" height="${h}"/>`;
+    body = `<image href="${escape(imageSource(s))}" x="${x}" y="${y}" width="${w}" height="${h}"/>`;
   else if (LINEAR.includes(s.type)) {
-    const pts = pathPoints(s, shapes),
-      marker = s.type === 'arrow' ? ' marker-end="url(#arrowhead)"' : '';
+    const pts = pathPoints(s, shapes);
     if (s.type === 'pen') body = `<path d="${through(pts)}" fill="none" ${attrs}/>`;
     else
       for (let p = 0; p < passes; p++)
-        body += `<path d="${pts.map((a, i) => (i ? line(...pts[i - 1], ...a, style.rough, rng, i > 1) : '')).join('')}" fill="none" ${attrs}${p ? '' : marker}/>`;
+        body += `<path d="${pts.map((a, i) => (i ? line(...pts[i - 1], ...a, style.rough, rng, i > 1) : '')).join('')}" fill="none" ${attrs}/>`;
+    if (s.type === 'arrow') {
+      const [ax, ay] = pts.at(-2), [bx, by] = pts.at(-1);
+      const length = Math.hypot(bx - ax, by - ay);
+      if (length) {
+        const ux = (bx - ax) / length, uy = (by - ay) / length, size = style.width * 7;
+        // Draw the head directly so SVG readers need no marker/context paint support.
+        body += `<path d="M${n(bx)} ${n(by)}L${n(bx - size * ux - size / 2 * uy)} ${n(by - size * uy + size / 2 * ux)}L${n(bx - size * ux + size / 2 * uy)} ${n(by - size * uy - size / 2 * ux)}Z" fill="${ink}"/>`;
+      }
+    }
   } else if (s.type !== 'text') {
     const fill = escape(style.fill);
     if (fill !== 'none') {
@@ -305,18 +314,16 @@ export function shapeSVG(s, shapes) {
     const lines = s.text.split('\n'),
       tx = centered ? x + w / 2 : x + 10;
     const ty = centered ? y + h / 2 - ((lines.length - 1) * lead) / 2 + size * 0.375 : y + size * 1.5;
-    body += `<text x="${tx}" y="${n(ty)}" text-anchor="${centered ? 'middle' : 'start'}" font-family="Noto Sans, sans-serif" font-size="${size}" fill="${ink}">${lines
-      .map((line, i) => `<tspan x="${tx}" dy="${i ? n(lead) : 0}">${escape(line)}</tspan>`)
-      .join('')}</text>`;
+    // Explicit baselines also work in SVG viewers that ignore tspan positions.
+    // Empty lines still consume a full line of vertical space.
+    body += lines.map((line, i) => `<text x="${tx}" y="${n(ty + i * lead)}" text-anchor="${centered ? 'middle' : 'start'}" font-family="Noto Sans, sans-serif" font-size="${size}" fill="${ink}">${escape(line)}</text>`).join('');
   }
   return `<g data-shape="${escape(s.id)}"${style.opacity < 100 ? ` opacity="${style.opacity / 100}"` : ''}>${body}</g>`;
 }
-export const definitions =
-  '<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>';
 export function boardSVG(shapes, maxEdge = 2048, context = shapes) {
   const box = bounds(shapes, context),
     scale = Math.min(1, maxEdge / Math.max(box[2], box[3]));
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.join(' ')}">${definitions}<rect x="${box[0]}" y="${box[1]}" width="${box[2]}" height="${box[3]}" fill="#faf9f5"/>${shapes.map((s) => shapeSVG(s, context)).join('')}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.join(' ')}"><rect x="${box[0]}" y="${box[1]}" width="${box[2]}" height="${box[3]}" fill="#ffffff"/>${shapes.map((s) => shapeSVG(s, context)).join('')}</svg>`;
 }
 export function documentHTML(json) {
   const render = (node) => {
@@ -338,7 +345,7 @@ export function documentHTML(json) {
     if (node.type === 'horizontalRule') return '<hr>';
     if (node.type === 'image') {
       const a = node.attrs;
-      return `<img src="${escape(a.src)}" alt="${escape(a.alt || '')}"${a.title ? ` title="${escape(a.title)}"` : ''}${a.width ? ` width="${a.width}"` : ''}${a.height ? ` height="${a.height}"` : ''}>`;
+      return `<img src="${escape(imageSource(a))}" alt="${escape(a.alt || '')}"${a.title ? ` title="${escape(a.title)}"` : ''}${a.width ? ` width="${a.width}"` : ''}${a.height ? ` height="${a.height}"` : ''}>`;
     }
     if (node.type === 'codeBlock') return `<pre><code>${inner}</code></pre>`;
     const tag =

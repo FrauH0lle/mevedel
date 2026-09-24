@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-palette="cool" data-accents="selective">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
+    <script src="/viewer-appearance.js"></script>
     <link rel="stylesheet" href="/viewer-theme.css">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
@@ -12,6 +13,7 @@
     <link rel="stylesheet" href="/viewer-agent.css">
     <link rel="stylesheet" href="/viewer-artifact.css">
     <link rel="stylesheet" href="/viewer-task.css">
+    <link rel="stylesheet" href="/viewer-room.css">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" href="/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/icon.png">
@@ -19,18 +21,33 @@
   <body>
     <a class="skip-link" href="#transcript">Skip to transcript</a>
     <header class="topbar">
-      <div class="wordmark">MevView<small id="session-label">live session</small></div>
-      <button id="theme-button" class="bell" type="button"
-              title="Colour theme: follow system"
-              aria-label="Colour theme: follow system">◐</button>
-      <button id="notify-button" class="bell" type="button" hidden
-              aria-pressed="false" title="Notifications off"
-              aria-label="Notifications off">🔔</button>
-      <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
+      <div class="wordmark">mevedel</div>
+      <div class="room-heading"><span class="project-name">Shared workspace</span><h1 id="session-label">Live session</h1></div>
+      <div class="header-actions">
+        <details id="appearance-menu">
+          <summary>Appearance</summary>
+          <div class="appearance-body">
+            <label>Palette<select id="palette"><option value="cool">Cool</option><option value="warm">Warm</option></select></label>
+            <label>Appearance<select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            <label>Accent detail<select id="accents"><option value="selective">Selective color</option><option value="minimal">Minimal</option></select></label>
+            <p>Changes keep your draft and reading position.</p>
+          </div>
+        </details>
+        <button id="invite-button" class="btn quiet" type="button" hidden title="Copy a link to this room" aria-label="Invite to this room">Invite</button>
+        <button id="notify-button" class="bell" type="button" hidden aria-pressed="false" title="Notifications off" aria-label="Notifications off">Notifications</button>
+      </div>
     </header>
+    <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
+    <section id="terminal-state" class="terminal-state" role="status" aria-atomic="true" hidden>
+      <h2 id="terminal-title"></h2>
+      <p id="terminal-message"></p>
+    </section>
     <section id="empty-state" class="empty-state" aria-label="Empty conversation" hidden>
       <h1>No messages yet</h1>
-      <p>The shared conversation will appear here. Open Session to find shared documents and whiteboards.</p>
+      <p>The shared conversation will appear here. Open In this room to find shared documents and whiteboards.</p>
+    </section>
+    <section id="history" class="history" aria-label="Earlier conversation" hidden>
+      <p class="history-description">Earlier segments stay available after context is compacted or cleared.</p>
     </section>
     <main id="transcript" class="ledger" tabindex="-1" aria-live="polite"
           aria-label="Shared session transcript"></main>
@@ -65,8 +82,8 @@
     </section>
     <div class="dock">
       <section id="editing-panel" class="viewer-panel" hidden role="dialog" aria-label="Shared editing">
-        <header class="panel-head"><span id="editing-title" class="panel-title"></span>
-          <button id="editing-close" class="btn quiet" type="button">Room</button></header>
+        <header class="panel-head"><span class="wordmark">mevedel</span><span class="editor-location">Shared work</span><span id="editing-title" class="panel-title editor-title-hidden"></span>
+          <button id="editing-close" class="btn quiet" type="button">Back to room</button></header>
         <div id="editing-body"></div>
       </section>
       <div class="live-controls">
@@ -75,31 +92,36 @@
       </div>
       <details id="session-box" class="dock-disclosure" hidden
                aria-label="Session menu: commands, sub-agents, tasks, artifacts, rooms">
-        <summary id="session-summary">Session</summary>
+        <summary><span class="sidebar-title">In this room</span><span id="session-summary">Session</span></summary>
         <div class="dock-disclosure-body">
-          <details id="commands-box" class="dock-submenu" hidden>
-            <summary id="commands-summary">Commands</summary>
-            <nav id="skill-chips" class="dock-strip skill-chips" aria-label="Host-allowed commands"></nav>
-          </details>
-          <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
-          <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
-          <ul id="tasks-list" class="dock-disclosure-list tasks-list"></ul>
-          <details id="artifacts-box" class="dock-submenu" hidden>
-            <summary id="artifacts-summary">Artifacts</summary>
-            <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
-          </details>
-          <details id="editing-box" class="dock-submenu" hidden><summary>Shared</summary>
-            <div class="editing-availability">
-              <p id="editing-status" role="status">Checking shared editing on the Emacs host…</p>
-              <button id="editing-recheck" class="btn quiet" type="button" disabled>Recheck availability</button>
-            </div>
+          <details id="editing-box" class="dock-submenu" hidden open><summary>Shared work</summary>
+            <nav id="editing-items" aria-label="Shared whiteboards and documents"></nav>
+
             <div class="editing-create" role="group" aria-label="Create shared content">
               <button class="btn" data-create-editor="whiteboard" type="button" disabled>＋ Whiteboard</button>
               <button class="btn" data-create-editor="document" type="button" disabled>＋ Document</button>
               <button id="editing-import" class="btn quiet" type="button" disabled>Import</button>
               <input id="editing-file" type="file" accept=".json,.md,.txt,image/png,image/jpeg,image/webp" hidden>
             </div>
-            <nav id="editing-items" aria-label="Shared whiteboards and documents"></nav>
+
+            <div class="editing-availability">
+              <p id="editing-status" role="status">Checking shared editing on the Emacs host…</p>
+              <button id="editing-recheck" class="btn quiet" type="button" disabled>Recheck availability</button>
+            </div>
+          </details>
+          <details id="artifacts-box" class="dock-submenu" hidden open>
+            <summary id="artifacts-summary">Artifacts</summary>
+            <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
+          </details>
+          <section id="activity" class="activity" aria-label="Progress"><h2>Progress</h2>
+          <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
+          <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
+          <ul id="tasks-list" class="dock-disclosure-list tasks-list"></ul>
+</section>
+          <details id="commands-box" class="dock-submenu" hidden>
+            <summary>Skills &amp; commands <span id="commands-summary"></span></summary>
+            <label class="skill-search">Find a skill or command<input id="skill-search" type="search" placeholder="Search…"></label>
+            <nav id="skill-chips" class="dock-strip skill-chips" aria-label="Host-allowed commands"></nav>
           </details>
           <div class="dock-actions">
             <button id="new-session-button" class="btn quiet" type="button" hidden
@@ -108,20 +130,37 @@
             <button id="rooms-button" class="btn quiet" type="button" hidden
                     title="Other rooms this browser can get back to"
                     aria-label="Rooms">Rooms</button>
-            <button id="invite-button" class="btn quiet" type="button" hidden
-                    title="Copy a link to this room"
-                    aria-label="Invite to this room">Invite</button>
+
           </div>
+      <details class="disclosure" aria-label="Sharing and security notice">
+        <summary>Access and privacy</summary>
+        <p>Anyone who has it can read the visible prompts, responses, paths,
+        and tool results, which may contain secrets; a full-control link
+        can also prompt, interrupt, and answer pending interactions; and an
+        owner link can additionally change the permission mode and create
+        sessions. Frames
+        are sealed end to end with a key that lives only in the link; the
+        relay sees ciphertext. This tab keeps the link for as long as it is
+        open, so a reload lands back in the room; closing the tab forgets
+        it. Enabling notifications stores the link in
+        this browser so an installed app can reconnect. It is cleared after
+        this viewer observes the room end or gives up reconnecting; otherwise
+        it may remain until this link is opened again or site data is cleared.
+        Links to rooms you requested or were offered are kept in this browser
+        too, so a reload does not lose them; Rooms lists them and Forget
+        removes one, and they die with the host&rsquo;s share regardless.</p>
+      </details>
         </div>
       </details>
       <div id="requests" class="requests" role="region" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" role="region" aria-label="Your queued prompts" hidden></div>
       <div id="invites" class="own-queue" role="region" aria-label="Rooms you can join" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>
+      <p id="assistant-working" class="assistant-working" role="status" hidden>Assistant working…</p>
       <form id="composer" class="composer" autocomplete="off" hidden>
         <p id="queue-state" class="queue-state" role="status" hidden></p>
         <p id="composer-scope" class="composer-scope" hidden></p>
-        <label class="composer-label" for="composer-input">Message</label>
+        <label class="composer-label" for="composer-input">Message the room</label>
         <textarea id="composer-input" class="composer-input" rows="2"
                   placeholder="Queue a follow-up for the session…"
                   aria-label="Prompt"></textarea>
@@ -137,6 +176,7 @@
           <button id="attach-button" class="btn quiet" type="button"
                   title="Attach files — images, PDFs, logs and patches"
                   aria-label="Attach files">Attach</button>
+          <button id="skills-button" class="btn quiet" type="button" hidden>Skills <span aria-hidden="true">＋</span></button>
           <span class="composer-spacer"></span>
           <button id="stop-button" class="btn danger" type="button"
                   title="Stop the running turn in Emacs">Interrupt</button>
@@ -192,29 +232,13 @@
       <p id="modeline" class="modeline" role="status">
         <span id="connection" class="conn">Connecting…</span>
       </p>
-      <details class="disclosure" aria-label="Sharing and security notice">
-        <summary>This link is a bearer credential — treat it like a secret.</summary>
-        <p>Anyone who has it can read the visible prompts, responses, paths,
-        and tool results, which may contain secrets; a full-control link
-        can also prompt, interrupt, and answer pending interactions; and an
-        owner link can additionally change the permission mode and create
-        sessions. Frames
-        are sealed end to end with a key that lives only in the link; the
-        relay sees ciphertext. This tab keeps the link for as long as it is
-        open, so a reload lands back in the room; closing the tab forgets
-        it. Enabling notifications stores the link in
-        this browser so an installed app can reconnect. It is cleared after
-        this viewer observes the room end or gives up reconnecting; otherwise
-        it may remain until this link is opened again or site data is cleared.
-        Links to rooms you requested or were offered are kept in this browser
-        too, so a reload does not lose them; Rooms lists them and Forget
-        removes one, and they die with the host&rsquo;s share regardless.</p>
-      </details>
+
     </div>
     <script src="/transport.js" defer></script>
     <script src="/notifications.js" defer></script>
     <script src="/renderer.js" defer></script>
     <script src="/viewer-artifact.js" defer></script>
+    <script src="/viewer-history.js" defer></script>
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
     <script src="/viewer-session.js" defer></script>

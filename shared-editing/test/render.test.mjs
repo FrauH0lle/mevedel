@@ -16,11 +16,12 @@ test('styled shapes render deterministically with bounded work', () => {
   assert.match(dashed, /<g data-shape="d" opacity="0.3">/);
   assert.equal(dashed.match(/<path /g).length, 1, 'a dashed stroke draws once');
   const arrow = shapeSVG({ id: 'e', type: 'arrow', box: [0, 0, 100, 100], points: [[0, 0], [100, 100]], rough: 1 }, []);
-  assert.match(arrow, /<path d="M[^"]*" fill="none" [^>]*marker-end="url\(#arrowhead\)"/);
+  assert.match(arrow, /<path d="M100 100L[^"]*Z" fill="#242424"/);
   assert.doesNotMatch(arrow, /d="C/, 'every stroke starts with a move');
   const text = shapeSVG({ id: 't', type: 'sticky', box: [0, 0, 180, 100], text: 'a\nb', fontSize: 32 }, []);
   assert.match(text, /font-size="32"/);
-  assert.match(text, /dy="44"/);
+  assert.match(text, /y="84"/);
+  assert.equal((text.match(/<text /g) || []).length, 2);
   assert.match(text, /<path d="[^"]*" fill="#fff1a8" stroke="none"\/>/, 'a sticky note is solid paper by default');
   assert.match(boardSVG([rough]), /^<svg [^>]*viewBox="-30 -30 260 180">/);
 });
@@ -62,5 +63,5 @@ test('bound arrows meet silhouettes and follow moved or resized shapes', () => {
     assert.ok(pathPoints(arrow,[{...from,box},to]).flat().every(Number.isFinite));
   assert.deepEqual(pathPoints({type:'pen',box:[0,0,10,10],points:[[0,0],[5,3],[10,10]]},[]),
     [[0,0],[5,3],[10,10]]);
-  assert.match(boardSVG([from,to,arrow]), /refX="10"/);
+  assert.match(boardSVG([from,to,arrow]), /<path d="M300 50L286 57L286 43Z" fill="#242424"/);
 });

@@ -578,13 +578,24 @@
           truncated: record.truncated, collapsed: true}, disclosures, 'root');
   }
 
+  function markContinuations(transcript) {
+    let previousRole = null;
+    for (const turn of transcript.children) {
+      if (turn.hidden) continue;
+      const role = turn.dataset.role || 'ai';
+      const cont = role === 'ai' && previousRole === 'ai';
+      turn.className = `turn ${role}${cont ? ' cont' : ''}`;
+      previousRole = role;
+    }
+  }
+
   function renderRecord(record, directiveLabel, onArtifactOpen, previous) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
     const rail = el('div', 'rail');
-    const glyphText = roleOf(record) === 'you' ? 'H'
-      : roleOf(record) === 'guest' ? 'G' : '◆';
+    const glyphText = roleOf(record) === 'ai' ? 'm'
+      : (record.guest || (roleOf(record) === 'you' ? 'H' : 'G')).slice(0, 1).toUpperCase();
     rail.append(el('div', 'glyph', glyphText));
     turn.append(rail);
     const content = el('div', 'content');
@@ -603,5 +614,5 @@
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, renderDiff, renderMarkdown, formatBytes});
+    {renderRecord, markContinuations, renderDiff, renderMarkdown, formatBytes});
 })();

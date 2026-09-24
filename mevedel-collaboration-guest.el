@@ -65,6 +65,16 @@
 (declare-function mevedel-collaboration--handle-artifact-get
                   "mevedel-collaboration-artifact" (room peer frame))
 
+;; `mevedel-collaboration-history'
+(declare-function mevedel-collaboration--handle-history-get
+                  "mevedel-collaboration-history" (room peer frame))
+(declare-function mevedel-collaboration--publish-history
+                  "mevedel-collaboration-history" (room &optional peer))
+(autoload 'mevedel-collaboration--handle-history-get
+  "mevedel-collaboration-history")
+(autoload 'mevedel-collaboration--publish-history
+  "mevedel-collaboration-history")
+
 ;; `mevedel-collaboration-owner'
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
@@ -614,6 +624,7 @@ answer can execute the same path the host key binding would."
                                      (plist-get frame :guestId)))))
         (puthash peer guest (plist-get room :guests))
         (mevedel-collaboration--send-snapshot room peer)
+        (mevedel-collaboration--publish-history room peer)
         ;; Queue and busy state travel only on change, so a joining
         ;; guest is told the current ones directly.
         (mevedel-collaboration--send-queue-state room peer guest t)
@@ -961,6 +972,12 @@ handling stops the room instead of leaking into the session."
     (condition-case nil
         (pcase (plist-get frame :t)
           ("hello" (mevedel-collaboration--handle-hello room peer frame))
+          ("set-name"
+           (when-let* ((guest (mevedel-collaboration--guest room peer))
+                       ((stringp (plist-get frame :name))))
+             (plist-put guest :name
+                        (mevedel-collaboration--sanitize-guest-name
+                         (plist-get frame :name)))))
           ((or "push-subscribe" "push-unsubscribe" "push-state")
            (mevedel-collaboration--handle-push-subscription
             room peer frame))
@@ -970,6 +987,8 @@ handling stops the room instead of leaking into the session."
            (mevedel-collaboration--handle-fetch-agent room peer frame))
           ("artifact-get"
            (mevedel-collaboration--handle-artifact-get room peer frame))
+          ("history-get"
+           (mevedel-collaboration--handle-history-get room peer frame))
           ((or "editing" "editing-presence")
            (mevedel-collaboration-editing-handle room peer frame))
           ("retract" (mevedel-collaboration--handle-retract room peer frame))

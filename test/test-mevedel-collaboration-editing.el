@@ -15,6 +15,50 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-editing)
 
+(mevedel-deftest mevedel-collaboration-editing--browser-value
+  (:doc "Browser projection keeps editable state and attribution without repeated image snapshots")
+  (let* ((image (make-string (* 1024 1024) ?x))
+         (changes (vector (list :id "picture" :before (list :src image)
+                                :after (list :src image))
+                          (list :id "removed" :before (list :src image) :after nil)))
+         (tx (list :id "move" :actor "Agent: test" :revision 7 :time 123 :changes changes))
+         (result (list :id "board" :kind "whiteboard" :revision 7 :crdt "editable-state"
+                       :content (vector (list :src image)) :transaction tx
+                       :transactions (vector tx) :comments []
+                       :snapshot (list :content "question context")))
+         (value (list :result result))
+         (projected (mevedel-collaboration-editing--browser-value value))
+         (visible (plist-get projected :result)))
+    (should (< (length (mevedel-shared-editing--json projected)) 1000))
+    (should (equal (plist-get visible :crdt) "editable-state"))
+    (should (equal (plist-get visible :snapshot) (plist-get result :snapshot)))
+    (should-not (plist-member visible :content))
+    (should-not (plist-member visible :transaction))
+    (should (equal (plist-get (aref (plist-get visible :transactions) 0) :changes)
+                   [(:id "picture" :after t) (:id "removed" :after :json-false)]))
+    (should (eq (plist-get result :transactions) (plist-get (plist-get value :result) :transactions)))
+    (should (plist-member result :content))
+    (should (equal (plist-get (aref changes 0) :after) (list :src image)))
+    (dolist (plain (list [(:id "board" :kind "whiteboard")]
+                        '(:error "Save refused")
+                        '(:result (:data "export bytes" :mime "image/png"))))
+      (should (equal (mevedel-collaboration-editing--browser-value plain) plain)))))
+
+(mevedel-deftest mevedel-collaboration-editing--send
+  (:doc "Read replies and broadcast events both use compact browser contributions")
+  (let* ((tx (list :id "move" :actor "Guest: test" :revision 2 :time 10
+                   :changes (vector (list :id "picture" :after
+                                          (list :src (make-string (* 1024 1024) ?x))))))
+         (payload (list :id "board" :revision 2 :transactions (vector tx)))
+         frames)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport _peer frame) (push frame frames))))
+      (dolist (value (list payload (list :result payload)))
+        (setq frames nil)
+        (mevedel-collaboration-editing--send nil 1 "event" value)
+        (should (= (length frames) 1))
+        (should (< (plist-get (car frames) :total) 1000))))))
+
 (mevedel-deftest mevedel-collaboration-editing-handle
 		 (:doc "Incomplete transfers clean up and authority is checked after assembly and before commit")
 		 (let* ((directory (make-temp-file "mevedel-editing-transfer-" t))
@@ -80,6 +124,8 @@
 
 (mevedel-deftest mevedel-collaboration-editing--presence
   (:doc "Terminal clears bypass sample throttling once, with item and writer authority intact")
+  ,test
+  (test)
   (let* ((guests (make-hash-table :test #'eql))
          (guest (list :name "Alice" :writable t :editing-item "board"))
          (room (list :guests guests :transport 'test))
@@ -120,7 +166,37 @@
         (plist-put guest :writable nil)
         (setq now 100.12)
         (point "laser")
-        (should (= (length frames) 3))))))
+        (should (= (length frames) 3)))))
+
+  :doc "Movement previews are bounded writer-only metadata scoped to the active item"
+  (let* ((guests (make-hash-table :test #'eql))
+         (guest (list :name "Alice" :writable t :editing-item "board"))
+         (room (list :guests guests :transport 'test))
+         (preview '(:opId "save" :shapes ((:id "shape" :box (10 20 100 80)))))
+         frames)
+    (puthash 1 guest guests)
+    (puthash 2 (list :editing-item "board") guests)
+    (puthash 3 (list :editing-item "other") guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_ peer value) (push (cons peer value) frames))))
+      (cl-labels ((send (value &optional id)
+                    (plist-put guest :editing-presence-at 0)
+                    (mevedel-collaboration-editing--presence
+                     room 1 guest (list :id (or id "board") :mode "cursor" :point '(0 0) :preview value))))
+        (send preview)
+        (should (= (length frames) 1))
+        (should (= (caar frames) 2))
+        (should (equal (plist-get (cdar frames) :preview)
+                       '(:opId "save" :shapes [(:id "shape" :box [10 20 100 80])])))
+        (dolist (bad (list '(:shapes ((:id "shape" :box (1 2 -1 4))))
+                          '(:shapes ((:id "shape" :box (1 2 3 "bad"))))
+                          '(:shapes ((:id "shape" :box (1 2 3 1000001))))
+                          (list :shapes (make-list 101 '(:id "shape" :box (1 2 3 4))))))
+          (send bad))
+        (send preview "other")
+        (plist-put guest :writable nil)
+        (send preview)
+        (should (= (length frames) 1))))))
 
 (require 'mevedel-view)
 (require 'mevedel-pending-inputs)

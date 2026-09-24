@@ -56,6 +56,7 @@
           record, directiveLabel, openArtifact, previous.get(record.id));
         transcript.append(turn);
       });
+      renderer.markContinuations(transcript);
       if (records.length === 0) {
         transcript.append(el('p', 'panel-note',
                              'Nothing visible in this transcript yet.'));

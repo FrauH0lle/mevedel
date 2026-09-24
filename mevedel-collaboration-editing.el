@@ -33,10 +33,43 @@
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs" (data-buffer prompt &rest keys))
 
+(defun mevedel-collaboration-editing--browser-value (value)
+  "Project VALUE for an editor without duplicating content and image snapshots.
+The editor restores CRDT state and needs contribution attribution and target
+IDs, while exact before/after snapshots stay on the host for reversion."
+  (if (not (listp value)) value
+    (let ((visible (copy-sequence value)))
+      (if (plist-member visible :result)
+          (plist-put visible :result
+                     (mevedel-collaboration-editing--browser-value
+                      (plist-get visible :result)))
+        (cl-remf visible :content)
+        (cl-remf visible :transaction)
+        (cl-remf visible :png)
+        (when (plist-member visible :transactions)
+          (plist-put
+           visible :transactions
+           (vconcat
+            (mapcar
+             (lambda (tx)
+               (list :id (plist-get tx :id) :revision (plist-get tx :revision)
+                     :actor (plist-get tx :actor) :time (plist-get tx :time)
+                     :changes
+                     (vconcat
+                      (mapcar (lambda (change)
+                                (list :id (plist-get change :id)
+                                      :after (if (plist-get change :after) t :json-false)))
+                              (append (plist-get tx :changes) nil)))))
+             (append (plist-get visible :transactions) nil)))))
+        visible))))
+
 (defun mevedel-collaboration-editing--send (room peer req-id value)
   "Send bounded VALUE chunks to PEER in ROOM for REQ-ID."
   (let* ((encoded (base64-encode-string
-                   (encode-coding-string (mevedel-shared-editing--json value) 'utf-8-unix) t))
+                   (encode-coding-string
+                    (mevedel-shared-editing--json
+                     (mevedel-collaboration-editing--browser-value value))
+                    'utf-8-unix) t))
          (length (length encoded))
          (offset 0))
     (when (> length (* 48 1024 1024)) (error "Editing response is too large"))
@@ -67,13 +100,27 @@
 (defun mevedel-collaboration-editing--presence (room peer guest args)
   "Forward PEER's ephemeral ARGS to others viewing the same item in ROOM."
   (let ((now (float-time)) (point (plist-get args :point))
-        (trail (plist-get args :trail)))
+        (trail (plist-get args :trail)) (preview (plist-get args :preview)))
     (when (and (plist-get guest :writable)
                (equal (plist-get guest :editing-item) (plist-get args :id))
                (if (equal (plist-get args :mode) "clear")
                    (plist-get guest :editing-pointing)
                  (>= (- now (or (plist-get guest :editing-presence-at) 0)) 0.045))
                (member (plist-get args :mode) '("cursor" "laser" "selection" "clear"))
+               (or (null preview)
+                   (and (equal (plist-get args :mode) "cursor") (listp preview)
+                        (let ((op (plist-get preview :opId)) (shapes (plist-get preview :shapes)))
+                          (and (or (null op) (and (stringp op) (<= (length op) 80)))
+                               (listp shapes) (<= (length shapes) 100)
+                               (cl-every
+                                (lambda (shape)
+                                  (and (listp shape)
+                                       (stringp (plist-get shape :id))
+                                       (<= (length (plist-get shape :id)) 80)
+                                       (let ((box (plist-get shape :box)))
+                                         (and (listp box) (= (length box) 4)
+                                              (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) box)
+                                              (>= (nth 2 box) 0) (>= (nth 3 box) 0))))) shapes)))))
                (or (null trail)
                    (and (equal (plist-get args :mode) "laser")
                         (listp trail) (<= (length trail) 64)
@@ -94,6 +141,13 @@
       (let ((frame (list :t "editing-presence" :id (plist-get args :id)
                          :peer peer :name (plist-get guest :name)
                          :mode (plist-get args :mode) :point (and point (vconcat point))
+                         :preview (when preview
+                                    (list :opId (plist-get preview :opId)
+                                          :shapes (vconcat (mapcar
+                                                            (lambda (shape)
+                                                              (list :id (plist-get shape :id)
+                                                                    :box (vconcat (plist-get shape :box))))
+                                                            (plist-get preview :shapes)))))
                          :trail (and trail (vconcat (mapcar #'vconcat trail))))))
         (when (equal (plist-get args :mode) "clear")
           (setq frame (append frame (list :clientId (plist-get guest :editing-client)

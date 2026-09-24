@@ -976,6 +976,23 @@
         (mevedel-collaboration--on-frame (current-buffer) 5
                                          (list :t "hello" :proto 3)))
       (should (= 5 handled))
+      ;; Renaming changes only an existing guest's display attribution.
+      (let ((guest (list :name "Before" :ready t :writable nil
+                         :guest-id "stable-id")))
+        (puthash 5 guest (plist-get room :guests))
+        (mevedel-collaboration--on-frame
+         (current-buffer) 5 (list :t "set-name" :name "  Calm\nCat  "
+                                 :writable t :owner t))
+        (should (equal (plist-get guest :name) "Calm Cat"))
+        (should-not (plist-get guest :writable))
+        (should-not (plist-get guest :owner))
+        (should (equal (plist-get guest :guest-id) "stable-id"))
+        (mevedel-collaboration--on-frame
+         (current-buffer) 5 (list :t "set-name" :name 42))
+        (should (equal (plist-get guest :name) "Calm Cat"))
+        (mevedel-collaboration--on-frame
+         (current-buffer) 9 (list :t "set-name" :name "Unknown"))
+        (should-not (gethash 9 (plist-get room :guests))))
       ;; Unknown frame types are tolerated.
       (mevedel-collaboration--on-frame (current-buffer) 5
                                        (list :t "future-frame"))

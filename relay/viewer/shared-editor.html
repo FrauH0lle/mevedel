@@ -7,12 +7,12 @@
     <link rel="stylesheet" href="/viewer-theme.css">
     <title>Shared editor</title>
     <link rel="stylesheet" href="/shared-editor.css" />
+    <link rel="stylesheet" href="/shared-editor-layout.css">
   </head>
-  <body>
+  <body class="editor">
     <header>
-      <input id="title" aria-label="Item title" maxlength="200" /><span id="saved" role="status"
-        >Opening…</span
-      >
+      <div class="editor-identity"><input id="title" aria-label="Item title" maxlength="200" /><span id="saved" role="status"
+        >Opening…</span></div>
       <button id="ask-toggle" type="button" aria-expanded="false" aria-controls="assistant">Assistant</button>
       <button id="undo" title="Undo your last edit (Ctrl+Z)">Undo</button
       ><button id="redo">Redo</button>
@@ -26,7 +26,7 @@
           <button id="download">Download</button>
           <button id="recovery">Recovery copy</button>
           <button id="retry">Retry save</button>
-          <label><input id="show-agent" type="checkbox" checked /> Highlight assistant edits</label>
+          <label><input id="show-agent" type="checkbox" checked /> Highlight recent assistant edits</label>
           <details id="history">
             <summary>Contributions</summary>
             <div id="contributions"></div>
@@ -36,6 +36,9 @@
     </header>
     <div id="tools" role="toolbar" aria-label="Drawing tools"></div>
     <div id="formatting" role="toolbar" aria-label="Document formatting" hidden></div>
+    <div id="table-tools" role="group" aria-label="Table tools" hidden><span class="table-label">Table</span></div>
+    <div id="link-tools" class="context-bar" role="group" aria-label="Link tools" hidden><span id="link-address"></span></div>
+    <div id="image-tools" class="context-bar" role="group" aria-label="Image tools" hidden><span>Image</span><span id="image-size"></span></div>
     <main id="board" hidden>
       <svg id="canvas" tabindex="0" aria-label="Shared whiteboard">
         <g id="scene"></g>
@@ -43,21 +46,22 @@
         <g id="presence"></g>
       </svg>
     </main>
-    <main id="document" hidden aria-label="Shared document"></main>
+    <main id="document" hidden tabindex="0" aria-label="Shared document"></main>
     <footer>
       <div id="context-actions" class="context-actions">
-        <button id="whole-question" type="button">Ask about whole item</button>
+        <div id="context-scope" role="group" aria-label="Question context"><button id="selected-question" type="button" aria-pressed="false" disabled>Selected passage</button><button id="whole-question" type="button" aria-pressed="false">Whole document</button></div>
         <div id="selection-actions" role="toolbar" aria-label="Selected content">
           <button id="comment-selection" type="button" disabled>Add comment</button>
           <button id="selection-question" type="button" disabled>Ask about selection</button>
         </div>
       </div>
-      <span id="hint">Select text to add an anchored comment.</span>
+      <span id="document-stat"></span><span id="hint">Select text to add an anchored comment.</span>
     </footer>
     <aside id="assistant" aria-label="Document discussion" hidden>
-      <div class="assistant-head"><nav aria-label="Discussion views"><button id="assistant-tab" type="button" aria-pressed="true">Assistant</button><button id="comments-tab" type="button" aria-pressed="false">Comments</button></nav><button id="assistant-close" type="button" aria-label="Close assistant">×</button></div>
+      <div id="discussion-resize" role="separator" tabindex="0" aria-label="Resize discussion" aria-orientation="vertical" aria-controls="assistant" title="Drag to resize. Use the left and right arrow keys, or double-click to reset."></div>
+      <div class="assistant-head"><h2 id="discussion-title">Discussion</h2><nav aria-label="Discussion views"><button id="assistant-tab" type="button" aria-pressed="true">Assistant</button><button id="comments-tab" type="button" aria-pressed="false">Comments</button></nav><button id="assistant-close" type="button" aria-label="Close assistant">×</button></div>
       <div id="conversation-state" role="status">Ready</div>
-      <div id="assistant-scroll">
+      <div id="assistant-scroll" tabindex="0" aria-label="Discussion history">
       <p id="conversation-context" class="conversation-context">This item has its own conversation. Earlier room context can be retrieved when needed.</p>
       <div id="conversation-history-notice" class="conversation-context" role="status" hidden></div>
         <section id="comments-section" hidden><label><input id="show-resolved" type="checkbox" /> Show resolved</label><p id="comments-empty">Select text and choose Add comment to start a discussion.</p><div id="comments"></div></section>
@@ -67,8 +71,8 @@
       <div class="assistant-compose" id="question-compose">
         <details id="attached-context" open>
           <summary id="context-title">Choose content to discuss</summary>
-          <blockquote id="context-quote"></blockquote>
-          <details><summary>Full attached context</summary><pre id="context-detail"></pre></details>
+          <blockquote id="context-quote" tabindex="0" aria-label="Attached passage"></blockquote>
+          <details hidden><summary>Full attached context</summary><pre id="context-detail"></pre></details>
           <button id="refresh-context" type="button">Refresh context</button>
         </details>
         <form id="ask" autocomplete="off">
@@ -80,7 +84,7 @@
       </div>
       <form id="comment-form" class="assistant-compose" autocomplete="off" hidden>
         <label for="comment-text">New comment · private until posted</label>
-        <blockquote id="comment-quote"></blockquote>
+        <blockquote id="comment-quote" tabindex="0" aria-label="Comment passage"></blockquote>
         <button id="comment-refresh" type="button">Refresh passage</button>
         <textarea id="comment-text" placeholder="Start a discussion…" maxlength="10000" rows="3" required></textarea>
         <button id="comment-post" type="submit">Post comment</button>
@@ -89,10 +93,23 @@
       <div id="assistant-notice" role="status"></div>
     </aside>
     <textarea id="shape-text" aria-label="Shape text" maxlength="10000" wrap="off" spellcheck="false" hidden></textarea>
-    <dialog id="link-dialog">
-      <form method="dialog">
-        <label>Link URL<input id="link-url" type="url" placeholder="https://…" /></label
-        ><button value="cancel">Cancel</button><button value="save">Save</button>
+    <dialog id="link-dialog" aria-labelledby="link-dialog-title" class="editor-dialog">
+      <form id="link-form" method="dialog">
+        <h2 id="link-dialog-title">Insert link</h2>
+        <label>Link URL<input id="link-url" type="url" placeholder="https://…" required /></label>
+        <div class="dialog-actions"><button id="link-remove" type="button" class="danger">Remove link</button><button value="cancel" formnovalidate>Cancel</button><button value="save" class="primary">Save link</button></div>
+      </form>
+    </dialog>
+    <dialog id="image-dialog" aria-labelledby="image-dialog-title" class="editor-dialog">
+      <form id="image-form" method="dialog">
+        <h2 id="image-dialog-title">Image properties</h2>
+        <label>Alt text<textarea id="image-alt" rows="2" maxlength="10000" aria-describedby="image-alt-help"></textarea></label>
+        <p id="image-alt-help" class="field-help">Describe what the image conveys. Leave empty for a decorative image.</p>
+        <label>Title <span class="optional">(optional)</span><input id="image-title" maxlength="10000" /></label>
+        <div class="dimension-fields"><label>Width (px)<input id="image-width" type="number" min="1" max="8192" step="1" required /></label><label>Height (px)<input id="image-height" type="number" min="1" max="8192" step="1" required /></label></div>
+        <label class="checkbox-label"><input id="image-proportions" type="checkbox" checked /> Keep proportions</label>
+        <p id="image-error" role="alert"></p>
+        <div class="dialog-actions"><button value="cancel" formnovalidate>Cancel</button><button value="save" class="primary">Save image</button></div>
       </form>
     </dialog>
     <script src="/renderer.js" defer></script>
