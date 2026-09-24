@@ -994,7 +994,11 @@ and invalidation remain in `mevedel-view-render.el`. Generated transcript mode
 setup also suppresses persistent Org element-cache loading; ordinary user Org
 buffers keep their configuration.
 
-Assistant response text is rendered as Markdown in the view. The data
+Assistant responses and submitted user messages are highlighted as Markdown
+in the view, including expanded user-input folds. The editable composer uses
+the same highlighter during redisplay, keeping markup delimiters visible while
+typing. Composer highlighting copies only faces and preserves draft text,
+point, undo history, and mention bindings. The data
 buffer remains org-mode for gptel state, tool parsing, and persistence,
 but the user-facing projection does not convert assistant Markdown to org.
 Markdown view text is fontified through `markdown-ts-mode`, which Emacs

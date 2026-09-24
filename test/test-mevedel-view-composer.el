@@ -52,6 +52,61 @@
   "Return the source feature basename that defines SYMBOL."
   (file-name-base (or (symbol-file symbol 'defun) "")))
 
+(mevedel-deftest mevedel-view--fontify-composer
+  (:before-each (mevedel-view--release-markdown-fontify-buffer)
+   :after-each (mevedel-view--release-markdown-fontify-buffer))
+  ,test
+  (test)
+  :doc "redisplay highlights only the draft and updates multiline syntax"
+  ;; Use a built-in fontifier so this contract also runs without TS grammars.
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'emacs-lisp-mode)))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (buffer-enable-undo)
+        (insert "> \"first\nsecond\" @file:/tmp/note.md")
+        (mevedel-mention-bindings-set
+         (- (point-max) (length "@file:/tmp/note.md")) (point-max)
+         '(:kind file :token "@file:/tmp/note.md" :path "/tmp/note.md"))
+        (jit-lock-fontify-now)
+        (let* ((start (mevedel-view--input-start))
+               (prefix (buffer-substring (point-min) start))
+               (draft (mevedel-view--input-text))
+               (position (point))
+               (undo buffer-undo-list))
+          (jit-lock-refontify start)
+          (setq undo buffer-undo-list)
+          (jit-lock-fontify-now)
+          (should (eq (get-text-property (+ start 4) 'font-lock-face)
+                      'font-lock-string-face))
+          (should (equal (mevedel-view--input-text) draft))
+          (should (= (point) position))
+          (should (equal buffer-undo-list undo))
+          (should (equal-including-properties
+                   prefix (buffer-substring (point-min) start)))
+          (should (equal (get-text-property (1- (point-max))
+                                            'mevedel-mention-binding)
+                         '(:kind file :token "@file:/tmp/note.md"
+                           :path "/tmp/note.md")))
+          (should-not (text-property-not-all start (point-max) 'invisible nil))
+          (goto-char (+ start 2))
+          (delete-char 1)
+          (jit-lock-fontify-now (line-beginning-position) (line-end-position))
+          (should-not (get-text-property (+ start 9) 'font-lock-face))))))
+
+  :doc "missing grammars leave the draft editable and clear stale highlighting"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () nil)))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (insert (propertize "**draft**" 'font-lock-face 'bold))
+        (jit-lock-fontify-now)
+        (should (equal (mevedel-view--input-text) "**draft**"))
+        (should-not (get-text-property (mevedel-view--input-start)
+                                       'font-lock-face))))))
+
 (mevedel-deftest mevedel-view-composer-ownership ()
   ,test
   (test)

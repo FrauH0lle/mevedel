@@ -412,6 +412,9 @@
 (declare-function mevedel-view-disclosure-source-start
                   "mevedel-view-disclosure" (source))
 
+;; `mevedel-view-fontify'
+(declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))
+
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history"
 		  (input))
@@ -1144,6 +1147,30 @@ all displayed windows plus the editable composer text around THUNK."
 ;;
 ;;; Initialization
 
+(defun mevedel-view--fontify-composer (_beg end)
+  "Highlight Markdown in the draft when redisplay reaches END.
+Fontify the whole draft so multiline syntax updates across edited lines.
+Copy only faces: markup stays visible and editable, and mention bindings
+and other input properties remain untouched."
+  (when (and (markerp mevedel-view--input-marker)
+             (marker-buffer mevedel-view--input-marker))
+    (let ((start (mevedel-view--input-start)))
+      (when (> end start)
+        (let* ((text (buffer-substring-no-properties start (point-max)))
+               (fontified (mevedel-view--fontify-as text 'markdown-mode))
+               (pos 0)
+               (limit (length text)))
+          (with-silent-modifications
+            (remove-text-properties start (point-max) '(font-lock-face nil))
+            (while (< pos limit)
+              (let ((next (next-single-property-change
+                           pos 'font-lock-face fontified limit))
+                    (face (get-text-property pos 'font-lock-face fontified)))
+                (when face
+                  (put-text-property (+ start pos) (+ start next)
+                                     'font-lock-face face))
+                (setq pos next)))))))))
+
 (defun mevedel-view-composer-initialize ()
   "Initialize composer editing support in the current chat view."
   (unless mevedel-view--agent-transcript-p
@@ -1152,6 +1179,7 @@ all displayed windows plus the editable composer text around THUNK."
     (setq-local mevedel-mentions-agent-enabled-p
                 (not mevedel-view--side-conversation-p))
     (mevedel-mentions-install)
+    (jit-lock-register #'mevedel-view--fontify-composer)
     (mevedel-view--install-dnd)
     (add-hook 'completion-at-point-functions
               #'mevedel-resource-capf nil t)
