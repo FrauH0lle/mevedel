@@ -26,18 +26,19 @@ admission, and callback settlement as continuation and handoff generation.
 That shared behavior is the reason for adding a third purpose rather than a
 second request implementation. The digest purpose has a separate factual
 bullet-list prompt and four headings (Done, Learned, Surprised, Unfinished),
-a 16 KiB output cap, and at most a 4,000-token output reserve during input
-admission. Supported server token controls are capped on the realized provider
-payload. It treats prior summaries as evidence and
+a 16 KiB visible-output cap, and the ordinary model context reserve during
+input admission. Explicit server output limits are honored on the realized
+provider payload; the journal adds no automatic token ceiling. It treats prior summaries as evidence and
 never turns unfinished state into instructions. Capture jobs, source
 projection, persistence, deadlines, and retry policy belong to the journal
 consumer. Existing continuation and handoff contracts remain intact.
 
-New digest policy disables unspecified reasoning effort when the model declares
-`disabled` or `none`; explicit effort and frozen policy remain authoritative.
-The journal workload is independent of summarization and defaults to balanced.
-Supported provider output limits are clamped; providers lacking that control
-retain client byte/deadline guards without a server billing guarantee.
+Digest policy preserves configured reasoning effort and otherwise uses the
+provider default. The journal workload is independent of summarization and
+defaults to balanced. Configured token limits and frozen policy remain
+authoritative, but the journal neither invents an output-token allowance nor
+forces reasoning off. Providers lacking token controls retain client
+byte/deadline guards without a server billing guarantee.
 
 The [compaction manual](../compaction.md) owns evidence selection, generation,
 and continuation recovery. The [memory manual](../memory.md) owns journal capture,
@@ -71,12 +72,11 @@ adding a second durable skill-state format. Ordinary tool output remains capped.
 
 The first real-model long-transcript evaluation exhausted the configured
 DeepSeek model's 4,000-token allowance in reasoning and returned no digest.
-Prompt shortening alone reproduced that failure. Newly resolved digest policy
-therefore defaults unspecified effort to `disabled`, or `none`, when the model
-declares that capability; explicit effort and already frozen policies remain unchanged.
-The journal freezes this choice before inference. The shared generator owns
-this digest default alongside its output cap, using gptel's model-declared
-effort choices and request implementation rather than provider-specific JSON.
+Prompt shortening alone reproduced that failure. The initial response was to
+default unspecified digest effort to `disabled`, or `none`, when supported,
+while preserving explicit choices. The September 2026 controlled evaluation
+below replaces that response: the small shared output budget caused the empty
+answer, while disabling reasoning could reduce selection quality.
 
 The configured gptel branch also encoded DeepSeek's disabled effort as
 `reasoning_effort: "disabled"`, which the service rejected. A separate isolated
@@ -109,3 +109,28 @@ before dispatch. Consolidation resolves `memory` instead of `buddy`. Both new
 workloads default to `balanced` and use the existing tier/provider/effort map.
 Existing queued captures keep their frozen policy. The generator and workflow
 ownership boundaries remain unchanged.
+
+### September 2026 reasoning and output-budget evaluation
+
+A controlled evaluation used six synthetic reusable-knowledge fixtures, two
+runs per fixture, and six settings through the configured DeepSeek V4.1 Flash
+and GPT-6 Astra transports (72 measured calls). DeepSeek with reasoning disabled
+passed 18/24 cases; reasoning high passed 22/24. Failures without reasoning
+included retaining tracker state, omitting a reference, and inventing an
+observed outcome. One additional failure was a malformed empty-section bullet;
+excluding that formatting failure does not reverse the comparison. High with
+a 4,000-token cap again consumed exactly 4,000 reasoning tokens and returned no
+visible digest. High without that cap completed every request, although one
+still omitted a reference. Astra low and high both passed 12/12; that endpoint
+does not support reasoning off. This small fixture set does not establish a
+universal optimum or perfect reliability.
+
+The replacement is to remove both the forced reasoning-off default and the
+journal's automatic 4,000-token cap. Keep explicit user choices, normal context
+admission, brief-output instructions, 16 KiB accepted text, and the consumer's
+120-second deadline. Provider defaults still impose their own limits. Existing
+captures retain their stored choices; no queued evidence is rewritten. This
+uses native workload/provider configuration rather than inventing a cross-model
+reasoning scale. The evidence, grading, actual request controls, dependency
+hashes, limitations and four failed pilot measurements are retained in
+[the evaluation report](../../.mevedel/shared/journal-reasoning-2026-09-24/report.md).

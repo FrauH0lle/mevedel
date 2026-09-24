@@ -1,0 +1,44 @@
+[
+  {
+    "id": "flash-off-4000",
+    "backend": "DeepSeek",
+    "model": "deepseek-flash",
+    "effort": "disabled",
+    "cap": 4000
+  },
+  {
+    "id": "flash-off-default",
+    "backend": "DeepSeek",
+    "model": "deepseek-flash",
+    "effort": "disabled",
+    "cap": null
+  },
+  {
+    "id": "flash-high-4000",
+    "backend": "DeepSeek",
+    "model": "deepseek-flash",
+    "effort": "high",
+    "cap": 4000
+  },
+  {
+    "id": "flash-high-default",
+    "backend": "DeepSeek",
+    "model": "deepseek-flash",
+    "effort": "high",
+    "cap": null
+  },
+  {
+    "id": "astra-low",
+    "backend": "Codex",
+    "model": "gpt-6-astra",
+    "effort": "low",
+    "cap": null
+  },
+  {
+    "id": "astra-high",
+    "backend": "Codex",
+    "model": "gpt-6-astra",
+    "effort": "high",
+    "cap": null
+  }
+]

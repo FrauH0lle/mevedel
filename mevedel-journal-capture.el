@@ -194,9 +194,9 @@ the caller's own program, used instead of a fresh read."
                                                '(:provider :effort :max-tokens :stream))
                                      (stringp (plist-get policy :provider))
                                      (or (null (plist-get policy :effort)) (stringp (plist-get policy :effort)))
-                                     (integerp (plist-get policy :max-tokens))
-                                     (< 0 (plist-get policy :max-tokens))
-                                     (<= (plist-get policy :max-tokens) 4000)
+                                     (or (null (plist-get policy :max-tokens))
+                                         (and (integerp (plist-get policy :max-tokens))
+                                              (< 0 (plist-get policy :max-tokens))))
                                      (memq (plist-get policy :stream) '(nil t))))))
                      (cl-every (lambda (field) (mevedel-journal-store-id-p (plist-get record field)))
                                '(:evidence-sha256 :notes-sha256))
@@ -395,14 +395,11 @@ Return non-nil only when the ready marker was newly created."
 (defun mevedel-journal-capture--freeze-policy ()
   "Freeze serializable journal selection in the current root buffer."
   (condition-case err
-      (let* ((policy (mevedel-model-resolve-workload 'journal))
-             (policy (mevedel-context-summary-digest-policy
-                      (plist-put (copy-sequence policy) :max-tokens
-                                 (or (plist-get policy :max-tokens) gptel-max-tokens)))))
+      (let ((policy (mevedel-model-resolve-workload 'journal)))
         (list :provider (mevedel-model--provider-label policy)
               :effort (and (plist-get policy :effort) (symbol-name (plist-get policy :effort)))
               :stream (if gptel-stream t :false)
-              :max-tokens (plist-get policy :max-tokens)))
+              :max-tokens (or (plist-get policy :max-tokens) gptel-max-tokens)))
     (error (list :error (error-message-string err)))))
 
 (defun mevedel-journal-capture-checkpoint (session buffer)

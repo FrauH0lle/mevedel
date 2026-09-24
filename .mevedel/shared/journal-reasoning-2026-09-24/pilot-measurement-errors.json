@@ -1,0 +1,22 @@
+[
+  {
+    "id": "flash-off-4000--scoped-feedback--2",
+    "outcome": "measurement-error",
+    "error": "Result recorder attempted JSON encoding of backend object; no response/usage recovered. Pilot attempt, rerun after recorder repair."
+  },
+  {
+    "id": "flash-high-default--scoped-feedback--1",
+    "outcome": "measurement-error",
+    "error": "Result recorder attempted JSON encoding of backend object; no response/usage recovered. Pilot attempt, rerun after recorder repair."
+  },
+  {
+    "id": "flash-off-4000--user-reference--1",
+    "outcome": "measurement-error",
+    "error": "Result recorder attempted JSON encoding of backend object; no response/usage recovered. Pilot attempt, rerun after recorder repair."
+  },
+  {
+    "id": "astra-high--tracker-only--1",
+    "outcome": "measurement-error",
+    "error": "Result recorder attempted JSON encoding of backend object; no response/usage recovered. Pilot attempt, rerun after recorder repair."
+  }
+]

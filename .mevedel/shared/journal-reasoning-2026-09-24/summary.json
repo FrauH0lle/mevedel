@@ -1,0 +1,80 @@
+[
+  {
+    "arm": "flash-off-4000",
+    "n": 12,
+    "passed": 9,
+    "generated": 12,
+    "median_seconds": 1.54,
+    "median_total_output_tokens": 163.5,
+    "median_reasoning_tokens": 0.0,
+    "max_output_tokens": 335,
+    "median_visible_bytes": 726.5,
+    "max_visible_bytes": 1661,
+    "estimated_deepseek_cost_usd": 0.001639602
+  },
+  {
+    "arm": "flash-off-default",
+    "n": 12,
+    "passed": 9,
+    "generated": 12,
+    "median_seconds": 1.13,
+    "median_total_output_tokens": 108.5,
+    "median_reasoning_tokens": 0.0,
+    "max_output_tokens": 383,
+    "median_visible_bytes": 470.0,
+    "max_visible_bytes": 1737,
+    "estimated_deepseek_cost_usd": 0.004303602
+  },
+  {
+    "arm": "flash-high-4000",
+    "n": 12,
+    "passed": 11,
+    "generated": 11,
+    "median_seconds": 8.47,
+    "median_total_output_tokens": 1610.5,
+    "median_reasoning_tokens": 1459.0,
+    "max_output_tokens": 4000,
+    "median_visible_bytes": 517.0,
+    "max_visible_bytes": 1567,
+    "estimated_deepseek_cost_usd": 0.011875476000000001
+  },
+  {
+    "arm": "flash-high-default",
+    "n": 12,
+    "passed": 11,
+    "generated": 12,
+    "median_seconds": 5.36,
+    "median_total_output_tokens": 1027.5,
+    "median_reasoning_tokens": 856.5,
+    "max_output_tokens": 4939,
+    "median_visible_bytes": 606.5,
+    "max_visible_bytes": 1374,
+    "estimated_deepseek_cost_usd": 0.016038444
+  },
+  {
+    "arm": "astra-low",
+    "n": 12,
+    "passed": 12,
+    "generated": 12,
+    "median_seconds": 4.75,
+    "median_total_output_tokens": 99.0,
+    "median_reasoning_tokens": 0.0,
+    "max_output_tokens": 236,
+    "median_visible_bytes": 463.5,
+    "max_visible_bytes": 1076,
+    "estimated_deepseek_cost_usd": null
+  },
+  {
+    "arm": "astra-high",
+    "n": 12,
+    "passed": 12,
+    "generated": 12,
+    "median_seconds": 5.24,
+    "median_total_output_tokens": 98.0,
+    "median_reasoning_tokens": 0.0,
+    "max_output_tokens": 355,
+    "median_visible_bytes": 441.5,
+    "max_visible_bytes": 945,
+    "estimated_deepseek_cost_usd": null
+  }
+]

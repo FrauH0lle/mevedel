@@ -37,7 +37,6 @@
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
-(declare-function mevedel-model-supported-efforts "mevedel-models" (model))
 (declare-function mevedel-model-usable-input-tokens "mevedel-models" (policy))
 
 ;; `mevedel-structs'
@@ -74,20 +73,6 @@
 
 (defconst mevedel-context-summary--digest-max-bytes 16384
   "Maximum UTF-8 byte size of a journal digest.")
-
-;;;###autoload
-(defun mevedel-context-summary-digest-policy (policy)
-  "Freeze digest defaults in newly resolved journal POLICY.
-Keep explicit reasoning choices.  When supported, disable unspecified
-reasoning so it cannot consume the entire short digest output allowance.
-Callers load `mevedel-models' at their request or capture boundary."
-  (let ((policy (copy-sequence policy)))
-    (unless (plist-get policy :effort)
-      (let ((efforts (mevedel-model-supported-efforts (plist-get policy :model))))
-        (when-let* ((effort (or (and (memq 'disabled efforts) 'disabled)
-                               (and (memq 'none efforts) 'none))))
-          (setq policy (plist-put policy :effort effort)))))
-    (plist-put policy :max-tokens (min 4000 (or (plist-get policy :max-tokens) 4000)))))
 
 (defun mevedel-context-summary--headings (purpose)
   "Return the required ordered heading names for PURPOSE."
@@ -384,10 +369,6 @@ continuation and handoff summaries."
                     (append (mevedel-model-resolve-workload
                              (if (eq purpose 'digest) 'journal 'summarization))
                             '(:max-tokens nil :request-params nil)))))
-          ;; A frozen digest policy was already bounded at capture; applying
-          ;; the same idempotent defaults keeps every digest request clamped.
-          (when (eq purpose 'digest)
-            (setq policy (mevedel-context-summary-digest-policy policy)))
           (setq span
                 (and session
                      (fboundp 'mevedel-telemetry-start)
@@ -454,7 +435,7 @@ continuation and handoff summaries."
                  :context
                  (list :mevedel-context-summary t :purpose purpose)
                  :fsm
-                 (if (eq purpose 'digest)
+                 (if (and (eq purpose 'digest) (plist-get policy :max-tokens))
                      (gptel-make-fsm
                       :handlers
                       (cons

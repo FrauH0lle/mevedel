@@ -1,0 +1,98 @@
+[
+  {
+    "id": "flash-off-4000",
+    "arm": {
+      "id": "flash-off-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": 4000
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "flash-off-default",
+    "arm": {
+      "id": "flash-off-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "flash-high-4000",
+    "arm": {
+      "id": "flash-high-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": 4000
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "flash-high-default",
+    "arm": {
+      "id": "flash-high-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "astra-low",
+    "arm": {
+      "id": "astra-low",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "astra-high",
+    "arm": {
+      "id": "astra-high",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "DeepSeek-provider-default",
+    "arm": {
+      "id": "DeepSeek-provider-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": null,
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 0
+  },
+  {
+    "id": "Codex-provider-default",
+    "arm": {
+      "id": "Codex-provider-default",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": null,
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 0
+  }
+]

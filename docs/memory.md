@@ -845,21 +845,23 @@ it and can process another sealed capture. Explicit retry reports the recovery
 error. The job browser identifies a capture that requires its original client.
 
 New captures use the configured `journal` workload (default tier `balanced`)
-and explicit effort. When effort is unspecified and the model declares support
-for disabling reasoning,
-digest capture freezes `disabled` or `none` to reserve output capacity for the
-digest itself. Models without
-that control retain their provider default. Existing frozen policies keep their
-saved effort. Digest prompts also skip routine successful tool chatter and
-prefer a few decisive facts; continuation and handoff policy is unchanged.
+and its effort selection. Unspecified effort retains the provider default;
+journaling does not force reasoning off or translate a universal effort level
+across models. Existing frozen policies keep their saved effort and limit.
+Digest prompts request a few decisive facts and skip routine successful tool
+chatter; continuation and handoff policy is unchanged.
 
-Input admission reserves at most 4,000 output tokens. Supported server token
-limits are capped accordingly. Codex OAuth has no such control, so its requests
-use the same 16-KiB digest limit and 120-second client deadline without claiming
-a server token or billing ceiling. Streaming overflow cancels the request;
-oversized final output is rejected. The journal model remains configurable
-through `mevedel-model-workloads`; changing it affects new captures, while queued
-captures keep their frozen choice and published digests remain readable.
+Journaling adds no server token limit. Explicit output limits from the resolved
+policy or originating buffer's `gptel-max-tokens` are frozen and honored where
+the provider supports them, without an automatic 4,000-token ceiling. Omitting
+a limit uses provider defaults, not unlimited generation. Input admission uses
+the ordinary model context reserve (`mevedel-model-reserve-tokens`) and any
+configured output allowance. Accepted digest text remains limited to 16 KiB,
+with a 120-second client deadline. Streaming overflow cancels the request;
+oversized final output is rejected. These client guards do not bound internal
+reasoning tokens or guarantee a server billing ceiling. Codex OAuth has no
+server output-token control. Changing journal policy affects new captures;
+queued captures keep their frozen choice and published digests remain readable.
 
 Successful output is accepted durably before publication. If publication
 fails, the next opportunity recovers that exact output without another model

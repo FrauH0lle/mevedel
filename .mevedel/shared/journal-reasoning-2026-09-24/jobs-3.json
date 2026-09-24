@@ -1,0 +1,218 @@
+[
+  {
+    "id": "astra-high--tracker-only--1",
+    "arm": {
+      "id": "astra-high",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "tracker-only",
+    "replicate": 1
+  },
+  {
+    "id": "flash-high-4000--user-reference--2",
+    "arm": {
+      "id": "flash-high-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": 4000
+    },
+    "fixture": "user-reference",
+    "replicate": 2
+  },
+  {
+    "id": "flash-high-4000--tracker-only--2",
+    "arm": {
+      "id": "flash-high-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": 4000
+    },
+    "fixture": "tracker-only",
+    "replicate": 2
+  },
+  {
+    "id": "flash-off-default--routine--1",
+    "arm": {
+      "id": "flash-off-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 1
+  },
+  {
+    "id": "astra-high--user-reference--1",
+    "arm": {
+      "id": "astra-high",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "user-reference",
+    "replicate": 1
+  },
+  {
+    "id": "astra-low--user-reference--2",
+    "arm": {
+      "id": "astra-low",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "cap": null
+    },
+    "fixture": "user-reference",
+    "replicate": 2
+  },
+  {
+    "id": "astra-high--routine--2",
+    "arm": {
+      "id": "astra-high",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "routine",
+    "replicate": 2
+  },
+  {
+    "id": "flash-off-4000--tracker-only--1",
+    "arm": {
+      "id": "flash-off-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": 4000
+    },
+    "fixture": "tracker-only",
+    "replicate": 1
+  },
+  {
+    "id": "flash-high-default--tracker-only--1",
+    "arm": {
+      "id": "flash-high-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "tracker-only",
+    "replicate": 1
+  },
+  {
+    "id": "flash-off-default--superseded-evidence--2",
+    "arm": {
+      "id": "flash-off-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": null
+    },
+    "fixture": "superseded-evidence",
+    "replicate": 2
+  },
+  {
+    "id": "flash-off-4000--buried-boundary--1",
+    "arm": {
+      "id": "flash-off-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": 4000
+    },
+    "fixture": "buried-boundary",
+    "replicate": 1
+  },
+  {
+    "id": "astra-high--buried-boundary--1",
+    "arm": {
+      "id": "astra-high",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "buried-boundary",
+    "replicate": 1
+  },
+  {
+    "id": "flash-high-4000--scoped-feedback--2",
+    "arm": {
+      "id": "flash-high-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": 4000
+    },
+    "fixture": "scoped-feedback",
+    "replicate": 2
+  },
+  {
+    "id": "astra-high--superseded-evidence--2",
+    "arm": {
+      "id": "astra-high",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "cap": null
+    },
+    "fixture": "superseded-evidence",
+    "replicate": 2
+  },
+  {
+    "id": "flash-off-default--buried-boundary--1",
+    "arm": {
+      "id": "flash-off-default",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": null
+    },
+    "fixture": "buried-boundary",
+    "replicate": 1
+  },
+  {
+    "id": "flash-off-4000--tracker-only--2",
+    "arm": {
+      "id": "flash-off-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "disabled",
+      "cap": 4000
+    },
+    "fixture": "tracker-only",
+    "replicate": 2
+  },
+  {
+    "id": "astra-low--user-reference--1",
+    "arm": {
+      "id": "astra-low",
+      "backend": "Codex",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "cap": null
+    },
+    "fixture": "user-reference",
+    "replicate": 1
+  },
+  {
+    "id": "flash-high-4000--user-reference--1",
+    "arm": {
+      "id": "flash-high-4000",
+      "backend": "DeepSeek",
+      "model": "deepseek-flash",
+      "effort": "high",
+      "cap": 4000
+    },
+    "fixture": "user-reference",
+    "replicate": 1
+  }
+]

@@ -50,7 +50,7 @@
                (should (string-match-p "Local runner passed" (car prompts)))
                (should (eq 'fast-model (buffer-local-value 'gptel-model (car request-buffers))))
                (should-not (buffer-local-value 'gptel-use-tools (car request-buffers)))
-               (should (= 4000 (buffer-local-value 'gptel-max-tokens (car request-buffers))))
+               (should-not (buffer-local-value 'gptel-max-tokens (car request-buffers)))
                (should (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
                (funcall (car callbacks) mevedel-test-journal-process--digest
                         '(:tokens (:input 100 :output 20)))

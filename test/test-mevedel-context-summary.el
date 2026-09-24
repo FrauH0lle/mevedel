@@ -24,31 +24,6 @@
 (defvar gptel-tools)
 (defvar gptel-use-tools)
 
-(mevedel-deftest mevedel-context-summary-digest-policy ()
-  ,test
-  (test)
-  :doc "defaults unspecified digest reasoning only when the model supports disabling it"
-  (let ((model (make-symbol "digest-policy-model")))
-    (put model :reasoning-effort '(member disabled high max))
-    (dolist (effort '(nil high max disabled))
-      (let* ((policy (list :model model :effort effort))
-             (resolved (mevedel-context-summary-digest-policy policy)))
-        (should (eq (or effort 'disabled) (plist-get resolved :effort)))
-        (should (eq effort (plist-get policy :effort)))))
-    (put model :reasoning-effort '(member low high))
-    (should-not (plist-get (mevedel-context-summary-digest-policy (list :model model)) :effort))
-    (put model :reasoning-effort '(member none low medium high))
-    (should (eq 'none (plist-get (mevedel-context-summary-digest-policy
-                                 (list :model model)) :effort)))
-    (should (eq 'high (plist-get (mevedel-context-summary-digest-policy
-                                 (list :model model :effort 'high)) :effort))))
-  :doc "retains smaller output caps and bounds unspecified or larger caps"
-  (dolist (limit '(nil 1000 9000))
-    (let* ((policy (list :max-tokens limit))
-           (resolved (mevedel-context-summary-digest-policy policy)))
-      (should (= (or (and (eql limit 1000) limit) 4000) (plist-get resolved :max-tokens)))
-      (should (equal limit (plist-get policy :max-tokens))))))
-
 (defconst test-mevedel-context-summary--continuation
   "## Scope
 - Work
@@ -312,39 +287,42 @@
     (should-not (plist-get captured :use-tools))
     (should-not (buffer-live-p (plist-get captured :buffer))))
 
-  :doc "unfrozen digest requests resolve the journal workload"
-  (let (result request-buffer)
+  :doc "unfrozen digest requests leave unspecified reasoning and token limits alone"
+  (let ((model (make-symbol "digest-model")) result request-buffer)
+    (put model :reasoning-effort '(member disabled high max))
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (workload &rest _)
                  (should (eq workload 'journal))
-                 '(:backend digest-backend :model digest-model)))
+                 (list :backend 'digest-backend :model model)))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-request)
                (lambda (_prompt &rest args)
                  (setq request-buffer (plist-get args :buffer))
+                 (should-not (buffer-local-value 'gptel-reasoning-effort request-buffer))
+                 (should-not (buffer-local-value 'gptel-max-tokens request-buffer))
                  (funcall (plist-get args :callback)
                           test-mevedel-context-summary--digest nil))))
       (mevedel-context-summary-generate
        "Completed work" 'digest (lambda (value) (setq result value))))
     (should (eq 'success (plist-get result :outcome)))
-    (should (eq 'digest-model (plist-get result :model)))
+    (should (eq model (plist-get result :model)))
     (should-not (buffer-live-p request-buffer)))
 
-  :doc "digest generation uses the frozen policy with a bounded output reserve"
+  :doc "digest generation preserves absent or explicit output limits and reasoning effort"
   (dolist (limit '(nil 9000 1000 codex))
     (let ((policy (list :backend (if (eq limit 'codex)
                                    (gptel--make-openai-oauth)
                                  'digest-backend)
-                        :model 'digest-model
+                        :model 'digest-model :effort 'high
                         :max-tokens (unless (eq limit 'codex) limit)))
           result request-buffer)
       (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                  (lambda (&rest _) (ert-fail "Frozen policy was re-resolved")))
                 ((symbol-function 'mevedel-model-usable-input-tokens)
                  (lambda (resolved)
-                   (should (= (plist-get resolved :max-tokens)
-                              (if (eql limit 1000) 1000 4000)))
+                   (should (equal (plist-get resolved :max-tokens)
+                                  (unless (eq limit 'codex) limit)))
                    100000))
                 ((symbol-function 'gptel-request)
                  (lambda (prompt &rest args)
@@ -358,8 +336,9 @@
                                                (plist-get args :system)))
                    (should (equal (buffer-local-value 'gptel-max-tokens
                                                        request-buffer)
-                                  (unless (eq limit 'codex)
-                                    (if (eql limit 1000) 1000 4000))))
+                                  (unless (eq limit 'codex) limit)))
+                   (should (eq 'high (buffer-local-value 'gptel-reasoning-effort
+                                                        request-buffer)))
                    (funcall (plist-get args :callback)
                             test-mevedel-context-summary--digest nil))))
         (with-temp-buffer
@@ -428,7 +407,7 @@
       (when cancel (funcall cancel))
       (when (buffer-live-p request-buffer) (kill-buffer request-buffer))))
 
-  :doc "digest output limits survive provider overrides before network dispatch"
+  :doc "explicit digest output limits survive provider overrides before dispatch"
   (dolist (entry '(((:messages []) . (:messages []))
                    ((:max_tokens 9000) . (:max_tokens 4000))
                    ((:max_output_tokens 9000) . (:max_output_tokens 4000))
@@ -457,7 +436,7 @@
                        (funcall handler fsm))))))
         (mevedel-context-summary-generate
          "evidence" 'digest (lambda (value) (setq result value))
-         :policy '(:backend digest-backend :model digest-model)))
+         :policy '(:backend digest-backend :model digest-model :max-tokens 4000)))
       (should (equal sent (cdr entry)))
       (should (equal original (car entry)))
       (should (eq (plist-get result :outcome) 'success))))
@@ -477,7 +456,7 @@
                        (funcall handler fsm))))))
         (mevedel-context-summary-generate
          "evidence" 'digest (lambda (value) (setq result value))
-         :policy '(:backend digest-backend :model digest-model)))
+         :policy '(:backend digest-backend :model digest-model :max-tokens 4000)))
       (should-not sent)
       (should (eq (plist-get result :outcome) 'error))
       (should (eq (plist-get result :error-class) 'provider))))

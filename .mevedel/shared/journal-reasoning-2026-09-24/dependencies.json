@@ -1,0 +1,261 @@
+[
+  {
+    "library": "gptel-anthropic.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-anthropic.el",
+    "source_path": "/home/roland/gptel/gptel-anthropic.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-anthropic.el",
+    "sha256": "2be38d9ce36a77099c6526deff77d5bd5dd9c77f4948a2fdd9a302bd8bee8bb1"
+  },
+  {
+    "library": "gptel-anthropic.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-anthropic.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-anthropic.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-anthropic.elc",
+    "sha256": "abe241556b414f6e2bc628fb56ffe734bf96a83a04c35f4d172a58d459b94513"
+  },
+  {
+    "library": "gptel-autoloads.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-autoloads.el",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-autoloads.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-autoloads.el",
+    "sha256": "cd31defba52476acd62e6f481e2f7f645b4295a9fa99962eb4d710f70513e2ba"
+  },
+  {
+    "library": "gptel-bedrock.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-bedrock.el",
+    "source_path": "/home/roland/gptel/gptel-bedrock.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-bedrock.el",
+    "sha256": "327d25078e9d6078def0b6a96ff1df207709898064aa77699fd040f74c137920"
+  },
+  {
+    "library": "gptel-bedrock.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-bedrock.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-bedrock.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-bedrock.elc",
+    "sha256": "b91cfaf313721079ef584f5dc21fb82450a14d41a53c680a4fd183bc8ad02221"
+  },
+  {
+    "library": "gptel-context.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-context.el",
+    "source_path": "/home/roland/gptel/gptel-context.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-context.el",
+    "sha256": "98878c4af84c35dee2ab3961943a46667e66eb7f76a5027efa2836ac4c98aec7"
+  },
+  {
+    "library": "gptel-context.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-context.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-context.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-context.elc",
+    "sha256": "38d580b16ec81ccd667d9b6b41aa400ff475e461431677174ced1c64fc882468"
+  },
+  {
+    "library": "gptel-gemini.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-gemini.el",
+    "source_path": "/home/roland/gptel/gptel-gemini.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-gemini.el",
+    "sha256": "21d1c59c68c80eb000d221e66c0123177ccdd07b8da9fcecfe0d6471bb27f024"
+  },
+  {
+    "library": "gptel-gemini.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-gemini.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-gemini.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-gemini.elc",
+    "sha256": "c80ddb69ef17a87f9ae0ec5a6a6f3490dfab36a9b36bb49ec66837b5d6ffe7b4"
+  },
+  {
+    "library": "gptel-gh.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-gh.el",
+    "source_path": "/home/roland/gptel/gptel-gh.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-gh.el",
+    "sha256": "f68060c9ba311094cbbc1582390959e004680f2c91e6a333df87d2d1e8663880"
+  },
+  {
+    "library": "gptel-gh.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-gh.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-gh.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-gh.elc",
+    "sha256": "8294dccb1257f4481a2d123a32f1e8e272e6f15fe52f81c13aa6857597428b1c"
+  },
+  {
+    "library": "gptel-integrations.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-integrations.el",
+    "source_path": "/home/roland/gptel/gptel-integrations.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-integrations.el",
+    "sha256": "46459bd0cca2334567be2bebf5e8166f89373981f2a15e27aef5acd700987d04"
+  },
+  {
+    "library": "gptel-integrations.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-integrations.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-integrations.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-integrations.elc",
+    "sha256": "c4235aec39b335b7a6a6d613fce487fa79f5b8a73b44f03def124b6d4b4b69fb"
+  },
+  {
+    "library": "gptel-kagi.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-kagi.el",
+    "source_path": "/home/roland/gptel/gptel-kagi.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-kagi.el",
+    "sha256": "5c8a7f5fbaa1a7d2ddcd601e6bd83f0225edcab47b89861380a23eea49138616"
+  },
+  {
+    "library": "gptel-kagi.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-kagi.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-kagi.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-kagi.elc",
+    "sha256": "29a1c1b8bc0512218a93950fe36ef5700cf9b8d46fa51e34f84d743b4c9130be"
+  },
+  {
+    "library": "gptel-oauth.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-oauth.el",
+    "source_path": "/home/roland/gptel/gptel-oauth.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-oauth.el",
+    "sha256": "d1ca33b6e8fd22caabdeabbb782d7dafee1d078f02cb23af667a8c6bb4cc1486"
+  },
+  {
+    "library": "gptel-oauth.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-oauth.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-oauth.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-oauth.elc",
+    "sha256": "6406c707e99a8e3b24b18041016106d8e053f899f4ae367409e65424d43413c9"
+  },
+  {
+    "library": "gptel-ollama.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-ollama.el",
+    "source_path": "/home/roland/gptel/gptel-ollama.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-ollama.el",
+    "sha256": "604388f8d3100939f862cf1dce77dcb3b57406a4143d818cb5462759e1560aa9"
+  },
+  {
+    "library": "gptel-ollama.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-ollama.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-ollama.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-ollama.elc",
+    "sha256": "726eabde11be00e3cb2d552bcf771e65ae96cb5dc483602072f9893036a919a2"
+  },
+  {
+    "library": "gptel-openai-extras.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-extras.el",
+    "source_path": "/home/roland/gptel/gptel-openai-extras.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai-extras.el",
+    "sha256": "e597e5207f9fe5acda5f3cebd4811d35335ddd8417168c2c5553bd700ba7ec7d"
+  },
+  {
+    "library": "gptel-openai-extras.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-extras.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-extras.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai-extras.elc",
+    "sha256": "5a7f52f3a265a68c9a59667f3c2f7b18af290308e89281fc3e1922e95ac9d6da"
+  },
+  {
+    "library": "gptel-openai-oauth.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-oauth.el",
+    "source_path": "/home/roland/gptel/gptel-openai-oauth.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai-oauth.el",
+    "sha256": "16fe0738b182f9d6ce2cc070bc92a7167bb58be26fa4a06ef1efa5d61d58d7cb"
+  },
+  {
+    "library": "gptel-openai-oauth.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-oauth.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-oauth.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai-oauth.elc",
+    "sha256": "727326b6e110bc9ebe1ce4a4517a9509ece3b688c97b962a9658c516054f4c9f"
+  },
+  {
+    "library": "gptel-openai-responses.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-responses.el",
+    "source_path": "/home/roland/gptel/gptel-openai-responses.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai-responses.el",
+    "sha256": "e5420768007e00225d2259b9bc18ccee48c07ce0b55f04e2bb1534c633c3e80d"
+  },
+  {
+    "library": "gptel-openai-responses.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-responses.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai-responses.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai-responses.elc",
+    "sha256": "e8c90f2ea958f61478a0900b714d3b7af42ef37b66c1791c8ea5ca39a34691eb"
+  },
+  {
+    "library": "gptel-openai.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai.el",
+    "source_path": "/home/roland/gptel/gptel-openai.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai.el",
+    "sha256": "010e4088589f3b704446477579bb929da3ae2313676e8eb172cfab561359c639"
+  },
+  {
+    "library": "gptel-openai.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-openai.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-openai.elc",
+    "sha256": "c09dcabb42de3da457b8142bfa2004e5258f32b807c8df58c532cc454e170b2d"
+  },
+  {
+    "library": "gptel-org.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-org.el",
+    "source_path": "/home/roland/gptel/gptel-org.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-org.el",
+    "sha256": "081efe25528b41dd32c021946a391b7eebecf4939089c38cbeb2b1cd30062cdc"
+  },
+  {
+    "library": "gptel-org.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-org.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-org.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-org.elc",
+    "sha256": "36d5e520e98ee5146e38b6aafd90c6282d6ff833339e4f92c228e6d48c20a308"
+  },
+  {
+    "library": "gptel-request.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-request.el",
+    "source_path": "/home/roland/gptel/gptel-request.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-request.el",
+    "sha256": "834283faa90ec95ee433744c1a1e46e4c9746becedecdc5eea5dd247ad59e240"
+  },
+  {
+    "library": "gptel-request.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-request.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-request.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-request.elc",
+    "sha256": "eb6f93078fdd92f219fb55b837cd7805a0d2bb5d379744c8d278d8a94b02fe1b"
+  },
+  {
+    "library": "gptel-rewrite.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-rewrite.el",
+    "source_path": "/home/roland/gptel/gptel-rewrite.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-rewrite.el",
+    "sha256": "c6a099cd4523a0d74ab0c7ae6960f6e6e7e6aca4de7694c88843be3ead234b81"
+  },
+  {
+    "library": "gptel-rewrite.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-rewrite.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-rewrite.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-rewrite.elc",
+    "sha256": "663ede57c17c1410f9253756bc750ab5d2f14ad9b4d935b919083dd76b63009d"
+  },
+  {
+    "library": "gptel-transient.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-transient.el",
+    "source_path": "/home/roland/gptel/gptel-transient.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-transient.el",
+    "sha256": "5830d3235f57d1e6be943bb3a6c3e01b0b7b6e8e487ff4eaa4ee43e7ece8e6f2"
+  },
+  {
+    "library": "gptel-transient.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-transient.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel-transient.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel-transient.elc",
+    "sha256": "4c9399ed7eea42fd3a6fb157581c936ff14036d05da84a11bb142a90241d60dd"
+  },
+  {
+    "library": "gptel.el",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel.el",
+    "source_path": "/home/roland/gptel/gptel.el",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel.el",
+    "sha256": "68b8ceec5e0114d648e7175667bd66b706c4a177ba8175a94a41f3974d52c94a"
+  },
+  {
+    "library": "gptel.elc",
+    "configured_path": "/home/roland/.emacs.d/straight/build/gptel/gptel.elc",
+    "source_path": "/home/roland/.emacs.d/straight/build/gptel/gptel.elc",
+    "frozen_path": "/home/roland/Projekte/mevedel/.scratch/journal-reasoning-2026-09-24/dependencies/gptel/gptel.elc",
+    "sha256": "2009886c3a68c79f6d00fd14ab1e25b7bfef0bac5488218a595cd3f5f26a7937"
+  }
+]
