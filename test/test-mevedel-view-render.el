@@ -7228,6 +7228,43 @@
     (should (string-match-p "\\.\\.\\. (\\+1 line)\\'" summary))
     (should (< (length summary) 100))))
 
+(mevedel-deftest mevedel-view-user-markdown
+  (:before-each (mevedel-view--release-markdown-fontify-buffer)
+   :after-each (mevedel-view--release-markdown-fontify-buffer)
+   :doc "user echo, history, and expanded folds reuse Markdown fontification")
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'emacs-lisp-mode)))
+    (dolist (path '(echo history fold shared))
+      (mevedel-view-test--with-buffers
+        (let ((text "\"highlight me\"\nsecond line")
+              (mevedel-view-user-input-collapse-line-threshold
+               (if (eq path 'fold) 1 0)))
+          (with-current-buffer view-buf
+            (pcase path
+              ((or 'echo 'fold)
+               (mevedel-view--insert-user-message text))
+              ('shared
+               (let ((inhibit-read-only t))
+                 (goto-char (mevedel-view--history-insertion-marker))
+                 (mevedel-view--insert-shared-context
+                  (list :text text :context "context" :label "Shared context"))))
+              ('history
+               (mevedel-view-test--insert-data
+                data-buf (concat "*** " text "\n") nil)
+               (let ((inhibit-read-only t))
+                 (goto-char (mevedel-view--history-insertion-marker))
+                 (mevedel-view--render-user-turn
+                  (with-current-buffer data-buf
+                    (list (list 'user (point-min) (point-max)))) data-buf))))
+            (goto-char (point-min))
+            (search-forward "highlight me")
+            (when (eq path 'fold)
+              (mevedel-view-render-toggle-user-input)
+              (goto-char (point-min))
+              (search-forward "highlight me"))
+            (should (eq (get-text-property (match-beginning 0) 'font-lock-face)
+                        'font-lock-string-face))))))))
+
 (mevedel-deftest mevedel-view-render-toggle-user-input ()
   ,test
   (test)

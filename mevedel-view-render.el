@@ -4774,7 +4774,7 @@ coordinates yet -- folds and expands the same way as a rendered turn."
         (let ((ins-start (point)))
           (if collapsed
               (progn
-                (insert text)
+                (insert (mevedel-view--fontify-as text 'markdown-mode))
                 (unless (eq (char-before) ?\n)
                   (insert "\n")))
             (insert (mevedel-view--user-input-fold-summary text))
@@ -4804,7 +4804,8 @@ coordinates yet -- folds and expands the same way as a rendered turn."
 SOURCE bounds the original user input.  Anchor the disclosure to the exact
 context suffix so live echoes and later full renders share its fold state.
 Return the start of the inserted disclosure."
-  (insert (plist-get display :text) "\n")
+  (insert (mevedel-view--fontify-as (plist-get display :text) 'markdown-mode)
+          "\n")
   (let ((body (plist-get display :context))
         (start (point)))
     (when (and source (markerp (car source)))
@@ -4905,7 +4906,9 @@ Return the start of the inserted disclosure."
               (cadr (car user-segs))
               (caddr (car (last user-segs)))))))
          (t
-          (insert text)
+          (insert (if (or prompt-drawers directive)
+                      text
+                    (mevedel-view--fontify-as text 'markdown-mode)))
           (unless (eq (char-before) ?\n)
             (insert "\n")))))
       ;; Decorate mailbox blocks that appear inside mixed user text.
@@ -7742,7 +7745,7 @@ marker at the end of the inserted block."
          (t
           (insert (if (eq kind 'directive)
                       (mevedel-view--fontify-directive-display-text text)
-                    text))
+                    (mevedel-view--fontify-as text 'markdown-mode)))
           (unless (eq (char-before) ?\n)
             (insert "\n"))))
         (setq user-end (point))
