@@ -15,6 +15,10 @@
 (require 'mevedel-memory-write)
 (require 'mevedel-transport)
 
+;; `mevedel-journal-cleanup'
+(declare-function mevedel-journal-cleanup-wait "mevedel-journal-cleanup" (workspace))
+(autoload 'mevedel-journal-cleanup-wait "mevedel-journal-cleanup")
+
 (defun mevedel-memory-decision-terminal-status-p (status)
   "Return non-nil when decision STATUS ends its proposal's lifecycle."
   (memq status '(applied rejected reversed)))
@@ -223,7 +227,10 @@ RECOVER-STORE is non-nil, so FUNCTION sees every fenced predecessor's outcome.
 Signal when another client owns the workspace.  The claim is cancelled
 afterwards; FUNCTION settles durable outcomes itself."
   (let ((claim (or (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)
-                   (error "Memory consolidation is busy"))))
+                   (progn
+                     (mevedel-journal-cleanup-wait workspace)
+                     (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+                   (user-error "Memory consolidation is busy"))))
     (unwind-protect
         (progn
           (mevedel-memory-decision-recover workspace)

@@ -127,9 +127,8 @@
           (cancel-timer first)
           (apply (timer--function first) (timer--args first))
           (should mevedel-journal-worker--processes)
-          (let ((until (+ (float-time) 15)))
-            (while (and (gethash root mevedel-journal-cleanup--pending) (< (float-time) until))
-              (accept-process-output nil .01)))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-journal-cleanup-wait workspace))
           (should-not (gethash root mevedel-journal-cleanup--pending))
           (should-not mevedel-journal-worker--processes)
           (should (numberp (mevedel-workspace-journal-cleanup-at workspace))))

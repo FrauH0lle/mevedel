@@ -139,7 +139,7 @@ BUSY-MESSAGE as a user error, or return nil without it."
 (defun mevedel-journal-process--recover (workspace capture entries &optional usage)
   "Complete CAPTURE's accepted result or reconcile its entry from ENTRIES.
 Return the completed entry or omission, otherwise nil.  Source pins are released
-only after publication or an accepted explicit discard.  Recovery errors never
+only after publication or an accepted omission.  Recovery errors never
 admit replacement inference.  USAGE carries available provider token counts."
   (let* ((id (plist-get capture :id))
          (entry (mevedel-journal-store-entry-for-capture entries id))
@@ -154,22 +154,28 @@ admit replacement inference.  USAGE carries available provider token counts."
         (let ((body (or (plist-get entry :body)
                         (and (eq 'completed (plist-get outcome :status)) (plist-get outcome :payload)))))
           (when body
-            (setq entry (mevedel-journal-store-publish-digest
-                         (mevedel-workspace-root workspace)
-                         (mevedel-journal-process--metadata workspace capture) body))
-            (setf (mevedel-workspace-journal-observation workspace) nil)
-            (mevedel-telemetry-record-workspace
-             workspace 'journal-digest-written
-             :capture-id id :trigger (plist-get entry :trigger)
-             :output-bytes (string-bytes body)
-             :attempt-generation (plist-get claim :generation)
-             :input-tokens (plist-get usage :input-tokens)
-             :cached-tokens (plist-get usage :cached-tokens)
-             :output-tokens (plist-get usage :output-tokens)
-             :outcome 'published)
-            (mevedel-journal-capture--retire workspace capture (format "published %s\n" (plist-get entry :id)))
-            (mevedel-memory-pass-schedule workspace)
-            entry))))))
+            (let* ((metadata (mevedel-journal-process--metadata workspace capture))
+                   (omitted (and (not entry) (mevedel-context-summary-digest-empty-p body))))
+              (if omitted
+                  (progn
+                    (mevedel-journal-store--record-coverage (mevedel-workspace-root workspace) metadata)
+                    (setq entry (list :capture-id id :trigger (plist-get metadata :trigger) :outcome 'omitted)))
+                (setq entry (mevedel-journal-store-publish-digest
+                             (mevedel-workspace-root workspace) metadata body)))
+              (setf (mevedel-workspace-journal-observation workspace) nil)
+              (mevedel-telemetry-record-workspace
+               workspace (if omitted 'journal-digest-omitted 'journal-digest-written)
+               :capture-id id :trigger (plist-get entry :trigger)
+               :output-bytes (string-bytes body)
+               :attempt-generation (plist-get claim :generation)
+               :input-tokens (plist-get usage :input-tokens)
+               :cached-tokens (plist-get usage :cached-tokens)
+               :output-tokens (plist-get usage :output-tokens)
+               :outcome (if omitted 'omitted 'published))
+              (mevedel-journal-capture--retire
+               workspace capture (if omitted "nothing noteworthy\n" (format "published %s\n" (plist-get entry :id))))
+              (unless omitted (mevedel-memory-pass-schedule workspace))
+              entry)))))))
 
 (defun mevedel-journal-process--policy (workspace capture)
   "Resolve CAPTURE's frozen selection without substituting another provider.

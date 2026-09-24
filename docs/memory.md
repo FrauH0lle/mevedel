@@ -815,6 +815,16 @@ workspace admission claim permits one digest request at a time; the capture's
 own claim accepts its result. Both share a 120-second target-clock deadline.
 Failed jobs get at most three automatic attempts on separate opportunities.
 
+Generation records only noteworthy events: useful corrections, non-obvious
+discoveries, consequential decisions with their reasons, and unresolved blockers.
+Routine completion, passing tests, ordinary Q&A, and progress chatter alone do
+not warrant notes. A validated result with `- none` in all four sections succeeds
+without publishing a journal entry or scheduling consolidation. Its accepted
+outcome records turn coverage before releasing source pins, so recovery needs no
+replacement inference and later boundaries do not recapture those turns.
+Consolidation likewise treats No action as success; a journal note does not by
+itself justify creating or rewriting a lasting memory.
+
 Processing re-resolves the exact frozen provider/model and uses the saved
 streaming, effort, and output settings. Missing policy or client-owned evidence
 stays unavailable instead of selecting a fallback. Frozen evidence is bounded
@@ -962,6 +972,11 @@ public or private bytes are retained for inspection. Retired capture payloads ca
 with their expired digest, while identity-only capture coverage survives.
 Consolidation uses the same mutation boundary when pinning proposal evidence.
 Cleanup also acquires consolidation admission, so a live pass postpones cleanup.
+When an interactive memory decision encounters this client's active cleanup,
+it waits for that batch to release ownership, with quitting available and a
+120-second bound. Queued idle cleanup does not delay decisions. Bulk decisions
+defer newly scheduled cleanup until the command finishes. Other owners still
+prevent conflicting decisions.
 Completed general reviews become eligible only after all their examined digests are gone,
 their own evidence pins are released, and their accepted private state matches
 the public record. A digest and its covering review expire on separate
