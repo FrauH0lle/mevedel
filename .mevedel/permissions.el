@@ -18,7 +18,12 @@
    :sandbox-permissions require-escalated :action allow)
   ("Bash" :pattern
    "npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test ert test/test-mevedel-view-render-reentry.el test/test-mevedel-view-render.el test/test-mevedel-view-stream.el test/test-mevedel-view-agent-reminders.el test/test-mevedel-view-segments.el"
-   :sandbox-permissions require-escalated :action allow))
+   :sandbox-permissions require-escalated :action allow)
+  ("Bash" :pattern "git -C .scratch/upstream/gptel pull --ff-only" :network t
+   :file-system
+   ((:path "~/Projekte/mevedel/.scratch/upstream/gptel" :access write :recursive
+           t))
+   :action allow))
  :resource-grants
  ((:path "~/.mevedel/skills" :access read)
   (:path "~/.agents/skills" :access read)

@@ -83,8 +83,8 @@ contracts. The `docs/` tree documents the system as it exists now: implemented
 behavior, current contracts, and the rationale for the current design. It is
 not a planning workspace. `docs/backlog.md` is the sole future-work exception,
 holding concise actionable entries. Keep detailed plans, PRDs, proposals,
-roadmaps, reviews, progress reports, and speculative designs outside `docs/`,
-under `.scratch/<feature-slug>/`.
+roadmaps, reviews, progress reports, and speculative designs outside `docs/`;
+use the working-material policy below for their destinations.
 Update `docs/` when the corresponding change is implemented; do not document
 intended behavior as current behavior. Clearly marked ADR decision histories
 retain historical rationale, not future plans. This file keeps the entry rules and
@@ -123,11 +123,32 @@ test structure, diagnostic handling, and compilation commands.
 
 For interactive commands, see [README.md](README.md#usage).
 
+## Working material
+
+- Put ordinary investigations, reports, working notes, drafts, and handoffs in
+  `work://shared/`, not `.scratch/`. This applies to full reports as well as short
+  summaries and takes precedence over general scratch-storage guidance in the
+  backlog and agent docs.
+- Keep managed session plans in `work://plans/`; curate selected durable lessons
+  into memory. Read-only requests and Plan-mode write restrictions still apply.
+- Preserve explicitly invoked skills' configured workflows and destinations,
+  including the local issue tracker below. Do not rewrite plugin skills or
+  relocate their files merely to follow the ordinary-notes default.
+- `.scratch/` is local-only, for skill workflow files and disposable execution
+  material such as checkouts and logs. Never track or commit anything under it.
+- `.mevedel/shared/`, addressed through `work://shared/`, is versioned working
+  material. Review its contents before committing; Git commits and pulls, not
+  the resource address itself, carry it between independent checkouts.
+
 ## Agent skills
 
 ### Issue tracker
 
-Issues and PRDs are tracked as local markdown files under `.scratch/<feature-slug>/`. `.scratch/` is gitignored local agent state; promote implemented decisions to maintained docs when they describe the current system. See `docs/agents/issue-tracker.md`.
+The Matt Pocock skills' local issue-tracker workflow keeps issues and PRDs under
+`.scratch/<feature-slug>/`. Preserve that workflow; its files remain local-only
+and must not be committed. This is not the default destination for ordinary
+notes or handoffs. Promote implemented decisions to maintained docs when they
+describe the current system. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
