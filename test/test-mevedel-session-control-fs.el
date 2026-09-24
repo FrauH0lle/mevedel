@@ -1055,6 +1055,31 @@
   :doc "an empty path list runs no program"
   (should-not (mevedel-session-control-fs-delete-directories nil)))
 
+(mevedel-deftest mevedel-session-control-fs-listing-proof ()
+  ,test
+  (test)
+  :doc "proves exactly the listed entries, dotfiles and an absent directory included"
+  (let* ((root (make-temp-file "mevedel-control-fs-listing-" t))
+         (directory (file-name-concat root "listed"))
+         (status (lambda (entries)
+                   (plist-get (car (mevedel-session-control-fs-run-program
+                                    (list (mevedel-session-control-fs-listing-proof
+                                           directory entries))))
+                              :status))))
+    (unwind-protect
+        (progn
+          (should (eq 'ok (funcall status nil)))
+          (make-directory directory)
+          (should (eq 'ok (funcall status nil)))
+          (dolist (name '("b" ".hidden" "a"))
+            (write-region "" nil (file-name-concat directory name) nil 'silent))
+          (let ((entries (mevedel-session-control-fs-list-directory directory ".")))
+            (should (eq 'ok (funcall status entries)))
+            (should (eq 'mismatch (funcall status (cdr entries))))
+            (delete-file (file-name-concat directory "a"))
+            (should (eq 'mismatch (funcall status entries)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs-tree-sizes
   ()
   ,test

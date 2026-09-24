@@ -899,13 +899,17 @@ After a complete scan, retained manifests are validated one per idle step and
 mark their exact referenced files. All obsolete manifests are retired before
 any unreferenced payloads are removed, so interruption cannot leave discoverable
 heads whose bytes have been collected. Each deletion batch contains at most
-eight operations under a reserved lease. Wholly unreferenced generation
-directories need no listing and share a batch. A partially retained generation
-is listed on its own step, yielding between generations. The target proofs of lease ownership and of an unchanged
-journal pin set run only in steps that delete. Steps that read manifests or list
-generations check local state and cost only their own read. A changed pin set
-stops the plan before deletion.
-Failure warns without breaking settlement or restore.
+eight operations. Wholly unreferenced generation directories need no listing
+and share a batch. A partially retained generation is listed on its own step,
+yielding between generations. Steps that read manifests or list generations
+check local state and cost only their own read. A deleting step is one program
+whose first operations prove, on the target, this client's lease generation
+bytes, a target clock before the lease expiry, and the planned journal pin
+directory's exact entries and pin bytes. On targets that support direct-async
+spawns that program runs in the background; the job waits for it, and its
+report continues the job from a timer outside any remote command. A failed
+proof deletes nothing and ends the plan quietly; the next settlement plans
+afresh. Other failures warn without breaking settlement or restore.
 
 Collection follows references rather than age: manifests can retain unchanged
 bytes in older generations. It reads every published sidecar, using cached

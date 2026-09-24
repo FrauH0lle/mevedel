@@ -341,6 +341,25 @@ before the operation ran."
    "        if [[ \"${entry#./}\" > \"$leaf\" ]]; then exit 72; fi\n"
    "      done\n"
    "      ;;\n"
+   ;; Proves a directory still holds exactly the entries once listed, so a
+   ;; program can refuse to mutate after something was added or removed.
+   ;; Both sides sort by bytes; an absent directory holds nothing.
+   "    verify-list)\n"
+   "      if test ! -e \"$leaf\" && test ! -L \"$leaf\"; then\n"
+   "        test -z \"${payload//$'\\n'/}\" || exit 72\n"
+   "        exit 0\n"
+   "      fi\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      exec 8<\"$leaf\" || exit 67\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      cd -- /proc/self/fd/8 || exit 70\n"
+   "      observed=$(set -o pipefail\n"
+   "        for entry in ./* ./.[!.]* ./..?*; do\n"
+   "          test -e \"$entry\" || test -L \"$entry\" || continue\n"
+   "          printf '%s\\0' \"${entry#./}\"\n"
+   "        done | LC_ALL=C sort -z | base64 -w0) || exit 67\n"
+   "      test \"$observed\" = \"${payload//$'\\n'/}\" || exit 72\n"
+   "      ;;\n"
    "    list)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
@@ -517,6 +536,7 @@ parent must not turn into a `Setting current directory' failure."
     (delete-empty-directory . "delete-empty-directory")
     (target-time . "clock")
     (list-directory . "list")
+    (verify-list . "verify-list")
     (tree-size . "tree-size"))
   "Program operation names mapped to their target-side verbs.")
 
@@ -1310,6 +1330,16 @@ Symlink entries fail closed before their names can be handed to a caller."
     (dolist (name names (nreverse result))
       (when (string-match-p regexp name)
         (push (expand-file-name name directory) result)))))
+
+(defun mevedel-session-control-fs-listing-proof (directory paths)
+  "Return an operation proving DIRECTORY still holds exactly PATHS.
+PATHS are every entry `mevedel-session-control-fs-list-directory' returned
+for DIRECTORY.  The operation fails as `mismatch' once an entry was added or
+removed, so a later program can make an unchanged listing its precondition."
+  (list :op 'verify-list :path (mevedel-session-control-fs-physical-path directory)
+        :content (mapconcat (lambda (name) (concat name "\0"))
+                            (sort (mapcar #'file-name-nondirectory paths) #'string<)
+                            "")))
 
 (defun mevedel-session-control-fs-delete-file (path)
   "Delete target control file PATH without following a final symlink."

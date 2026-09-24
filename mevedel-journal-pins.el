@@ -34,11 +34,10 @@
   (file-name-concat (mevedel-journal-pins--directory session-dir)
                     (concat capture-id ".json")))
 
-(defun mevedel-journal-pins--read (path)
-  "Return validated publication heads retained by the pin at PATH.
+(defun mevedel-journal-pins--parse (path bytes)
+  "Return validated publication heads retained by pin BYTES read from PATH.
 Malformed pins signal an error so collection cannot silently delete evidence."
-  (let* ((object (json-parse-string
-                  (mevedel-session-control-fs-read-file path)))
+  (let* ((object (json-parse-string bytes))
          (id (and (hash-table-p object) (gethash "capture-id" object)))
          (heads (and (hash-table-p object) (gethash "heads" object))))
     (unless (and (hash-table-p object) (= 2 (hash-table-count object))
@@ -51,6 +50,10 @@ Malformed pins signal an error so collection cannot silently delete evidence."
                            heads))
       (error "Invalid journal evidence pin: %s" path))
     (append heads nil)))
+
+(defun mevedel-journal-pins--read (path)
+  "Return validated publication heads retained by the pin at PATH."
+  (mevedel-journal-pins--parse path (mevedel-session-control-fs-read-file path)))
 
 (defun mevedel-journal-pins-retain (session-dir capture-id heads)
   "Pin source SESSION-DIR and immutable HEADS for CAPTURE-ID.
@@ -82,15 +85,30 @@ Only completed publication or explicit discard may release a capture pin."
 (defun mevedel-journal-pins-heads (session-dir)
   "Return all immutable publication heads pinned below SESSION-DIR.
 An unreadable pin is an error, never an empty pin set."
-  (let (heads)
-    (dolist (path (mevedel-session-control-fs-list-directory
-                  (mevedel-journal-pins--directory session-dir)
-                  mevedel-journal-pins--name-regexp))
-      (condition-case nil
-          (setq heads (append (mevedel-journal-pins--read path) heads))
-        ;; A concurrent completed capture may release its own pin.
-        (mevedel-session-control-fs-absent nil)))
-    (delete-dups heads)))
+  (car (mevedel-journal-pins-observe session-dir)))
+
+(defun mevedel-journal-pins-observe (session-dir)
+  "Return (HEADS . PROOF) for the pins below SESSION-DIR.
+HEADS are as `mevedel-journal-pins-heads' returns them.  PROOF is a list of
+control-program operations that fail unless the pin directory still holds
+exactly the observed entries with the observed bytes, so a later program
+that deletes publications can make the unchanged pin set its precondition."
+  (let* ((directory (mevedel-journal-pins--directory session-dir))
+         (entries (mevedel-session-control-fs-list-directory directory "."))
+         heads proof)
+    (dolist (path entries)
+      (when (string-match-p mevedel-journal-pins--name-regexp
+                            (file-name-nondirectory path))
+        (condition-case nil
+            (let ((bytes (mevedel-session-control-fs-read-file path)))
+              (setq heads (append (mevedel-journal-pins--parse path bytes) heads))
+              (push (list :op 'verify :path path :content bytes) proof))
+          ;; A concurrent completed capture may release its own pin.
+          (mevedel-session-control-fs-absent
+           (setq entries (delete path entries))))))
+    (cons (delete-dups heads)
+          (cons (mevedel-session-control-fs-listing-proof directory entries)
+                (nreverse proof)))))
 
 (defun mevedel-journal-pins-present-p (session-dir)
   "Return non-nil if SESSION-DIR has capture pins, including malformed pins.

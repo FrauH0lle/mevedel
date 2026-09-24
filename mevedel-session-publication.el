@@ -738,33 +738,43 @@ Retained heads are marked one at a time by
 No files are deleted until every retained manifest has been validated."
   (let* ((directory (mevedel-session-save-path session))
          (head (plist-get (mevedel-session-publication session) :head))
-         (pins (sort (mevedel-journal-pins-heads directory) #'string<)))
+         (pins (mevedel-journal-pins-observe directory)))
     (unless head (error "Collection requires a current publication"))
-    (list :head head :pins pins
+    (list :head head :pin-proof (cdr pins)
           :root (file-name-as-directory
                  (mevedel-session-control-fs-physical-path directory))
           :heads (delete-dups
-                  (append (list head) pins
+                  (append (list head) (car pins)
                           (mevedel-session-publication--retained-heads summaries)))
           :keep (make-hash-table :test #'equal)
           :marked nil :directories nil :operations nil
           :candidates (mapcar (lambda (summary) (plist-get summary :head)) summaries)
           :deleted-directories 0 :deleted-files 0)))
 
-(defun mevedel-session-publication-collect-step (session plan)
+(defun mevedel-session-publication-collect-step (session plan &optional callback)
   "Advance SESSION's collection PLAN by one bounded step.
 Read one retained manifest, enumerate one generation, or delete up to eight
-files/directories.  Return non-nil while work remains.  A changed head,
-journal pin set, or ownership aborts before mutation.  Errors propagate to
-the idle collection owner, which reports them and discards the plan."
+files/directories.  Return non-nil while work remains.  A changed head
+aborts before any step; errors propagate to the idle collection owner, which
+reports them and discards the plan.
+
+A deleting step is one program that proves this client's lease generation,
+its unexpired deadline on the target clock, and the unchanged journal pin set
+before it deletes, through
+`mevedel-session-durability-run-owned-program-async'.  Where that program runs
+in the background this returns `pending' and CALLBACK later receives ERROR,
+nil once PLAN has advanced; the callback can run inside another remote
+command.  A failed proof ends PLAN quietly, since collection is rescheduled
+from a fresh plan.  Without CALLBACK the program runs synchronously and its
+failure signals here."
   (let ((directory (mevedel-session-save-path session))
         (root (plist-get plan :root))
         (keep (plist-get plan :keep)))
-    ;; Local state is checked before every step.  The target proofs --
-    ;; the lease clock and the journal pin set -- guard deletion, so only
-    ;; the step that deletes pays them; reading a manifest or listing a
-    ;; generation changes nothing a later proof would miss.
+    ;; Local state is checked before every step.  The target proofs guard
+    ;; deletion, so only the program that deletes carries them; reading a
+    ;; manifest or listing a generation changes nothing they would miss.
     (unless (and (mevedel-session-codec-portable-authority-p session)
+                 (not (plist-get plan :in-flight))
                  (not (mevedel-session-pending-publication session))
                  (null (mevedel-session-publication-uncommitted-batches session))
                  (null (mevedel-session-publication-queue session))
@@ -772,14 +782,7 @@ the idle collection owner, which reports them and discards the plan."
                  (equal (plist-get plan :head)
                         (plist-get (mevedel-session-publication session) :head))
                  (equal root (file-name-as-directory
-                              (mevedel-session-control-fs-physical-path directory)))
-                 (or (plist-get plan :heads)
-                     (not (plist-get plan :marked))
-                     (not (plist-get plan :operations))
-                     (and (mevedel-session-durability-lease-owned-p session)
-                          (equal (plist-get plan :pins)
-                                 (sort (mevedel-journal-pins-heads directory)
-                                       #'string<)))))
+                              (mevedel-session-control-fs-physical-path directory))))
       (error "Publication collection ownership or retained sources changed"))
     (cond
      ((plist-get plan :heads)
@@ -809,7 +812,10 @@ the idle collection owner, which reports them and discards the plan."
             (plist-get plan :marked) t)
       t)
      ((plist-get plan :operations)
-      (let ((operations (seq-take (plist-get plan :operations) 8)))
+      (let ((operations (seq-take (plist-get plan :operations) 8))
+            (expires (plist-get (mevedel-session-lease session) :expires-at)))
+        (unless (numberp expires)
+          (error "Publication collection requires an owned lease"))
         ;; Retire ALL obsolete heads before any payloads, including across
         ;; generations.  Evict observations before the program: it can fail
         ;; after completing only some required operations.
@@ -821,15 +827,40 @@ the idle collection owner, which reports them and discards the plan."
                              (file-name-concat path "manifest.el") path)))
                 (remhash key mevedel-session-publication--generation-cache)
                 (remhash key mevedel-session-publication--facts-cache)))))
-        (mevedel-session-durability-call-with-reserved-lease
-         session (lambda ()
+        (let ((proofs (cons (list :op 'before-time :path (directory-file-name root)
+                                  :content (number-to-string (floor expires)))
+                            (plist-get plan :pin-proof)))
+              failure)
+          (setf (plist-get plan :in-flight) t)
+          (let ((mevedel-session-control-fs--async-wait
+                 (or mevedel-session-control-fs--async-wait (null callback))))
+            (mevedel-session-durability-run-owned-program-async
+           session (append proofs operations)
+           (lambda (results error)
+             (setf (plist-get plan :in-flight) nil)
+             (condition-case err
+                 (cond
+                  (error (signal (car error) (cdr error)))
+                  ((not (and results
+                             (cl-every (lambda (result) (eq 'ok (plist-get result :status)))
+                                       (seq-take results (length proofs)))))
+                   ;; Another owner, a lapsing lease, or a new pin: nothing
+                   ;; was deleted, and the next schedule plans afresh.
+                   (setf (plist-get plan :operations) nil
+                         (plist-get plan :directories) nil))
+                  (t
                    (mapc #'mevedel-session-control-fs-program-value
-                         (mevedel-session-control-fs-run-program operations))))
-        (dolist (operation operations)
-          (cl-incf (plist-get plan (if (eq (plist-get operation :op) 'delete-directory)
-                                      :deleted-directories :deleted-files))))
-        (setf (plist-get plan :operations) (nthcdr (length operations) (plist-get plan :operations))))
-      t)
+                         (nthcdr (length proofs) results))
+                   (dolist (operation operations)
+                     (cl-incf (plist-get plan (if (eq (plist-get operation :op) 'delete-directory)
+                                                 :deleted-directories :deleted-files))))
+                   (setf (plist-get plan :operations)
+                         (nthcdr (length operations) (plist-get plan :operations)))))
+               (error (setq failure err)))
+             (if callback
+                 (funcall callback failure)
+               (when failure (signal (car failure) (cdr failure)))))))
+          (if (plist-get plan :in-flight) 'pending t))))
      ((plist-get plan :directories)
       (let* ((path (car (plist-get plan :directories)))
              (manifest (file-name-concat path "manifest.el")))

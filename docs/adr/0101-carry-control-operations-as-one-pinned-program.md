@@ -69,6 +69,9 @@ artifact write and after the last, even when those operations share a process;
 an adjacent lease commit with no target write in between -- the reservation, or
 a committing batch's head commit -- is that proof. A diagnostic append carries
 its own proof as the first operation of its program instead of a reservation.
+A collection deletion does too: its program first verifies the lease generation
+bytes, a target clock before the lease expiry, and the planned journal pin
+directory's entries and bytes.
 Identical lease bytes need verification and listing but no replacement write.
 Renewals omit the trailing clock operation while the transaction's existing
 reading is fresh, without refreshing its age. Once that reading expires, the
@@ -204,6 +207,11 @@ protocol, extraction directory, or generic resolver cache is needed.
   collected per batch and run as one background direct-async program on
   capable targets; its callback performs no target I/O, and unwritten entries
   retry from an in-memory backlog.
+- **Reserved collection deletions:** run 7 spent 102 of its 151 collection
+  programs in 17 deleting steps of six synchronous programs each: a clock
+  read, a pin listing and read, a reservation, the deletion, and the
+  reservation's release. The deletion program now carries those proofs itself
+  and runs in the background on direct-async targets.
 - **Timer suspension did not stop sentinel reentrancy.** Projectile's advice on
   `delete-file` resolved remote project roots while native compilation or syntax
   checking deleted local temporary files. Those sentinels ran inside a remote
