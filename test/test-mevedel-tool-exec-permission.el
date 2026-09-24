@@ -204,6 +204,19 @@
           (mevedel-permission--invocation-context
            :tool-name "Bash" :pattern "make test" :mode 'edits
            :session-rules '(("Bash" :pattern "make *" :action allow)))))))
+  :doc "coalescing checks the selected tree instead of the original exact request"
+  (let* ((exact '(:path "/tmp/profile-cache" :access write))
+         (tree (append exact '(:recursive t)))
+         (entry `(:kind sandbox :tool-name "Bash" :detail "make test"
+                  :sandbox-permissions additive
+                  :resource-selection-cell ((,tree))
+                  :requested-additional-permissions (:file-system (,exact)))))
+    (dolist (grant (list exact tree))
+      (should
+       (eq (if (eq grant tree) 'allow 'ask)
+           (mevedel-tool-exec-permission-reevaluate
+            entry `(:tool-name "Bash" :mode edits
+                    :resource-grants (,grant)))))))
 )
 
 (mevedel-deftest mevedel-tool-exec-permission--request-permission ()

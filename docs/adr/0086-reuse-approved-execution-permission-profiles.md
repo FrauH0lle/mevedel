@@ -41,12 +41,16 @@ Target replacement strips filesystem entries from session profiles and invalidat
 frozen authority alongside session resource grants. It preserves command and
 network approvals and does not rewrite durable workspace/global configuration.
 
-For confined execution, approval and persistence reject exact directory writes
-before settling a card.
-The user must explicitly select directory-tree scope; automatic review cannot
-widen it. Native, live Eval and unconfined exact directory operations remain valid. Confinement also
-refuses exact reads beneath inaccessible
-masks that Bubblewrap cannot represent without widening authority. Explicit tree
+Human queue admission defaults existing directory writes and reads beneath
+inaccessible masks to recursive scope for confined Bash and batch Eval. The
+card displays that scope for both execution and remembering, so ordinary
+approval accepts an enforceable grant without a separate scope-selection step.
+Only the requested directory is selected; access level is preserved. Hooks and
+automatic review still receive the original request. Files, missing paths,
+already-readable directory reads, native operations, live Eval and unconfined
+operations retain their original scope. The scope picker omits unrepresentable
+exact directory choices. Approval and launch validation still refuse unusable
+grants rather than expanding authority during settlement. Explicit tree
 grants can admit protected Git metadata. File masks use private mode-000 files,
 and approved exact file mounts replace only their matching masks. These are
 current representability limits, not invitations to broaden a request.
@@ -172,3 +176,23 @@ Review then reproduced rejection of an Ask-mode directory approval with the
 sandbox off, where no child mount exists. Validation now consults the selected
 execution boundary, retaining the mount restriction for confined execution but
 not forcing recursive authority for native, live or disclosed unconfined work.
+
+### Default human cards to enforceable directory scope
+
+A September 24 Git index operation presented an exact `.git` write request,
+then rejected both RET and session approval because Bubblewrap can only expose
+that directory through a tree mount. The initial card offered an unusable
+selection and required an extra scope-selection interaction to repair it.
+
+Previously the user had to explicitly select a tree with `g`. Human admission
+now selects the requested directory tree before presenting the card. Approval
+accepts the visibly displayed extent; it does not silently broaden authority.
+Defaults update current-call and remembered selections together, preserve the
+original request for audit, and never select a parent. Automatic review and
+hooks retain their original scope. Queue rechecks use the selected extent so
+an exact grant cannot release a pending recursive request. Existing persisted
+authority is not rewritten.
+
+Regression coverage includes confined Git index updates preserving local files,
+invocation-only approval, session and workspace reuse, protected directory
+reads, exact file grants, and automatic-review fallback to the human card.

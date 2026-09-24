@@ -343,17 +343,25 @@ Identical entries in different scopes remain separate and independently
 revocable. Global entries are authored explicitly: prompt-based remembering
 continues to write only session or workspace authority.
 
-The permission card keeps the original request visible. Press `g` to select
-the exact resource or an existing containing directory tree, including a higher
-ancestor, and its read/write access. For several execution resources, first
-choose which resource to change. The card shows the selected path in the
-execution target's native notation and labels exact and recursive scope.
-Selection alone neither creates a grant nor runs the tool. A child exact-directory
-write cannot be represented by a bind mount: approval leaves the card pending
-with an actionable error until the user explicitly chooses a directory tree.
-No automatic reviewer, hook or persistence path silently broadens that extent. `RET` approves the
-current invocation, `s` remembers session authority, and `A` remembers workspace
-authority; one-shot interactions retain only their permitted lifetime choices.
+Human permission cards select an enforceable scope before displaying approval
+controls. For confined Bash and batch Eval, existing directory writes and
+reads beneath inaccessible masks default to the requested directory's recursive
+scope. Files, missing paths, already-readable directory reads, native operations,
+live Eval, and unconfined execution retain their original scope. Defaults never
+select an ancestor or change read access to write access. Hooks and automatic
+reviewers receive the unchanged original request before human admission.
+
+The card displays the selected authority consistently for the current invocation
+and remembering controls, with exact/recursive labels and target-native paths.
+Original request facts remain available in the permission audit. Press `g` to
+choose another enforceable scope, including a higher containing directory tree;
+unrepresentable exact directory choices are omitted. For several resources,
+first choose which resource to change. Selection alone neither creates a grant
+nor runs the tool. `RET` approves the displayed scope for the current invocation,
+`s` remembers session authority, and `A` remembers workspace authority; one-shot
+interactions retain only their permitted lifetime choices. Remembering preserves
+the selected command-bound or independent path scope. Approval and launch still
+reject unusable grants if filesystem or confinement facts change.
 Approving a tree installs its grant before checking queued siblings. Rechecks
 retain the originating tool buffer and delegated rules, and a captured hook ask
 continues to require its own answer.
@@ -689,8 +697,8 @@ Full Access bypasses ordinary resource asks. Invocation approval applies only
 to the current child. Reusable approval
 stores each selected path either in the matching operation profile or as an
 independent resource grant shared with native filesystem tools. It never
-creates both entries implicitly. The card's `g` selection can
-broaden a requested file or directory to a containing tree. Both the current
+creates both entries implicitly. Human directory defaults and the card's `g` selection can
+broaden a requested resource to a displayed directory tree. Both the current
 child and a selected remembered profile receive that explicit extent. Narrowing
 the remembering toggles does not narrow the current invocation's approval.
 The default remembered selection includes every requested capability, including

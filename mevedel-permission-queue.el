@@ -69,11 +69,14 @@
 (autoload 'mevedel-permission--normalize-outcome "mevedel-permissions")
 
 ;; `mevedel-sandbox'
+(declare-function mevedel-sandbox-directory-read-masked-p
+                  "mevedel-sandbox" (path workdir &optional target))
 (declare-function mevedel-sandbox-mode-effective
                   "mevedel-sandbox" (&optional session permission-mode))
 (declare-function mevedel-sandbox-pending-facts
                   "mevedel-sandbox"
                   (&optional additional-permissions sandbox-permissions mode workdir))
+(autoload 'mevedel-sandbox-directory-read-masked-p "mevedel-sandbox")
 (autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
 (autoload 'mevedel-sandbox-pending-facts "mevedel-sandbox")
 
@@ -361,6 +364,11 @@ ENTRY plist keys:
                (plist-get (mevedel-session-control-transfer session) :state)
                (not (plist-get entry :request-id)))
       (mevedel-session-artifacts-assert-new-mutation-authority session))
+    ;; Only human admission selects a broader, enforceable default.  Hooks
+    ;; and automatic review have already seen the unchanged model request.
+    (setq entry (plist-put entry :session session))
+    (when session
+      (mevedel-permission-queue--prepare-resources entry))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
     (let* ((release
             (and session
@@ -377,14 +385,16 @@ ENTRY plist keys:
               callback))
            (entry (plist-put (copy-sequence entry) :callback wrapped)))
       (condition-case err
-          (if (not session)
+          (if (or (not session)
+                  (when-let* ((request (plist-get entry :request)))
+                    (mevedel-request-cancelled-p request)))
               (progn
-                (mevedel--warn-once
-                 'permission-queue-no-session
-                 "permission-queue: enqueue with no session")
+                (unless session
+                  (mevedel--warn-once
+                   'permission-queue-no-session
+                   "permission-queue: enqueue with no session"))
                 (mevedel-permission-queue--safe-settle
-                 entry 'aborted 'no-session))
-            (setq entry (plist-put entry :session session))
+                 entry 'aborted (if session 'cancelled 'no-session)))
             (mevedel-permission-queue--ensure-settled-cell entry)
             (mevedel-permission-queue--set
              (append (mevedel-permission-queue--get session) (list entry))
@@ -427,43 +437,72 @@ ENTRY plist keys:
           (_ 'aborted))
         'render-failed)))))
 
+(defun mevedel-permission-queue-resource-needs-tree-p (entry grant)
+  "Return non-nil when ENTRY cannot confine exact directory GRANT."
+  (let* ((session (plist-get entry :session))
+         (path (plist-get grant :path))
+         (directory (or (plist-get entry :execution-directory)
+                        (and session (mevedel-session-working-directory session))
+                        default-directory)))
+    (and (memq (plist-get entry :kind) '(bash eval sandbox))
+         (not (and (eq (plist-get entry :kind) 'eval)
+                   (eq (mevedel-tool-exec-permission-eval-mode
+                        (or (plist-get entry :args)
+                            (list :mode (plist-get entry :mode))))
+                       'live)))
+         (not (plist-get grant :recursive))
+         (file-directory-p path)
+         (memq (plist-get
+                (mevedel-sandbox-pending-facts
+                 nil (plist-get entry :sandbox-permissions)
+                 (mevedel-sandbox-mode-effective
+                  session (mevedel-permission-mode-effective
+                           session (plist-get entry :data-buffer)))
+                 directory)
+                :sandbox)
+               '(bubblewrap refused))
+         (or (eq (plist-get grant :access) 'write)
+             (mevedel-sandbox-directory-read-masked-p
+              path directory (and session (mevedel-session-execution-target session)))))))
+
+(defun mevedel-permission-queue-select-resource (entry previous selected)
+  "Replace PREVIOUS with SELECTED in ENTRY's current and remembered authority."
+  (dolist (cell-key '(:resource-selection-cell :remember-authority-cell))
+    (when-let* ((cell (plist-get entry cell-key)))
+      (if (eq cell-key :resource-selection-cell)
+          (setcar cell (mapcar (lambda (grant) (if (equal grant previous) selected grant))
+                              (car cell)))
+        (dolist (key '(:file-system :resource-grants))
+          (when (plist-member (car cell) key)
+            (setcar cell
+                    (plist-put (car cell) key
+                               (mapcar (lambda (grant)
+                                         (if (equal grant previous) selected grant))
+                                       (plist-get (car cell) key))))))))))
+
+(defun mevedel-permission-queue--prepare-resources (entry)
+  "Select enforceable defaults once when ENTRY enters the human queue."
+  (dolist (grant (car (plist-get entry :resource-selection-cell)))
+    (when (mevedel-permission-queue-resource-needs-tree-p entry grant)
+      (mevedel-permission-queue-select-resource
+       entry grant (plist-put (copy-sequence grant) :recursive t)))))
+
 (defun mevedel-permission-queue-validate-approval (entry outcome)
   "Reject an unrepresentable child directory grant in ENTRY's OUTCOME.
 Validation precedes settlement and persistence.  Native, live Eval and
 unconfined access need no child mount.  A covering tree grant may
 subsume an exact grant, but this function never broadens selected authority."
-  (when (and (memq outcome '(allow allow-once allow-session always-allow))
-             (memq (plist-get entry :kind) '(bash eval sandbox))
-             (not (and (eq (plist-get entry :kind) 'eval)
-                       (eq (mevedel-tool-exec-permission-eval-mode
-                            (or (plist-get entry :args)
-                                (list :mode (plist-get entry :mode))))
-                           'live))))
-    (let ((session (plist-get entry :session))
-          (grants (or (car (plist-get entry :resource-selection-cell))
-                      (plist-get (plist-get entry :requested-additional-permissions)
-                                 :file-system))))
+  (when (memq outcome '(allow allow-once allow-session always-allow))
+    (let ((grants (or (car (plist-get entry :resource-selection-cell))
+                     (plist-get (plist-get entry :requested-additional-permissions)
+                                :file-system))))
       (dolist (grant grants)
         (let ((path (plist-get grant :path)))
-          (when (and (eq (plist-get grant :access) 'write)
-                     (not (plist-get grant :recursive))
-                     (file-directory-p path)
+          (when (and (mevedel-permission-queue-resource-needs-tree-p entry grant)
                      (not (mevedel-permission-rules-resource-granted-p
-                           path 'write grants t))
-                     (memq
-                      (plist-get
-                       (mevedel-sandbox-pending-facts
-                        nil (plist-get entry :sandbox-permissions)
-                        (mevedel-sandbox-mode-effective
-                         session (mevedel-permission-mode-effective
-                                  session (plist-get entry :data-buffer)))
-                        (or (plist-get entry :execution-directory)
-                            (and session (mevedel-session-working-directory session))
-                            default-directory))
-                       :sandbox)
-                      '(bubblewrap refused)))
+                           path (plist-get grant :access) grants t)))
             (user-error
-             "Exact directory writes cannot be confined: %s; select directory-tree scope before approving"
+             "Exact directory access cannot be confined: %s; select directory-tree scope before approving"
              path)))))))
 
 (defun mevedel-permission-queue--pop (entry outcome &optional phase)

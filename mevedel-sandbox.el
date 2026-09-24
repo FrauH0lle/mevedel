@@ -22,10 +22,16 @@
 (declare-function mevedel-permission-rules-match-path-p
                   "mevedel-permission-rules"
                   (path pattern &optional target))
+(declare-function mevedel-permission-rules-path-in-allowed-roots-p
+                  "mevedel-permission-rules" (path roots))
+(declare-function mevedel-permission-rules-path-protected-p
+                  "mevedel-permission-rules" (path &optional target access))
 (defvar mevedel-protected-paths)
 (autoload 'mevedel-permission-protected-path-policy
   "mevedel-permission-rules")
 (autoload 'mevedel-permission-rules-match-path-p "mevedel-permission-rules")
+(autoload 'mevedel-permission-rules-path-in-allowed-roots-p "mevedel-permission-rules")
+(autoload 'mevedel-permission-rules-path-protected-p "mevedel-permission-rules")
 
 ;; `mevedel-sandbox-grants'
 (declare-function mevedel-sandbox--fd-backed-command
@@ -735,6 +741,41 @@ a one-element list; path and symlink checks still happen here."
          (signal 'mevedel-sandbox-policy-error
                  (list (format "Could not compile protected paths: %s"
                                (error-message-string err)))))))))
+
+(defun mevedel-sandbox-directory-read-masked-p (path workdir &optional target)
+  "Return non-nil if directory PATH needs a read mount on TARGET.
+WORKDIR supplies the execution path domain.  Inspect containing masks and
+canonical aliases without scanning directory trees or preparing mounts.
+Launch preparation still checks the actual restrictions afresh."
+  (let* ((canonical (file-truename path))
+         (paths (delete-dups (list (expand-file-name path) canonical))))
+    (or
+     (cl-some
+      (lambda (directory)
+        (let (masked)
+          (while (and directory (not masked))
+            (setq masked (mevedel-permission-rules-path-protected-p
+                          (directory-file-name directory) target 'read)
+                  directory (file-name-parent-directory directory)))
+          masked))
+      paths)
+     ;; Literal policies can mask a canonical tree through a different alias.
+     ;; Glob matches on the selected path and its ancestors are handled above.
+     (let ((mevedel-protected-paths
+            (cl-remove-if-not
+             (lambda (entry)
+               (and (eq (cdr entry) 'inaccessible)
+                    (not (string-match-p
+                          "[*?\\[]"
+                          (string-remove-suffix "/**" (car entry))))))
+             (mevedel-permission-protected-path-policy))))
+       (cl-some
+        (lambda (candidate)
+          (let ((mask (plist-get candidate :path)))
+            (and (file-directory-p mask)
+                 (mevedel-permission-rules-path-in-allowed-roots-p
+                  canonical (list (file-truename mask))))))
+        (mevedel-sandbox--protected-candidates workdir nil))))))
 
 (defun mevedel-sandbox--unrestricted-facts (sandbox reason)
   "Return direct-execution facts for SANDBOX and REASON."

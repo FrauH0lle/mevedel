@@ -72,6 +72,122 @@
 ;;
 ;;; Enqueue order + head render
 
+(mevedel-deftest mevedel-permission-queue-resource-needs-tree-p
+  (:doc "only unrepresentable confined directory scopes need a tree")
+  (let* ((root (make-temp-file "mevedel-scope-" t))
+         (file (file-name-concat root "file"))
+         (missing (file-name-concat root "missing"))
+         (session (mevedel-session--create
+                   :permission-mode 'edits :sandbox-mode 'required))
+         (entry (list :kind 'sandbox :tool-name "Bash" :session session :mode "batch"))
+         (mevedel-protected-paths nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "fixture"))
+          (dolist (kind '(sandbox bash eval generic))
+            (plist-put entry :kind kind)
+            (dolist (path (list root file missing))
+              (dolist (access '(read write))
+                (should (eq (not (null
+                                  (mevedel-permission-queue-resource-needs-tree-p
+                                   entry (list :path path :access access))))
+                            (and (not (eq kind 'generic))
+                                 (equal path root) (eq access 'write)))))))
+          (plist-put entry :kind 'eval)
+          (plist-put entry :mode "live")
+          (should-not (mevedel-permission-queue-resource-needs-tree-p
+                       entry (list :path root :access 'write)))
+          (plist-put entry :kind 'sandbox)
+          (let ((mevedel-protected-paths (list (cons root 'inaccessible))))
+            (should (mevedel-permission-queue-resource-needs-tree-p
+                     entry (list :path root :access 'read))))
+          (setf (mevedel-session-permission-mode session) 'ask
+                (mevedel-session-sandbox-mode session) 'off)
+          (should-not (mevedel-permission-queue-resource-needs-tree-p
+                       entry (list :path root :access 'write))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-permission-queue-select-resource
+  (:doc "changing extent preserves command, independent and omitted remembering")
+  (let* ((original '(:path "/directory" :access write))
+         (selected '(:path "/directory" :access write :recursive t)))
+    (dolist (key '(:file-system :resource-grants nil))
+      (let ((entry (list :resource-selection-cell (list (list original))
+                         :remember-authority-cell
+                         (list (append '(:operation t :network t)
+                                       (and key (list key (list original))))))))
+        (mevedel-permission-queue-select-resource entry original selected)
+        (should (equal (list selected) (car (plist-get entry :resource-selection-cell))))
+        (should (equal (append '(:operation t :network t)
+                               (and key (list key (list selected))))
+                       (car (plist-get entry :remember-authority-cell))))))))
+
+(mevedel-deftest mevedel-permission-queue--prepare-resources
+  (:doc "human defaults follow automatic review and create no authority")
+  (let* ((root (make-temp-file "mevedel-human-scope-" t))
+         (session (mevedel-session--create
+                   :permission-mode 'edits :sandbox-mode 'required))
+         (original (list :path root :access 'write))
+         (entry (list :kind 'sandbox :tool-name "Bash" :origin "/root"
+                      :resource-originals (list original)
+                      :resource-selection-cell (list (list original))
+                      :remember-authority-cell (list (list :file-system (list original)))
+                      :callback #'ignore))
+         (mevedel-permission-reviewer 'auto)
+         fallback)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry) #'ignore)
+                  ((symbol-function 'mevedel-permission-review-start)
+                   (lambda (reviewed cont)
+                     (should (equal (list original)
+                                    (car (plist-get reviewed :resource-selection-cell))))
+                     (should-error (mevedel-permission-queue-validate-approval
+                                    reviewed 'allow-once) :type 'user-error)
+                     (setq fallback cont))))
+          (mevedel-permission--enqueue entry session)
+          (should-not (mevedel-session-permission-queue session))
+          (funcall fallback)
+          (let ((selected (car (car (plist-get entry :resource-selection-cell)))))
+            (should (plist-get selected :recursive))
+            (should (equal root (plist-get selected :path)))
+            (should (equal (list original) (plist-get entry :resource-originals)))
+            (should (equal (list selected)
+                           (plist-get (car (plist-get entry :remember-authority-cell))
+                                      :file-system)))
+            (should-not (mevedel-session-resource-grants session))
+            (should-not (mevedel-session-permission-rules session))
+            (mevedel-permission-queue--render-head session)
+            (should (equal selected (car (car (plist-get entry :resource-selection-cell)))))))
+      (mevedel-permission-queue-abort-all session)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-permission-queue--admit
+  (:doc "cancellation during directory inspection never leaves a pending card")
+  (let* ((root (make-temp-file "mevedel-admit-cancel-" t))
+         (session (mevedel-session--create :permission-mode 'edits))
+         (request (mevedel-request--create))
+         (directory-p (symbol-function 'file-directory-p))
+         (mevedel-permission-reviewer 'user)
+         outcomes rendered)
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-directory-p)
+                   (lambda (path)
+                     (when (equal path root)
+                       (setf (mevedel-request-cancelled-p request) t))
+                     (funcall directory-p path)))
+                  ((symbol-function 'mevedel-permission-queue--render-entry)
+                   (lambda (_) (setq rendered t))))
+          (mevedel-permission--enqueue
+           (list :kind 'sandbox :tool-name "Bash" :origin "/root"
+                 :request request :resource-selection-cell
+                 (list (list (list :path root :access 'write)))
+                 :callback (lambda (outcome) (push outcome outcomes))) session)
+          (should (equal '(aborted) outcomes))
+          (should-not rendered)
+          (should-not (mevedel-session-permission-queue session)))
+      (mevedel-permission-queue-abort-all session)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-permission-queue-validate-approval ()
   ,test
   (test)
@@ -90,6 +206,8 @@
                  :callback (lambda (outcome) (push outcome received)))
            session)
           (let ((entry (car (mevedel-session-permission-queue session))))
+            ;; Simulate a stale or externally supplied unusable selection.
+            (setcar selection (list (list :path root :access 'write)))
             (dolist (outcome '(allow-once allow-session always-allow))
               (should-error
                (mevedel-permission-queue-validate-approval entry outcome)
@@ -166,6 +284,7 @@
            first second outcomes yielded)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry) #'ignore))
+            (setf (mevedel-session-sandbox-mode session) 'off)
             (mevedel-permission--enqueue
              (list :kind 'sandbox :tool-name "Bash" :origin "/root"
                    :resource-selection-cell (list (list (list :path root :access 'write)))
@@ -1832,10 +1951,13 @@
                    (let ((availability (mevedel-sandbox-probe)))
                      (unless (plist-get availability :available)
                        (ert-skip (plist-get availability :reason))))
-                   (let* ((remember-p ,remember-p)
+                   (let* ((approval ,approval)
+                          (remember-p (not (equal approval "RET")))
+                          (git-p ,git-p)
                           (root (make-temp-file "mevedel-pq-exec-root-" t))
                           (external (make-temp-file "mevedel-pq-exec-external-" t))
-                          (cache (file-name-concat external "cache"))
+                          (cache (if git-p (file-name-concat root ".git")
+                                   (file-name-concat external "cache")))
                           (script (file-name-concat root "validate"))
                           (counter (file-name-concat root "counter"))
                           (data-buf (generate-new-buffer " *test-pq-exec-data*"))
@@ -1847,7 +1969,14 @@
                           result)
                      (unwind-protect
                          (progn
-                           (make-directory cache)
+                           (make-directory (file-name-concat root "tmp"))
+                           (if git-p
+                               (let ((default-directory root))
+                                 (should (zerop (process-file "git" nil nil nil "init" "-q")))
+                                 (make-directory (file-name-concat root ".scratch"))
+                                 (with-temp-file (file-name-concat root ".scratch" "note")
+                                   (insert "keep locally")))
+                             (make-directory cache))
                            (with-temp-file script
                              (insert "#!/bin/sh\nset -eu\n"
                                      "n=0\n"
@@ -1860,6 +1989,7 @@
                                              (shell-quote-argument cache))
                                      (format "if touch %s 2>/dev/null; then exit 55; fi\n"
                                              (shell-quote-argument (file-name-concat external "unapproved")))
+                                     (if git-p "git rm --cached -r -- .scratch/\n" "")
                                      "printf 'confined validation complete'\n"))
                            (set-file-modes script #o700)
                            (setf (mevedel-session-permission-mode session) 'edits
@@ -1867,14 +1997,21 @@
                            (with-current-buffer data-buf
                              (org-mode)
                              (setq-local mevedel--session session)
-                             (setq-local temporary-file-directory root))
+                             (setq-local temporary-file-directory (file-name-concat root "tmp")))
                            (mevedel-view--setup view-buf data-buf)
+                           (with-current-buffer view-buf
+                             (goto-char (mevedel-view--input-start))
+                             (insert "> keep this draft\nand its second line"))
                            (let ((mevedel-permission-rules nil)
                                  (mevedel-permission-reviewer 'user))
                              (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                                         (lambda () 'ask)))
                                       (dotimes (index (if remember-p 4 1))
                                         (setq result nil)
+                                        (when git-p
+                                          (let ((default-directory root))
+                                            (should (zerop (process-file "git" nil nil nil
+                                                                         "add" "--" ".scratch/")))))
                                         (with-current-buffer data-buf
                                           (mevedel-pipeline-run-tool
                                            (mevedel-tool-get "Bash")
@@ -1894,15 +2031,26 @@
                                                    (ov (gethash id mevedel-view--interaction-overlays))
                                                    (choice (format "Write %s (recursive)" cache)))
                                               (goto-char (overlay-start ov))
-                                              (cl-letf (((symbol-function 'completing-read)
-                                                         (lambda (_prompt choices &rest _)
-                                                           (should (assoc choice choices))
-                                                           choice)))
-                                                       (call-interactively (lookup-key (overlay-get ov 'keymap) "g")))
-                                              (setq ov (gethash id mevedel-view--interaction-overlays))
+                                              (should (plist-get
+                                                       (car (car (plist-get entry :resource-selection-cell)))
+                                                       :recursive))
+                                              (should (string-match-p
+                                                       (regexp-quote choice)
+                                                       (buffer-substring-no-properties
+                                                        (overlay-start ov) (overlay-end ov))))
+                                              (when (and git-p (equal approval "s"))
+                                                (cl-letf (((symbol-function 'completing-read)
+                                                           (lambda (_prompt choices &rest _)
+                                                             (should-not (assoc (format "Write %s (exact)" cache)
+                                                                                choices))
+                                                             choice)))
+                                                  (call-interactively (lookup-key (overlay-get ov 'keymap) "g")))
+                                                (setq ov (gethash id mevedel-view--interaction-overlays)))
+                                              (should (equal "> keep this draft\nand its second line"
+                                                             (mevedel-view--input-text)))
                                               (goto-char (overlay-start ov))
                                               (call-interactively
-                                               (lookup-key (overlay-get ov 'keymap) (if remember-p "s" "a"))))))
+                                               (lookup-key (overlay-get ov 'keymap) (kbd approval))))))
                                         (let ((deadline (+ (float-time) 15)))
                                           (while (and (not result) (< (float-time) deadline))
                                             (accept-process-output nil 0.01)))
@@ -1911,6 +2059,12 @@
                                         (should (string-match-p "sandbox: bubblewrap" result))
                                         (should (file-exists-p
                                                  (file-name-concat cache (format "run-%d" (1+ index)) "value")))
+                                        (when git-p
+                                          (should (file-exists-p (file-name-concat root ".scratch" "note")))
+                                          (with-temp-buffer
+                                            (let ((default-directory root))
+                                              (should (zerop (process-file "git" nil t nil "ls-files"))))
+                                            (should (string-empty-p (buffer-string)))))
                                         (should-not (file-exists-p (file-name-concat external "unapproved")))
                                         (should-not (mevedel-session-permission-queue session)))
                                       (unless remember-p
@@ -1934,11 +2088,72 @@
                        (delete-directory root t)
                        (delete-directory external t)
                        (mevedel-workspace-clear-registry))))
-                 (remember-p)
-                 :doc "real confined cache writes reuse a prompt-selected directory profile"
-                 t
-                 :doc "invocation-only tree selection reaches the confined child without remembering"
-                 nil)
+                 (approval git-p)
+                 :doc "real confined cache writes reuse the default directory profile"
+                 "s" nil
+                 :doc "RET grants the default tree only for the invocation"
+                 "RET" nil
+                 :doc "RET permits Git index changes while preserving local scratch files"
+                 "RET" t
+                 :doc "session approval remembers the displayed Git tree"
+                 "s" t
+                 :doc "workspace approval remembers the displayed Git tree"
+                 "A" t)
+
+(mevedel-deftest mevedel-permission-queue--masked-directory-read
+  (:quiet t :doc "human approval mounts a masked read tree without exposing its sibling")
+  (let* ((root (make-temp-file "mevedel-read-tree-" t))
+         (mask (file-name-concat root "hidden"))
+         (tree (file-name-concat mask "selected"))
+         (sibling (file-name-concat mask "sibling"))
+         (buffer (generate-new-buffer " *test-masked-directory-read*"))
+         (workspace (mevedel-workspace-get-or-create 'project root root "workspace"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel-protected-paths (list (cons mask 'inaccessible)))
+         (_register (mevedel-tool-exec--register))
+         (mevedel-permission-reviewer 'user)
+         (mevedel-permission-rules nil)
+         entry result)
+    (unwind-protect
+        (progn
+          (let ((availability (mevedel-sandbox-probe)))
+            (unless (plist-get availability :available)
+              (ert-skip (plist-get availability :reason))))
+          (make-directory tree t)
+          (make-directory (file-name-concat root "tmp"))
+          (with-temp-file (file-name-concat tree "value") (insert "approved read"))
+          (with-temp-file sibling (insert "unapproved read"))
+          (setf (mevedel-session-permission-mode session) 'edits)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session
+                        temporary-file-directory (file-name-concat root "tmp"))
+            (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                       (lambda (item) (setq entry item))))
+              (mevedel-pipeline-run-tool
+               (mevedel-tool-get "Bash") (lambda (value) (setq result value))
+               (list :command
+                     (format "cat %s; if cat %s 2>/dev/null; then exit 55; fi"
+                             (shell-quote-argument (file-name-concat tree "value"))
+                             (shell-quote-argument sibling))
+                     :sandbox_permissions "with_additional_permissions"
+                     :additional_permissions (list :file_system (list :read (vector tree)))
+                     :justification "Read the selected directory"))
+              (should entry)
+              (should (equal (list (list :path tree :access 'read :recursive t))
+                             (car (plist-get entry :resource-selection-cell))))
+              (mevedel-permission-queue--on-head-outcome entry 'allow-once)))
+          (let ((deadline (+ (float-time) 15)))
+            (while (and (not result) (< (float-time) deadline))
+              (accept-process-output nil 0.01)))
+          (should (string-match-p "approved read" result))
+          (should-not (string-match-p "unapproved read" result))
+          (should (string-match-p "sandbox: bubblewrap" result))
+          (should-not (mevedel-session-resource-grants session)))
+      (mevedel-permission-queue-abort-all session)
+      (mevedel-execution-teardown-session session)
+      (kill-buffer buffer)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-permission-queue--gptel-batch-deny-once
   (:doc "deny-once settles one queued gptel-dispatched permission")
