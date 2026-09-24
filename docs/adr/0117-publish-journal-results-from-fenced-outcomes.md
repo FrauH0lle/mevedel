@@ -33,7 +33,12 @@ call. Advisory prompt discovery separately reuses validated local entries while
 public-record and expiry-marker source attributes remain unchanged, with a
 ten-second refresh throttle and age filtering on every use. Remote discovery
 retains throttled fresh reads. Digest inference uses frozen model policy without
-a live session or tools. Only noteworthy events become public notes. An accepted,
+a live session or tools. Only evidence supporting reusable user, feedback,
+enduring project, or reference knowledge becomes a public note. Tasks, blockers,
+deadlines, progress, and decisions belong in trackers or maintained documentation;
+session continuation belongs in compaction. Easily recovered facts and debugging
+fix recipes are excluded. Consolidation independently evaluates qualifying
+knowledge, even for older progress-oriented notes. An accepted,
 validated all-none digest instead records private turn coverage and retires its
 capture without publication or a consolidation opportunity. Both paths retain
 coverage before releasing source pins and recover without replacement inference.
@@ -564,3 +569,11 @@ noteworthy events. Validated all-none output is accepted completion without a
 note: turn coverage precedes source-pin release, and interrupted retirement
 recovers the accepted omission without another model call. Consolidation likewise
 prefers No action when dated activity supplies no useful lasting context.
+
+The initial selection rule included consequential decisions and unresolved
+blockers. User review identified these as tracker or documentation state, not
+persistent memory. Selection now retains evidence only for reusable knowledge
+in the user, feedback, enduring project, and reference categories. The direct-save
+prompt and manual follow the same boundary; the journal's Unfinished field holds
+uncertainty about qualifying knowledge rather than pending work. Existing records
+remain unchanged, while subsequent reviews apply the stricter criteria.

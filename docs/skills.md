@@ -155,8 +155,10 @@ Bundled skills currently include:
 - `clean-work` — user-only housekeeping for confirmed obsolete shared working
   material, using normal ApplyPatch permissions and review.
 - `learn` — user-invocable durable write-back helper. Repository-derived
-  contributor facts go to the nearest applicable `AGENTS.md`; stable personal,
-  rationale, and external-reference findings use the existing memory types.
+  contributor facts go to the nearest applicable `AGENTS.md`; reusable user,
+  feedback, enduring project, and reference knowledge follows the memory save
+  policy. Tasks, deadlines, blockers, progress, and decisions stay in trackers or
+  maintained documentation; no qualifying findings is a successful no-change result.
   Relevant files discovered under `work://shared` and `memory://journal/` digests supply additional
   evidence; the skill retains attribution, verifies cheap claims, and acknowledges
   relevant missing captures without treating repeated summaries as independent

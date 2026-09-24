@@ -8,8 +8,8 @@ future work. Explicit user requests to save, forget, or ignore memory take
 precedence over package preferences about what is worth retaining.
 
 
-Curated topics hold durable facts; journal digests hold dated evidence from
-completed work. Use `/remember` to review memory and journal evidence, then
+Curated topics hold reusable knowledge; journal digests hold dated evidence
+supporting that knowledge. Use `/remember` to review memory and journal evidence, then
 inspect the proposed changes in the [memory cockpit](#memory-cockpit).
 The `$learn` skill supports explicitly requested write-back during a conversation.
 
@@ -34,7 +34,7 @@ flowchart TD
 .agents/memory/
   MEMORY.md             ; delivered index
   user-style.md         ; topic file
-  release-context.md    ; topic file
+  issue-tracker.md      ; topic file
   external-systems.md   ; topic file
 ```
 
@@ -48,7 +48,7 @@ date:
 ```markdown
 <!-- Last updated: 2026-05-08 -->
 - [User style](user-style.md) - communication preferences for this user
-- [Release context](release-context.md) - current release coordination facts
+- [Issue tracker](issue-tracker.md) - where integration bugs are tracked
 ```
 
 Topic files hold the actual durable memories. `MEMORY.md` entries should
@@ -80,12 +80,12 @@ Supported `type` values:
 
 - `user`: stable details about the user's role, goals, expertise, or
   durable preferences.
-- `feedback`: guidance about how mevedel should approach work, including
-  corrections and confirmed non-obvious successes.
-- `project`: ongoing work, deadlines, ownership, incidents, or decision
-  context not otherwise derivable from code, docs, or git history.
-- `reference`: pointers to external systems such as ticket projects,
-  dashboards, runbooks, or incident trackers.
+- `feedback`: reusable guidance about how mevedel should approach work,
+  including corrections and explicitly confirmed non-obvious approaches.
+- `project`: enduring context or motivation not otherwise recoverable from
+  code, Git history, project instructions, or maintained documentation.
+- `reference`: otherwise undiscoverable pointers to authoritative information
+  in trackers, documentation, or external systems, with their purpose.
 
 Feedback and project memories should preserve enough context to be
 actionable later. Prefer a direct rule or fact followed by `**Why:**`
@@ -93,16 +93,20 @@ and `**How to apply:**`.
 
 ## Save Policy
 
-Ordinary saving is optional. Keep a useful preference, correction, decision,
-coordination fact, or reference when it will help future work. Do not treat an
-empty index as a task to fill, or infer a lasting preference from silence or an
-ambiguous one-time reaction.
+Ordinary saving is optional. Keep reusable knowledge in the categories above
+when it will help a future task. No entry and no memory change are successful
+outcomes. Do not treat an empty index as a task to fill, or infer a lasting
+preference from silence or an ambiguous one-time reaction.
 
-Avoid unsolicited activity logs, transient task state, speculative conclusions,
-and duplication of easily recovered code, git history, or maintained project
-docs. These defaults do not veto an explicit request to preserve a particular
-fact. Avoid retaining secrets or unnecessary personal information; keep the
-scope the user actually asked for.
+Tasks, blockers, deadlines, progress, and decisions belong in the project tracker
+or maintained documentation. Conversation state and continuation details belong
+in session context and compaction. Avoid speculative conclusions and duplication
+of code, Git history, project instructions, or maintained documentation.
+Debugging fix recipes normally stay with the code and commit; a distinct reusable
+lesson may qualify, but the activity itself does not. A reference points to the
+authoritative source instead of copying its changing contents. These defaults do
+not veto an explicit request to preserve a particular fact. Avoid retaining
+secrets or unnecessary personal information; keep the scope the user asked for.
 
 Saving is a three-step operation:
 
@@ -815,15 +819,20 @@ workspace admission claim permits one digest request at a time; the capture's
 own claim accepts its result. Both share a 120-second target-clock deadline.
 Failed jobs get at most three automatic attempts on separate opportunities.
 
-Generation records only noteworthy events: useful corrections, non-obvious
-discoveries, consequential decisions with their reasons, and unresolved blockers.
-Routine completion, passing tests, ordinary Q&A, and progress chatter alone do
-not warrant notes. A validated result with `- none` in all four sections succeeds
+Generation records dated evidence supporting qualifying user, feedback, project,
+or reference knowledge under the save policy above, rather than conversation
+progress. A correction or discovery may qualify; completing a task, passing
+tests, encountering a blocker, or making a decision does not qualify by itself.
+The digest's Unfinished section preserves uncertainty about qualifying knowledge,
+not pending work. A validated result with `- none` in all four sections succeeds
 without publishing a journal entry or scheduling consolidation. Its accepted
 outcome records turn coverage before releasing source pins, so recovery needs no
 replacement inference and later boundaries do not recapture those turns.
-Consolidation likewise treats No action as success; a journal note does not by
-itself justify creating or rewriting a lasting memory.
+Consolidation independently judges whether journal evidence supports a useful
+memory, including when older notes contain project progress. It treats No action
+as success, avoids duplicates, and proposes corrections or removal of outdated
+memories when supported. Existing notes and memories are not rewritten merely
+because the selection policy changed.
 
 Processing re-resolves the exact frozen provider/model and uses the saved
 streaming, effort, and output settings. Missing policy or client-owned evidence

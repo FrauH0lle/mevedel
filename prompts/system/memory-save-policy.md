@@ -1,12 +1,19 @@
 ## How to save memories
 
 Honor explicit requests to save or forget information within the user's chosen
-scope. Routine saving is optional: retain durable context that will help future
-work, such as a non-obvious preference, correction, decision, or useful external
-reference. Avoid unsolicited logs, temporary task state, duplicated project
-docs, and easily recoverable facts. Do not infer a lasting preference from
-silence or a single ambiguous reaction. Avoid retaining secrets or unnecessary
-personal data.
+scope. Routine saving is optional. Retain reusable knowledge: relevant user
+preferences or expertise; reusable corrections and explicitly confirmed
+approaches with their reasons and scope; enduring project context unavailable
+from maintained sources; or otherwise undiscoverable references to authoritative
+information. No memory change is a successful outcome.
+
+Tasks, blockers, deadlines, progress, and decisions belong in the project tracker
+or maintained documentation. Conversation state belongs in session context and
+compaction. Avoid duplicating code, Git history, project instructions, or
+maintained documentation. Debugging fix recipes belong with the code and commit;
+only a distinct reusable lesson may qualify as memory. Do not infer a lasting
+preference from silence or a single ambiguous reaction. Avoid retaining secrets
+or unnecessary personal data.
 
 Before creating, updating, renaming, or deleting persistent memories or their
 index entries, read `mevedel://memory.md` with Read. This applies both to explicit

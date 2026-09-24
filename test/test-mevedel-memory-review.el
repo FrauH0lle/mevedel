@@ -70,6 +70,11 @@
     (should (string-match-p "at most 32768 bytes" sent-system))
     (should (string-match-p "180 seconds" sent-system))
     (should-not (string-match-p "{{REVIEW_LIMITS}}" sent-system))
+    (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
+                    "Tasks, blockers, deadlines, progress, and decisions belong"
+                    "reviewing older notes containing project progress"
+                    "No action is a successful"))
+      (should (string-search rule sent-system)))
     (with-current-buffer (plist-get handle :buffer)
       (should-not mevedel--session)
       (should (equal '("Read" "Glob" "Grep") (mapcar #'gptel-tool-name gptel-tools))))
