@@ -140,7 +140,23 @@
     (with-timeout (10 (ert-fail "Failed program never settled"))
       (while (not settled) (accept-process-output nil 0.02)))
     (should-not (car settled))
-    (should (eq 'file-error (car (nth 1 settled))))))
+    (should (eq 'file-error (car (nth 1 settled)))))
+
+  :doc "counts its dispatch as a remote operation, so work a filter starts defers"
+  (let ((mevedel-session-control-fs--pipe-local t)
+        busy settled)
+    (cl-letf* ((original (symbol-function 'process-send-region))
+               ((symbol-function 'process-send-region)
+                (lambda (&rest args)
+                  (setq busy (mevedel-transport-busy-p))
+                  (apply original args))))
+      (mevedel-session-control-fs-run-program-async
+       (list (list :op 'path-exists-p :path "/tmp"))
+       (lambda (results error) (setq settled (list results error)))))
+    (should busy)
+    (should-not (mevedel-transport-busy-p))
+    (with-timeout (10 (ert-fail "Program never settled"))
+      (while (not settled) (accept-process-output nil 0.02)))))
 
 (mevedel-deftest mevedel-session-control-fs--program-arguments/large-field ()
   (let* ((field (make-string (1+ mevedel-session-control-fs--argument-field-budget) ?x))

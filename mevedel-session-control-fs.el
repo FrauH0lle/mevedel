@@ -1113,51 +1113,55 @@ target: callers serialize the ones that touch the same files."
              settled process)
         (with-current-buffer output (set-buffer-multibyte nil))
         (condition-case err
-            (progn
-              (setq process
-                    (mevedel-transport-call-with-spawn-channel
-                     remote t
-                     (lambda ()
-                       (make-process
-                        :name "mevedel-control-fs-async" :buffer output
-                        :stderr stderr
-                        :command (list bash "-p" "-c"
-                                       mevedel-session-control-fs--pipe-bootstrap
-                                       bash "" "" "0")
-                        :connection-type 'pipe :coding 'no-conversion
-                        :file-handler t :noquery t
-                        :sentinel
-                        (lambda (process _event)
-                          (unless (or settled (process-live-p process))
-                            (setq settled t)
-                            (let ((status (process-exit-status process))
-                                  (text (with-current-buffer output (buffer-string))))
-                              (funcall release)
-                              (if (eql 0 status)
-                                  (let (results failure)
-                                    (condition-case err
-                                        (setq results
-                                              (mevedel-session-control-fs--program-results
-                                               operations text))
-                                      (error (setq failure err)))
-                                    (funcall callback results failure))
-                                (remhash (or remote "") mevedel-session-control-fs--programs)
-                                (funcall callback nil
-                                         (list 'file-error
-                                               "Portable control program failed"
-                                               (plist-get (car operations) :path)
-                                               (format "exit status %s" status)))))))))))
-              (process-send-string
-               process
-               (concat (encode-coding-string
-                        mevedel-session-control-fs--program-script 'utf-8-unix)
-                       "\0"))
-              (with-temp-buffer
-                (mevedel-session-control-fs--insert-program-request
-                 (mapcar #'mevedel-session-control-fs--program-fields operations))
-                (process-send-region process (point-min) (point-max)))
-              (process-send-eof process)
-              process)
+            ;; Writing the request can run process filters, as it does in the
+            ;; synchronous carrier: counting the dispatch as a remote operation
+            ;; makes whatever they start defer instead of nesting in it.
+            (mevedel-transport-call-as-remote-operation
+             (lambda ()
+               (setq process
+                     (mevedel-transport-call-with-spawn-channel
+                      remote t
+                      (lambda ()
+                        (make-process
+                         :name "mevedel-control-fs-async" :buffer output
+                         :stderr stderr
+                         :command (list bash "-p" "-c"
+                                        mevedel-session-control-fs--pipe-bootstrap
+                                        bash "" "" "0")
+                         :connection-type 'pipe :coding 'no-conversion
+                         :file-handler t :noquery t
+                         :sentinel
+                         (lambda (process _event)
+                           (unless (or settled (process-live-p process))
+                             (setq settled t)
+                             (let ((status (process-exit-status process))
+                                   (text (with-current-buffer output (buffer-string))))
+                               (funcall release)
+                               (if (eql 0 status)
+                                   (let (results failure)
+                                     (condition-case err
+                                         (setq results
+                                               (mevedel-session-control-fs--program-results
+                                                operations text))
+                                       (error (setq failure err)))
+                                     (funcall callback results failure))
+                                 (remhash (or remote "") mevedel-session-control-fs--programs)
+                                 (funcall callback nil
+                                          (list 'file-error
+                                                "Portable control program failed"
+                                                (plist-get (car operations) :path)
+                                                (format "exit status %s" status)))))))))))
+               (process-send-string
+                process
+                (concat (encode-coding-string
+                         mevedel-session-control-fs--program-script 'utf-8-unix)
+                        "\0"))
+               (with-temp-buffer
+                 (mevedel-session-control-fs--insert-program-request
+                  (mapcar #'mevedel-session-control-fs--program-fields operations))
+                 (process-send-region process (point-min) (point-max)))
+               (process-send-eof process)
+               process))
           (error
            (unless settled
              (setq settled t)
