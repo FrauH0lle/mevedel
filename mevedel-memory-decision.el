@@ -302,37 +302,32 @@ targets retain the root marker for checked recovery, never blind reapplication."
     (unless (eq status 'recovery-required) (mevedel-memory-write-retire target intent))
     published))
 
-(defun mevedel-memory-decision--application-input (workspace accepted proposal)
-  "Return (SCOPE . PROPOSAL) with confirmed same-pass index edits in WORKSPACE.
-Only confirmed applied or reversed writes advance the index expectation. Never
-adopt current filesystem bytes as a baseline or mutate ACCEPTED's original data."
+(defun mevedel-memory-decision--application-input (accepted proposal)
+  "Prepare checked application input for ACCEPTED PROPOSAL without writes.
+Return :scope and :proposal working copies, plus :status and optional :reason.
+Only unrelated index edits may advance the captured before-state. Application
+must hold original-root ownership across this preparation and the transaction."
   (let* ((scope (copy-tree (plist-get (plist-get accepted :prepared) :scope)))
          (item (copy-tree proposal))
          (index (assoc "MEMORY.md" (plist-get item :before)))
-         (pass (plist-get (plist-get accepted :prepared) :id))
-         decisions)
-    (when index
-      (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
-        (when (and (eq (plist-get entry :kind) 'decision)
-                   (mevedel-memory-decision-written-status-p (plist-get entry :status))
-                   (equal pass (plist-get entry :pass-id)))
-          (let* ((decision (mevedel-memory-decision--published workspace entry))
-                 (intent (plist-get decision :intent)))
-            (when (and (equal (plist-get proposal :root) (plist-get (plist-get intent :item) :root))
-                       (if (plist-get intent :reverse-of) (eq (plist-get entry :status) 'reversed)
-                         (eq (plist-get entry :status) 'applied)))
-              (push decision decisions)))))
-      (dolist (decision (sort decisions (lambda (a b) (< (plist-get (plist-get a :claim) :generation)
-                                                         (plist-get (plist-get b :claim) :generation)))))
-        (let* ((intent (plist-get decision :intent))
-               (before (cdr (assoc "MEMORY.md" (plist-get intent :before))))
-               (after (cdr (assoc "MEMORY.md" (plist-get intent :after)))))
-          (unless (mevedel-tool-patch--same-snapshot-p (cdr index) before)
-            (error "Confirmed memory index history is discontinuous"))
-          (setcdr index (copy-tree after))))
-      (let ((root (cdr (assoc (plist-get item :root) (plist-get scope :roots)))))
-        (setf (alist-get "MEMORY.md" (plist-get root :before) nil nil #'equal) (cdr index))))
-    (cons scope item)))
+         check)
+    (condition-case err
+        (let ((root (mevedel-memory-scope--root scope (plist-get item :root))))
+          (when index
+            (let* ((current (mevedel-memory-scope--snapshot
+                             (plist-get (cdr index) :path) mevedel-memory-scope--max-file-bytes))
+                   (conflicts (mevedel-memory-apply--index-conflicts (cdr index) current item)))
+              (if conflicts
+                  (setq check (list :status 'stale :reason
+                                    (format "MEMORY.md entries changed since capture: %s"
+                                            (string-join conflicts ", "))))
+                (setcdr index current)
+                (setf (alist-get "MEMORY.md" (plist-get root :before) nil nil #'equal) current))))
+          (unless check
+            (setq check (mevedel-memory-scope-check scope (plist-get item :root)
+                                                   (mapcar #'car (plist-get item :before))))))
+      (error (setq check (list :status 'unavailable :reason (error-message-string err)))))
+    (append check (list :scope scope :proposal item))))
 
 (defun mevedel-memory-decision-apply (workspace pass proposal &optional on-applied)
   "Apply accepted PROPOSAL from PASS in WORKSPACE with durable write intent.
@@ -354,13 +349,12 @@ application by this call. Repeated terminal decisions do not notify it."
          (mevedel-memory-write-call
           scope (plist-get item :root)
           (lambda (target)
-            (let* ((input (mevedel-memory-decision--application-input workspace accepted item))
-                   (scope (car input)) (effective (cdr input))
-                   (fresh (mevedel-memory-scope-check scope (plist-get item :root) (mapcar #'car (plist-get item :before)))))
-              (if (not (eq (plist-get fresh :status) 'fresh))
+            (let* ((input (mevedel-memory-decision--application-input accepted item))
+                   (scope (plist-get input :scope)) (effective (plist-get input :proposal)))
+              (if (not (eq (plist-get input :status) 'fresh))
                   (mevedel-memory-decision--publish
-                   workspace (mevedel-memory-decision--accept workspace claim accepted item (plist-get fresh :status)
-                                                               "Targets changed or are unavailable since capture."))
+                   workspace (mevedel-memory-decision--accept workspace claim accepted item (plist-get input :status)
+                                                               (mevedel--truncate-bytes (plist-get input :reason) 4096 "...")))
                 (let ((intent (mevedel-memory-write-prepare workspace claim target accepted effective scope)) failed)
                   (condition-case nil (mevedel-memory-write-run workspace claim target intent)
                     ((error quit) (setq failed t)))

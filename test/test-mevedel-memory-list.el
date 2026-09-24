@@ -120,12 +120,66 @@
       (mevedel-memory-list-history)
       (mevedel-cockpit-goto-id id)
       (should (eq 'applied (plist-get (mevedel-cockpit-surface-selected) :status)))
+      (let* ((details (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context))
+             (decision (car (plist-get details :sections))))
+        (should-not (string-search "Current check" (plist-get decision :body))))
       (mevedel-memory-list-reverse)
       (should (eq 'reversed (plist-get (mevedel-cockpit-surface-selected) :status)))
       (mevedel-cockpit-surface-refresh))
     (with-current-buffer view
       (should (equal draft (mevedel-view--input-text)))
       (should (= (point) (+ (mevedel-view--input-start) 4)))))
+  :doc "accept all composes independent reviews, retries stale candidates and preserves the draft"
+  (let* ((index (file-name-concat memory "MEMORY.md"))
+         (first (car (mevedel-memory-list--collect context)))
+         (scope (mevedel-memory-scope-capture workspace))
+         (root-id (caar (plist-get scope :roots)))
+         (draft "> quoted\nsecond line"))
+    (write-region "- [Topic](topic.md) - Conflicting edit\n" nil index nil 'silent)
+    (should (eq 'stale (plist-get (mevedel-memory-decision-apply workspace (plist-get first :pass) id) :status)))
+    (write-region "# Manual notes\n- [Topic](topic.md) - Original\n" nil index nil 'silent)
+    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+    (let* ((prepared (mevedel-memory-store-prepare workspace claim scope nil ""))
+           (accepted (mevedel-memory-store-accept-proposals
+                      workspace prepared
+                      (list :proposals (list (list :action 'promote :root root-id :file "new.md"
+                                                  :type "project" :title "New" :hook "Context"
+                                                  :reason "New evidence" :body "New guide.")))
+                      nil "test:model" nil))
+           (new-id (plist-get (car (plist-get accepted :proposals)) :id)))
+      (mevedel-memory-store-publish workspace (plist-get prepared :id))
+      (with-current-buffer view (mevedel-view-test--insert-composer-draft draft 4))
+      (with-current-buffer (save-window-excursion (mevedel-memory-list-open context))
+        (should (= 2 (length (mevedel-cockpit-surface-items))))
+        (mevedel-memory-list-accept-all)
+        (should-not (mevedel-cockpit-surface-items))
+        (mevedel-memory-list-history)
+        (dolist (proposal-id (list id new-id))
+          (mevedel-cockpit-goto-id proposal-id)
+          (should (eq 'applied (plist-get (mevedel-cockpit-surface-selected) :status)))))
+      (should (equal "# Manual notes\n- [Topic](topic.md) - Current\n- [New](new.md) - Context\n"
+                     (mevedel-session-control-fs-read-file index)))
+      (with-current-buffer view
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+  :doc "inspection shows an effective index diff and keeps captured evidence for conflicts"
+  (let* ((row (car (mevedel-memory-list--collect context)))
+         (index (file-name-concat memory "MEMORY.md")))
+    (dolist (conflict '(nil t))
+      (write-region (concat "# Manual heading\n- [Topic](topic.md) - "
+                            (if conflict "Foreign edit" "Original") "\n") nil index nil 'silent)
+      (let* ((details (mevedel-memory-list--details row context))
+             (sections (plist-get details :sections))
+             (decision (seq-find (lambda (section) (eq (plist-get section :id) 'decision)) sections))
+             (diff (seq-find (lambda (section) (equal (plist-get section :id) '(change . "MEMORY.md"))) sections)))
+        (if conflict
+            (progn
+              (should (string-search "MEMORY.md entries changed since capture: topic.md" (plist-get decision :body)))
+              (should (string-search "Original" (plist-get diff :body)))
+              (should-not (string-search "Foreign edit" (plist-get diff :body))))
+          (should (string-search "Ready to apply" (plist-get decision :body)))
+          (should (string-search " Manual heading" (plist-get diff :body)))
+          (should-not (string-search "-# Manual heading" (plist-get diff :body)))))))
   :doc "stored memories can be deleted with their index entry and restored from History"
   (save-window-excursion
     (with-current-buffer (mevedel-memory-list-open context)
