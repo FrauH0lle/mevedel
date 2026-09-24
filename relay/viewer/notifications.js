@@ -52,7 +52,7 @@
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       button.className = `bell${on ? ' on' : ''}${blocked ? ' blocked' : ''}`;
-      button.textContent = on ? '🔔' : '🔕';
+      button.textContent = 'Notifications';
     }
 
     function maybeNotify(title, body) {

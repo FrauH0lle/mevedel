@@ -43,6 +43,21 @@ The first drag implementation only redrew after release. Move and resize now
 render temporary geometry through the same scene and connector renderer, then
 commit that geometry on release. Cancellation drops the preview without a CRDT
 write; pointer motion does not create a stream of saved revisions.
+Move and resize previews also use the existing bounded presence channel. They
+contain object IDs and bounding boxes, never CRDT updates or image bytes. The
+receiver marks the movement as unsaved, renders it over its committed scene,
+and removes it on commit, clear, disconnect, or expiry. After release the
+preview carries the pending operation ID so a late packet cannot replace its
+acknowledged commit. Content authority, validation, and saved acknowledgement
+remain on the host path.
+
+The previous design showed peers only committed geometry. After pipe and queue
+fixes, the user still measured roughly two seconds for a rectangle move while
+named pointers remained quick. This separated presence latency from the save
+round trip. Reusing presence for disposable geometry previews removes that
+wait from dragging without broadcasting unvalidated content. In the local
+two-browser room test, the preview arrived in roughly 70 ms before release.
+
 New empty documents share an initial text object: real browser testing found
 that two separately created empty text objects could normalize into one while
 losing a writer's undo history. Agent edits and inverses compare their exact
@@ -62,6 +77,16 @@ Native, HTML, and Markdown document exports retain image data without a separate
 asset service or remote fetch. Existing session activity drives visible working
 indicators in the room and editor chats; no second request lifecycle is tracked.
 
+Image transforms preserve `src` as the source and keep normalized crop,
+quarter-turn rotation, flips, and a rendered PNG in one `imageEdit` property.
+This atomic attribute prevents concurrent edits from mixing transformation
+settings with another edit's rendered pixels. Browser canvas rendering serves
+both editors; ordinary renderers and HTML/Markdown exports use those pixels,
+so document consumers do not need custom crop CSS. Native exports retain the
+original for reset. The tradeoff is storing both source and rendered bytes;
+both count against the existing bounded image and item budgets. Crop previews
+are local until Apply, and a changed target refuses the pending transform.
+
 The cost is a local Node runtime and packaged browser/helper bundles. End
 users do not install npm dependencies. Missing Node previously left editing
 actions clickable until they failed. Availability now uses a read-only request
@@ -72,9 +97,47 @@ between jobs to pick up runtime configuration and resource repairs, without
 cancelling queued edits or creating durable state. Chat and static artifacts
 remain independent of this optional dependency.
 
-Large content and operation histories
-have explicit bounds; reaching them calls for a smaller item or a native
-export/import, rather than unbounded memory or hidden history truncation.
+Large content and operation histories have explicit bounds. Revert history
+retains at most 32 transactions, targeting 4 MiB, and expires older snapshots
+before they crowd out an otherwise valid save. The latest transaction remains
+revertible, even above that history target, within the 16 MiB item bound.
+The Contributions view states its earliest retained revision. Receipt IDs are
+not expired with snapshots: replay protection keeps its existing hard ceiling.
+Content or receipt limits still require a smaller item or native export/import.
+
+Browser projections carry only contribution IDs, actor, revision, timestamp,
+and affected target IDs with a surviving/deleted flag. Full snapshots remain
+host-side for reversion and model reads. The browser already receives the CRDT
+or delta, so the bridge also omits duplicate materialized content and the full
+latest transaction from its replies.
+
+### Decision history: image history saturated shared editing
+
+A board containing a roughly 0.95 MB screenshot reached 15.6 MB of persisted
+state; 14.3 MB was repeated before/after contribution snapshots. An ordinary
+image move then failed the item limit. Sending those snapshots in broadcasts
+also created transfers larger than the relay's bounded guest queue. A count-only
+history bound did not control this growth. Byte-bounded retention and compact
+browser projections replace that behavior without raising transport limits or
+discarding current content, replay receipts, or browser-local Undo/Redo state.
+
+The follow-up trial exposed slow catch-up during typing: the browser queued
+another operation every 300 ms even when the previous save took seconds.
+It now accumulates unsent updates into one follow-up until the in-flight
+operation is acknowledged. Recovery retains both, and the sent operation's
+identity and payload stay stable for retries. The helper pipe also assembles
+JSON lines from chunks once, with an incremental byte bound, instead of
+repeatedly copying and scanning the entire growing message. On a copy of the
+reported board, Emacs reply framing fell from roughly 520 ms to 15 ms; durable
+commit remains before broadcast and acknowledgement.
+
+Single moves still exposed Emacs pipe backpressure after that fix: writing a
+5 MiB request in one `process-send-string` took about 1.2 seconds even with a
+helper that only consumed input. Requests now use 1,024-character writes,
+preserving UTF-8 and the same bounded JSON-line protocol. On a copy of the
+reported board, a complete host patch fell from roughly 1.6 seconds to 0.28
+seconds. State authority, validation, persistence, and acknowledgement order
+are unchanged; no helper state cache is introduced.
 
 
 ## Usability findings from the first shared session
@@ -101,8 +164,25 @@ short-viewport spacing retains at least 150px of document viewport in that test.
 The trial also showed that a contribution row per 300 ms save was unreadable.
 Keep those commits and their exact inverse records; group their presentation
 by participant name and five-second idle gaps. Agent transactions remain
-separate. Local view decorations distinguish the latest retained agent changes
-without modifying CRDT content or exported formatting.
+separate. Local view decorations distinguish newly received agent changes
+for eight seconds, fading over the final two. Repeated publications retain
+each target's original local expiry; initial history does not trigger a glow.
+Attribution remains in Contributions without modifying CRDT content or
+exported formatting.
+
+### Decision history: persistent highlights and SVG exports
+
+Highlights originally lasted until a human edited the same element. A board
+authored mostly by the assistant consequently kept a permanent glow that
+blurred its labels. Short-lived local decorations replace that display while
+retaining contribution records and exact inverses.
+
+Whiteboard exports originally used a fixed cream substrate and positioned SVG
+`tspan` lines. The substrate differed from the editor, and Qt's SVG renderer
+collapsed those lines and omitted marker arrowheads. PNG and SVG now share
+an opaque white background, independent of UI theme. Explicit text baselines
+and path arrowheads render in the browser, resvg, and Qt without sacrificing
+editable SVG text or blank-line spacing.
 
 
 ## Pointing and menu refinement

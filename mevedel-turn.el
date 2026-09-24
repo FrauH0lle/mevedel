@@ -32,6 +32,10 @@
                   "mevedel-agents" (invocation))
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-notify-request-changed
+                  "mevedel-collaboration" (data-buffer))
+
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline
                   "mevedel-compact-estimation" (fsm))
@@ -361,6 +365,8 @@ directive being processed.  Return the new request struct."
                    :started-at (current-time)
                    :origin origin)))
     (setq mevedel--current-request request)
+    (when (fboundp 'mevedel-collaboration-notify-request-changed)
+      (mevedel-collaboration-notify-request-changed (current-buffer)))
     (when (equal origin "/root")
       (setf (mevedel-session-agent-root-activity session) 'running))
     (when (fboundp 'mevedel-telemetry-record)
@@ -425,7 +431,9 @@ is returned here."
           (setf (mevedel-session-agent-root-activity
                  (mevedel-request-session request))
                 'idle))
-        (setq mevedel--current-request nil)))))
+        (setq mevedel--current-request nil)
+        (when (fboundp 'mevedel-collaboration-notify-request-changed)
+          (mevedel-collaboration-notify-request-changed (current-buffer)))))))
 
 
 ;;

@@ -47,11 +47,16 @@ selected direct-tool identity. Display metadata is allowlisted rather than
 exposing raw internal render data. Delivered Skill dependencies are historical
 captured bodies, not current file reads. Each browser owns nested disclosures.
 
-Artifact cards are settled transcript records; bytes are fetched on demand by
+Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
 with scripts permitted but no same-origin authority and a restrictive CSP.
 Artifacts use existing portable session publication, not relay file storage or
 a separate retention system. See [Session artifacts](../view.md#session-artifacts).
+
+Compaction reduces model context without withdrawing browser history. Earlier
+segments load as read-only disclosures through the existing session reader.
+The room caches only their published artifact metadata, keeping sidebar access
+independent of the current context segment; transcript bodies load on demand.
 
 Shared whiteboards and documents allow direct browser editing through typed,
 host-committed operations. [ADR 0120](0120-edit-shared-content-through-the-session-host.md)
@@ -88,6 +93,13 @@ within that deliberate sharing boundary. Untrusted artifact scripts must not
 inherit the viewer origin that holds decrypted content and credentials.
 
 ## Decision history
+
+- **Browser continuity, 2026-09-24:** compaction removed two still-existing HTML
+  artifacts from a live room because the sidebar used only current-segment
+  records. Archived publication records now contribute to its artifact catalog,
+  and expandable archived segments preserve access to earlier conversations.
+  This reuses canonical session storage and projection, without publishing
+  arbitrary files or adding a second durable transcript store.
 
 The following changes belong to ADR 0099 unless another ID is named.
 

@@ -33,6 +33,12 @@
 (declare-function mevedel-collaboration--request-id-p
                   "mevedel-collaboration-guest" (value))
 
+;; `mevedel-collaboration-history'
+(declare-function mevedel-collaboration--history-artifacts
+                  "mevedel-collaboration-history" (room))
+(autoload 'mevedel-collaboration--history-artifacts
+  "mevedel-collaboration-history")
+
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
                   "mevedel-collaboration-transport" (transport peer frame))
@@ -73,6 +79,7 @@
        (and (equal id (plist-get record :id))
             (plist-get record :artifact)))
      (append (plist-get room :records)
+             (mevedel-collaboration--history-artifacts room)
              (plist-get guest :agent-artifacts)))))
 
 (defun mevedel-collaboration--artifact-refuse (room peer req-id message)

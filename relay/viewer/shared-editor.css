@@ -287,7 +287,15 @@ header {
   pointer-events: stroke;
 }
 #scene [data-agent='true'] > :not(title) {
-  filter: drop-shadow(0 0 2px #14707a);
+  animation: board-contribution 8s linear var(--highlight-delay, 0ms) both;
+}
+@keyframes board-contribution {
+  0%, 75% { filter: drop-shadow(0 0 2px #14707a); }
+  100% { filter: none; }
+}
+@keyframes document-contribution {
+  0%, 75% { background: var(--accent-soft); box-shadow: -3px 0 var(--accent); }
+  100% { background: transparent; box-shadow: -3px 0 transparent; }
 }
 #selection,
 #presence {
@@ -410,6 +418,14 @@ header {
 .agent-contribution {
   background: var(--accent-soft);
   box-shadow: -3px 0 var(--accent);
+  animation: document-contribution 8s linear var(--highlight-delay, 0ms) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  #scene [data-agent='true'] > :not(title) {
+    animation: none;
+    filter: drop-shadow(0 0 2px #14707a);
+  }
+  .agent-contribution { animation: none; }
 }
 footer {
   flex: none;

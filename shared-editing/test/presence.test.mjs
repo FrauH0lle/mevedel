@@ -1,6 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { positionAt, trailSegments } from '../presence.mjs';
+import { BoardPreviews, positionAt, trailSegments } from '../presence.mjs';
+
+test('overlapping previews reconcile with commits and reject malformed geometry', () => {
+  const previews = new BoardPreviews(() => {});
+  const show = (peer, id, box, opId) => previews.receive({peer, mode:'cursor', preview:{opId, shapes:[{id,box}]}});
+  try {
+    show(1, 'a', [10,20,30,40], 'one');
+    show(2, 'a', [20,20,30,40], 'two');
+    show(3, 'b', [50,20,30,40], 'three');
+    assert.equal(previews.boxes().get('a')[0], 20);
+    previews.clear(2);
+    assert.equal(previews.boxes().get('a')[0], 10);
+    for (const box of [[0,0,-1,1], [NaN,0,1,1], [1e7,0,1,1], [0,0]]) show(4,'a',box);
+    previews.receive({peer:4, mode:'cursor', preview:{shapes:[null]}});
+    assert.equal(previews.people.size, 2);
+    previews.reconcile([{id:'different-writer', changes:[{id:'a'}]}]);
+    assert.equal(previews.boxes().has('a'), false);
+    assert.equal(previews.boxes().has('b'), true);
+    previews.reconcile([{id:'three', changes:[]}]);
+    show(3, 'b', [60,20,30,40], 'three');
+    assert.equal(previews.boxes().size, 0, 'late preview cannot override its commit');
+    show(1, 'a', [10,20,30,40]);
+    previews.receive({peer:1, mode:'cursor'});
+    assert.equal(previews.boxes().size, 0);
+  } finally { previews.clear(); }
+});
 
 test('playback interpolates samples but never predicts beyond a stop or reversal', () => {
   const samples = [

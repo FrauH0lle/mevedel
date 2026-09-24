@@ -1,5 +1,44 @@
 /* Disposable board overlays. Samples are world coordinates, sizes are screen pixels. */
 
+// Geometry previews never enter the CRDT, undo, exports, or recovery drafts.
+export class BoardPreviews {
+  constructor(changed) {
+    this.changed = changed;
+    this.people = new Map();
+    this.committed = new Set();
+  }
+  clear(peer) {
+    for (const [id, entry] of this.people) {
+      if (peer !== undefined && peer !== id) continue;
+      clearTimeout(entry.timer);
+      this.people.delete(id);
+    }
+    this.changed();
+  }
+  receive({peer, mode, preview}) {
+    if (mode === 'clear' || mode === 'cursor' && !preview) { this.clear(peer); return; }
+    if (mode !== 'cursor' || !preview || this.committed.has(preview.opId)) return;
+    const shapes = preview.shapes;
+    if (!Array.isArray(shapes) || shapes.length > 100 || !shapes.every(s =>
+      s && typeof s.id === 'string' && s.id.length <= 80 && Array.isArray(s.box) && s.box.length === 4 &&
+      s.box.every(n => Number.isFinite(n) && Math.abs(n) <= 1000000) && s.box[2] >= 0 && s.box[3] >= 0)) return;
+    clearTimeout(this.people.get(peer)?.timer);
+    this.people.delete(peer); // The newest preview wins visually if gestures overlap.
+    this.people.set(peer, {...preview, timer:setTimeout(()=>this.clear(peer),5000)});
+    this.changed();
+  }
+  reconcile(transactions) {
+    const changed = new Set(transactions.filter(tx=>!this.committed.has(tx.id))
+      .flatMap(tx=>(tx.changes || []).map(change=>change.id)));
+    this.committed = new Set(transactions.map(tx=>tx.id));
+    for (const [peer, preview] of this.people)
+      if (this.committed.has(preview.opId) || preview.shapes.some(s=>changed.has(s.id))) this.clear(peer);
+  }
+  boxes() {
+    return new Map([...this.people.values()].flatMap(p=>p.shapes.map(s=>[s.id,s.box])));
+  }
+}
+
 // Short transitions fill the gaps between updates without predicting motion.
 // Never extrapolate: stopping and packet loss must not move the pointer past its owner.
 export function positionAt(samples, time) {

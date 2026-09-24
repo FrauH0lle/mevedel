@@ -461,7 +461,8 @@ async function main() {
                                                Buffer.from(writeToken),
                                                Buffer.from(ownerToken)]));
 
-  const ids = ['transcript', 'connection', 'notice', 'live-button',
+  const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'assistant-working',
+               'terminal-state', 'terminal-title', 'terminal-message',
                'composer', 'composer-input', 'composer-name',
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
@@ -473,7 +474,7 @@ async function main() {
                'artifacts', 'artifact-panel', 'artifact-title',
                'artifact-meta', 'artifact-tab', 'artifact-download',
                'artifact-close', 'artifact-body',
-               'theme-button', 'modeline', 'empty-state',
+               'appearance-menu', 'palette', 'appearance', 'accents', 'skill-search', 'skills-button', 'activity', 'modeline', 'empty-state',
                'session-box', 'session-summary',
                'tasks-list', 'agents-done-list',
                'new-session-button', 'new-session', 'new-session-form',
@@ -625,6 +626,7 @@ async function main() {
       this.type = (options && options.type) || '';
     }
   }
+  window.matchMedia = () => ({matches:false, addEventListener(){}});
   const context = {
     document, window, WebSocket: TestWebSocket, URL: ViewerURL, console,
     crypto, TextEncoder, TextDecoder, atob, btoa, Date, Blob: FakeBlob,
@@ -673,10 +675,12 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
 
@@ -702,20 +706,23 @@ async function main() {
   assert.equal(api.parseFragment(`#${roomId}.${base64url(new Uint8Array(31))}`), null);
   assert.equal(api.parseFragment('#nodotsecret'), null);
 
-  // The theme switch cycles system -> light -> dark, stamping the root
-  // so an explicit choice beats the OS in either direction, and
-  // remembering it. No stamp at all means "follow the system".
+  // Appearance persists one validated choice and keeps the system theme unstamped.
   assert.equal(document.documentElement.attributes['data-theme'], undefined);
-  assert.equal(textOf(nodes['theme-button']), '◐');
-  nodes['theme-button'].dispatch('click');
-  assert.equal(document.documentElement.attributes['data-theme'], 'light');
-  assert.equal(storage.get('mevedel-theme'), 'light');
-  nodes['theme-button'].dispatch('click');
-  assert.equal(document.documentElement.attributes['data-theme'], 'dark');
-  assert.match(nodes['theme-button'].attributes['aria-label'], /dark/i);
-  nodes['theme-button'].dispatch('click');
-  assert.equal(document.documentElement.attributes['data-theme'], undefined);
-  assert.equal(storage.get('mevedel-theme'), 'system');
+  assert.equal(document.documentElement.attributes['data-palette'], 'cool');
+  for (const theme of ['light', 'dark', 'system']) {
+    nodes.appearance.value = theme;
+    nodes.appearance.dispatch('change');
+    assert.equal(document.documentElement.attributes['data-theme'], theme === 'system' ? undefined : theme);
+    assert.equal(JSON.parse(storage.get('mevedel-appearance')).theme, theme);
+  }
+  nodes.palette.value = 'warm';
+  nodes.accents.value = 'minimal';
+  nodes.palette.dispatch('change');
+  assert.equal(document.documentElement.attributes['data-palette'], 'warm');
+  assert.equal(document.documentElement.attributes['data-accents'], 'minimal');
+  nodes.palette.value = 'invalid';
+  nodes.palette.dispatch('change');
+  assert.equal(document.documentElement.attributes['data-palette'], 'cool');
 
   // Reading mode: scrolled well back from the live edge the dock folds
   // its status rows away, and it unfolds at the edge again. The fold
@@ -762,6 +769,10 @@ async function main() {
   assert.equal(hello.writeToken, base64url(writeToken));
   assert.equal(hello.ownerToken, base64url(ownerToken));
   assert.equal(typeof hello.name, 'string');
+  assert.match(hello.name, /^[A-Z][a-z]+ [A-Z][a-z]+$/);
+  assert.equal(hello.name[0], hello.name.split(' ')[1][0], 'generated name alliterates');
+  assert.equal(nodes['composer-name'].value, hello.name, 'generated name is visible and editable');
+  assert.equal(storage.get('mevedel-guest-name'), hello.name, 'generated name survives reload');
   // The stable per-browser guest id rides every hello, so the host can
   // match this guest's own queued entries across reconnects.
   assert.match(hello.guestId, /^[A-Za-z0-9_-]{8,64}$/);
@@ -812,7 +823,7 @@ async function main() {
   // Every control says what it does on hover.
   assert.match(nodes['skill-chips'].children[0].attributes.title,
                /Prepare \/plan.*\[prompt\]/);
-  assert.match(nodes['theme-button'].attributes.title, /Colour theme/);
+  assert.equal(nodes.appearance.value, 'system');
   assert.equal(textOf(nodes['skill-chips'].children[1]), '$review');
   assert.equal(nodes['empty-state'].hidden, true, 'loading is not an empty session');
   await deliver({t: 'snapshot-chunk', final: false, records: [
@@ -1097,6 +1108,32 @@ async function main() {
                'log line\n');
   assert.equal(nodes.attachments.children.length, 0);
 
+  // Name commits travel independently of the message draft.
+  nodes['composer-input'].value = 'Unsent draft';
+  for (const [value, event, expected] of [
+    ['  Roland55  ', 'blur', 'Roland55'],
+    ['Clever Cat', 'keydown', 'Clever Cat'],
+    ['   ', 'blur', hello.name],
+  ]) {
+    const before = first.sent.length;
+    nodes['composer-name'].value = value;
+    let prevented = false;
+    nodes['composer-name'].dispatch(event, {
+      key: 'Enter', preventDefault: () => { prevented = true; },
+    });
+    if (event === 'keydown') assert.equal(prevented, true);
+    await waitFor(() => first.sent.length === before + 1, 'sealed name update');
+    assert.deepEqual(await unseal(key, first.sent.at(-1)), {t: 'set-name', name: expected});
+    assert.equal(nodes['composer-name'].value, expected);
+    assert.equal(storage.get('mevedel-guest-name'), expected);
+    assert.match(textOf(nodes.modeline), new RegExp(expected));
+    assert.equal(nodes['composer-input'].value, 'Unsent draft');
+  }
+  const afterName = first.sent.length;
+  nodes['composer-name'].dispatch('blur');
+  await tick();
+  assert.equal(first.sent.length, afterName, 'unchanged blur sends no duplicate');
+
   await Promise.all([
     api2.addFiles([fakeFile('one.log', '', '1'),
                    fakeFile('two.log', '', '2')]),
@@ -1166,11 +1203,16 @@ async function main() {
   const agentFetch = await unseal(key, first.sent[agentFetchBefore]);
   await deliver({t: 'agent', reqId: agentFetch.reqId,
                  path: '/root/worker-1', digest: 'd1', final: true,
-                 records: [{id: 'a1', kind: 'assistant', text: 'Looking'}]});
+                 records: [{id: 'a1', kind: 'assistant', text: 'Looking'},
+                           {id: 'a2', kind: 'tool', name: 'Read', result: 'Found it'},
+                           {id: 'a3', kind: 'user', text: 'Continue'},
+                           {id: 'a4', kind: 'assistant', text: 'Continuing'}]});
   assert.deepEqual(agentFetch,
                    {t: 'fetch-agent', reqId: agentFetch.reqId,
                     path: '/root/worker-1'});
   assert.match(textOf(nodes['agent-transcript']), /Looking/);
+  assert.equal(nodes['agent-transcript'].children[1].className, 'turn ai cont');
+  assert.equal(nodes['agent-transcript'].children[3].className, 'turn ai');
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
   assert.equal(textOf(nodes['session-summary']),
@@ -1363,8 +1405,8 @@ async function main() {
   assert.match(textOf(nodes.modeline), /deepseek-v4-flash/);
   assert.match(textOf(nodes.modeline), /edits/);
   assert.match(textOf(nodes.modeline), /Connected/);
-  assert.match(textOf(nodes.modeline), /Assistant working/);
-  assert.ok(nodes.modeline.children.some(n=>n.className.includes('assistant-working')));
+  assert.equal(nodes['assistant-working'].hidden, false);
+  assert.doesNotMatch(textOf(nodes.modeline), /Assistant working/);
   assert.doesNotMatch(textOf(nodes.modeline), /plan/);
   // Plan is enterable from a chip, so the strip has to show it is on.
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
@@ -1559,7 +1601,7 @@ async function main() {
   await waitFor(() => first.sent.length === sentBefore + 1, 'ui-response');
   assert.deepEqual(await unseal(key, first.sent[sentBefore]),
                    {t: 'ui-response', reqId: 41, option: 1});
-  const feedbackRow = card.children[card.children.length - 1];
+  const feedbackRow = card.children[card.children.length - 1].children[1];
   feedbackRow.children[0].value = 'do a dry run first';
   feedbackRow.children[1].dispatch('click');
   await waitFor(() => first.sent.length === sentBefore + 2, 'feedback');
@@ -1771,6 +1813,10 @@ async function main() {
   await staleAttachment;
   assert.equal(nodes.composer.hidden, true);
   assert.equal(nodes['empty-state'].hidden, true, 'an ended session is not presented as empty');
+  assert.equal(nodes['terminal-state'].hidden, false);
+  assert.equal(textOf(nodes['terminal-title']), 'Session ended');
+  assert.match(textOf(nodes['terminal-message']), /new invitation/);
+  assert.equal(nodes.notice.hidden, true, 'terminal status replaces the small dock notice');
   assert.equal(nodes['new-session-button'].hidden, true);
   // An ended room's link is dead, so offering to pass it on would lie.
   assert.equal(nodes['invite-button'].hidden, true);

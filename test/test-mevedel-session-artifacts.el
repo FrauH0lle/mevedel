@@ -2551,8 +2551,14 @@
     (unwind-protect
         (let* ((buf (get-buffer "*test-data-buf*"))
                (_orig-segment buffer-file-name)
-               (new-path (mevedel-session-artifacts-rotate-segment
-                          session buf "Summary of the prior conversation.")))
+               notified
+               (new-path
+                (cl-letf (((symbol-function 'mevedel-collaboration-notify-history-changed)
+                           (lambda (buffer)
+                             (setq notified (list buffer (mevedel-session-current-segment session))))))
+                  (mevedel-session-artifacts-rotate-segment
+                   session buf "Summary of the prior conversation."))))
+          (should (equal notified (list buf 2)))
           (with-current-buffer buf
             (should new-path)
             (should (= 2 (mevedel-session-current-segment session)))

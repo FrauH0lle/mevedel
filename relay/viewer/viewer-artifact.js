@@ -18,7 +18,20 @@
       + 'else root.removeAttribute("data-theme");};'
       + `set(${JSON.stringify(theme)});`
       + 'addEventListener("message", e => {if (e.source === parent && e.data '
-      + '&& e.data.t === "theme") set(e.data.theme);});})()<\/script>';
+      + '&& e.data.t === "theme") set(e.data.theme);});'
+      // srcdoc inherits the room's base URL. Resolve local fragment links
+      // inside this opaque document instead of navigating to the room.
+      + 'addEventListener("click", e => {'
+      + 'const link = e.target.closest?.("a[href]");'
+      + 'const href = link?.getAttribute("href");'
+      + 'if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey '
+      + '|| e.shiftKey || e.altKey || !href?.startsWith("#")) return;'
+      + 'e.preventDefault(); let id;'
+      + 'try {id = decodeURIComponent(href.slice(1));} catch {id = href.slice(1);}'
+      + 'const target = document.getElementById(id) || document.getElementsByName(id)[0];'
+      + 'if (target) {target.scrollIntoView(); target.focus({preventScroll:true});}'
+      + 'else if (!id) scrollTo(0,0);'
+      + '});})()<\/script>';
   }
 
   function create({send, el, flash, summarize}) {

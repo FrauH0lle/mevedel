@@ -101,40 +101,53 @@ therefore involves neither the host nor the relay -- the Invite sheet
 builds the links in the page and copies them. That is also why the tiers
 are a prefix chain rather than three unrelated tokens.
 
-The Invite and Rooms buttons sit in the Session menu rather than
-in the composer row: a read-only guest never sees the composer and has
-its own link to hand on. Invite does go away when the room ends, because
-the link goes with it.
+Invite sits in the room header and remains available to read-only guests.
+Rooms and New session are in **In this room**. Invite disappears when the room
+ends, because the link goes with it.
 
-## The Session menu
+## Room navigation and appearance
 
-The viewer has one collapsible menu, the `Session` disclosure, and every
-non-transcript surface the viewer offers lives in it: the host-admitted
-command and skill chips, live sub-agent chips, finished agents, the task
-list, artifact chips, and the New Session, Rooms, and Invite buttons. Its
-summary line lists what is inside as counts (`Session · 4 commands · 2
-agents · 3/5 tasks · 1 artifact · invite`) and the box hides when every
-section is empty. Commands and artifacts fold into closed submenus of
-their own, because an owner link with `t` sees every skill on the host
-and a flat list would push the agents and tasks out of view. Each section reports its own fragment through one `summarize`
-seam keyed by section, so a module adds itself to the menu without
-knowing about the others. Tapping a chip selects it while keeping the menu and keyboard focus in place.
+**In this room** groups Shared work, artifacts, progress, skills and commands,
+and room actions. Shared work and artifacts start expanded; skills and commands
+start collapsed and include a search field. **Skills +** beside the composer
+opens and focuses that search. Each section reports its counts through the
+shared `summarize` seam and hides when it has nothing to offer.
+
+Tapping a chip selects it while keeping the menu and keyboard focus in place.
 Skills combine on one message (up to six); a slash command is a single action
 and replaces the skill selection. Selecting a skill replaces a slash command.
 Selected chips stay highlighted and appear above the composer, each with a
 remove button. Removing a selection preserves the message draft.
 
-At viewport widths of 80rem and above, Session occupies a separate right-hand
-column so opening shared work does not cover the transcript. At smaller widths
-and increased browser zoom, it returns to the bottom dock. The same disclosure
-and controls serve both layouts. Conversation text and the composer share a
+At viewport widths of 1100px and above, the navigation occupies an independently
+scrolling right column. At smaller widths and increased browser zoom, it becomes
+a disclosure above the composer. Conversation text and the composer share a
 bounded reading width. Message and display-name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
+The display name initially uses a randomly generated alliterative adjective
+and animal, such as **Curious Capybara**. It is visible and editable in the
+composer and retained in that browser's storage per relay origin; existing
+chosen names are preserved. Enter or leaving the name field saves the change
+and sends a sealed `set-name` frame to update the host's registered guest.
+Clearing the field restores that browser's saved generated name. Enter in the
+name field does not submit a message draft. Names are labels, not identities
+or unique handles.
+The guest's independent browser ID continues to identify its queued work.
 
-Room and editor chrome share the same light/dark palette and native font stack.
-Teal identifies actions; guest attribution, errors, diffs, comments, and presence
-retain their distinct semantic colors. The theme control follows the system by
-default and can select light or dark explicitly.
+Room and editor chrome share color tokens. **Appearance** selects a complete
+cool (default) or warm palette, system/light/dark appearance, and selective or
+minimal accent detail. Selective accents color participant attribution and the
+sidebar scrollbar; minimal accents make those details neutral. Errors, diffs,
+comments, presence and authored drawing colors retain their meaning. Choices
+persist in browser storage per relay origin and follow other open room/editor
+tabs. Editors receive them through their bound item port without replacing the
+frame, document, selection or question draft. The same Appearance menu is
+available in the editor tab's header.
+
+Pending decisions use a quiet card with an accent edge. Host-provided options
+retain their labels and response IDs, with no implicit preferred answer.
+**Suggest a change** expands the feedback field when the host allows feedback.
+Repeated unchanged requests preserve the open card and draft feedback.
 
 ## Guest-requested sessions
 
@@ -203,6 +216,23 @@ text may still be queued. A storage error refuses that prompt without ending
 the room. Failed enqueue removes the files just created for it.
 
 ## Transcript, agent, and task projection
+
+Compaction and clearing model context retain earlier conversation segments.
+The browser lists them in expandable **Earlier conversation** rows above the
+live transcript. Opening a row loads the host's canonical archived projection
+on demand; it does not restore that segment into model context or change where
+new prompts are sent. Loaded disclosures remain open across live updates, and
+unavailable archives show a retry action. Rejoining a room reconstructs the
+segment index from the session, rather than relying on browser memory.
+An expanded segment has a collapse rail along its full left edge; closing it
+brings its heading back into view and returns keyboard focus there.
+Archived and agent transcripts use the live conversation's compact grouping:
+consecutive assistant text and tool calls share one visible speaker label.
+
+The **Assistant working…** indicator sits above the message composer. The
+host publishes status immediately after request admission and teardown,
+including interruption and failure, rather than inferring activity from the
+arrival of transcript text. A lost connection clears the working indicator.
 
 The shared browser renderer owns disclosure continuity when rebuilding a record.
 Main transcript updates, reconnect snapshots, and polled agent transcripts pass
@@ -346,12 +376,15 @@ none, and a mixed code/artifact patch retains its ordinary tool row.
 File stats are memoized against per-publish-tick target round trips and
 invalidated when ApplyPatch settles. A deleted artifact still
 projects, marked missing, so it reads as deleted rather than as a gap
-in the log. The viewer also derives a strip of chips in the Session menu
-(last record per name wins) so reopening one never means scrolling the
-log.
+in the log. The sidebar combines live and archived artifact records (last
+record per name wins), so compaction does not remove access to published work.
+Archived transcripts are read once per segment to reconstruct artifact metadata;
+their full browser projection is sent only when that segment is expanded. The published
+record remains the authority: unrelated files in the artifact directory are
+not exposed by this index.
 
 Bytes travel only on demand: opening a card sends `artifact-get` with
-the record id -- resolution is by identity against the root records or agent
+the record id -- resolution is by identity against live or archived root records or agent
 records already published to that guest, never by a guest-supplied path. Agent
 artifact ids are namespaced before publication because canonical ids are only
 transcript-local. The request id must be a nonnegative JavaScript-safe integer
@@ -368,7 +401,11 @@ blocked by the policy. Because the frame's origin is
 opaque, the viewer's colour-theme choice cannot be read from it: a prelude
 script bakes the current `data-theme` stamp onto the artifact's root and
 follows later toggles over `postMessage`, so an artifact themes off
-`html[data-theme]` beside `prefers-color-scheme`. Markdown goes through the
+`html[data-theme]` beside `prefers-color-scheme`. The prelude also handles
+local `#section` links inside the artifact, including encoded section IDs,
+so they scroll within its sandbox rather than navigating to the room URL.
+This applies in both the panel and the separate artifact tab.
+Markdown goes through the
 DOM-built XSS-safe renderer, images display inline, plain text shows as
 text, and anything else is offered as a download. "Open in tab" puts an
 HTML artifact beside the conversation: a same-origin shell opened
@@ -412,6 +449,11 @@ at once and drops the stale stored share instead of retrying for three
 minutes. Code 4001 (room closed by the host) starts the bounded reconnect
 window; a 4004 during that window stays retryable because the guest may have
 reached the relay before the host recreated the room.
+
+An ended room shows a prominent status panel above the loaded conversation,
+or centered in the main area when no messages are loaded. It explains that
+continuing requires a new invitation from the host. The loaded transcript
+remains readable.
 
 An actively focused viewer reports itself active and receives no Web Push.
 When a push-enabled viewer moves away, it receives Web Push whether its page

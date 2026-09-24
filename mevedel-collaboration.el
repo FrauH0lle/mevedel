@@ -40,6 +40,10 @@
 (declare-function mevedel-collaboration--artifact-stat-invalidate
                   "mevedel-collaboration-artifact-projection" ())
 
+;; `mevedel-collaboration-editing'
+(declare-function mevedel-collaboration-editing-depart
+                  "mevedel-collaboration-editing" (room peer))
+
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--on-control
                   "mevedel-collaboration-guest" (data-buffer event peer))
@@ -51,6 +55,10 @@
                   "mevedel-collaboration-guest" (overlay))
 (declare-function mevedel-collaboration--on-state
                   "mevedel-collaboration-guest" (data-buffer state))
+
+;; `mevedel-collaboration-history'
+(declare-function mevedel-collaboration--publish-history "mevedel-collaboration-history" (room &optional peer))
+(autoload 'mevedel-collaboration--publish-history "mevedel-collaboration-history")
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
@@ -481,6 +489,7 @@ identity.  The id never enters model context or the transcript."
          room (list :t "remove" :ids (vconcat removed))))
       (mevedel-collaboration--publish-queue room)
       (mevedel-collaboration--publish-status room)
+      (mevedel-collaboration--publish-history room)
       (mevedel-collaboration--publish-agents room)
       (mevedel-collaboration--publish-tasks room))))
 
@@ -613,6 +622,20 @@ the Emacs mode line carries."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (setq room (plist-put room :publish-timer nil))
     (mevedel-collaboration--publish room)))
+
+(defun mevedel-collaboration-notify-request-changed (data-buffer)
+  "Publish DATA-BUFFER's settled request ownership without delaying the turn."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (condition-case nil
+        (mevedel-collaboration--publish-status room)
+      (error (mevedel-collaboration--observer-failure room)))))
+
+(defun mevedel-collaboration-notify-history-changed (data-buffer)
+  "Refresh DATA-BUFFER's browser history after a segment transition commits."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (condition-case nil
+        (mevedel-collaboration--schedule-publish room)
+      (error (mevedel-collaboration--observer-failure room)))))
 
 (defun mevedel-collaboration--safe-accepted-prompt (data-buffer)
   "Publish DATA-BUFFER immediately after an accepted prompt is inserted.

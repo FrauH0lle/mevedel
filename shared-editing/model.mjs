@@ -2,7 +2,7 @@
 import * as Y from 'yjs';
 import { equalityDeep } from 'lib0/function';
 import { documentJSON, validateDocument } from './document.mjs';
-import { validateImage } from './image.mjs';
+import { validateImageContent } from './image.mjs';
 
 export const LIMIT = 16 * 1024 * 1024;
 export const identifier = (value) =>
@@ -88,6 +88,7 @@ export function validateShape(shape) {
     'from',
     'to',
     'src',
+    'imageEdit',
     'dash',
     'rough',
     'pattern',
@@ -167,7 +168,8 @@ export function validateShape(shape) {
     shape.type === 'image' ? Boolean(shape.src) : shape.src === undefined,
     'Images require embedded data on an image shape',
   );
-  const pixels = shape.src ? validateImage(shape.src) : 0;
+  check(shape.imageEdit == null || shape.type === 'image', 'Only images carry image edits');
+  const pixels = shape.src ? validateImageContent(shape) : 0;
   for (const key of ['from', 'to'])
     check(!shape[key] || identifier(shape[key]), 'Invalid connector target');
   check(shape.type === 'arrow' || (!shape.from && !shape.to), 'Only arrows bind to shapes');

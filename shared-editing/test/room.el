@@ -61,6 +61,18 @@
         (with-current-buffer editing-test-buffer
           (condition-case err
               (pcase (plist-get command :tool)
+                ("RequestState"
+                 (if (eq (plist-get (plist-get command :args) :busy) t)
+                     (mevedel-request-begin editing-test-session)
+                   (mevedel-request-end))
+                 (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
+                ("CompactHistory"
+                 (goto-char (point-max))
+                 (mevedel--insert-user-turn "Earlier room question")
+                 (insert (propertize "A preserved earlier answer.\n" 'gptel 'response))
+                 (mevedel-session-artifacts-rotate-segment
+                  editing-test-session editing-test-buffer "Earlier work was summarized.")
+                 (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("EndShare"
                  (mevedel-collaboration--stop-internal
                   (mevedel-collaboration--room-for-session editing-test-session) 'test)

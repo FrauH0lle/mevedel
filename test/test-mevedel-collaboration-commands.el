@@ -38,6 +38,30 @@
 ;;
 ;;; Observer and command boundaries
 
+(mevedel-deftest mevedel-collaboration-request-lifecycle
+  (:doc "publishes busy after admission and idle after teardown without another response")
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "status"))
+           (guests (make-hash-table :test #'eql))
+           (room (list :session session :data-buffer (current-buffer)
+                       :guests guests :transport 'transport))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           sent)
+      (setq-local mevedel--session session)
+      (puthash 1 (list :ready t) guests)
+      (cl-letf (((symbol-function 'mevedel-request-assert-target-ready) #'ignore)
+                ((symbol-function 'mevedel-session-artifacts-assert-mutation-authority) #'ignore)
+                ((symbol-function 'mevedel-telemetry-record) #'ignore)
+                ((symbol-function 'mevedel-collaboration--transport-control) #'ignore)
+                ((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport _peer frame) (push frame sent) t)))
+        (mevedel-collaboration--publish-status room)
+        (dotimes (_ 2)
+          (mevedel-request-begin session)
+          (should (eq t (plist-get (car sent) :busy)))
+          (mevedel-request-end)
+          (should (eq :json-false (plist-get (car sent) :busy))))))))
+
 (mevedel-deftest mevedel-collaboration--safe-post-response
   (:doc "installed response hooks coalesce updates and isolate publication faults")
   (mevedel-view-test--with-buffers
@@ -79,6 +103,25 @@
       (with-current-buffer view-buf
         (should (equal draft (mevedel-view--input-text)))
         (should (= 4 (- (point) (mevedel-view--input-start))))))))
+
+(mevedel-deftest mevedel-collaboration-notify-history-changed
+  (:doc "coalesces committed history changes and isolates observer failures")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           scheduled failures)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat callback &rest args)
+                   (push (cons callback args) scheduled) 'timer)))
+        (mevedel-collaboration-notify-history-changed (current-buffer))
+        (mevedel-collaboration-notify-history-changed (current-buffer))
+        (should (= 1 (length scheduled))))
+      (cl-letf (((symbol-function 'mevedel-collaboration--schedule-publish)
+                 (lambda (_) (error "observer")))
+                ((symbol-function 'mevedel-collaboration--observer-failure)
+                 (lambda (failed) (push failed failures))))
+        (mevedel-collaboration-notify-history-changed (current-buffer))
+        (should (equal (list room) failures))))))
 
 (mevedel-deftest mevedel-collaboration-status
   (:doc "reports safe active and inactive status without exposing secrets")

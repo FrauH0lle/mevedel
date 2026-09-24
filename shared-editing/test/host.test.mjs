@@ -2,6 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { handle } from '../host.mjs';
 
+test('large retained snapshots expire before repeated moves block new saves', async () => {
+  const content = Array.from({length:50},(_,i)=>({id:`shape-${i}`,type:'rect',box:[i*10,0,100,100],text:'x'.repeat(10000)}));
+  let {state}=await handle({action:'create',id:'large-history',kind:'whiteboard',title:'Large history',content,actor:'Guest: Alice',opId:'create'});
+  for(let step=0;step<20;step++) {
+    const {result}=await handle({action:'read',state});
+    const changes=result.content.map(shape=>({id:shape.id,before:shape,after:{...shape,box:[shape.box[0],step+1,100,100]}}));
+    ({state}=await handle({action:'patch',state,actor:'Guest: Alice',opId:`move-${step}`,changes}));
+  }
+  assert.ok(state.transactions.length<20,'old snapshots expire by size as well as count');
+  assert.ok(Buffer.byteLength(JSON.stringify(state.transactions))<=4*1024*1024);
+  const latest=state.transactions[0];
+  assert.equal(latest.id,'move-19');
+  const read=await handle({action:'read',state,since:0});
+  assert.equal(read.result.historyTruncated,true);
+  const reverted=await handle({action:'revert',state,actor:'Agent: test',opId:'revert',transaction:latest.id});
+  assert.equal(reverted.result.content[0].box[1],19,'retained entries still revert');
+  const duplicate=await handle({action:'patch',state,actor:'Guest: Alice',opId:'move-0',changes:[]});
+  assert.equal(duplicate.result.revision,state.revision,'expired history does not remove replay receipts');
+});
+
 test('availability verifies schema and renderer without returning durable state', async () => {
   assert.deepEqual(await handle({ action: 'status' }), { result: { available: true } });
 });
@@ -310,4 +330,52 @@ test('document images survive saves and native, HTML, and Markdown exports', asy
     ]}));
   }
   assert.equal((await handle({action:'read',state:made.state})).result.content.content[0].attrs.src,src);
+});
+
+test('image edits validate at the host and retain their original through native import', async () => {
+  const {restore,encode,inspect,patch,applyUpdate} = await import('../model.mjs');
+  const source = await handle({action:'create',id:'source',kind:'whiteboard',actor:'Guest',opId:'source'});
+  const src = 'data:image/png;base64,'+(await handle({action:'export',state:source.state,format:'png'})).result.data;
+  const imageEdit = {src,crop:[0.2,0.1,0.5,0.6],rotation:90,flipX:true,flipY:false};
+  for (const kind of ['whiteboard','document']) {
+    const image = kind === 'whiteboard'
+      ? {id:'picture',type:'image',box:[0,0,100,100],src,imageEdit}
+      : {type:'image',attrs:{id:'picture',src,imageEdit,width:100,height:100}};
+    const content = kind==='whiteboard' ? [image] : {type:'doc',content:[image]};
+    const {state} = await handle({action:'create',id:'edited-'+kind,kind,content,actor:'Guest',opId:'create'});
+    const native = await handle({action:'export',format:'native',state});
+    const imported = await handle({action:'import',format:'native',id:'copy-'+kind,data:native.result.text,actor:'Guest',opId:'copy'});
+    const attrs = kind==='whiteboard' ? imported.result.content[0] : imported.result.content.content[0].attrs;
+    assert.equal(attrs.src,src);assert.deepEqual(attrs.imageEdit,imageEdit);
+    for (const invalid of [
+      {...imageEdit,crop:[0,0,0,1]}, {...imageEdit,crop:[0.8,0,0.5,1]},
+      {...imageEdit,crop:[0,0,1]}, {...imageEdit,crop:[0,0,'1',1]},
+      {...imageEdit,rotation:45}, {...imageEdit,flipX:'true'},
+      {...imageEdit,src:'https://example.com/image.png'}, {...imageEdit,unknown:true},
+    ]) {
+      const after = kind==='whiteboard' ? {...image,imageEdit:invalid} : {...image,attrs:{...image.attrs,imageEdit:invalid}};
+      const read = await handle({action:'read',state});
+      const before = kind==='whiteboard' ? read.result.content[0] : read.result.content.content[0];
+      await assert.rejects(handle({action:'patch',state,actor:'Guest',opId:'bad',changes:[{id:'picture',before,after}]}),/image (edit|crop|orientation)|embedded image/i);
+    }
+    const peers = [restore(Buffer.from(state.crdt,'base64')),restore(Buffer.from(state.crdt,'base64'))];
+    try {
+      const edits = [{...imageEdit,rotation:180}, {...imageEdit,flipY:true}];
+      peers.forEach((peer,i) => {
+        const content=inspect(peer).content;
+        const before=kind==='whiteboard'?content[0]:content.content[0];
+        if (kind==='whiteboard') patch(peer,[{id:'picture',before,after:{...before,imageEdit:edits[i]}}]);
+        // Tiptap's attribute update edits the surviving image node, unlike a
+        // host patch which deliberately replaces a target-checked whole block.
+        else peer.getXmlFragment('document').get(0).setAttribute('imageEdit',edits[i]);
+      });
+      applyUpdate(peers[0],encode(peers[1]));applyUpdate(peers[1],encode(peers[0]));
+      assert.deepEqual(inspect(peers[0]),inspect(peers[1]),'concurrent image edits converge');
+      const content=inspect(peers[0]).content;
+      const merged=kind==='whiteboard'?content[0]:content.content[0].attrs;
+      assert.equal(merged.src,src);
+      assert.ok(edits.some(edit=>JSON.stringify(edit)===JSON.stringify(merged.imageEdit)),
+        'settings and rendered pixels remain one complete edit');
+    } finally {peers.forEach(peer=>peer.destroy());}
+  }
 });

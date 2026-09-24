@@ -5,7 +5,7 @@ import { getSchema } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TableKit } from '@tiptap/extension-table';
 import Image from '@tiptap/extension-image';
-import { validateImage } from './image.mjs';
+import { validateImage, validateImageContent, imageSource } from './image.mjs';
 import UniqueID, { generateUniqueIds } from '@tiptap/extension-unique-id';
 import { MarkdownManager } from '@tiptap/markdown';
 import {
@@ -17,13 +17,21 @@ import {
 
 export const extensions = [
   StarterKit.configure({ undoRedo: false, link: { openOnClick: false } }),
-  TableKit,
+  TableKit.configure({table:{resizable:true, cellMinWidth:48}}),
   Image.extend({
     addAttributes() {
-      return {...this.parent(), ...Object.fromEntries(['width', 'height'].map(key => [key, {
+      return {...this.parent(),
+        src: {default:null, renderHTML: attrs => ({src:imageSource(attrs)})},
+        imageEdit: {default:null, rendered:false},
+        ...Object.fromEntries(['width', 'height'].map(key => [key, {
         default: null,
         parseHTML: element => element.hasAttribute(key) ? Number(element.getAttribute(key)) : null,
       }]))};
+    },
+    renderMarkdown(node) {
+      const {alt = '', title = ''} = node.attrs;
+      const src = imageSource(node.attrs);
+      return title ? `![${alt || ''}](${src} "${title}")` : `![${alt || ''}](${src})`;
     },
     parseHTML() {
       return [{ tag: 'img[src]', getAttrs: element => {
@@ -32,7 +40,32 @@ export const extensions = [
       } }];
     },
     addInputRules() { return []; },
-  }).configure({ allowBase64: true }),
+    addNodeView() {
+      if (!this.editor.isEditable) return null;
+      const create = this.parent();
+      return props => {
+        const view = create(props), update = view.update.bind(view), commit = view.onCommit;
+        view.maxSize = {width:8192, height:8192};
+        const image = view.dom.querySelector('img');
+        image.style.aspectRatio = props.node.attrs.width && props.node.attrs.height ? `${props.node.attrs.width} / ${props.node.attrs.height}` : '';
+        // The supplied view does not repaint stored dimensions on undo or remote updates.
+        view.update = (node, ...args) => {
+          const accepted = update(node, ...args);
+          if (accepted) {
+            image.style.width = node.attrs.width ? `${node.attrs.width}px` : '';
+            image.style.height = node.attrs.height ? `${node.attrs.height}px` : '';
+            image.style.aspectRatio = node.attrs.width && node.attrs.height ? `${node.attrs.width} / ${node.attrs.height}` : '';
+          }
+          return accepted;
+        };
+        view.onCommit = (width, height) => { if (this.editor.isEditable) commit(width, height); };
+        // Complete the library's touch drag through its mouse-release cleanup path.
+        for (const event of ['touchend', 'touchcancel'])
+          view.dom.addEventListener(event, () => document.dispatchEvent(new MouseEvent('mouseup')));
+        return view;
+      };
+    },
+  }).configure({ allowBase64: true, resize:{enabled:true, directions:['bottom-left','bottom-right'], minWidth:24, minHeight:24, alwaysPreserveAspectRatio:true} }),
   UniqueID.configure({
     types: [
       'paragraph',
@@ -89,8 +122,8 @@ export function validateDocument(json) {
     if (Object.keys(node).some((k) => !['type', 'attrs', 'content', 'marks', 'text'].includes(k)))
       throw new Error('Unknown document property');
     if (node.type === 'image') {
-      pixels += validateImage(node.attrs?.src);
-      imageBytes += node.attrs.src.length;
+      pixels += validateImageContent(node.attrs || {});
+      imageBytes += node.attrs.src.length + (node.attrs.imageEdit?.src.length || 0);
       for (const key of ['alt', 'title'])
         if (node.attrs[key] != null && (typeof node.attrs[key] !== 'string' || node.attrs[key].length > 10000))
           throw new Error('Invalid image description');

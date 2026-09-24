@@ -222,37 +222,61 @@ Observers cannot change whether the preceding commit succeeded.")
                                   nil "Shared editing helper exited. Check Node 22.4+ and the installed shared-editing resources on the Emacs host, then recheck")))))
                :filter
                (lambda (child chunk)
-                 (let ((text (concat (process-get child :partial) chunk)))
-                   (if (> (string-bytes text) (* 64 1024 1024))
-                       (delete-process child)
-                     (while (string-match "\n" text)
-                       (let ((line (substring text 0 (match-beginning 0))))
-                         (setq text (substring text (match-end 0)))
-                         (when (buffer-live-p buffer)
-                           (with-current-buffer buffer
-                             (let ((job (plist-get mevedel-shared-editing--runtime :active)))
-                               (when job
-                                 (condition-case err
-                                     (let ((reply (mevedel-shared-editing--parse line)))
-                                       (when (equal (plist-get reply :requestId)
-                                                    (plist-get job :requestId))
-                                         (plist-put mevedel-shared-editing--runtime :timer
-                                                    (run-at-time
-                                                     0 nil #'mevedel-shared-editing--accept
-                                                     buffer job reply))))
-                                   (error
-                                    (mevedel-shared-editing--finish
-                                     buffer job
-                                     (list :error
-                                           (if (equal (plist-get (plist-get job :args) :action) "status")
-                                               "Shared editing helper could not start. Check Node 22.4+ and the installed helper resources on the Emacs host, then recheck"
-                                             (error-message-string err))))))))))))
-                     (process-put child :partial text)))))))
+                 ;; Scan each arriving chunk once. Repeatedly concatenating
+                 ;; a growing image-bearing reply makes framing quadratic.
+                 (let ((start 0))
+                   (while (and (< start (length chunk)) (process-live-p child))
+                     (let* ((end (string-match "\n" chunk start))
+                            (part (substring chunk start end))
+                            (size (+ (or (process-get child :partial-bytes) 0)
+                                     (string-bytes part))))
+                       (setq start (if end (1+ end) (length chunk)))
+                       (if (> size (* 64 1024 1024))
+                           (delete-process child)
+                         (process-put child :partial-bytes size)
+                         (process-put child :partial
+                                      (cons part (process-get child :partial)))
+                         (when end
+                           (let ((line (mapconcat #'identity
+                                                  (nreverse (process-get child :partial)) "")))
+                             (process-put child :partial nil)
+                             (process-put child :partial-bytes 0)
+                             (when (buffer-live-p buffer)
+                               (with-current-buffer buffer
+                                 (let ((job (plist-get mevedel-shared-editing--runtime :active)))
+                                   (when job
+                                     (condition-case err
+                                         (let ((reply (mevedel-shared-editing--parse line)))
+                                           (when (equal (plist-get reply :requestId)
+                                                        (plist-get job :requestId))
+                                             (plist-put mevedel-shared-editing--runtime :timer
+                                                        (run-at-time
+                                                         0 nil #'mevedel-shared-editing--accept
+                                                         buffer job reply))))
+                                       (error
+                                        (mevedel-shared-editing--finish
+                                         buffer job
+                                         (list :error
+                                               (if (equal (plist-get (plist-get job :args) :action) "status")
+                                                   "Shared editing helper could not start. Check Node 22.4+ and the installed helper resources on the Emacs host, then recheck"
+                                                 (error-message-string err))))))))))))))))))))
         (plist-put mevedel-shared-editing--runtime :process process)
         (process-put process :configuration
                      (list mevedel-shared-editing-node-program
                            mevedel-shared-editing--directory))
         process)))
+
+(defun mevedel-shared-editing--send (process args)
+  "Send one bounded JSON request ARGS to helper PROCESS.
+Small writes avoid Emacs's large pipe-write backpressure pauses.  Chunk by
+characters so UTF-8 encoding never splits a character between writes."
+  (let* ((text (concat (mevedel-shared-editing--json args) "\n"))
+         (length (length text))
+         (offset 0))
+    (while (< offset length)
+      (let ((end (min length (+ offset 1024))))
+        (process-send-string process (substring text offset end))
+        (setq offset end)))))
 
 (defun mevedel-shared-editing--drain (buffer)
   "Start the next serialized editing operation in BUFFER."
@@ -301,9 +325,8 @@ Observers cannot change whether the preceding commit succeeded.")
                     (setq args (plist-put args :requestId (plist-get job :requestId)))
                     ;; A check starts fresh so repaired resources and runtime
                     ;; changes are verified, without discarding queued work.
-                    (process-send-string (mevedel-shared-editing--process
-                                          buffer (equal action "status"))
-                                         (concat (mevedel-shared-editing--json args) "\n"))
+                    (mevedel-shared-editing--send
+                     (mevedel-shared-editing--process buffer (equal action "status")) args)
                     (plist-put mevedel-shared-editing--runtime :timeout
                                (run-at-time
                                 30 nil (lambda ()

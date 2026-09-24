@@ -357,11 +357,20 @@ export async function handle(request) {
       crdt: b64(encode(doc)),
       comments,
       receipts: { ...state.receipts, [request.opId]: revision },
-      transactions: changed
-        ? [transaction, ...state.transactions].slice(0, 32)
-        : state.transactions,
+      transactions: (changed ? [transaction, ...state.transactions] : [...state.transactions]).slice(0, 32),
     };
-    check(Buffer.byteLength(JSON.stringify(next)) <= LIMIT, 'Shared content is too large');
+    const sizes = next.transactions.map(tx => Buffer.byteLength(JSON.stringify(tx)));
+    let size = Buffer.byteLength(JSON.stringify(next));
+    let historySize = 2 + sizes.reduce((sum, n) => sum + n, 0) + Math.max(0, sizes.length - 1);
+    // Keep the newest revertible change; expire older snapshots before they
+    // consume the item's capacity. One large latest change may exceed 4 MiB.
+    while (sizes.length > 1 && (historySize > 4 * 1024 * 1024 || size > LIMIT)) {
+      const removed = sizes.pop() + 1;
+      next.transactions.pop();
+      historySize -= removed;
+      size -= removed;
+    }
+    check(size <= LIMIT, 'Shared content is too large');
     return {
       state: next,
       result: {

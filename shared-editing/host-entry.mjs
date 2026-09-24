@@ -1,13 +1,18 @@
 import { handle } from './host.mjs';
-let pending = '';
+let pending = [], pendingBytes = 0;
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
-  pending += chunk;
-  if (Buffer.byteLength(pending) > 64 * 1024 * 1024) process.exit(2);
-  let end;
-  while ((end = pending.indexOf('\n')) >= 0) {
-    const line = pending.slice(0, end);
-    pending = pending.slice(end + 1);
+  let start = 0;
+  while (start < chunk.length) {
+    const end = chunk.indexOf('\n', start);
+    const part = chunk.slice(start, end < 0 ? undefined : end);
+    pendingBytes += Buffer.byteLength(part);
+    if (pendingBytes > 64 * 1024 * 1024) process.exit(2);
+    pending.push(part);
+    if (end < 0) break;
+    const line = pending.join('');
+    pending = []; pendingBytes = 0;
+    start = end + 1;
     let request;
     try {
       request = JSON.parse(line);
