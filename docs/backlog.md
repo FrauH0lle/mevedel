@@ -14,9 +14,12 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   and touch presence; both reproduce with the previous save behavior.
   Sync and retry checks pass. Evidence: `.scratch/whiteboard-sync-latency/`.
 - Consider making mevedel's data buffers hidden
+- The model tends to use .sratch for storing and sharing information, however this only local on this PC (.gitignore).
+  The intended place for that is work:// and the memories
+- While a table is streaming in, it flickers between rendered and raw
+- compacting might collapse all expanded tools when starting
 - Add optional cached container/VM/WSL detection to environment context for
   local and SSH targets; TRAMP execution targets are already reported.
-
 
 ## Request lifecycle
 

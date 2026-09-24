@@ -54,7 +54,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
      (cl-letf (((symbol-function 'mevedel-view-prepare--checkpoint)
                 (lambda (job)
                   (setq paused t)
-                  (while (not released) (sleep-for 0.001))
+                  (while (not released) (thread-yield))
                   (funcall original job))))
        (unwind-protect
            (progn
@@ -341,6 +341,43 @@ BODY can release it by setting RELEASED and inspect WORKER."
                              (not mevedel-view-render--batch))))
             (should-not (string-search "preparing result" (buffer-string))))
         (when timer (cancel-timer timer))))))
+
+(mevedel-deftest mevedel-view-prepare/process-sentinels ()
+  (mevedel-prepare-test--with-tool
+    (let (process unattended calls errors)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                     (lambda (&rest _) unattended)))
+            (setq process
+                  (make-process
+                   :name "mevedel-prepare-sentinel-test"
+                   :command '("sh" "-c" "sleep 0.01")
+                   :connection-type 'pipe :noquery t
+                   :sentinel
+                   (lambda (child _event)
+                     (push (current-thread) calls)
+                     ;; Native compilation drains final output in its sentinel.
+                     (condition-case err
+                         (while (accept-process-output child 0.001 nil 1))
+                       (error (push err errors))))))
+            (mevedel-view-render-batched-full)
+            (mevedel-view-prepare--advance view-buf)
+            (setq unattended t)
+            ;; Let the worker wait across child exit, without dispatching
+            ;; callbacks on the main thread until afterward.
+            (let ((deadline (+ (float-time) 0.1)))
+              (while (< (float-time) deadline) (thread-yield)))
+            (setq unattended nil)
+            (mevedel-view-prepare-resume)
+            (mevedel-prepare-test--wait
+             (lambda () (and calls (not mevedel-view-prepare--jobs)
+                             (not mevedel-view-render--batch))))
+            (should-not errors)
+            (should (cl-every (lambda (thread) (eq thread main-thread)) calls))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+        (when process
+          (set-process-sentinel process #'ignore)
+          (delete-process process))))))
 
 (mevedel-deftest mevedel-view-prepare/queue ()
   ,test

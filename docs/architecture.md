@@ -226,6 +226,14 @@ after terminal request cleanup.
 
 ## Workspace context chain
 
+Workspace detection first uses the session or cached workspace, then a
+project.el root. Outside recognized projects it uses the nearest ancestor with
+`.mevedel/workspace-id`, falling back to `default-directory`. File buffers and
+Dired therefore share one directory workspace and the same portable session
+authority. Plain directories need no project marker. File-based workspaces
+remain available through explicit `mevedel-workspace-functions` customization;
+they are not part of default detection.
+
 Retained current-context delivery loads `AGENTS.md` then `AGENTS.local.md` from the
 workspace root through the session working directory. A successful `Read` of a
 deeper file queues any newly applicable instruction files as a host-generated

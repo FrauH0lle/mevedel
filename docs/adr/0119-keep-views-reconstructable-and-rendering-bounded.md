@@ -90,7 +90,8 @@ and browser projection request complete rendering. Scheduled projection initiall
 shows a pending row for large uncached tool spans. A view-owned native thread
 runs the canonical parser with explicit waits between stages; main-thread
 publication validates source identity and invokes current renderers. The worker
-uses private timer queues, pauses while unattended or transport is busy, and is
+waits on main-thread condition notifications, pauses while unattended or
+transport is busy, and is
 cancelled on source replacement or teardown. Payloads are released after
 publication. Explicit synchronous callers and expansion retain ordinary parsing;
 metadata is still decoded before the final summary, and shared GC remains.
@@ -640,8 +641,16 @@ threads share the heap and do not solve GC pauses.
 A lifecycle regression exposed that `sleep-for` can dispatch ordinary timers in
 the worker: a separate experiment observed 18 worker-dispatched callbacks. A stale
 job could then signal itself before replacing its pending row. Private worker
-timer queues fixed the reproducible regression, keeping editor callbacks and
-renderer context on the main thread. Source edits, truncation, provenance changes,
+timer queues initially fixed that timer regression. A subsequent native-compilation
+failure showed that `sleep-for` also dispatches process sentinels: the compiler's
+sentinel tried to drain a main-thread-owned process from the parser worker and
+raised "Attempt to accept output from process ... locked to thread". A real
+subprocess regression reproduced the same failure without compiler customization.
+Checkpoints now block on a condition variable released by the existing main-thread
+advance callback, which checks attention and transport readiness before waking the
+worker. This replaces private timer queues and polling waits, keeping both timers
+and process sentinels on the main thread without spinning while paused.
+Source edits, truncation, provenance changes,
 cache eviction, queued jobs, focus loss, buffer death, mode changes, renderer
 failure and expanded disclosures have regression coverage. Unrenderable complete
 spans also fall back rather than being admitted repeatedly.

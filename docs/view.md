@@ -1178,8 +1178,9 @@ Scheduled projections show a non-toggleable `Tool: preparing result...` row for
 uncached collapsed tool spans of at least 256 Ki characters. The row indicates
 pending presentation, not a successful tool outcome. One parser thread per view
 processes admitted spans sequentially, waiting between the canonical parser's
-stages. Its timer queues are private: `sleep-for` can otherwise dispatch editor
-timers inside the worker. Registered renderers and view mutations run on the main
+stages. Checkpoints block on a condition variable released by the main-thread
+preparation callback; worker waits never dispatch editor timers or process
+sentinels. Registered renderers and view mutations run on the main
 thread with current presentation context. Prepared payloads are temporary and are
 released after publication or cancellation; collapsed caches retain summaries.
 
