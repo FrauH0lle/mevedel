@@ -827,6 +827,10 @@ always prompt for the session name."
     (mevedel-gptel-stream-bridge-uninstall))
   (mevedel-gptel-bridge-uninstall)
 
+  ;; Stop event-loop lag watching and its timer advice.
+  (when (featurep 'mevedel-telemetry)
+    (mevedel-telemetry--lag-stop))
+
   (message "mevedel uninstalled successfully"))
 
 (provide 'mevedel)

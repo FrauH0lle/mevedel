@@ -134,6 +134,17 @@ cancellation releases the fence and leaves the machine retryable.
 - agent dispatch, provider send, first response, settlement, waits, and UI
   status ownership transitions;
 - queued user messages with enqueue/dequeue events and dwell time;
+- `event-loop-lag` whenever the editor's event loop ran more than
+  `mevedel-telemetry-lag-threshold` (0.5 s) late. A 100 ms heartbeat takes
+  the measurement while a request runs and for two minutes after it settles,
+  since journal, collection and publication work follows settlement. The
+  event carries the delay, whether input was pending, whether the request
+  had settled, the running command's name, and the name and duration of
+  the slowest timer callback since the previous heartbeat. A closure is
+  named `anonymous`. Each settled request adds an `event-loop-lag-summary`
+  with the counts above 200, 500 and 1000 ms, the maximum, and how many had
+  input pending. Wait time the CPU profiler cannot see, such as a blocking
+  remote command, shows up here;
 - `journal-capture-queued` when a checkpoint first becomes ready, carrying its
   capture identity, checkpoint trigger, and frozen input byte count; no evidence
   body is logged;

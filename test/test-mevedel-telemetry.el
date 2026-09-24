@@ -236,6 +236,89 @@
                           (plist-get (read (current-buffer)) :stage))))))
       (delete-directory root t))))
 
+(defun test-mevedel-telemetry--events (session event)
+  "Return SESSION's pending telemetry entries for EVENT, oldest first."
+  (seq-filter (lambda (entry) (eq event (plist-get entry :event)))
+              (reverse (mevedel-session-telemetry-pending session))))
+
+(mevedel-deftest mevedel-telemetry--lag-tick
+  (:after-each (mevedel-telemetry--lag-stop))
+  ,test
+  (test)
+  :doc "watches only while a request runs, then for its tail"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil))
+    (unwind-protect
+        (progn
+          (should-not mevedel-telemetry--lag-timer)
+          (mevedel-telemetry-record session 'request-start :request-id "request-1")
+          (should (timerp mevedel-telemetry--lag-timer))
+          (should (advice-member-p #'mevedel-telemetry--lag-time-callback
+                                   'timer-event-handler))
+          (mevedel-telemetry-record session 'request-settled :request-id "request-1")
+          (should (timerp mevedel-telemetry--lag-timer))
+          ;; Past the tail, nothing is watched and the heartbeat stops.
+          (setf (plist-get (alist-get session mevedel-telemetry--lag-windows) :until)
+                (- (float-time) 1))
+          (mevedel-telemetry--lag-tick)
+          (should-not mevedel-telemetry--lag-timer)
+          (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
+                                       'timer-event-handler)))
+      (delete-directory root t)))
+
+  :doc "records a long stall with its timer and summarizes the request"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil))
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "request-2")
+          (dolist (delay '(0.3 0.7 1.5 0.05))
+            (setq mevedel-telemetry--lag-due (- (float-time) delay)
+                  mevedel-telemetry--lag-slowest '("mevedel-slow-step" . 0.6))
+            (mevedel-telemetry--lag-tick))
+          (mevedel-telemetry-record session 'request-settled :request-id "request-2")
+          (let ((lags (test-mevedel-telemetry--events session 'event-loop-lag))
+                (summary (car (test-mevedel-telemetry--events
+                               session 'event-loop-lag-summary))))
+            ;; Only the delays past the half-second threshold are events.
+            (should (= 2 (length lags)))
+            (should (equal "request-2" (plist-get (car lags) :request-id)))
+            (should (equal "mevedel-slow-step" (plist-get (car lags) :timer-callback)))
+            (should (= 600 (plist-get (car lags) :timer-ms)))
+            (should (<= 700 (plist-get (car lags) :delay-ms) 800))
+            (should-not (plist-get (car lags) :dropped-keys))
+            (should (equal "request-2" (plist-get summary :request-id)))
+            (should (= 3 (plist-get summary :over-200-ms)))
+            (should (= 2 (plist-get summary :over-500-ms)))
+            (should (= 1 (plist-get summary :over-1000-ms)))
+            (should (<= 1500 (plist-get summary :max-ms) 1600))
+            (should-not (plist-get summary :dropped-keys))))
+      (delete-directory root t)))
+
+  :doc "does not watch a batch Emacs"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive t))
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "request-3")
+          (should-not mevedel-telemetry--lag-timer)
+          (mevedel-telemetry-record session 'request-settled :request-id "request-3")
+          (should-not (test-mevedel-telemetry--events session 'event-loop-lag-summary)))
+      (delete-directory root t)))
+
+  :doc "names the slowest timer callback between heartbeats"
+  (let ((mevedel-telemetry--lag-slowest nil)
+        (timer (timer-create)))
+    (timer-set-function timer #'ignore)
+    (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.02)) timer)
+    (should (equal "ignore" (car mevedel-telemetry--lag-slowest)))
+    (timer-set-function timer (lambda ()))
+    (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.05)) timer)
+    (should (equal "anonymous" (car mevedel-telemetry--lag-slowest)))))
+
 (mevedel-deftest mevedel-telemetry--queue-order
   ()
   ,test

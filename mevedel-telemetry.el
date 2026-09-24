@@ -163,9 +163,9 @@ profile file larger and cost a little more per sample."
     :budget-kind :budget-status :buffer-chars-total
     :buffers :cache-identity :cached-tokens :call-source :capture-id :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
-    :command-class :command-hash :context :context-chars
+    :command-class :command-hash :command-name :context :context-chars
     :context-deduplicated :continuation :conversation-scope :covered-count
-    :cumulative-usage :cumulative-usage-tokens :dequeue-goal-id
+    :cumulative-usage :cumulative-usage-tokens :delay-ms :dequeue-goal-id
     :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
     :effective-wait-ms :effort :emacs-version :enqueue-goal-id
     :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
@@ -174,13 +174,15 @@ profile file larger and cost a little more per sample."
     :git-head :goal-id
     :gptel-commit :gptel-file-hash :gptel-version :handler-count
     :handler-id :handler-source :handler-type :hook-event
-    :ineligible-reason :input-bytes :input-p :input-tokens :interaction-id :issue-count
+    :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
+    :interaction-id :issue-count
     :kind :lane
-    :message-chars :message-hash :mode :model :model-context-window :modes
+    :max-ms :message-chars :message-hash :mode :model :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :old-segment :omitted-count :origin :outcome
-    :output-bytes :output-estimated-tokens :output-limit :output-tokens :overlap-count :owner
+    :output-bytes :output-estimated-tokens :output-limit :output-tokens
+    :over-1000-ms :over-200-ms :over-500-ms :overlap-count :owner
     :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode
     :permission-mode-base
     :permission-mode-effective :permission-via :preexisting-count :preparation-state
@@ -200,7 +202,7 @@ profile file larger and cost a little more per sample."
     :specifier-key :stage :status :step :summary-threshold
     :system-configuration :target-model :target-origin :target-pressure
     :target-threshold :termination :test-scope :threshold :threshold-ms
-    :timed-out :timeout-ms :token-source :tokens-after :tokens-before
+    :timed-out :timeout-ms :timer-callback :timer-ms :token-source :tokens-after :tokens-before
     :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
     :trigger :tty :turns-run :updated-file-count :via
     :workload :yield-time-ms)
@@ -482,6 +484,11 @@ supplies them itself."
 The event is buffered until SESSION has a persistent directory.  Raw payload
 keys are always discarded.  Return the sanitized event plist."
   (when (and mevedel-telemetry-enabled session)
+    ;; Lag is a property of an interactive editor; batch Emacs has no event
+    ;; loop a user waits on.
+    (when (and (memq event '(request-start request-settled))
+               (not noninteractive))
+      (mevedel-telemetry--lag-request session event (plist-get props :request-id)))
     (condition-case err
         (let ((entry (mevedel-telemetry--envelope session event props))
               (pending (mevedel-session-telemetry-pending session)))
@@ -554,6 +561,152 @@ anything crosses into the durable target."
               (push entry remaining)))
           (setf (mevedel-session-telemetry-pending session)
                 remaining))))))
+
+
+;;
+;;; Event-loop lag
+
+(defcustom mevedel-telemetry-lag-threshold 0.5
+  "Event-loop delay, in seconds, recorded as an `event-loop-lag' event.
+Delays above `mevedel-telemetry--lag-count-threshold' are only counted, in
+the `event-loop-lag-summary' each settled request records."
+  :type 'number
+  :group 'mevedel)
+
+(defconst mevedel-telemetry--lag-interval 0.1
+  "Seconds between heartbeats.")
+
+(defconst mevedel-telemetry--lag-count-threshold 0.2
+  "Event-loop delay, in seconds, counted in a request's lag summary.")
+
+(defconst mevedel-telemetry--lag-tail 120
+  "Seconds the heartbeat keeps watching a session after its request settles.
+Journal, collection and publication work follows settlement and can stall
+the editor as much as the request did.")
+
+(defvar mevedel-telemetry--lag-timer nil
+  "Repeating heartbeat timer, or nil while no session is watched.")
+
+(defvar mevedel-telemetry--lag-due nil
+  "Float time the next heartbeat is due.")
+
+(defvar mevedel-telemetry--lag-slowest nil
+  "(NAME . SECONDS) of the slowest timer callback since the last heartbeat.")
+
+(defvar mevedel-telemetry--lag-windows nil
+  "Alist from watched session to its lag window.
+A window is (:request-id ID :until TIME :counts COUNTS).  UNTIL is nil
+while the request runs and the end of the tail afterwards; COUNTS is a
+plist of the delays counted for the running request.")
+
+(defun mevedel-telemetry--lag-callback-name (timer)
+  "Return a label for TIMER's callback."
+  (let ((function (timer--function timer)))
+    (if (and (symbolp function) function)
+        (symbol-name function)
+      "anonymous")))
+
+(defun mevedel-telemetry--lag-time-callback (original timer)
+  "Run ORIGINAL on TIMER, remembering the slowest callback since a heartbeat.
+The heartbeat can only tell that the loop was late; this names what held
+it for most stalls, since timers run most of mevedel's deferred work."
+  (let ((start (float-time)))
+    (unwind-protect (funcall original timer)
+      (let ((elapsed (- (float-time) start)))
+        (when (> elapsed (or (cdr mevedel-telemetry--lag-slowest) 0))
+          (setq mevedel-telemetry--lag-slowest
+                (cons (mevedel-telemetry--lag-callback-name timer) elapsed)))))))
+
+(defun mevedel-telemetry--lag-start ()
+  "Start the heartbeat and callback timing unless they already run."
+  (unless mevedel-telemetry--lag-timer
+    (setq mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval)
+          mevedel-telemetry--lag-slowest nil
+          mevedel-telemetry--lag-timer
+          (run-at-time mevedel-telemetry--lag-interval
+                       mevedel-telemetry--lag-interval
+                       #'mevedel-telemetry--lag-tick))
+    (advice-add 'timer-event-handler :around
+                #'mevedel-telemetry--lag-time-callback)))
+
+(defun mevedel-telemetry--lag-stop ()
+  "Stop the heartbeat and callback timing."
+  (when (timerp mevedel-telemetry--lag-timer)
+    (cancel-timer mevedel-telemetry--lag-timer))
+  (setq mevedel-telemetry--lag-timer nil
+        mevedel-telemetry--lag-windows nil)
+  (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback))
+
+(defun mevedel-telemetry--lag-request (session event request-id)
+  "Open or close SESSION's lag window for request EVENT with REQUEST-ID."
+  (pcase event
+    ('request-start
+     (setf (alist-get session mevedel-telemetry--lag-windows nil nil #'eq)
+           (list :request-id request-id :until nil :counts nil))
+     (mevedel-telemetry--lag-start))
+    ('request-settled
+     (when-let* ((window (alist-get session mevedel-telemetry--lag-windows nil nil #'eq)))
+       (unless (plist-get window :until)
+         (let ((counts (plist-get window :counts)))
+           (mevedel-telemetry-record
+            session 'event-loop-lag-summary
+            :request-id (plist-get window :request-id)
+            :over-200-ms (or (plist-get counts :over-200-ms) 0)
+            :over-500-ms (or (plist-get counts :over-500-ms) 0)
+            :over-1000-ms (or (plist-get counts :over-1000-ms) 0)
+            :max-ms (or (plist-get counts :max-ms) 0)
+            :input-pending (or (plist-get counts :input-pending) 0)))
+         (setf (alist-get session mevedel-telemetry--lag-windows nil nil #'eq)
+               (list :request-id (plist-get window :request-id)
+                     :until (+ (float-time) mevedel-telemetry--lag-tail)
+                     :counts nil)))))))
+
+(defun mevedel-telemetry--lag-count (counts delay input-pending)
+  "Return COUNTS with DELAY seconds counted, INPUT-PENDING or not."
+  (let ((ms (round (* 1000 delay))))
+    (dolist (bucket '((0.2 . :over-200-ms) (0.5 . :over-500-ms) (1.0 . :over-1000-ms)))
+      (when (> delay (car bucket))
+        (setq counts (plist-put counts (cdr bucket)
+                                (1+ (or (plist-get counts (cdr bucket)) 0))))))
+    (when input-pending
+      (setq counts (plist-put counts :input-pending
+                              (1+ (or (plist-get counts :input-pending) 0)))))
+    (plist-put counts :max-ms (max ms (or (plist-get counts :max-ms) 0)))))
+
+(defun mevedel-telemetry--lag-tick ()
+  "Record how late this heartbeat ran for every watched session."
+  (let* ((now (float-time))
+         (delay (- now (or mevedel-telemetry--lag-due now)))
+         (slowest mevedel-telemetry--lag-slowest))
+    (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
+          mevedel-telemetry--lag-slowest nil
+          mevedel-telemetry--lag-windows
+          (seq-filter (lambda (entry)
+                        (let ((until (plist-get (cdr entry) :until)))
+                          (or (null until) (< now until))))
+                      mevedel-telemetry--lag-windows))
+    (when (> delay mevedel-telemetry--lag-count-threshold)
+      (let ((input-pending (and (input-pending-p) t)))
+        (dolist (entry mevedel-telemetry--lag-windows)
+          (let ((window (cdr entry)))
+            (unless (plist-get window :until)
+              (setf (plist-get (cdr entry) :counts)
+                    (mevedel-telemetry--lag-count
+                     (plist-get window :counts) delay input-pending)))
+            (when (> delay mevedel-telemetry-lag-threshold)
+              (apply #'mevedel-telemetry-record
+                     (car entry) 'event-loop-lag
+                     :request-id (plist-get window :request-id)
+                     :delay-ms (round (* 1000 delay))
+                     :input-pending input-pending
+                     :settled (and (plist-get window :until) t)
+                     :command-name (and (symbolp this-command) this-command
+                                        (symbol-name this-command))
+                     (and slowest
+                          (list :timer-callback (car slowest)
+                                :timer-ms (round (* 1000 (cdr slowest)))))))))))
+    (unless mevedel-telemetry--lag-windows
+      (mevedel-telemetry--lag-stop))))
 
 
 ;;
