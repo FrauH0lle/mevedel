@@ -69,8 +69,30 @@
 ;;
 ;;; Workspace type accessors
 
+(mevedel-deftest mevedel-workspace--directory-workspace
+  (:vars* ((root (file-name-as-directory
+                 (make-temp-file "mevedel-directory-workspace-" t))))
+   :after-each (delete-directory root t))
+  ,test
+  (test)
+  :doc "uses the current directory without a project marker"
+  (let ((default-directory root))
+    (should (equal (cons 'project root)
+                   (mevedel-workspace--directory-workspace))))
+
+  :doc "nested directories reuse a durable root but ignore plain config directories"
+  (let ((default-directory (file-name-concat root "nested/")))
+    (make-directory default-directory)
+    (make-directory (file-name-concat root ".mevedel"))
+    (should (equal (cons 'project default-directory)
+                   (mevedel-workspace--directory-workspace)))
+    (with-temp-file (file-name-concat root ".mevedel/workspace-id")
+      (insert (make-string 64 ?a) "\n"))
+    (should (equal (cons 'project root)
+                   (mevedel-workspace--directory-workspace)))))
+
 (mevedel-deftest mevedel-workspace--project-root
-  (:doc "`mevedel-workspace--project-root' validates that id is a real project root"
+  (:doc "`mevedel-workspace--project-root' validates that id is a directory"
    :vars* ((dir (file-name-as-directory (make-temp-file "mevedel-ws-pr-" t))))
    :after-each (delete-directory dir t))
   ,test
@@ -88,11 +110,10 @@
   (should-error (mevedel-workspace--project-root "/nonexistent-mevedel-ws-test/")
                 :type 'error)
 
-  :doc "errors when project-current returns nil for the dir"
-  (cl-letf (((symbol-function 'project-current)
-             (lambda (&optional _prompt _dir) nil)))
-    (should-error (mevedel-workspace--project-root dir)
-                  :type 'error)))
+  :doc "accepts a plain directory without a project marker"
+  (progn
+    (should-not (project-current nil dir))
+    (should (equal dir (mevedel-workspace--project-root dir)))))
 
 (mevedel-deftest mevedel-workspace--project-name
   (:doc "`mevedel-workspace--project-name' falls back to directory name when project.el is silent")
@@ -247,7 +268,20 @@
   :doc "returns nil when no workspace function matches"
   (with-temp-buffer
     (let ((mevedel-workspace-functions (list (lambda () nil))))
-      (should (null (mevedel-workspace))))))
+      (should (null (mevedel-workspace)))))
+
+  :doc "file buffers and Dired share the same plain-directory authority"
+  (let ((root (file-name-as-directory (make-temp-file "mevedel-ws-directory-" t))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq default-directory root)
+          (let ((workspace (mevedel-workspace)))
+            (setq buffer-file-name (file-name-concat root "notes.md"))
+            (should (eq workspace (mevedel-workspace)))
+            (should (eq 'portable
+                        (mevedel-session-authority-mode-for-workspace
+                         (mevedel-workspace))))))
+      (delete-directory root t))))
 
 
 ;;

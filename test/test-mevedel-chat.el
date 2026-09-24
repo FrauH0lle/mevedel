@@ -51,6 +51,27 @@
 (mevedel-deftest mevedel ()
   ,test
   (test)
+  :doc "starts from Dired in a directory outside any project"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-entry-directory-" t)))
+         (mevedel-workspace--registry (make-hash-table :test #'equal))
+         started)
+    (unwind-protect
+        (with-temp-buffer
+          (setq default-directory root)
+          (dired-mode root)
+          (should-not (project-current nil))
+          (cl-letf (((symbol-function 'mevedel--start-chat)
+                     (lambda (workspace directory &rest _)
+                       (setq started (list workspace directory)))))
+            (mevedel))
+          (should (equal root (cadr started)))
+          (should (equal root (mevedel-workspace-root (car started))))
+          (should (eq 'portable
+                      (mevedel-session-authority-mode-for-workspace
+                       (car started)))))
+      (delete-directory root t)))
+
   :doc "uses persisted entry choices for restore and explicit new sessions"
   (let* ((root (make-temp-file "mevedel-entry-command-" t))
          (workspace

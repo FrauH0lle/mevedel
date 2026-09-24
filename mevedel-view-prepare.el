@@ -45,7 +45,8 @@ Explicit synchronous projections and expansion leave this nil.")
 
 (cl-defstruct (mevedel-view-prepare--job
                (:constructor mevedel-view-prepare--job-create))
-  view source start end key tick thread result error kill-hook)
+  view source start end key tick thread result error kill-hook
+  (gate (make-condition-variable (make-mutex) "mevedel tool preparation")))
 
 (defvar-local mevedel-view-prepare--jobs nil
   "Pending jobs in admission order; only the first may have a live thread.")
@@ -121,12 +122,12 @@ Explicit synchronous projections and expansion leave this nil.")
 (defun mevedel-view-prepare--checkpoint (job)
   "Validate JOB and return interpreter time to the main thread."
   (unless (mevedel-view-prepare--current-p job) (signal 'quit nil))
-  (while (or (mevedel-view--unattended-p (mevedel-view-prepare--job-view job))
-             (mevedel-transport-busy-p
-              (buffer-local-value 'default-directory (mevedel-view-prepare--job-source job))))
-    (sleep-for 0.1)
-    (unless (mevedel-view-prepare--current-p job) (signal 'quit nil)))
-  (sleep-for 0.001)
+  ;; Unlike `sleep-for', this wait cannot dispatch editor timers or process
+  ;; sentinels in the worker.  The main-thread advance callback admits each
+  ;; stage only while the view is attended and its transport is idle.
+  (let ((gate (mevedel-view-prepare--job-gate job)))
+    (with-mutex (condition-mutex gate)
+      (condition-wait gate)))
   (unless (mevedel-view-prepare--current-p job) (signal 'quit nil)))
 
 (defun mevedel-view-prepare--start (job)
@@ -136,12 +137,7 @@ Explicit synchronous projections and expansion leave this nil.")
           (make-thread
            (lambda ()
              (condition-case err
-                 ;; `sleep-for' dispatches timers in the calling thread.
-                 ;; Keep editor callbacks on the main thread while this
-                 ;; read-only worker yields between parsing stages.
-                 (let ((timer-list nil)
-                       (timer-idle-list nil)
-                       (process-environment environment)
+                 (let ((process-environment environment)
                        (mevedel-view-render--parse-checkpoint
                         (lambda () (mevedel-view-prepare--checkpoint job))))
                    (mevedel-view-prepare--checkpoint job)
@@ -251,7 +247,10 @@ INVALID requires rebuilding historical context instead of reusing its turn."
                  (mevedel-view-prepare--redraw job t))
                 ((null (mevedel-view-prepare--job-thread job))
                  (mevedel-view-prepare--start job))
-                ((thread-live-p (mevedel-view-prepare--job-thread job)) nil)
+                ((thread-live-p (mevedel-view-prepare--job-thread job))
+                 (let ((gate (mevedel-view-prepare--job-gate job)))
+                   (with-mutex (condition-mutex gate)
+                     (condition-notify gate))))
                 (t
                  (let* ((result (mevedel-view-prepare--job-result job))
                         (key (mevedel-view-prepare--job-key job))

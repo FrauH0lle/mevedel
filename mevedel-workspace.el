@@ -7,8 +7,8 @@
 ;; directory (`.mevedel/' under root), and optional additional roots
 ;; for cross-project access.  The main entry point
 ;; `mevedel-workspace' resolves the active workspace by checking
-;; session > cached buffer-local > project.el detection, with a
-;; file-based fallback for buffers outside any project.
+;; session > cached buffer-local > project.el detection, then a durable
+;; workspace root or the current directory outside any project.
 ;;
 ;; Keeps a workspace registry so that distinct buffers under the
 ;; same project share a single workspace struct (and therefore a
@@ -52,7 +52,9 @@
 ;; `tramp'
 (defvar tramp-verbose)
 
-(defcustom mevedel-workspace-functions '(mevedel-workspace--project-workspace mevedel-workspace--file-workspace)
+(defcustom mevedel-workspace-functions
+  '(mevedel-workspace--project-workspace
+    mevedel-workspace--directory-workspace)
   "Functions to determine the workspace for the current buffer.
 
 Each function in this list is called with no arguments in the current
@@ -64,7 +66,9 @@ current buffer, allowing other functions in the list to try.
 
 Built-in workspace functions:
 - `mevedel-workspace--project-workspace' - Detects project.el workspaces
-- `mevedel-workspace--file-workspace' - Falls back to file-based workspace"
+- `mevedel-workspace--directory-workspace' - Uses an existing workspace root
+  or the current directory
+- `mevedel-workspace--file-workspace' - Opt-in file-based workspace detector"
   :type 'hook
   :group 'mevedel)
 
@@ -168,17 +172,24 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
   (when-let* ((filename (buffer-file-name)))
     (cons 'file filename)))
 
+(defun mevedel-workspace--directory-workspace ()
+  "Detect a directory workspace independently of the current buffer's file.
+Use the nearest durable workspace root, or `default-directory' if none exists."
+  (cons 'project
+        (file-name-as-directory
+         (expand-file-name
+          (or (locate-dominating-file default-directory ".mevedel/workspace-id")
+              default-directory)))))
+
 
 ;;
 ;;; Workspace type functions
 
 (defun mevedel-workspace--project-root (project-id)
-  "Get the project root for PROJECT-ID, validating it's a real project root."
-  ;; Verify that project-id is actually a valid project root directory.
+  "Get the workspace root for PROJECT-ID, validating its directory."
   (unless (and (stringp project-id)
                (file-name-absolute-p project-id)
-               (file-directory-p project-id)
-               (mevedel-workspace--project-current project-id))
+               (file-directory-p project-id))
     (error "Project ID '%s' is not a valid project root directory" project-id))
   project-id)
 
