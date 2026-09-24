@@ -154,10 +154,9 @@
                    (purpose (or (plist-get case :purpose) 'digest))
                    (source (plist-get case :source))
                    (case-policy (if (eq purpose 'digest)
-                                    (mevedel-context-summary-digest-policy
-                                     (if-let* ((effort (getenv "MEVEDEL_QUALITY_DIGEST_EFFORT")))
-                                         (plist-put (copy-sequence policy) :effort (intern effort))
-                                       policy))
+                                    (if-let* ((effort (getenv "MEVEDEL_QUALITY_DIGEST_EFFORT")))
+                                        (plist-put (copy-sequence policy) :effort (intern effort))
+                                      policy)
                                   policy))
                    (case-root (file-name-concat root name))
                    (start (float-time))

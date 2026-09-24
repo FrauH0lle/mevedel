@@ -454,21 +454,21 @@
 (mevedel-deftest mevedel-journal-capture--freeze-policy ()
   ,test
   (test)
-  :doc "freezes the effective digest effort and smaller configured output allowance"
+  :doc "freezes explicit effort and output limits without inventing defaults"
   (mevedel-skills-test--with-model-backends
     (let ((model (make-symbol "quality-model"))
-          (gptel-max-tokens 700)
           (gptel-stream t))
       (put model :reasoning-effort '(member disabled high max))
-      (dolist (effort '(nil high))
-        (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
-                   (lambda (workload &rest _)
-                     (should (eq workload 'journal))
-                     (list :backend (gptel-get-backend "Fast") :model model :effort effort))))
-          (let ((policy (mevedel-journal-capture--freeze-policy)))
-            (should (equal (if effort "high" "disabled") (plist-get policy :effort)))
-            (should (= 700 (plist-get policy :max-tokens)))
-            (should (eq t (plist-get policy :stream)))))))))
+      (dolist (gptel-max-tokens '(nil 700 16000))
+        (dolist (effort '(nil high disabled))
+          (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                     (lambda (workload &rest _)
+                       (should (eq workload 'journal))
+                       (list :backend (gptel-get-backend "Fast") :model model :effort effort))))
+            (let ((policy (mevedel-journal-capture--freeze-policy)))
+              (should (equal (and effort (symbol-name effort)) (plist-get policy :effort)))
+              (should (equal gptel-max-tokens (plist-get policy :max-tokens)))
+              (should (eq t (plist-get policy :stream))))))))))
 
 (mevedel-deftest mevedel-journal-capture--read ()
   ,test
@@ -491,6 +491,27 @@
                    (should (eq (intern trigger)
                                (plist-get (mevedel-journal-capture--metadata
                                            (mevedel-journal-capture--read workspace id)) :trigger)))
+                 (should-error (mevedel-journal-capture--read workspace id)))))
+         (write-region original nil path nil 'silent)))))
+
+  :doc "capture decoding preserves absent and large limits and rejects malformed limits"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Preference" "Acknowledged")
+     (let* ((workspace (mevedel-session-workspace session))
+            (capture (car (mevedel-journal-capture-list workspace)))
+            (id (plist-get capture :id))
+            (path (mevedel-journal-capture--file workspace id "capture.json"))
+            (original (mevedel-session-control-fs-read-file path)))
+       (unwind-protect
+           (dolist (limit '(:null 700 16000 0 -1 "4000"))
+             (let ((record (json-parse-string original)))
+               (puthash "max-tokens" limit (gethash "policy" record))
+               (write-region (json-serialize record) nil path nil 'silent)
+               (if (memq limit '(:null 700 16000))
+                   (should (equal (unless (eq limit :null) limit)
+                                  (plist-get (plist-get (mevedel-journal-capture--read workspace id)
+                                                        :policy) :max-tokens)))
                  (should-error (mevedel-journal-capture--read workspace id)))))
          (write-region original nil path nil 'silent)))))
 
