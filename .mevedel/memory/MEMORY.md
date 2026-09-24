@@ -4,3 +4,5 @@
 - [View composer preservation feedback](view-composer-preservation-feedback.md) - test active drafts during async view/status redraws
 - [Forward declaration formatting feedback](forward-declaration-formatting-feedback.md) - sort declarations before defvars within source groups
 - [Verify against the compiled library the runtime loads](verify-compiled-runtime-artifacts.md) - Repository edits do not reach the running Emacs until Straight's compiled build artifacts are rebuilt; live availability is not cold-start correctness
+- [Remote hook readiness and stdin timing](remote-hook-readiness-verification.md) - A stalled remote hook command is reproduced by imposing the suspected interleaving, not by raising its timeout; green replays diagnose nothing
+- [Put shareable working notes in work:// and memories, not .scratch](working-note-destinations-feedback.md) - User wants authored notes in work:// and memories; .scratch is PC-local and gitignored
