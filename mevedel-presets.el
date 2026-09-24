@@ -45,7 +45,7 @@
 ;; `mevedel-chat'
 (declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--generate-final-patch
-                  "mevedel-chat" (&optional workspace request))
+                  "mevedel-chat" (workspace request callback))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
@@ -618,30 +618,49 @@ the buffer-local would find nil and signal."
   (let* ((continuation (or continuation #'ignore))
          (root (ignore-errors (mevedel-workspace-root workspace)))
          finished
+         (settle
+          (lambda (patch error)
+            (unwind-protect
+                (unwind-protect
+                    (funcall
+                     (mevedel--safe-fsm-handler
+                      (lambda (_machine)
+                        (when error (signal (car error) (cdr error)))
+                        ;; Captured evidence belongs to the old request;
+                        ;; presentation belongs only to the current one.
+                        (setf (gptel-fsm-info fsm)
+                              (plist-put (gptel-fsm-info fsm)
+                                         :mevedel-directive-patch patch))
+                        (when (and (buffer-live-p chat-buffer)
+                                   (mevedel--turn-current-p fsm)
+                                   patch (> (length patch) 0))
+                          (mevedel--replace-patch-buffer patch))))
+                     fsm)
+                  (funcall continuation fsm))
+              (mevedel--turn-release fsm))))
          (generate
           (lambda ()
             (unless finished
               (setq finished t)
-              (unwind-protect
-                  (unwind-protect
-                      (funcall
-                       (mevedel--safe-fsm-handler
-                        (lambda (_machine)
-                          (when (buffer-live-p chat-buffer)
-                            (let ((patch (with-current-buffer chat-buffer
-                                           (mevedel--generate-final-patch
-                                            workspace request))))
-                              ;; Captured evidence belongs to the old request;
-                              ;; presentation belongs only to the current one.
-                              (setf (gptel-fsm-info fsm)
-                                    (plist-put (gptel-fsm-info fsm)
-                                               :mevedel-directive-patch patch))
-                              (when (and (mevedel--turn-current-p fsm)
-                                         patch (> (length patch) 0))
-                                (mevedel--replace-patch-buffer patch))))))
-                       fsm)
-                    (funcall continuation fsm))
-                (mevedel--turn-release fsm)))))
+              ;; The diffs run as helper processes; the turn waits for
+              ;; them through its hold instead of blocking the callback
+              ;; this handler runs in, where quitting is inhibited.
+              (let (settled)
+                (condition-case err
+                    (if (buffer-live-p chat-buffer)
+                        (with-current-buffer chat-buffer
+                          (mevedel--generate-final-patch
+                           workspace request
+                           (lambda (patch error)
+                             (unless settled
+                               (setq settled t)
+                               (funcall settle patch error)))))
+                      (setq settled t)
+                      (funcall settle nil nil))
+                  (error
+                   (unless settled
+                     (setq settled t)
+                     (funcall settle nil err))))))))
          (cancel
           (lambda ()
             (unless finished

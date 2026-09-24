@@ -227,8 +227,9 @@
                 ((symbol-function 'mevedel-transport-run-when-idle)
                  (lambda (_key _path thunk &optional _cancel _delay) (setq resume thunk) t))
                 ((symbol-function 'mevedel--generate-final-patch)
-                 (lambda (_workspace captured)
-                   (setq generated captured) "old diff\n"))
+                 (lambda (_workspace captured callback)
+                   (setq generated captured)
+                   (funcall callback "old diff\n" nil)))
                 ((symbol-function 'mevedel--replace-patch-buffer)
                  (lambda (_) (setq displayed t))))
         (mevedel-preset--apply-final-patch
@@ -260,7 +261,9 @@
                      (setq settle thunk))
                    t))
                 ((symbol-function 'mevedel--generate-final-patch)
-                 (lambda (&rest _) (setq generated t) "unwanted")))
+                 (lambda (_workspace _request callback)
+                   (setq generated t)
+                   (funcall callback "unwanted" nil))))
         (mevedel-preset--apply-final-patch
          fsm buffer remote request #'mevedel-preset--settle-terminal)
         (mevedel-abort buffer)

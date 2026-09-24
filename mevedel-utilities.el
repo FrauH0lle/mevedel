@@ -24,10 +24,10 @@
 (defvar gptel-response-separator)
 
 ;; `mevedel-execution'
-(declare-function mevedel-execution-run-helper
+(declare-function mevedel-execution-start-helper
                   "mevedel-execution"
-                  (name command read-paths writable-roots &rest keys))
-(autoload 'mevedel-execution-run-helper "mevedel-execution")
+                  (callback name command read-paths writable-roots &rest keys))
+(autoload 'mevedel-execution-start-helper "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-label
@@ -133,20 +133,44 @@ prefix argument, or when HERE is non-nil, insert it at point."
 ;;
 ;;; External helpers
 
-(defun mevedel-run-helper-capturing-output
-    (name command read-paths &optional writable-roots session)
-  "Run helper COMMAND as NAME, returning (EXIT-CODE . OUTPUT).
+(defun mevedel-start-helper-capturing-output
+    (callback name command read-paths &optional writable-roots session)
+  "Start helper COMMAND as NAME and call CALLBACK with its settlement.
+CALLBACK receives EXIT-CODE, OUTPUT and ERROR; ERROR is condition data when
+the helper failed to run or its owner was torn down, and nil otherwise.
 READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary.
-OUTPUT is returned unchanged so callers may interpret its whitespace."
-  (let* ((result (mevedel-execution-run-helper
-                  name command read-paths writable-roots
-                  :session (or session (bound-and-true-p mevedel--session))
-                  :owner (mevedel-current-origin)))
-         (error-data (plist-get result :error)))
-    (when error-data
-      (signal (car error-data) (cdr error-data)))
-    (cons (plist-get result :exit-code)
-          (plist-get result :output))))
+OUTPUT is passed unchanged so callers may interpret its whitespace.
+CALLBACK runs exactly once, and may run before this returns: a refused
+launch settles immediately.  Return the helper's idempotent cancellation
+function, or nil when it could not start.
+
+Callers continue from CALLBACK rather than waiting: a wait would re-enter
+the event loop from wherever it was called, including process callbacks
+that inhibit quitting, and the helper's own settlement needs that loop."
+  (let (settled)
+    (cl-flet ((settle (result)
+                (unless settled
+                  (setq settled t)
+                  (funcall callback (plist-get result :exit-code)
+                           (plist-get result :output)
+                           (plist-get result :error)))))
+      (let (start-error cancel)
+        (condition-case err
+            (setq cancel
+                  (mevedel-execution-start-helper
+                   #'settle name command read-paths writable-roots
+                   :session (or session (bound-and-true-p mevedel--session))
+                   :owner (mevedel-current-origin)
+                   :teardown-callback
+                   (lambda ()
+                     (settle '(:error (error "Helper owner was torn down"))))))
+          ;; An error after settlement was raised by CALLBACK itself, run
+          ;; synchronously by a refused launch; it is not a failed start.
+          (error (if settled
+                     (signal (car err) (cdr err))
+                   (setq start-error err))))
+        (when start-error (settle (list :error start-error)))
+        cancel))))
 
 (defun mevedel--diff-label (side filepath)
   "Return the unified-diff label for SIDE of FILEPATH.
@@ -158,47 +182,54 @@ repository-relative path; prepending one to an absolute path spells it
     (concat side "/" filepath)))
 
 (defun mevedel-generate-diff
-    (original modified filepath &optional labels-real)
-  "Generate unified diff between ORIGINAL and MODIFIED for FILEPATH.
-When LABELS-REAL is nil, empty content is labelled `/dev/null'.  Otherwise
-both sides carry FILEPATH, prefixed `a/' and `b/' when it is relative.
-Spool Unicode as UTF-8 while preserving literal cache bytes, without
-interactive coding-system selection."
-  (with-temp-buffer
-    (let ((orig-file (make-temp-file "mevedel-orig-"))
-          (mod-file (make-temp-file "mevedel-mod-"))
-          ;; Cached literal reads contain eight-bit characters.  Explicit
-          ;; UTF-8 writes preserve those bytes and encode decoded text.
-          (coding-system-for-write 'utf-8-unix))
-      (unwind-protect
-          (progn
-            (with-temp-file orig-file (when original (insert original)))
-            (with-temp-file mod-file (when modified (insert modified)))
-            (let* ((mevedel--session nil)
-                   (output
-                    (cdr
-                     (mevedel-run-helper-capturing-output
-                      "mevedel-diff"
-                      (list "diff" "-u"
-                            "--label" (if (or labels-real
-                                              (and original
-                                                   (not (string-empty-p
-                                                         original))))
-                                          (mevedel--diff-label "a" filepath)
-                                        "/dev/null")
-                            "--label" (if (or labels-real
-                                              (and modified
-                                                   (not (string-empty-p
-                                                         modified))))
-                                          (mevedel--diff-label "b" filepath)
-                                        "/dev/null")
-                            orig-file mod-file)
-                      (list orig-file mod-file)))))
-              (cond ((string-empty-p output) "")
-                    ((string-suffix-p "\n" output) output)
-                    (t (concat output "\n")))))
-        (when (file-exists-p orig-file) (delete-file orig-file))
-        (when (file-exists-p mod-file) (delete-file mod-file))))))
+    (original modified filepath callback &optional labels-real)
+  "Diff ORIGINAL against MODIFIED for FILEPATH, then call CALLBACK.
+CALLBACK receives the unified DIFF and ERROR: DIFF is a string, empty when
+the contents match, and nil exactly when ERROR carries the failure's
+condition data.  When LABELS-REAL is nil, empty content is labelled
+`/dev/null'.  Otherwise both sides carry FILEPATH, prefixed `a/' and `b/'
+when it is relative.  Spool Unicode as UTF-8 while preserving literal cache
+bytes, without interactive coding-system selection.  Failing to spool the
+snapshots signals instead.  Return the helper's cancellation function, or
+nil when it could not start."
+  (let* ((orig-file (make-temp-file "mevedel-orig-"))
+         (mod-file (make-temp-file "mevedel-mod-"))
+         (remove (lambda ()
+                   (dolist (file (list orig-file mod-file))
+                     (when (file-exists-p file) (delete-file file))))))
+    (condition-case err
+        ;; Cached literal reads contain eight-bit characters.  Explicit
+        ;; UTF-8 writes preserve those bytes and encode decoded text.
+        (let ((coding-system-for-write 'utf-8-unix))
+          (with-temp-file orig-file (when original (insert original)))
+          (with-temp-file mod-file (when modified (insert modified))))
+      (error
+       (funcall remove)
+       (signal (car err) (cdr err))))
+    ;; Both sides are local snapshots, so the diff runs beside Emacs even
+    ;; under an ambient remote session.
+    (let ((mevedel--session nil))
+      (mevedel-start-helper-capturing-output
+       (lambda (_exit-code output error)
+         (funcall remove)
+         (funcall callback
+                  (and (not error)
+                       (cond ((string-empty-p output) "")
+                             ((string-suffix-p "\n" output) output)
+                             (t (concat output "\n"))))
+                  error))
+       "mevedel-diff"
+       (list "diff" "-u"
+             "--label" (if (or labels-real
+                               (and original (not (string-empty-p original))))
+                           (mevedel--diff-label "a" filepath)
+                         "/dev/null")
+             "--label" (if (or labels-real
+                               (and modified (not (string-empty-p modified))))
+                           (mevedel--diff-label "b" filepath)
+                         "/dev/null")
+             orig-file mod-file)
+       (list orig-file mod-file)))))
 
 
 

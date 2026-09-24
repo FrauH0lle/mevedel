@@ -107,6 +107,36 @@
       (kill-buffer buffer))))
 
 
+(mevedel-deftest mevedel--compact-provider-wait/prepared-diffs
+  (:doc "a cancelled request ends a dispatch still waiting on its diffs")
+  ;; Nothing else moves a machine that has not sent its request out of WAIT:
+  ;; gptel's abort only finds requests with a live process.
+  (let* ((session (mevedel-session--create :name "provider-prepare"))
+         (buffer (generate-new-buffer " *compact-provider-prepare*"))
+         (request (mevedel-request--create :id "request-2"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :mevedel-request request)))
+         stopped transitions forwarded)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-telemetry-record) #'ignore)
+                    ((symbol-function 'mevedel-reminders-prepare-edited-files)
+                     (lambda (_fsm _continuation)
+                       (lambda () (setq stopped t))))
+                    ((symbol-function 'gptel--handle-wait)
+                     (lambda (_) (setq forwarded t)))
+                    ((symbol-function 'gptel--fsm-transition)
+                     (lambda (_fsm state) (push state transitions))))
+            (mevedel--compact-provider-wait fsm)
+            (should-not forwarded)
+            (should-not transitions)
+            (mevedel-request-cancel request)
+            (should stopped)
+            (should (equal '(ABRT) transitions))
+            (should-not forwarded)))
+      (kill-buffer buffer))))
+
 (mevedel-deftest mevedel--compact-transform-auto ()
   ,test
   (test)

@@ -1845,7 +1845,14 @@
           (make-directory directory)
           (with-temp-file a-file (insert "new\n"))
           (with-temp-file z-file (insert "created\n"))
-          (let* ((patch (mevedel--generate-final-patch workspace))
+          (let* ((patch nil)
+                 (_ (mevedel--generate-final-patch
+                     workspace mevedel--current-request
+                     (lambda (value error)
+                       (should-not error)
+                       (setq patch value))))
+                 (_ (with-timeout (10 (ert-fail "Final patch never settled"))
+                      (while (not patch) (accept-process-output nil 0.02))))
                  (a-pos (string-search "diff --git a/a.txt" patch))
                  (z-pos (string-search "diff --git a/z.txt" patch)))
             (should a-pos)

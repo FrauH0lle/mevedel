@@ -249,6 +249,37 @@ instead of the provider transcript.")
 (defvar mevedel-pipeline--canonical-path-map nil
   "Pre-authorized lexical-to-canonical paths for the active handler.")
 
+(defconst mevedel-pipeline--handler-context-variables
+  '(mevedel-pipeline--handler-active-p
+    mevedel-pipeline--handler-commit
+    mevedel-pipeline--active-tool-use-id
+    mevedel-pipeline--active-call-source
+    mevedel-pipeline--auto-apply-edit-p
+    mevedel-resource-current-attempts
+    mevedel-tool-patch-prepared-proposal
+    mevedel-pipeline--canonical-path-map
+    mevedel-execution-telemetry-summary-cell
+    mevedel-tool-exec-permission-approved-resources)
+  "Dynamic context `mevedel-pipeline--step-handler' binds around a handler.")
+
+(defun mevedel-pipeline-handler-resumable (function)
+  "Return FUNCTION wrapped to continue in the calling handler's context.
+An asynchronous handler that continues from a helper callback runs outside
+the dynamic extent in which the pipeline bound the active tool, resource
+attempts, path map and commit fence, and in whatever buffer is current.
+The wrapper restores those bindings and the buffer that was current when
+it was made, then applies FUNCTION to its arguments."
+  (let ((buffer (current-buffer))
+        (values (mapcar (lambda (symbol) (and (boundp symbol) (symbol-value symbol)))
+                        mevedel-pipeline--handler-context-variables)))
+    (lambda (&rest args)
+      (cl-flet ((resume ()
+                  (cl-progv mevedel-pipeline--handler-context-variables values
+                    (apply function args))))
+        (if (buffer-live-p buffer)
+            (with-current-buffer buffer (resume))
+          (resume))))))
+
 (defun mevedel-pipeline-canonical-path (path)
   "Return PATH's pre-authorized canonical value for the active handler."
   (or (cdr (assoc path mevedel-pipeline--canonical-path-map)) path))

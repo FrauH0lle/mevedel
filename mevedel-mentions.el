@@ -136,11 +136,13 @@
 
 ;; `mevedel-tool-fs-read'
 (declare-function mevedel-tool-fs-read-format-large-pdf-reminder
-                  "mevedel-tool-fs-read" (path))
+                  "mevedel-tool-fs-read" (path page-count))
 (declare-function mevedel-tool-fs-read-large-pdf-p
-                  "mevedel-tool-fs-read" (path))
-(declare-function mevedel-tool-fs-read-list-directory
+                  "mevedel-tool-fs-read" (path page-count))
+(declare-function mevedel-tool-fs-read-list-directory-now
                   "mevedel-tool-fs-read" (path &optional max-entries))
+(declare-function mevedel-tool-fs-read-pdf-page-count-now
+                  "mevedel-tool-fs-read" (path))
 (declare-function mevedel-tool-fs-read-media-mime-type
                   "mevedel-tool-fs-read" (filename))
 (declare-function mevedel-tool-fs-read-pdf-media-p
@@ -153,7 +155,8 @@
 (autoload 'mevedel-tool-fs-read-format-large-pdf-reminder
   "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-large-pdf-p "mevedel-tool-fs-read")
-(autoload 'mevedel-tool-fs-read-list-directory "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-list-directory-now "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-pdf-page-count-now "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-media-mime-type "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-pdf-media-p "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-session-artifact "mevedel-tool-fs-read")
@@ -779,7 +782,7 @@ to the user."
      ((and (not artifact-logical)
            (file-directory-p expanded))
       (condition-case err
-          (let* ((listing (mevedel-tool-fs-read-list-directory
+          (let* ((listing (mevedel-tool-fs-read-list-directory-now
                            expanded
                            mevedel-file-mention-directory-max-entries))
                  (entries (car listing))
@@ -829,14 +832,17 @@ gitignore-filtered):\n\n```\n%s\n```%s"
                    (when (and (not artifact-logical)
                               (mevedel-tool-fs-read-pdf-media-p expanded))
                      (mevedel-tool-fs-read-format-large-pdf-reminder
-                      expanded))))
+                      expanded
+                      (mevedel-tool-fs-read-pdf-page-count-now expanded)))))
          (t
-          (let ((reminder
-                 (and (not artifact-logical)
-                      (mevedel-tool-fs-read-pdf-media-p expanded)
-                      (mevedel-tool-fs-read-large-pdf-p expanded)
-                      (mevedel-tool-fs-read-format-large-pdf-reminder
-                       expanded))))
+          (let* ((page-count (and (not artifact-logical)
+                                  (mevedel-tool-fs-read-pdf-media-p expanded)
+                                  (mevedel-tool-fs-read-pdf-page-count-now expanded)))
+                 (reminder
+                  (and (not artifact-logical)
+                       (mevedel-tool-fs-read-large-pdf-p expanded page-count)
+                       (mevedel-tool-fs-read-format-large-pdf-reminder
+                        expanded page-count))))
             (list :placeholder
                   (format "[file:%s -- media attached]" display-path)
                   :reminder reminder

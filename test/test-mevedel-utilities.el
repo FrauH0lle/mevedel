@@ -955,28 +955,76 @@ rejects trailing binary operators"
           (setq buffer-file-name nil))
       (save-place-mode -1))))
 
-(mevedel-deftest mevedel-run-helper-capturing-output ()
+(defun test-mevedel-utilities--stub-helper (result &optional capture)
+  "Return a `mevedel-execution-start-helper' stub settling with RESULT.
+CAPTURE, when non-nil, is called with the stub's arguments."
+  (lambda (callback &rest args)
+    (when capture (funcall capture args))
+    (funcall callback result)
+    #'ignore))
+
+(defun test-mevedel-utilities--diff (original modified filepath &optional labels-real)
+  "Return the settled (DIFF . ERROR) of `mevedel-generate-diff'."
+  (let (settled)
+    (mevedel-generate-diff original modified filepath
+                           (lambda (diff error) (setq settled (cons diff error)))
+                           labels-real)
+    (with-timeout (10 (ert-fail "Diff never settled"))
+      (while (not settled) (accept-process-output nil 0.02)))
+    settled))
+
+(mevedel-deftest mevedel-start-helper-capturing-output ()
   ,test
   (test)
   :doc "routes a structured command and declared paths through the helper layer"
   (let ((session (mevedel-session--create))
-        captured)
-    (cl-letf (((symbol-function 'mevedel-execution-run-helper)
-               (lambda (&rest args)
-                 (setq captured args)
-                 '(:exit-code 7 :output " helper output \n"))))
+        captured settled)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (test-mevedel-utilities--stub-helper
+                '(:exit-code 7 :output " helper output \n")
+                (lambda (args) (setq captured args)))))
       (let ((mevedel--session session))
-        (should
-         (equal '(7 . " helper output \n")
-                (mevedel-run-helper-capturing-output
-                 "media-helper" '("helper" "--flag") '("/input")
-                 '("/artifacts"))))))
+        (should (functionp
+                 (mevedel-start-helper-capturing-output
+                  (lambda (&rest values) (setq settled values))
+                  "media-helper" '("helper" "--flag") '("/input")
+                  '("/artifacts"))))))
+    (should (equal '(7 " helper output \n" nil) settled))
     (should (equal '("media-helper" ("helper" "--flag") ("/input")
                      ("/artifacts") :session)
                    (seq-take captured 5)))
     (should (eq session (nth 5 captured)))
     (should (eq :owner (nth 6 captured)))
-    (should (equal "/root" (nth 7 captured)))))
+    (should (equal "/root" (nth 7 captured))))
+
+  :doc "settles once with the error when the helper cannot start"
+  (let (settled)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (lambda (&rest _) (error "No helper"))))
+      (should-not (mevedel-start-helper-capturing-output
+                   (lambda (&rest values) (push values settled))
+                   "helper" '("helper") nil)))
+    (should (= 1 (length settled)))
+    (should (equal '(error "No helper") (nth 2 (car settled)))))
+
+  :doc "settles with an error when the helper's owner is torn down"
+  (let (settled)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (lambda (_callback &rest args)
+                 (funcall (plist-get (nthcdr 4 args) :teardown-callback))
+                 #'ignore)))
+      (mevedel-start-helper-capturing-output
+       (lambda (&rest values) (push values settled))
+       "helper" '("helper") nil))
+    (should (= 1 (length settled)))
+    (should (nth 2 (car settled))))
+
+  :doc "lets an error raised by the callback propagate"
+  (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+             (test-mevedel-utilities--stub-helper '(:exit-code 0 :output ""))))
+    (should-error (mevedel-start-helper-capturing-output
+                   (lambda (&rest _) (error "Callback failed"))
+                   "helper" '("helper") nil))))
 
 (mevedel-deftest mevedel-generate-diff ()
   ,test
@@ -986,20 +1034,39 @@ rejects trailing binary operators"
           (mevedel-execution-target-create
            "/ssh:builder@example.test:/srv/project/"))
          (session (mevedel-session--create :execution-target target))
-        captured)
-    (cl-letf (((symbol-function 'mevedel-execution-run-helper)
-               (lambda (&rest args)
-                 (setq captured args)
-                 '(:exit-code 1 :output "unified diff"))))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (test-mevedel-utilities--stub-helper
+                '(:exit-code 1 :output "unified diff")
+                (lambda (args) (setq captured args)))))
       (let ((mevedel--session session))
-        (should (equal "unified diff\n"
-                       (mevedel-generate-diff
-                        "old" "new" "file.el")))))
+        (should (equal '("unified diff\n")
+                       (test-mevedel-utilities--diff "old" "new" "file.el")))))
     (should (equal "diff" (car (nth 1 captured))))
     (should (= 2 (length (nth 2 captured))))
     (should-not (nth 5 captured))
     (should (eq :owner (nth 6 captured)))
     (should (equal "/root" (nth 7 captured))))
+
+  :doc "produces a real unified diff through the helper layer"
+  (let ((settled (test-mevedel-utilities--diff "a\nb\n" "a\nc\n" "file.txt")))
+    (should-not (cdr settled))
+    (should (string-match-p "^-b$" (car settled)))
+    (should (string-match-p "^\\+c$" (car settled)))
+    (should (equal '("") (test-mevedel-utilities--diff "same\n" "same\n" "file.txt"))))
+
+  :doc "reports a failed helper as an error and removes its spools"
+  (let (spools)
+    (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+               (test-mevedel-utilities--stub-helper
+                '(:exit-code -1 :output "" :error (error "Helper failed"))
+                (lambda (args) (setq spools (nth 2 args))))))
+      (let ((settled (test-mevedel-utilities--diff "old" "new" "file.el")))
+        (should-not (car settled))
+        (should (equal '(error "Helper failed") (cdr settled)))))
+    (should (= 2 (length spools)))
+    (dolist (path spools) (should-not (file-exists-p path))))
+
   :doc "labels a relative path a/ and b/ and an absolute path as itself"
   ;; The a/ and b/ prefixes belong to git-style patches over
   ;; repository-relative paths.  The edited-file reminder diffs absolute
@@ -1008,11 +1075,11 @@ rejects trailing binary operators"
                   ("/home/user/file.el" "/home/user/file.el"
                    "/home/user/file.el")))
     (let (captured)
-      (cl-letf (((symbol-function 'mevedel-execution-run-helper)
-                 (lambda (&rest args)
-                   (setq captured args)
-                   '(:exit-code 1 :output "unified diff"))))
-        (mevedel-generate-diff "old" "new" (car case)))
+      (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                 (test-mevedel-utilities--stub-helper
+                  '(:exit-code 1 :output "unified diff")
+                  (lambda (args) (setq captured args)))))
+        (test-mevedel-utilities--diff "old" "new" (car case)))
       (let ((command (nth 1 captured)))
         (should (equal (list "diff" "-u"
                              "--label" (nth 1 case)
@@ -1033,8 +1100,8 @@ rejects trailing binary operators"
             spools)
         (cl-letf (((symbol-function 'select-safe-coding-system-interactively)
                    (lambda (&rest _) (ert-fail "Unexpected encoding prompt")))
-                  ((symbol-function 'mevedel-execution-run-helper)
-                   (lambda (&rest args)
+                  ((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (callback &rest args)
                      (setq spools (nth 2 args))
                      (should
                       (equal (list old-bytes new-bytes)
@@ -1045,21 +1112,22 @@ rejects trailing binary operators"
                                   (insert-file-contents-literally path)
                                   (buffer-string)))
                               spools)))
-                     '(:exit-code 1 :output "diff"))))
+                     (funcall callback '(:exit-code 1 :output "diff"))
+                     #'ignore)))
           (let ((noninteractive nil))
-            (should (equal "diff\n"
-                           (mevedel-generate-diff
+            (should (equal '("diff\n")
+                           (test-mevedel-utilities--diff
                             (car inputs) (cadr inputs) "unicode.md")))))
         (should (= 2 (length spools)))
         (dolist (path spools) (should-not (file-exists-p path))))))
 
   :doc "preserves a trailing blank context line in unified output"
-  (cl-letf (((symbol-function 'mevedel-execution-run-helper)
-             (lambda (&rest _)
-               '(:exit-code 1 :output "@@ -1 +1 @@\n-old\n+new\n \n"))))
+  (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+             (test-mevedel-utilities--stub-helper
+              '(:exit-code 1 :output "@@ -1 +1 @@\n-old\n+new\n \n"))))
     (should
-     (equal "@@ -1 +1 @@\n-old\n+new\n \n"
-            (mevedel-generate-diff "old\n\n" "new\n\n" "file.el")))))
+     (equal '("@@ -1 +1 @@\n-old\n+new\n \n")
+            (test-mevedel-utilities--diff "old\n\n" "new\n\n" "file.el")))))
 
 (mevedel-deftest mevedel--write-file-atomically ()
   ,test

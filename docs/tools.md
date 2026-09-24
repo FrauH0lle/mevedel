@@ -773,6 +773,27 @@ function. Sessionless request owners can stop their own helper children while
 preserving normal terminal delivery and cleanup. Glob/Grep return this handle
 when they launch a helper; synchronous no-match paths settle directly.
 
+Callers continue from the helper's callback instead of waiting for it.
+A synchronous wait re-entered the event loop wherever it was called.
+That includes gptel's process callbacks, which run with quitting
+inhibited, so a helper that never settled wedged the turn. The affected
+callers are:
+
+- **Read:** PDF page counts, page rendering, image transforms, and directory
+  listings. It delivers its result once the helpers settle. The pipeline's
+  handler context and Read's own state are restored for each continuation.
+  A failure after a helper becomes the ordinary `Error:` tool result.
+  Temporary local copies of remote media live until the Read settles.
+- **Final patch:** a turn's final patch runs one `diff` per touched file
+  while the turn's settlement hold stays in place.
+- **Edited-file reminder:** its diffs are prepared before a request is
+  dispatched. A cancelled request ends a dispatch still waiting on them.
+  Reminder evaluation outside that dispatch reports the change without a
+  diff.
+
+Mention expansion still waits synchronously for its directory listing and
+PDF page count.
+
 The caller supplies a structured argv, authorized read paths, and explicit
 writable artifact directories. The facade adds a private scratch working
 directory, applies `mevedel-sandbox-mode`, and removes the scratch directory
