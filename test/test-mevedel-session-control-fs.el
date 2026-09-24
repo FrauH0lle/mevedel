@@ -92,6 +92,56 @@
                         :type 'file-error))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-control-fs-run-program-async ()
+  ,test
+  (test)
+  :doc "runs a program without waiting and delivers its results"
+  (let* ((root (make-temp-file "mevedel-control-async-" t))
+         (path (file-name-concat root "log"))
+         (mevedel-session-control-fs--pipe-local t)
+         settled)
+    (unwind-protect
+        (progn
+          (should (processp
+                   (mevedel-session-control-fs-run-program-async
+                    (list (list :op 'append :path path :content "one\n")
+                          (list :op 'read :path path))
+                    (lambda (results error) (setq settled (list results error))))))
+          (should-not settled)
+          (with-timeout (10 (ert-fail "Asynchronous program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status))
+                                          (car settled))))
+          (should (equal "one\n" (plist-get (nth 1 (car settled)) :value))))
+      (delete-directory root t)))
+
+  :doc "runs synchronously where the editor is about to exit"
+  (let* ((root (make-temp-file "mevedel-control-async-" t))
+         (mevedel-session-control-fs--pipe-local t)
+         (mevedel-session-control-fs--async-wait t)
+         settled)
+    (unwind-protect
+        (progn
+          (should-not (mevedel-session-control-fs-run-program-async
+                       (list (list :op 'path-exists-p :path root))
+                       (lambda (results error) (setq settled (list results error)))))
+          (should (equal 'ok (plist-get (car (car settled)) :status))))
+      (delete-directory root t)))
+
+  :doc "reports a program that failed as a whole"
+  (let ((mevedel-session-control-fs--pipe-local t)
+        settled)
+    (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
+               (lambda (_) (cons "false" "stat"))))
+      (mevedel-session-control-fs-run-program-async
+       (list (list :op 'path-exists-p :path "/tmp"))
+       (lambda (results error) (setq settled (list results error)))))
+    (with-timeout (10 (ert-fail "Failed program never settled"))
+      (while (not settled) (accept-process-output nil 0.02)))
+    (should-not (car settled))
+    (should (eq 'file-error (car (nth 1 settled))))))
+
 (mevedel-deftest mevedel-session-control-fs--program-arguments/large-field ()
   (let* ((field (make-string (1+ mevedel-session-control-fs--argument-field-budget) ?x))
          (quote (symbol-function 'shell-quote-argument))

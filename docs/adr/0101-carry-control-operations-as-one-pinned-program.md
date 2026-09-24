@@ -198,6 +198,12 @@ protocol, extraction directory, or generic resolver cache is needed.
 - **Diagnostic append cost:** republishing complete diagnostic logs on every
   flush grew quadratically with stream size. Delta-only pinned append replaced
   that path; a crash can tear the last diagnostic line, which is not resume state.
+- **Synchronous diagnostic appends:** each append program still waited on the
+  target inside the request that produced it. Run 7 of the remote GUI capture
+  (2026-09-23) put 12% of a 350 s request inside TRAMP. Appends are now
+  collected per batch and run as one background direct-async program on
+  capable targets; its callback performs no target I/O, and unwritten entries
+  retry from an in-memory backlog.
 - **Timer suspension did not stop sentinel reentrancy.** Projectile's advice on
   `delete-file` resolved remote project roots while native compilation or syntax
   checking deleted local temporary files. Those sentinels ran inside a remote

@@ -522,6 +522,42 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-durability-run-owned-program-async ()
+  ,test
+  (test)
+  :doc "runs operations behind the proof and strips bytes it disproves"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-owned-async-" t)))
+         (session (test-mevedel-session-durability--local-session root))
+         (log (file-name-concat root "log"))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         settled)
+    (setf (mevedel-session-save-path session) root)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire root "*owner*" session))
+          (should (plist-get (mevedel-session-lease session) :bytes))
+          (mevedel-session-durability-run-owned-program-async
+           session (list (list :op 'append :path log :content "a"))
+           (lambda (results error) (setq settled (list results error))))
+          (should (equal 'ok (plist-get (car (car settled)) :status)))
+          (should (equal "a" (mevedel-session-control-fs-read-file log)))
+          ;; Bytes the target no longer holds fail the proof and are
+          ;; forgotten, so the next renewal observes instead of assuming.
+          (setf (mevedel-session-lease session)
+                (plist-put (copy-sequence (mevedel-session-lease session))
+                           :bytes "(:stale t)"))
+          (setq settled nil)
+          (mevedel-session-durability-run-owned-program-async
+           session (list (list :op 'append :path log :content "b"))
+           (lambda (results error) (setq settled (list results error))))
+          (should (equal '(nil nil) settled))
+          (should-not (plist-get (mevedel-session-lease session) :bytes))
+          (should (equal "a" (mevedel-session-control-fs-read-file log))))
+      (mevedel-session-durability--cancel-renewal session)
+      (ignore-errors (mevedel-session-durability-lease-release root session))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-durability--claim-next ()
   ,test
   (test)
@@ -3762,7 +3798,10 @@
                   (while (and (not warning) (< (float-time) deadline))
                     (accept-process-output nil 0.02))))
               (should warning)
-              (should (mevedel-session-hook-log-pending session))
+              ;; The log handed its entry over; the target refused it, so
+              ;; it waits in the session's diagnostic backlog.
+              (should-not (mevedel-session-hook-log-pending session))
+              (should (mevedel-session-publication-diagnostic-backlog-p session))
               (should-not (mevedel-session-pending-publication session))
               (should
                (mevedel-session-artifacts-assert-mutation-authority session))
@@ -3785,7 +3824,7 @@
                               (< (float-time) deadline))
                     (accept-process-output nil 0.02))))
               (should (= 1 diagnostic-publications))
-              (should-not (mevedel-session-hook-log-pending session))
+              (should-not (mevedel-session-publication-diagnostic-backlog-p session))
               (should-not (mevedel-session-pending-publication session))
               (with-temp-buffer
                 (insert-file-contents log-path)
