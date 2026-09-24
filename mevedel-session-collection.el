@@ -92,6 +92,17 @@ Cache observations only; the editor still checks authority and pins at deletion.
                         (format "Could not prepare publication collection: %s" (error-message-string err))
                         :warning)))))
 
+(defun mevedel-session-collection--resumed (session job error)
+  "Continue JOB for SESSION after a deleting program, reporting ERROR."
+  (when (eq job (gethash session mevedel-session-collection--jobs))
+    (plist-put job :pending nil)
+    (if (not error)
+        (mevedel-session-collection--arm session job)
+      (mevedel-session-collection-cancel session)
+      (display-warning 'mevedel
+                       (format "Could not collect published generations: %s"
+                               (error-message-string error)) :warning))))
+
 (defun mevedel-session-collection--step (session job)
   "Advance JOB by a bounded slice, preserving SESSION's live ownership."
   (when (eq job (gethash session mevedel-session-collection--jobs))
@@ -115,7 +126,7 @@ Cache observations only; the editor still checks authority and pins at deletion.
                 (mevedel-session-publication-queue session)
                 (mevedel-session-publication-active-p session))
             (mevedel-session-collection--arm session job))
-           ((plist-get job :worker) nil)
+           ((or (plist-get job :worker) (plist-get job :pending)) nil)
            (t
             (mevedel-transport-with-exclusive-connection
              (mevedel-session-durability-with-transaction
@@ -164,10 +175,20 @@ Cache observations only; the editor still checks authority and pins at deletion.
                     (setf (plist-get job :plan)
                           (mevedel-session-publication-collection-plan
                            session (reverse (plist-get job :summaries)))))
-                  (if (mevedel-session-publication-collect-step
-                       session (plist-get job :plan))
-                      (mevedel-session-collection--arm session job)
-                    (mevedel-session-collection-cancel session)))))))))
+                  (let (failure)
+                    (pcase (mevedel-session-publication-collect-step
+                            session (plist-get job :plan)
+                            (lambda (error)
+                              ;; A background program reports from a sentinel,
+                              ;; perhaps inside another remote command.
+                              (if (plist-get job :pending)
+                                  (mevedel-transport-run-at-time
+                                   0 #'mevedel-session-collection--resumed session job error)
+                                (setq failure error))))
+                      ('pending (plist-put job :pending t))
+                      ('nil (mevedel-session-collection-cancel session))
+                      (_ (when failure (signal (car failure) (cdr failure)))
+                         (mevedel-session-collection--arm session job)))))))))))
 
       (error
        (mevedel-session-collection-cancel session)
