@@ -114,7 +114,17 @@
   (should (string-match-p "final Next Steps"
                           (mevedel-context-summary--prompt 'continuation)))
   (should (string-match-p "Do not restate that task"
-                          (mevedel-context-summary--prompt 'handoff))))
+                          (mevedel-context-summary--prompt 'handoff)))
+
+  :doc "digest selection separates reusable knowledge from task and continuation state"
+  (let ((prompt (mevedel-context-summary--prompt 'digest)))
+    (dolist (rule '("User:" "Feedback:" "Project:" "Reference:"
+                    "Tasks, blockers, deadlines, progress, and decisions belong"
+                    "Conversation state belongs in session context"
+                    "Nothing noteworthy is a successful outcome"
+                    "remaining uncertainty about qualifying knowledge"))
+      (should (string-search rule prompt)))
+    (should-not (string-search "unresolved state at capture time" prompt))))
 
 (mevedel-deftest mevedel-context-summary--input ()
   ,test

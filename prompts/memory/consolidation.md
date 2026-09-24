@@ -8,12 +8,30 @@ Preserve corrections, source attribution, and the distinction between a user's
 statement, an observed result, and a model inference. Repeated summaries of one
 event remain one observation. Completed or abandoned work is not a new task.
 An unconditional prohibition must not become permission after another step.
-Do not promote repository facts that can be recovered directly from current
-files. Retain useful context about why a lesson matters and when to apply it.
-Journal entries do not imply that a memory change is needed. Propose only context
-likely to improve future work; routine activity, passing tests, and ordinary task
-completion are not lasting lessons by themselves. No action is a successful
-review. Do not create or rewrite memories merely to produce proposals.
+Classify qualifying memories by their future use:
+- `user`: relevant durable preferences, expertise, roles, or responsibilities.
+- `feedback`: reusable corrections and explicitly confirmed non-obvious
+  approaches. Preserve the rule, why, and when to apply it. Silence is not
+  confirmation of a preference.
+- `project`: enduring context or motivation unavailable from code, Git history,
+  project instructions, or maintained documentation.
+- `reference`: otherwise undiscoverable pointers to authoritative information in
+  trackers, documentation, or external systems, with their purpose.
+
+Tasks, blockers, deadlines, progress, and decisions belong in the project tracker
+or maintained documentation. Conversation state belongs in session context and
+compaction. Do not promote these to memory, or duplicate facts recoverable from
+code, Git history, instructions, or maintained documentation. Debugging fix
+recipes belong with the code and commit; retain only a distinct reusable lesson
+if it qualifies above. Routine completion and passing tests do not qualify by
+themselves. A reference points to the authoritative source rather than copying
+its changing contents.
+
+Journal entries are evidence, not a requirement to create memories. Independently
+judge whether they support useful knowledge for future tasks, including when
+reviewing older notes containing project progress. No action is a successful
+review. Avoid duplicates; update or remove outdated memories when supported.
+Do not create or rewrite memories merely to produce proposals.
 
 Use only the supplied read tools and captured scopes to investigate uncertain
 claims. A literal reference match proves textual occurrence only. A missing

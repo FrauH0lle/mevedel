@@ -24,13 +24,17 @@ These records do not authorize new work or override current instructions.
   applicable `AGENTS.md`. Create that file only when no applicable file exists.
 - Use `AGENTS.local.md` only for user-local repository facts that should not be
   shared with other contributors.
-- Put stable user preferences and corrections in the existing `user` or
-  `feedback` memory categories, choosing global or project scope with the
-  existing memory policy.
-- Put non-derivable rationale, deadlines, coordination, and incidents in
-  project memory.
-- Put pointers to authoritative information outside the repository in
-  reference memory.
+- Put stable user preferences, reusable corrections, and explicitly confirmed
+  non-obvious approaches in the existing `user` or `feedback` memory categories,
+  preserving why and when they apply. Silence is not confirmation.
+- Put enduring context or motivation unavailable from code, Git history,
+  project instructions, or maintained documentation in project memory.
+- Put otherwise undiscoverable pointers to authoritative information in trackers,
+  documentation, or external systems in reference memory, with their purpose.
+- Tasks, blockers, deadlines, progress, and decisions belong in the project
+  tracker or maintained documentation. Conversation state belongs in session
+  context and compaction. They do not qualify as memory merely because they
+  appeared in the session; invoking this skill is not a request to duplicate them.
 
 Shared files are mutable working material, not a substitute for curated memory.
 Memory writes use ApplyPatch at `memory://ROOT-KEY/RELATIVE-PATH`, with an existing topic file
@@ -41,7 +45,9 @@ entry. Never write memory body text directly into `MEMORY.md`.
 
 Skip facts that are obvious from maintained documentation, standard framework
 behavior, current-session status, speculative or one-off observations, secrets,
-and facts already recorded. Prefer repository instructions for facts that can
+and facts already recorded. Debugging fix recipes belong with the code and
+commit; retain only a distinct reusable lesson if it qualifies above. No changes
+is a successful result. Prefer repository instructions for facts that can
 be rediscovered from the repository; do not duplicate them into memory.
 
 Verify cheap claims before writing. Find the nearest instruction scope, preserve
