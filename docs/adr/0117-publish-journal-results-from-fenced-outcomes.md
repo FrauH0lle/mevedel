@@ -33,7 +33,10 @@ call. Advisory prompt discovery separately reuses validated local entries while
 public-record and expiry-marker source attributes remain unchanged, with a
 ten-second refresh throttle and age filtering on every use. Remote discovery
 retains throttled fresh reads. Digest inference uses frozen model policy without
-a live session or tools; accepted output is published before source pins are released.
+a live session or tools. Only noteworthy events become public notes. An accepted,
+validated all-none digest instead records private turn coverage and retires its
+capture without publication or a consolidation opportunity. Both paths retain
+coverage before releasing source pins and recover without replacement inference.
 
 Consolidation captures bounded memory, instructions, source observations, and
 selected digest evidence. It uses scoped read-only tools in a sessionless request.
@@ -111,7 +114,10 @@ batches remove at most 200 pairs and 50 content groups, scheduling another batch
 only after progress. A fresh listing can rule out pruning in a directory that
 contains only the newest or referenced generations. It cannot authorize a deletion;
 candidates still require fresh claim/deadline checks and locked byte verification.
-Minimal coverage and retirement identities remain.
+Minimal coverage and retirement identities remain. Interactive decisions wait
+for this client's active cleanup batch to release its claims, bounded by its
+120-second lifetime and with quitting available. Bulk decisions defer further
+cleanup until completion; foreign ownership still prevents conflicting actions.
 
 Expiry accepts a hash-bound manifest before deletion,
 hides expired entries before removing bytes, and deletes complete dependency
@@ -542,3 +548,19 @@ Alternating trials on a copied 40-entry journal reduced warm refreshes from
 134 ms to 0.33 ms with identical results. Cold reads remained about 134 ms.
 Regressions cover edits with restored modification times, replacements, expiry,
 corruption, read failures, source races, root changes and cached-only discovery.
+
+### 2026-09-24: defer decisions behind cleanup and allow no journal note
+
+Accept/reject scheduled cleanup under the same consolidation claim needed by the
+next decision. The editor could report no running review yet fail that decision
+with "Memory consolidation is busy". A regression holding real cleanup claims
+reproduced this. Decisions now wait for this client's active batch to settle,
+without stealing claims or killing maintenance children; bulk commands defer
+new cleanup until they finish.
+
+The digest contract also encouraged a note on every eligible capture, and even
+four empty sections published a public record. Generation now explicitly selects
+noteworthy events. Validated all-none output is accepted completion without a
+note: turn coverage precedes source-pin release, and interrupted retirement
+recovers the accepted omission without another model call. Consolidation likewise
+prefers No action when dated activity supplies no useful lasting context.

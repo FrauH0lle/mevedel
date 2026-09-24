@@ -148,7 +148,8 @@ cancellation releases the fence and leaves the machine retryable.
 - `journal-capture-queued` when a checkpoint first becomes ready, carrying its
   capture identity, checkpoint trigger, and frozen input byte count; no evidence
   body is logged;
-- `journal-digest-written` and `journal-digest-failed` in workspace diagnostics,
+- `journal-digest-written`, `journal-digest-omitted` (nothing noteworthy), and
+  `journal-digest-failed` in workspace diagnostics,
   with capture identity, trigger, attempt generation, publication/failure outcome,
   body byte count, and available provider uncached-input, cached-input, and
   output token counts. Input and cached counts are exclusive. Recovery

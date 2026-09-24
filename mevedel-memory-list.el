@@ -282,13 +282,15 @@ Check original root authority before disclosing private topic contents."
   (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
          (items (if all (copy-sequence (mevedel-cockpit-surface-items)) (list (mevedel-cockpit-surface-selected)))))
     (unwind-protect
-        (dolist (item items)
-          (when (or (not all) (mevedel-memory-decision-actionable-status-p (plist-get item :status)))
-            (unless (plist-get item :proposal) (user-error "This record has no available proposal"))
-            (pcase action
-              ('accept (mevedel-memory-decision-apply workspace (plist-get item :pass) (plist-get item :id)))
-              ('reject (mevedel-memory-decision-reject workspace (plist-get item :pass) (plist-get item :id) reason))
-              ('reverse (mevedel-memory-decision-reverse workspace (plist-get item :pass) (plist-get item :id))))))
+        (let ((mevedel-journal-cleanup--inhibit-scheduling t))
+          (dolist (item items)
+            (when (or (not all) (mevedel-memory-decision-actionable-status-p (plist-get item :status)))
+              (unless (plist-get item :proposal) (user-error "This record has no available proposal"))
+              (pcase action
+                ('accept (mevedel-memory-decision-apply workspace (plist-get item :pass) (plist-get item :id)))
+                ('reject (mevedel-memory-decision-reject workspace (plist-get item :pass) (plist-get item :id) reason))
+                ('reverse (mevedel-memory-decision-reverse workspace (plist-get item :pass) (plist-get item :id)))))))
+      (mevedel-journal-cleanup-schedule workspace t)
       (mevedel-cockpit-surface-refresh))))
 
 (defun mevedel-memory-list-accept ()

@@ -326,6 +326,21 @@ or nil when busy, throttled, or unavailable."
 (defvar mevedel-journal-cleanup--pending (make-hash-table :test #'equal)
   "Coalesced (TIMER . FORCE) cleanup requests keyed by workspace roots.")
 
+(defun mevedel-journal-cleanup-wait (workspace)
+  "Let this client's active WORKSPACE cleanup release its claims.
+Queued idle work needs no wait.  Allow at most the cleanup claim's 120-second
+lifetime, and allow quitting.  Suppress further batches while waiting; never
+kill a child holding claims or steal another owner's claim."
+  (let* ((root (mevedel-workspace-root workspace))
+         (job (gethash root mevedel-journal-cleanup--pending)))
+    (when (and job (not (memq (car job) timer-idle-list)))
+      (let ((deadline (+ (float-time) 120))
+            (mevedel-journal-cleanup--inhibit-scheduling t))
+        (message "mevedel: waiting for journal cleanup")
+        (while (and (eq job (gethash root mevedel-journal-cleanup--pending))
+                    (< (float-time) deadline))
+          (accept-process-output nil .05))))))
+
 ;;;###autoload
 (defun mevedel-journal-cleanup-schedule (workspace &optional force)
   "Schedule WORKSPACE cleanup in phases, bypassing the hourly gate with FORCE.

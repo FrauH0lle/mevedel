@@ -428,7 +428,8 @@ Malformed records fail closed so completed work cannot become eligible again."
     (append turns nil)))
 
 (defun mevedel-journal-store--record-coverage (root entry)
-  "Retain ENTRY's published turn IDs in ROOT before its capture can retire."
+  "Retain ENTRY's processed turn IDs in ROOT before its capture can retire.
+ENTRY may be frozen metadata from an accepted nothing-noteworthy result."
   (let* ((id (plist-get entry :capture-id))
          (directory (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)) "coverage"))
          (path (file-name-concat directory (concat id ".json")))
@@ -439,7 +440,8 @@ Malformed records fail closed so completed work cannot become eligible again."
       (signal 'mevedel-journal-store-invalid '("Conflicting capture coverage")))))
 
 (defun mevedel-journal-store-covered-turns (root)
-  "Return IDs of all turns already published in workspace ROOT.
+  "Return IDs of all turns already processed in workspace ROOT.
+This includes accepted nothing-noteworthy results without public notes.
 These private identity records outlive public entry expiry.  They contain no
 evidence text and are independent of consolidation review coverage.
 Read bounded batches afresh; malformed or unavailable coverage fails closed."

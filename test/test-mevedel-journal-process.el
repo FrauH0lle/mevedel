@@ -78,6 +78,62 @@
                (should-not (mevedel-journal-process-next workspace)))
            (mevedel-journal-process-cancel workspace))))))
 
+  :doc "nothing noteworthy completes without a note, repeat capture, or memory review"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Routine question" "Routine answer")
+     (let* ((workspace (mevedel-session-workspace session))
+            (root (mevedel-workspace-root workspace))
+            (capture (car (mevedel-journal-capture-seal session buffer 'compaction)))
+            (calls 0) scheduled)
+       (cl-letf (((symbol-function 'gptel-request)
+                  (lambda (_prompt &rest args)
+                    (cl-incf calls)
+                    (funcall (plist-get args :callback)
+                             "## Done\n- none\n\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none" nil)))
+                 ((symbol-function 'mevedel-memory-pass-schedule)
+                  (lambda (&rest _) (setq scheduled t))))
+         (let ((state (mevedel-journal-process-next workspace)))
+           (should-not (plist-get state :error))
+           (should (plist-get state :entry)))
+         (should-not (mevedel-journal-store-entries root))
+         (should-not (mevedel-journal-capture-list workspace))
+         (should-not (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
+         (should (equal (append (plist-get (plist-get capture :metadata) :turn-ids) nil)
+                        (mevedel-journal-store-covered-turns root)))
+         (should-not (mevedel-journal-capture-seal session buffer 'compaction))
+         (should-not (mevedel-journal-process-next workspace))
+         (should (= 1 calls))
+         (should-not scheduled)
+         (with-temp-buffer
+           (insert-file-contents (file-name-concat root ".mevedel/state/diagnostics/telemetry-log.el"))
+           (goto-char (point-min))
+           (let ((event (read (current-buffer))))
+             (should (eq 'journal-digest-omitted (plist-get event :event)))
+             (should (eq 'omitted (plist-get event :outcome)))))))))
+
+  :doc "accepted nothing-noteworthy output recovers interrupted retirement without inference"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Question" "Answer")
+     (let* ((workspace (mevedel-session-workspace session))
+            (root (mevedel-workspace-root workspace))
+            (capture (car (mevedel-journal-capture-seal session buffer 'compaction)))
+            (claim (mevedel-journal-claim-acquire
+                    (mevedel-journal-process--attempts workspace capture) 120)))
+       (mevedel-journal-claim-settle
+        claim 'completed "## Done\n- none\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")
+       (cl-letf (((symbol-function 'gptel-request) (lambda (&rest _) (ert-fail "Repeated inference"))))
+         (cl-letf (((symbol-function 'mevedel-journal-capture--retire)
+                    (lambda (&rest _) (error "Interrupted retirement"))))
+           (should-error (mevedel-journal-process--recover workspace capture nil)))
+         (should (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
+         (should (mevedel-journal-store-covered-turns root))
+         (mevedel-journal-process-next workspace)
+         (should-not (mevedel-journal-capture-list workspace))
+         (should-not (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
+         (should-not (mevedel-journal-store-entries root))))))
+
   :doc "failed generation retries only on later opportunities and stops after three"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)

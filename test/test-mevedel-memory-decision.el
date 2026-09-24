@@ -142,6 +142,27 @@
       (mevedel-memory-decision-reject workspace id (plist-get (cadr items) :id))
       (should-not (file-exists-p pin))
       (should (file-exists-p (mevedel-memory-store--pin workspace pass (plist-get digest :id))))))
+  :doc "a decision waits for this client's active cleanup to release ownership"
+  (let* ((mevedel-journal-worker--child-p t)
+         (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+         (iterator (mevedel-journal-cleanup--steps workspace t))
+         (job (cons nil nil)) timer)
+    (unwind-protect
+        (progn
+          (dotimes (_ 5) (iter-next iterator))
+          (should-not (mevedel-journal-claim-acquire
+                       (mevedel-memory-store--claim-directory workspace) 180))
+          (puthash root job mevedel-journal-cleanup--pending)
+          (setq timer (run-at-time .05 nil
+                                   (lambda ()
+                                     (iter-close iterator)
+                                     (remhash root mevedel-journal-cleanup--pending))))
+          (mevedel-test--with-captured-messages nil
+            (should (eq 'rejected
+                        (plist-get (mevedel-memory-decision-reject
+                                    workspace pass (plist-get proposal :id)) :status)))))
+      (when timer (cancel-timer timer))
+      (iter-close iterator)))
   :doc "busy ownership and unknown proposal identity cannot create decisions"
   (progn
     (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))

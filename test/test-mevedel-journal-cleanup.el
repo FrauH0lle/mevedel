@@ -361,6 +361,25 @@
       (advice-remove 'mevedel-journal-claim-acquire claim-probe)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-journal-cleanup-wait ()
+  ,test
+  (test)
+  :doc "queued idle cleanup does not delay an interactive decision"
+  (let* ((root (make-temp-file "mevedel-cleanup-wait-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+         (mevedel-journal-cleanup--inhibit-scheduling nil)
+         timer)
+    (unwind-protect
+        (progn
+          (mevedel-journal-cleanup-schedule workspace t)
+          (setq timer (car (gethash root mevedel-journal-cleanup--pending)))
+          (mevedel-journal-cleanup-wait workspace)
+          (should (eq timer (car (gethash root mevedel-journal-cleanup--pending))))
+          (should (memq timer timer-idle-list)))
+      (when timer (cancel-timer timer))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-journal-cleanup--steps ()
   (let ((mevedel-journal-worker--child-p t)) ,test)
   (test)

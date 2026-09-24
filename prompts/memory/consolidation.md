@@ -10,6 +10,10 @@ event remain one observation. Completed or abandoned work is not a new task.
 An unconditional prohibition must not become permission after another step.
 Do not promote repository facts that can be recovered directly from current
 files. Retain useful context about why a lesson matters and when to apply it.
+Journal entries do not imply that a memory change is needed. Propose only context
+likely to improve future work; routine activity, passing tests, and ordinary task
+completion are not lasting lessons by themselves. No action is a successful
+review. Do not create or rewrite memories merely to produce proposals.
 
 Use only the supplied read tools and captured scopes to investigate uncertain
 claims. A literal reference match proves textual occurrence only. A missing

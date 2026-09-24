@@ -174,6 +174,17 @@
       (kill-buffer root)
       (kill-buffer child))))
 
+(mevedel-deftest mevedel-context-summary-digest-empty-p ()
+  ,test
+  (test)
+  :doc "only validated all-none sections authorize omission"
+  (let ((empty "## Done\n- none\n\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none"))
+    (should (mevedel-context-summary-digest-empty-p empty))
+    (should-not (mevedel-context-summary-digest-empty-p test-mevedel-context-summary--digest))
+    (should-error (mevedel-context-summary-digest-empty-p ""))
+    (should-error (mevedel-context-summary-digest-empty-p (concat empty "\n- Fact")))
+    (should-error (mevedel-context-summary-digest-empty-p (concat empty "\n## Extra\n- none")))))
+
 (mevedel-deftest mevedel-context-summary--validate-output ()
   ,test
   (test)

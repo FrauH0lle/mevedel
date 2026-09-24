@@ -137,6 +137,14 @@ Callers load `mevedel-models' at their request or capture boundary."
              purpose headings)))
   (string-trim summary))
 
+(defun mevedel-context-summary-digest-empty-p (summary)
+  "Return non-nil when valid digest SUMMARY reports nothing noteworthy.
+Malformed output still signals an error; it cannot authorize omission."
+  (cl-every (lambda (line)
+              (or (string-blank-p line) (string-prefix-p "## " line)
+                  (equal line "- none")))
+            (split-string (mevedel-context-summary--validate-output summary 'digest) "\n")))
+
 (defun mevedel-context-summary--prompt (purpose)
   "Return the fixed system prompt for context-summary PURPOSE."
   (if (eq purpose 'digest)
