@@ -11,9 +11,6 @@
 (eval-when-compile (require 'mevedel-structs))
 (require 'mevedel-plan)
 
-;; `gptel'
-(defvar gptel-reasoning-effort)
-
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt-announce "mevedel-interaction-prompt"
                   (overlay))
@@ -34,12 +31,15 @@
 (autoload 'mevedel-menu-open-model-selection "mevedel-menu")
 
 ;; `mevedel-models'
-(declare-function mevedel-model-current-provider-label
-                  "mevedel-models" (&optional buffer))
+(declare-function mevedel-model--provider-label
+                  "mevedel-models" (provider))
 (declare-function mevedel-model-resolve-provider
                   "mevedel-models" (spec &optional noerror))
-(autoload 'mevedel-model-current-provider-label "mevedel-models")
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 (autoload 'mevedel-model-resolve-provider "mevedel-models")
+(autoload 'mevedel-model-resolve-workload "mevedel-models")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
@@ -259,19 +259,19 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
     "\n")))
 
 (defun mevedel-plan-mode--default-selection (session)
-  "Return the default Direct implementation selection for SESSION."
-  (list :location 'here
-        :context 'current
-        :execution 'direct
-        :mode (or (mevedel-session-permission-mode session) 'ask)
-        :model-provider
-        (mevedel-model-current-provider-label)
-        :reasoning-effort
-        (and (boundp 'gptel-reasoning-effort) gptel-reasoning-effort)
-        :goal-token-budget
-        (mevedel-plan-mode--effective-goal-budget (current-buffer))
-        :skills nil
-        :instructions nil))
+  "Return SESSION's initial selection using its implementation workload.
+Call in the owning chat buffer, where the session's preset policy lives."
+  (let ((policy (mevedel-model-resolve-workload 'plan-implementation)))
+    (list :location 'here
+          :context 'current
+          :execution 'direct
+          :mode (or (mevedel-session-permission-mode session) 'ask)
+          :model-provider (mevedel-model--provider-label policy)
+          :reasoning-effort (plist-get policy :effort)
+          :goal-token-budget
+          (mevedel-plan-mode--effective-goal-budget (current-buffer))
+          :skills nil
+          :instructions nil)))
 
 (defun mevedel-plan-mode--next-mode (mode)
   "Return the Plan implementation mode after MODE."

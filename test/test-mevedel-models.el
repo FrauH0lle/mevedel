@@ -402,6 +402,18 @@
         (should (eq 'balanced (plist-get (alist-get workload mevedel-model-workloads) :tier)))
         (should (eq 'balanced-model
                     (plist-get (mevedel-model-resolve-workload workload) :model))))))
+  :doc "plan implementation defaults to session policy instead of a tier"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-workloads
+           (eval (car (get 'mevedel-model-workloads 'standard-value)) t))
+          (gptel-backend (gptel-get-backend "Balanced"))
+          (gptel-model 'balanced-model)
+          (gptel-reasoning-effort nil))
+      (should (assq 'plan-implementation mevedel-model-workloads))
+      (should-not (alist-get 'plan-implementation mevedel-model-workloads))
+      (should (eq 'balanced-model
+                  (plist-get (mevedel-model-resolve-workload 'plan-implementation)
+                             :model)))))
   :doc "the buddy workload defaults to the fast tier"
   (mevedel-models-test--with-backends
     (let ((mevedel-model-tiers '((fast :provider "Fast:fast-model")))

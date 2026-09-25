@@ -26,6 +26,12 @@ seeds a Goal, its outcomes, constraints, and achievement criteria remain binding
 unless a later Goal-objective edit changes them. Implementation mechanics remain
 revisable. See [Plan mode](../plan-mode.md) and [Goals](../goals.md).
 
+The `planning` workload selects the planning model. The separate
+`plan-implementation` workload initializes approval's implementation model and
+effort, defaulting to session policy. Both Plan flows share this initialization;
+the user's approval selection remains authoritative through revisions, accepted
+handoffs, and retries.
+
 ## Rationale and consequences
 
 Separating planning from persistent execution gives each one responsibility and
@@ -34,6 +40,12 @@ handoff. Session-only working files let a planner prepare its artifacts without
 granting implementation authority over the workspace.
 
 ## Decision history
+
+The September 2026 preset configuration used Astra for planning and Sol for
+workers, but accepted-plan implementation still inherited Astra from the root
+session. Selecting Sol required a manual model change on every new approval.
+Resolving `plan-implementation` at initial selection replaces that unconditional
+session snapshot while preserving the existing approval and persistence flow.
 
 ADR 0022 embedded automatic planner/guardian negotiation in Goals. Correctable
 defects received at most two durable revision rounds; unresolved issues after a
