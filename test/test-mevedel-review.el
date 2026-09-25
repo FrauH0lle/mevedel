@@ -579,7 +579,13 @@
     (should (eq 'error (plist-get interrupted :status)))
     (should (eq 'agent-interrupted (plist-get interrupted :reason)))
     (should (equal "stopped" (plist-get interrupted :message)))
-    (should (eq 'invalid-agent-result (plist-get invalid :reason)))))
+    (should (eq 'invalid-agent-result (plist-get invalid :reason))))
+
+  :doc "retains the child's token usage on completed and failed outcomes"
+  (dolist (outcome '(completed errored))
+    (should (= 12 (plist-get (mevedel-review--result-outcome
+                              `(:outcome ,outcome :payload "x" :usage 12))
+                             :usage)))))
 
 (mevedel-deftest mevedel-review--write-target-package ()
   ,test
@@ -646,6 +652,43 @@
       (when timer (cancel-timer timer))
       (when (buffer-live-p data) (kill-buffer data))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-review-verify ()
+  ,test
+  (test)
+  :doc "dispatches the verifier for Goal completion and returns verdict and usage"
+  (let ((data (generate-new-buffer " *mevedel-review-verify*"))
+        captured-options captured-message outcome)
+    (unwind-protect
+        (with-current-buffer data
+          (setq-local mevedel--session
+                      (mevedel-session--create :authority-mode 'pid-lock :name "goal"))
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :session mevedel--session))
+          (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                     (lambda (_session task-name message callback &rest options)
+                       (setq captured-options options captured-message message)
+                       (funcall callback
+                                (list :outcome 'success
+                                      :record (mevedel-agent-record--create
+                                               :path (concat "/root/" task-name))))
+                       #'ignore)))
+            (mevedel-review-verify "Is the objective met?"
+                                   (lambda (value) (setq outcome value)))
+            (should (equal "Is the objective met?" captured-message))
+            (should (equal "verifier"
+                           (mevedel-agent-name (plist-get captured-options :agent))))
+            (should (equal "none" (plist-get captured-options :context)))
+            (should (equal "Verify Goal completion"
+                           (plist-get captured-options :description)))
+            (should (equal (mevedel-review--verify-permission-rules)
+                           (plist-get captured-options :skill-permission-rules)))
+            (funcall (plist-get captured-options :result-handler)
+                     '(:outcome completed :payload "evidence\nVERDICT: FAIL"
+                       :sender "/root/verify" :usage 42))
+            (should (eq 'fail (plist-get outcome :verdict)))
+            (should (= 42 (plist-get outcome :usage)))))
+      (kill-buffer data))))
 
 (mevedel-deftest mevedel-review--run-task ()
   ,test
@@ -806,6 +849,39 @@
                     (should (string-search (car case)
                                            (plist-get outcome :result))))
                 (should (eq 'pass (plist-get outcome :verdict))))))
+        (kill-buffer data))))
+
+  :doc "reads the verdict from the complete report behind a bounded preview"
+  (dolist (case '(("VERDICT: PASS" pass) ("VERDICT: FAIL\nmore\nVERDICT: PASS" nil)))
+    (let* ((data (generate-new-buffer " *mevedel-verify-full*"))
+           (full (concat (make-string 40000 ?x) "\n" (car case)))
+           (preview "head ... tail\n\nFull transcript: /root/verify")
+           (record (mevedel-agent-record--create
+                    :path "/root/verify" :activity 'idle
+                    :settled-result full :settled-outcome 'completed))
+           result-handler outcome)
+      (unwind-protect
+          (with-current-buffer data
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "verify"
+                                                 :agent-registry
+                                                 (list (cons "/root/verify" record))))
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session mevedel--session))
+            (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                       (lambda (_session _name _message callback &rest options)
+                         (setq result-handler (plist-get options :result-handler))
+                         (funcall callback (list :outcome 'success :record record))
+                         #'ignore)))
+              (mevedel-review--run-task
+               "prompt" "target" (lambda (value) (setq outcome value)) nil nil 'verify)
+              (funcall result-handler
+                       `(:outcome completed :payload ,preview :sender "/root/verify"))
+              (should (eq (cadr case) (plist-get outcome :verdict)))
+              (if (cadr case)
+                  (should (equal preview (plist-get outcome :result)))
+                (should (plist-get outcome :verification-rejected))
+                (should-not (string-search full (plist-get outcome :result))))))
         (kill-buffer data))))
 
   :doc "request cancellation interrupts once and suppresses the late RESULT"

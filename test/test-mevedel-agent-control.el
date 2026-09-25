@@ -789,7 +789,19 @@
       (should (equal "Provider failed"
                      (mevedel-agent-record-settled-result record)))
       (should (eq 'errored
-                  (mevedel-agent-record-settled-outcome record)))))
+                  (mevedel-agent-record-settled-outcome record)))
+      (should-not (plist-member result :usage))))
+
+  :doc "reports the child's normalized token usage while its FSM is attached"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation-create (mevedel-agent-default)))
+         (record (mevedel-agent-record--create
+                  :path "/root/verify" :parent-path "/root"
+                  :activity 'running :invocation invocation)))
+    (setf (mevedel-agent-invocation-runtime-fsm invocation)
+          (gptel-make-fsm :info '(:tokens-full (:input 7 :output 3 :cached 100))))
+    (mevedel-agent-control-test--settle session record invocation "VERDICT: PASS")
+    (should (= 10 (plist-get (car (mevedel-session-messages session)) :usage))))
 
   :doc "settles a workflow-owned turn once through its RESULT handler"
   (let* ((session (mevedel-agent-control-test--session))
@@ -1603,15 +1615,15 @@
                                (mevedel-session-agent-registry session)))
             (should-not (assoc "/root/commit_error"
                                (mevedel-session-agent-reservations session))))
-          (let (outcome diagnostics)
+          (let ((provider (gptel-make-fsm)) outcome diagnostics)
             (cl-letf
                 (((symbol-function 'mevedel-agent-exec-run)
                   (lambda (_callback _role _description invocation
                                      _buffer &optional _configure)
                     (push invocation invocations)
                     (setf (mevedel-agent-invocation-runtime-fsm invocation)
-                          'provider-request)
-                    'provider-request))
+                          provider)
+                    provider))
                  ((symbol-function
                    'mevedel-session-persistence-save-agent-state)
                   (lambda (&rest _) t)))
@@ -1629,7 +1641,7 @@
             (let* ((record (plist-get outcome :record))
                    (invocation (mevedel-agent-record-invocation record)))
               (should (eq 'running (mevedel-agent-record-activity record)))
-              (should (eq 'provider-request
+              (should (eq provider
                           (mevedel-agent-invocation-runtime-fsm invocation)))
               (cl-letf (((symbol-function
                           'mevedel-session-persistence-save-agent-state)

@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Create, inspect, and complete session Goals through the ordinary tool
-;; pipeline.  Only the owning root request can control its Goal.
+;; pipeline.  Only the owning root request can control its Goal, and a
+;; completion claim is accepted only after an independent verifier passes it.
 
 ;;; Code:
 
@@ -17,12 +18,25 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-pipeline'
+(defvar mevedel-pipeline--handler-active-p)
+(defvar mevedel-pipeline--handler-commit)
+
 ;; `mevedel-plan'
+(declare-function mevedel-plan-read-artifact "mevedel-plan" (session artifact))
 (declare-function mevedel-plan-resource-address "mevedel-plan" (relative-path))
+
+;; `mevedel-review'
+(declare-function mevedel-review-verify "mevedel-review" (prompt callback))
+(autoload 'mevedel-review-verify "mevedel-review")
 
 ;; `mevedel-structs'
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+
+;; `mevedel-system'
+(declare-function mevedel-system-render-prompt-file
+                  "mevedel-system" (relative-path &optional replacements))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--context-for "mevedel-tools" (fsm))
@@ -144,15 +158,87 @@ SUMMARY is required for `blocked'.  CAPTURED-ID must match its Goal identity."
           (mevedel-goal-updated-at goal) (format-time-string "%FT%T%z"))
     (format "Goal status changed to %s" status)))
 
-(defun mevedel-tool-goal--handle-update (args)
-  "Handle UpdateGoal ARGS from the current root request."
+(defun mevedel-tool-goal--verification-prompt (session goal)
+  "Return the independent completion check for GOAL in SESSION.
+GOAL's accepted plan, when it has one, is included verbatim."
+  (let ((plan
+         (when-let* ((reference (mevedel-goal-plan-reference goal)))
+           (condition-case err
+               (mevedel-plan-read-artifact
+                session
+                (list :path reference
+                      :hash (plist-get (mevedel-session-plan-metadata session)
+                                       :accepted-hash)))
+             (error
+              (error "Cannot verify completion: accepted plan is unreadable (%s)"
+                     (error-message-string err)))))))
+    ;; The plan is substituted first so an objective cannot expand into it.
+    (mevedel-system-render-prompt-file
+     "prompts/goals/completion-verification.md"
+     `(("plan-section" . ,(if plan
+                              (format "\n<accepted-plan>\n%s\n</accepted-plan>\n" plan)
+                            ""))
+       ("objective" . ,(mevedel-goal-objective goal))))))
+
+(defun mevedel-tool-goal--verification-failure (outcome)
+  "Return the tool result explaining why OUTCOME did not complete the Goal."
+  (list :status 'error
+        :result
+        (format "Goal remains active: completion verification %s. Address the findings, then call UpdateGoal again.\n\n%s"
+                (pcase (plist-get outcome :verdict)
+                  ('fail "returned FAIL")
+                  ('partial "returned PARTIAL")
+                  (_ (if (plist-get outcome :verification-rejected)
+                         "produced no valid verdict"
+                       "did not finish")))
+                (or (plist-get outcome :result) (plist-get outcome :message) ""))))
+
+(defun mevedel-tool-goal--handle-update (callback args)
+  "Handle UpdateGoal ARGS from the current root request through CALLBACK.
+Blocked settles at once.  Completion is accepted only when an independent
+verifier passes it; any other verdict returns its report and keeps the Goal
+active.  The verifier's token usage is charged to the Goal."
   (let* ((fsm (mevedel-tool-goal--request "UpdateGoal"))
-         (info (gptel-fsm-info fsm)))
-    (mevedel-goal--assert-mutation-authority mevedel--session)
-    (list :result
-          (mevedel-tool-goal-update
-           (plist-get args :status) (plist-get args :summary)
-           mevedel--session (plist-get info :mevedel-goal-id)))))
+         (session mevedel--session)
+         (goal-id (plist-get (gptel-fsm-info fsm) :mevedel-goal-id))
+         (status (plist-get args :status))
+         ;; Captured now: the pipeline binds these only while this runs.
+         (active-p (or mevedel-pipeline--handler-active-p #'always))
+         (commit (or mevedel-pipeline--handler-commit #'funcall)))
+    (mevedel-goal--assert-mutation-authority session)
+    (if (not (equal status "complete"))
+        (funcall callback
+                 (list :result (mevedel-tool-goal-update
+                                status (plist-get args :summary)
+                                session goal-id)))
+      ;; ponytail: tokens a verifier spent before a user abort are not charged;
+      ;; read its FSM from a request canceller if abort accounting matters.
+      (mevedel-review-verify
+       (mevedel-tool-goal--verification-prompt
+        session (mevedel-session-goal session))
+       (lambda (outcome)
+         (let ((usage (plist-get outcome :usage)))
+           (cond
+            ((not (funcall active-p))
+             (mevedel-goal-charge-tokens fsm usage))
+            ((eq (plist-get outcome :verdict) 'pass)
+             (funcall
+              commit
+              (lambda ()
+                (let ((reply
+                       (condition-case err
+                           (list :result (mevedel-tool-goal-update
+                                          'complete nil session goal-id))
+                         (error
+                          (list :status 'error
+                                :result (format "Error: %s"
+                                                (error-message-string err)))))))
+                  (mevedel-goal-charge-tokens fsm usage)
+                  (funcall callback reply)))))
+            (t
+             (mevedel-goal-charge-tokens fsm usage)
+             (funcall callback
+                      (mevedel-tool-goal--verification-failure outcome))))))))))
 
 (defun mevedel-tool-goal--register ()
   "Register Goal creation, inspection, and completion tools."
@@ -175,9 +261,10 @@ SUMMARY is required for `blocked'.  CAPTURED-ID must match its Goal identity."
    :groups (util))
   (mevedel-define-tool
    :name "UpdateGoal"
-   :description "Mark the active goal complete or blocked."
+   :description "Mark the active goal blocked, or request independently verified completion."
    :prompt-file "prompts/tools/updategoal.md"
    :handler #'mevedel-tool-goal--handle-update
+   :async-p t
    :args ((status string :required
                   "Terminal goal status."
                   :enum ["complete" "blocked"])

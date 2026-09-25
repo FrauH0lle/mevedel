@@ -685,7 +685,8 @@ in the current session. The model uses `CreateGoal`; `GetGoal` lets it report
 current status and known usage, including paused or blocked Goals. Every ordinary
 root turn receives request-local Goal context and is accounted to the Goal. While
 active and idle, the session continues with a generic continuation turn until
-the model calls `UpdateGoal` with `complete` or `blocked`. Goal state never
+the model calls `UpdateGoal` with `blocked`, or with `complete` and an
+independent verifier confirms it. Goal state never
 changes tool permissions.
 
 Bare `/goal` opens the Goal cockpit. Use `/goal edit <objective>`,

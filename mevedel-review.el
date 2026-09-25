@@ -26,11 +26,14 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-interrupt
                   "mevedel-agent-control" (session target))
+(declare-function mevedel-agent-control-settled-result
+                  "mevedel-agent-control" (record))
 (declare-function mevedel-agent-control-spawn
                   "mevedel-agent-control" t t)
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
 (autoload 'mevedel-agent-control-interrupt "mevedel-agent-control")
+(autoload 'mevedel-agent-control-settled-result "mevedel-agent-control")
 (autoload 'mevedel-agent-control-spawn "mevedel-agent-control")
 (autoload 'mevedel-agent-record-path "mevedel-agent-control")
 
@@ -937,22 +940,27 @@ the `<user_action>' block for parent-history continuity."
     name))
 
 (defun mevedel-review--result-outcome (result)
-  "Return a fork-style workflow outcome for canonical RESULT."
-  (let ((payload (or (plist-get result :payload) "Agent returned no result."))
-        (path (plist-get result :sender)))
-    (pcase (plist-get result :outcome)
-      ('completed
-       (list :status 'ok :kind 'fork :result payload :agent-path path))
-      ('interrupted
-       (list :status 'error :reason 'agent-interrupted
-             :message payload :agent-path path))
-      ('errored
-       (list :status 'error :reason 'agent-errored
-             :message payload :agent-path path))
-      (_
-       (list :status 'error :reason 'invalid-agent-result
-             :message "Agent returned an invalid terminal result"
-             :agent-path path)))))
+  "Return a fork-style workflow outcome for canonical RESULT.
+The child's token `:usage' is retained when RESULT reports it."
+  (let* ((payload (or (plist-get result :payload) "Agent returned no result."))
+         (path (plist-get result :sender))
+         (outcome
+          (pcase (plist-get result :outcome)
+            ('completed
+             (list :status 'ok :kind 'fork :result payload :agent-path path))
+            ('interrupted
+             (list :status 'error :reason 'agent-interrupted
+                   :message payload :agent-path path))
+            ('errored
+             (list :status 'error :reason 'agent-errored
+                   :message payload :agent-path path))
+            (_
+             (list :status 'error :reason 'invalid-agent-result
+                   :message "Agent returned an invalid terminal result"
+                   :agent-path path)))))
+    (if-let* ((usage (plist-get result :usage)))
+        (append outcome (list :usage usage))
+      outcome)))
 
 (defun mevedel-review--git-allow-rules ()
   "Return validation skill-scoped git inspection allow rules."
@@ -1071,13 +1079,16 @@ Dispatch only while the admitted request still owns DATA-BUFFER."
           (with-current-buffer view-buffer
             (mevedel-view--ensure-request-progress data-buffer)))))))
 
-(defun mevedel-review--verify-outcome (outcome invocation)
-  "Validate verifier OUTCOME and record its verdict on INVOCATION."
+(defun mevedel-review--verify-outcome (outcome invocation &optional report)
+  "Validate verifier OUTCOME and record its verdict on INVOCATION.
+REPORT is the complete settled report; the verdict is read from it because
+OUTCOME's `:result' is a bounded preview that can omit the final line."
   (if (not (and (eq (plist-get outcome :status) 'ok)
                 (eq (plist-get outcome :kind) 'fork)
                 (stringp (plist-get outcome :result))))
       outcome
-    (let* ((report (plist-get outcome :result))
+    (let* ((preview (plist-get outcome :result))
+           (report (if (stringp report) report preview))
            (lines (split-string report "\n"))
            (nonblank (cl-remove-if #'string-blank-p lines))
            (verdict-lines
@@ -1105,7 +1116,7 @@ Dispatch only while the admitted request still owns DATA-BUFFER."
          (concat
           "Verification report rejected: expected exactly one final "
           "VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL line.\n\n"
-          "Original report:\n\n" report))))))
+          "Original report:\n\n" preview))))))
 
 (defun mevedel-review--run-task
     (prompt hint callback &optional submit-context progress-callback command
@@ -1134,7 +1145,14 @@ after the parent has accepted the review turn; cancellation covers preparation."
                       (let ((outcome (mevedel-review--result-outcome result)))
 			(funcall callback
 				 (if (eq command 'verify)
-                                     (mevedel-review--verify-outcome outcome invocation)
+                                     (mevedel-review--verify-outcome
+                                      outcome invocation
+                                      (plist-get
+                                       (mevedel-agent-control-settled-result
+                                        (alist-get (plist-get result :sender)
+                                                   (mevedel-session-agent-registry session)
+                                                   nil nil #'equal))
+                                       :payload))
                                    outcome))))))))
              (cancel ()
                (unless (or settled-p cancelled-p)
@@ -1190,6 +1208,18 @@ after the parent has accepted the review turn; cancellation covers preparation."
             (dispatch nil))
           (unless settled-p
             (mevedel-request-push-canceller request #'cancel)))))))
+
+(defun mevedel-review-verify (prompt callback)
+  "Run the verifier for PROMPT from the current root request.
+CALLBACK receives one outcome plist.  A verified report has `:verdict' `pass',
+`fail' or `partial' with its bounded `:result'; a report without exactly one
+final VERDICT line has `:verification-rejected'.  Failures carry `:status'
+`error' with `:reason' and `:message'.  Any outcome may carry the verifier's
+token `:usage'.  Cancelling the request interrupts the verifier and drops its
+outcome."
+  (mevedel-review--ensure-dispatch-deps 'verify)
+  (mevedel-review--run-task prompt "Verify Goal completion" callback
+                            nil nil 'verify))
 
 (defun mevedel-review--transform-command-outcome (outcome &optional command)
   "Transform validation OUTCOME for COMMAND before parent insertion."

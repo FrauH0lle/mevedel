@@ -46,7 +46,7 @@ stateDiagram-v2
     active --> paused: Pause or runtime failure
     active --> blocked: Task impasse
     active --> budget_limited: Budget reached
-    active --> complete: Objective achieved
+    active --> complete: Verified objective achieved
     complete --> [*]
 ```
 
@@ -94,7 +94,10 @@ Child-agent, context-summary, and control requests are not Goal turns. A root tu
 captures its Goal identity at request start and charges tokens, wall time, and
 one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,
-with the request estimate as fallback.
+with the request estimate as fallback. The completion verifier started by
+`UpdateGoal` is not a Goal turn either, but its normalized usage is charged to
+the Goal the root request is accounted to when its verdict arrives. Usage a
+verifier spent before a user abort is not charged.
 
 Starting a Goal through `CreateGoal` or the user command also attributes an
 already-running root turn, including its known token usage; elapsed time starts
@@ -202,16 +205,27 @@ attributed to the active Goal. It accepts exactly:
 - `complete`; or
 - `blocked` with a nonblank summary, stored as the Goal reason.
 
-The tool reports only the status transition. Canonical turn settlement still
-persists the final accounting.
+`blocked` takes effect at once. `complete` is a completion claim: the tool
+runs the `verifier` agent in a separate request, using the `verifier`
+workload's model and effort, while the Goal stays active. The verifier receives
+the exact objective and, when the Goal has one, the accepted plan verbatim, but
+no account of the implementer's work or test results; it discovers the
+changes and current state itself. Only a final `VERDICT: PASS` completes the
+Goal, and only if it is still the same active Goal. FAIL, PARTIAL, a report
+without exactly one final verdict line, or a verifier failure returns the
+report as the tool result and leaves the Goal active. An unreadable accepted
+plan refuses verification. A user abort interrupts the verifier and pauses the
+Goal as for any Goal turn. Canonical turn settlement still persists the final
+accounting.
 
 The installed `prompts/goals/active-context.md` formats current objective,
 accepted-plan reference, and accounting. `prompts/goals/policy.md` separately
 supplies the completion contract. It requires evidence for the full requested outcome; passing a
 narrower set of checks does not establish completion. A model-reported block
 requires the same impasse across at least three consecutive Goal turns with
-no meaningful independent progress possible. These are judgment obligations,
-not claims that the tool mechanically verifies completion or classifies blockers.
+no meaningful independent progress possible. These are judgment obligations.
+The independent verifier checks a completion claim against workspace evidence,
+but neither it nor the tool mechanically proves completion or classifies blockers.
 
 ## Commands and UI
 

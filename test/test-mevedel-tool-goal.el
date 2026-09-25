@@ -18,13 +18,17 @@
           "helpers"))
 
 (defmacro mevedel-tool-goal-test--with-request (&rest body)
-  "Run BODY with an isolated root session, FSM and deferred continuations."
+  "Run BODY with an isolated root session, FSM and deferred continuations.
+Completion verification is captured: `verify-prompts' lists requested prompts
+and `verify-callback' delivers the verifier outcome."
   (declare (indent 0))
   `(let* ((gptel--known-backends nil)
           (mevedel-workspace-identity--cache (make-hash-table :test #'equal))
           (root (make-temp-file "mevedel-goal-tools-" t))
           (session (mevedel-skills-test--make-session "goals" root))
-          (scheduled nil))
+          (scheduled nil)
+          (verify-prompts nil)
+          (verify-callback nil))
      (unwind-protect
          (with-temp-buffer
            (org-mode)
@@ -46,7 +50,11 @@
                      (("mevedel" "GetGoal") . "Inspect goal")
                      (("mevedel" "UpdateGoal") . "Complete goal")))
              (cl-letf (((symbol-function 'mevedel-goal--schedule-continuation)
-                        (lambda (&rest args) (push args scheduled))))
+                        (lambda (&rest args) (push args scheduled)))
+                       ((symbol-function 'mevedel-review-verify)
+                        (lambda (prompt callback)
+                          (push prompt verify-prompts)
+                          (setq verify-callback callback))))
                ,@body)))
        (delete-directory root t))))
 
@@ -121,7 +129,8 @@
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "First" :token_budget 20))
     (let ((first (mevedel-session-goal session)))
-      (mevedel-tool-goal--handle-update '(:status "complete"))
+      (mevedel-tool-goal--handle-update #'ignore '(:status "complete"))
+      (funcall verify-callback '(:status ok :kind fork :verdict pass :result "ok"))
       (mevedel-tool-goal--handle-create '(:objective "Second"))
       (should (= 25 (mevedel-goal-tokens-used first)))
       (should (= 1 (mevedel-goal-turns-run first)))
@@ -187,18 +196,165 @@
 (mevedel-deftest mevedel-tool-goal--handle-update ()
   ,test
   (test)
-  :doc "returns success through the pipeline and permits same-turn completion"
+  :doc "completes only after the verifier passes and charges its usage"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship the parser"))
+    (let ((goal (mevedel-session-goal session))
+          outcome)
+      (mevedel-pipeline-run-tool-outcome
+       (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
+       '(:status "complete"))
+      (should-not outcome)
+      (should (eq 'active (mevedel-goal-status goal)))
+      (should (string-search "Ship the parser" (car verify-prompts)))
+      (funcall verify-callback
+               '(:status ok :kind fork :verdict pass :result "VERDICT: PASS" :usage 7))
+      (should (eq 'success (plist-get outcome :status)))
+      (should (equal "Goal status changed to complete" (plist-get outcome :result)))
+      (should (eq 'complete (mevedel-goal-status goal)))
+      (should (= 7 (mevedel-goal-tokens-used goal)))
+      (mevedel-goal-settle-turn fsm)
+      (should (= 32 (mevedel-goal-tokens-used goal)))
+      (should (eq 'inactive (mevedel-goal-continue-if-idle session (current-buffer))))))
+
+  :doc "returns every non-passing verdict as findings and keeps the Goal active"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (let ((goal (mevedel-session-goal session)))
+      (dolist (case '(((:status ok :kind fork :verdict fail :result "Parser crashes" :usage 5)
+                       "returned FAIL" "Parser crashes")
+                      ((:status ok :kind fork :verdict partial :result "No network" :usage 5)
+                       "returned PARTIAL" "No network")
+                      ((:status ok :kind fork :verification-rejected t :result "rambling" :usage 5)
+                       "no valid verdict" "rambling")
+                      ((:status error :reason agent-errored :message "Provider failed" :usage 5)
+                       "did not finish" "Provider failed")))
+        (let (outcome)
+          (mevedel-pipeline-run-tool-outcome
+           (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
+           '(:status "complete"))
+          (funcall verify-callback (car case))
+          (should (eq 'error (plist-get outcome :status)))
+          (should (string-search "Goal remains active" (plist-get outcome :result)))
+          (should (string-search (nth 1 case) (plist-get outcome :result)))
+          (should (string-search (nth 2 case) (plist-get outcome :result)))
+          (should (eq 'active (mevedel-goal-status goal)))))
+      (should (= 20 (mevedel-goal-tokens-used goal)))))
+
+  :doc "blocks immediately without verification"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (let (outcome)
+      (mevedel-tool-goal--handle-update
+       (lambda (value) (setq outcome value))
+       '(:status "blocked" :summary "Needs the production API key"))
+      (should (equal "Goal status changed to blocked" (plist-get outcome :result)))
+      (should-not verify-prompts)
+      (should (eq 'blocked (mevedel-goal-status (mevedel-session-goal session))))))
+
+  :doc "refuses to verify against an unreadable accepted plan"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
+          "local/plans/accepted-1.md")
     (let (outcome)
       (mevedel-pipeline-run-tool-outcome
        (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
        '(:status "complete"))
+      (should (string-search "accepted plan is unreadable" (plist-get outcome :result)))
+      (should-not verify-prompts)
+      (should (eq 'active (mevedel-goal-status (mevedel-session-goal session))))))
+
+  :doc "a pass cannot complete a Goal edited, paused, or cleared meanwhile"
+  (dolist (change (list (lambda (goal _session) (setf (mevedel-goal-id goal) "edited"))
+                        (lambda (goal _session) (setf (mevedel-goal-status goal) 'paused))
+                        (lambda (_goal session) (setf (mevedel-session-goal session) nil))))
+    (mevedel-tool-goal-test--with-request
+      (mevedel-tool-goal--handle-create '(:objective "Ship"))
+      (let ((goal (mevedel-session-goal session))
+            outcome)
+        (mevedel-pipeline-run-tool-outcome
+         (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
+         '(:status "complete"))
+        (funcall change goal session)
+        (funcall verify-callback '(:status ok :kind fork :verdict pass :result "ok"))
+        (should (eq 'error (plist-get outcome :status)))
+        (should-not (eq 'complete (mevedel-goal-status goal))))))
+
+  :doc "a cancelled call only charges a late verdict"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (let ((goal (mevedel-session-goal session))
+          outcome)
+      (mevedel-pipeline-run-tool-outcome
+       (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
+       '(:status "complete"))
+      (mapc #'funcall (mevedel-request-cancellers mevedel--current-request))
+      (let ((cancelled outcome))
+        (funcall verify-callback
+                 '(:status ok :kind fork :verdict pass :result "ok" :usage 4))
+        (should (eq cancelled outcome)))
+      (should (eq 'active (mevedel-goal-status goal)))
+      (should (= 4 (mevedel-goal-tokens-used goal)))))
+
+  :doc "completes through ToolCall after the dispatch binding unwinds"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (let (outcome)
+      (mevedel-tool-ptc--handler
+       (lambda (value) (setq outcome value))
+       '(:expression "(UpdateGoal :status \"complete\")"))
+      (let ((deadline (+ (float-time) 5))
+            (mevedel-tools--current-fsm nil))
+        (while (and (not verify-callback) (< (float-time) deadline))
+          (accept-process-output nil 0.01))
+        (funcall verify-callback '(:status ok :kind fork :verdict pass :result "ok"))
+        (while (and (not outcome) (< (float-time) deadline))
+          (accept-process-output nil 0.01)))
       (should (eq 'success (plist-get outcome :status)))
-      (should (equal "Goal status changed to complete" (plist-get outcome :result))))
-    (mevedel-goal-settle-turn fsm)
-    (should (eq 'complete (mevedel-goal-status (mevedel-session-goal session))))
-    (should (eq 'inactive (mevedel-goal-continue-if-idle session (current-buffer))))))
+      (should (eq 'complete (mevedel-goal-status (mevedel-session-goal session)))))))
+
+(mevedel-deftest mevedel-tool-goal--verification-prompt ()
+  ,test
+  (test)
+  :doc "states the objective verbatim and omits the plan when there is none"
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create :id "g" :objective "Ship {{x}} *exactly*")))
+    (let ((prompt (mevedel-tool-goal--verification-prompt session goal)))
+      (should (string-search "<objective>\nShip {{x}} *exactly*\n</objective>" prompt))
+      (should-not (string-search "accepted-plan" prompt))
+      (should (string-search "git status" prompt))))
+
+  :doc "includes the accepted plan verbatim and refuses an unreadable one"
+  (let* ((session (mevedel-session--create
+                   :name "main"
+                   :plan-metadata (list :accepted-path "local/plans/accepted-1.md"
+                                        :accepted-hash "hash-1")))
+         (goal (mevedel-goal--create :id "g" :objective "Ship"
+                                     :plan-reference "local/plans/accepted-1.md"))
+         seen)
+    (cl-letf (((symbol-function 'mevedel-plan-read-artifact)
+               (lambda (_session artifact) (setq seen artifact) "Step 1\nStep 2")))
+      (should (string-search "<accepted-plan>\nStep 1\nStep 2\n</accepted-plan>"
+                             (mevedel-tool-goal--verification-prompt session goal)))
+      (should (equal '(:path "local/plans/accepted-1.md" :hash "hash-1") seen)))
+    (cl-letf (((symbol-function 'mevedel-plan-read-artifact)
+               (lambda (&rest _) (error "Accepted plan hash mismatch"))))
+      (should (string-search
+               "accepted plan is unreadable"
+               (error-message-string
+                (should-error (mevedel-tool-goal--verification-prompt session goal))))))))
+
+(mevedel-deftest mevedel-tool-goal--verification-failure
+  (:doc "names each non-passing outcome and carries its report")
+  (dolist (case '(((:verdict fail :result "r") "returned FAIL")
+                  ((:verdict partial :result "r") "returned PARTIAL")
+                  ((:verification-rejected t :result "r") "no valid verdict")
+                  ((:status error :message "r") "did not finish")))
+    (let ((reply (mevedel-tool-goal--verification-failure (car case))))
+      (should (eq 'error (plist-get reply :status)))
+      (should (string-search (cadr case) (plist-get reply :result)))
+      (should (string-suffix-p "\n\nr" (plist-get reply :result))))))
 
 (mevedel-deftest mevedel-tool-goal-available-p ()
   ,test

@@ -19,6 +19,9 @@
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (backend))
 
+;; `gptel-request'
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-final-response
                   "mevedel-agent-conversation" (invocation))
@@ -67,6 +70,8 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-runtime-fsm
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
@@ -888,6 +893,13 @@ Return rollback and post-commit delivery closures for INVOCATION."
            (previous-blockers (mevedel-agent-record-blockers record))
            (previous-result (mevedel-agent-record-settled-result record))
            (previous-outcome (mevedel-agent-record-settled-outcome record))
+           ;; Normalized input plus output, excluding cached input, while the
+           ;; child FSM is still attached.  Callers may charge it elsewhere.
+           (usage
+            (when-let* ((fsm (mevedel-agent-invocation-runtime-fsm invocation))
+                        (tokens (plist-get (gptel-fsm-info fsm) :tokens-full)))
+              (+ (or (plist-get tokens :input) 0)
+                 (or (plist-get tokens :output) 0))))
            result)
       (cl-labels
           ((rollback ()
@@ -920,6 +932,8 @@ Return rollback and post-commit delivery closures for INVOCATION."
                     :payload
                     (mevedel-agent-control--bounded-result record payload)
                     :timestamp (current-time)))
+        (when usage
+          (setq result (append result (list :usage usage))))
         (mevedel-agent-control--set-mailbox-queue
          session recipient
          (append

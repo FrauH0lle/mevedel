@@ -5,7 +5,7 @@
 ;; Owns the phase-free Goal record, request-local context, root-turn
 ;; attribution, and deterministic idle continuation.  Planning and review are
 ;; ordinary conversation work; only UpdateGoal may mark an active Goal
-;; complete or blocked.
+;; blocked, or complete once an independent verifier accepts the claim.
 
 ;;; Code:
 
@@ -689,6 +689,26 @@ BEFORE is the durable usage before the charge."
                   (mevedel-goal-tokens-used goal)
                   (mevedel-goal-token-budget goal)))
     (mevedel-goal--touch goal)))
+
+(defun mevedel-goal-charge-tokens (fsm tokens)
+  "Charge TOKENS spent on behalf of root request FSM to its Goal.
+The Goal is the one FSM is accounted to, so charges follow an edited Goal and
+skip a cleared or replaced one.  Budget crossings are reported now; the root
+turn's settlement still applies the budget limit."
+  (when-let* (((natnump tokens))
+              ((> tokens 0))
+              (info (gptel-fsm-info fsm))
+              (buffer (plist-get info :buffer))
+              ((buffer-live-p buffer))
+              (session (buffer-local-value 'mevedel--session buffer))
+              (goal (mevedel-session-goal session))
+              ((equal (plist-get info :mevedel-goal-accounting-id)
+                      (mevedel-goal-id goal))))
+    (let ((before (mevedel-goal-tokens-used goal)))
+      (cl-incf (mevedel-goal-tokens-used goal) tokens)
+      (mevedel-goal--touch goal)
+      (mevedel-goal--emit-budget-crossings fsm session goal before)
+      goal)))
 
 (defun mevedel-goal-tool-result-budget-warning (session fsm)
   "Return the one-shot 100% tool warning entry for SESSION's FSM.
