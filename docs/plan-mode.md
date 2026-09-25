@@ -86,13 +86,23 @@ dispatch.
 For example:
 
 ```elisp
-(:model-workloads ((planning :tier strong)))
+(:model-workloads ((planning :tier strong)
+                  (plan-implementation :tier balanced)))
 ```
 
 A single leading user-invoked inline skill may override the planning model or
 effort for that request. Instruction skills and model-side Skill calls do not.
 Retained agents keep their own workload policies. Plan Summary preparation
 uses the shared `summarization` workload.
+
+The `plan-implementation` workload initializes the model and effort shown in
+approval for both ordinary Plan and directive Plan before implementation. It
+resolves from the owning chat buffer's preset, independently of the temporary
+planning model or a directive's planning override. Its default entry is empty,
+so unconfigured fields inherit the session policy. Invalid model policy prevents
+creating the initial approval selection; it never silently falls back.
+This workload does not select models for ordinary coding turns or delegated
+workers, which retain their own policy.
 
 ## Tool boundary
 
@@ -189,8 +199,10 @@ blocked, paused, or budget-limited. When Goal is selected, the approval shows
 the proposal's target token budget. `b` accepts a positive integer; empty input
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
-proposals, and applies only on acceptance. The first proposal snapshots the
-session model and effort into the same persisted selection. `M` changes only
+proposals, and applies only on acceptance. The first proposal resolves the
+`plan-implementation` workload and snapshots its model and effort into the same
+persisted selection. Later preset changes do not replace that selection.
+`M` changes only
 that implementation snapshot; choosing a model that cannot support the
 selected effort resets effort to its default. Cancellation or Plan exit leaves
 the session model unchanged. Acceptance applies the stored snapshot to every

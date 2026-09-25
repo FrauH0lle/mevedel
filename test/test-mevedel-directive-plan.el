@@ -57,6 +57,45 @@
 (mevedel-deftest mevedel-directive-plan--selection ()
   ,test
   (test)
+  :doc "uses the owning chat policy and preserves the selected model on revision"
+  (mevedel-skills-test--with-model-backends
+    (with-temp-buffer
+      (setq-local gptel-backend (gptel-get-backend "Balanced")
+                  gptel-model 'balanced-model
+                  gptel-reasoning-effort 'high
+                  mevedel-model-workloads
+                  '((plan-implementation :provider "Fast:fast-model" :effort low)))
+      (let* ((session (mevedel-session--create :name "test"))
+             (record (mevedel-directive--create :id "directive" :request "Request"))
+             (plan (list :chat-buffer (current-buffer)))
+             (directive (make-overlay (point-min) (point-max))))
+        (unwind-protect
+            (progn
+              (overlay-put directive 'mevedel-directive-model-provider
+                           "Balanced:balanced-model")
+              (overlay-put directive 'mevedel-directive-reasoning-effort 'medium)
+              (should (eq 'medium
+                          (plist-get (mevedel-directive-plan--planning-model-policy
+                                      directive) :effort)))
+              ;; The callback's temporary planning buffer must not supply policy.
+              (let ((selection
+                     (with-temp-buffer
+                       (setq-local mevedel-model-workloads
+                                   '((plan-implementation :provider "Missing:model")))
+                       (mevedel-directive-plan--selection session plan record))))
+                (should (equal "Fast:fast-model" (plist-get selection :model-provider)))
+                (should (eq 'low (plist-get selection :reasoning-effort)))
+                ;; Represent a user override retained by the approval card.
+                (plist-put selection :reasoning-effort 'medium)
+                (plist-put plan :selection selection)
+                (setq-local mevedel-model-workloads
+                            '((plan-implementation :provider "Missing:model")))
+                (should (equal selection
+                               (mevedel-directive-plan--selection session plan record))))
+              (should (eq 'balanced-model gptel-model))
+              (should (eq 'high gptel-reasoning-effort)))
+          (delete-overlay directive)))))
+
   :doc "seeds a fresh default selection with directive-selected skills"
   (let ((record (mevedel-directive--create
                  :id "directive" :request "Request"

@@ -162,7 +162,54 @@
                          :goal-token-budget 1234
                          :skills nil :instructions nil)
                        (mevedel-plan-mode--default-selection session))))
-      (should (eq 'edits (mevedel-session-permission-mode session))))))
+      (should (eq 'edits (mevedel-session-permission-mode session)))))
+
+  :doc "resolves implementation policy independently of planning without mutation"
+  (mevedel-skills-test--with-model-backends
+    (with-temp-buffer
+      (setq-local gptel-backend (gptel-get-backend "Balanced")
+                  gptel-model 'balanced-model
+                  gptel-reasoning-effort 'high
+                  mevedel-model-tiers
+                  '((implementer :provider "Fast:fast-model" :effort low)))
+      (let ((session (mevedel-session--create :name "test")))
+        (dolist (case '((nil "Balanced:balanced-model" high)
+                        ((plan-implementation) "Balanced:balanced-model" high)
+                        ((plan-implementation :tier implementer)
+                         "Fast:fast-model" low)
+                        ((plan-implementation :tier implementer :effort medium)
+                         "Fast:fast-model" medium)
+                        ((plan-implementation :provider "Fast:fast-model" :effort none)
+                         "Fast:fast-model" none)
+                        ((plan-implementation :effort nil)
+                         "Balanced:balanced-model" nil)))
+          (setq-local mevedel-model-workloads
+                      (cons '(planning :provider "Missing:planner")
+                            (and (car case) (list (car case)))))
+          (let ((selection (mevedel-plan-mode--default-selection session)))
+            (should (equal (cadr case) (plist-get selection :model-provider)))
+            (should (eq (caddr case) (plist-get selection :reasoning-effort)))))
+        (should (eq 'balanced-model gptel-model))
+        (should (eq 'high gptel-reasoning-effort))
+        (should-not (mevedel-session-model-provider session)))))
+
+  :doc "rejects invalid implementation policy before producing a selection"
+  (mevedel-skills-test--with-model-backends
+    (with-temp-buffer
+      (setq-local gptel-backend (gptel-get-backend "Balanced")
+                  gptel-model 'balanced-model
+                  gptel-reasoning-effort 'high)
+      (let ((session (mevedel-session--create :name "test")))
+        (dolist (policy '((:tier missing)
+                          (:provider "Missing:model")
+                          (:provider "Fast:missing")
+                          (:effort unsupported)
+                          (:tier balanced :provider "Fast:fast-model")))
+          (setq-local mevedel-model-workloads
+                      (list (cons 'plan-implementation policy)))
+          (should-error (mevedel-plan-mode--default-selection session)
+                        :type 'user-error))
+        (should-not (mevedel-session-plan-metadata session))))))
 
 (mevedel-deftest mevedel-plan-mode--invalidate-proposal
   (:doc "demotes an actionable proposal while preserving its selection")
@@ -950,10 +997,13 @@
                    :plan-metadata
                    '(:selection (:location here :context current
                                  :execution goal :mode edits
+                                 :model-provider "Chosen:model" :reasoning-effort low
                                  :goal-token-budget 2468)))))
     (unwind-protect
         (with-temp-buffer
-          (setq-local mevedel--session session)
+          (setq-local mevedel--session session
+                      mevedel-model-workloads
+                      '((plan-implementation :provider "Missing:model")))
           (let ((start (point)))
             (insert "Recheck existing edits before changing files.<proposed_plan>\n# Root\n<detail>keep</detail>\n</proposed_plan>\n")
             (add-text-properties start (point) '(gptel response)))
@@ -981,6 +1031,7 @@
                           :body)))
           (should (equal '(:location here :context current
                            :execution goal :mode edits
+                           :model-provider "Chosen:model" :reasoning-effort low
                            :goal-token-budget 2468)
                          (plist-get
                           (mevedel-session-pending-plan-approval session)

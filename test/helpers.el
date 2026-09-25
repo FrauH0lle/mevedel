@@ -437,9 +437,13 @@ settles at the sentinel instead of riding the grace timers."
   "Run BODY with an isolated pair of gptel model backends."
   (declare (indent 0) (debug t))
   `(let ((gptel--known-backends nil))
-     (gptel-make-openai "Fast" :key "test" :models '(fast-model))
-     (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
-     ,@body))
+     (cl-letf (((symbol-plist 'fast-model)
+                '(:reasoning-effort (member none low medium high max)))
+               ((symbol-plist 'balanced-model)
+                '(:reasoning-effort (member none low medium high max))))
+       (gptel-make-openai "Fast" :key "test" :models '(fast-model))
+       (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
+       ,@body)))
 
 (defun mevedel-skills-test--make-session (&optional name root)
   "Return a throwaway session named NAME with a minimal workspace at ROOT."
