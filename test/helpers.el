@@ -59,10 +59,14 @@
 (defvar tramp-local-host-regexp)
 (defvar tramp-methods)
 
+;; Compare resolved names: `file-in-directory-p' stats the shared temporary
+;; directory twice, and parallel workers changing it make those stats differ.
 (unless (cl-every
          (lambda (directory)
            (and directory
-                (file-in-directory-p directory temporary-file-directory)))
+                (string-prefix-p
+                 (file-name-as-directory (file-truename temporary-file-directory))
+                 (file-name-as-directory (file-truename directory)))))
          (cons (expand-file-name "~")
                (mapcar #'getenv
                        '("XDG_CACHE_HOME" "XDG_CONFIG_HOME"

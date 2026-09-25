@@ -240,6 +240,18 @@ the target, leaving the local recovery directory available for a later retry."
           session-dir (buffer-name (current-buffer)) session)
          (mevedel-session-durability-lease-owned-p session)))))
 
+(defun mevedel-session-recovery--local-temporary-p (path)
+  "Return non-nil when PATH resolves to a directory strictly inside the temp dir.
+Resolved names are compared as strings: `file-in-directory-p' compares two
+stats of the shared temporary directory, which concurrent activity there
+makes differ."
+  (when (and (stringp path) (file-directory-p path))
+    (let ((temporary (file-name-as-directory
+                      (file-truename temporary-file-directory)))
+          (true (file-name-as-directory (file-truename path))))
+      (and (string-prefix-p temporary true)
+           (not (equal temporary true))))))
+
 (defun mevedel-session-recovery--copy-local-directory
     (source destination)
   "Copy local recovery SOURCE into target DESTINATION through control FS."
@@ -281,8 +293,7 @@ after this function returns."
                       (file-name-concat root (concat "recovery-" id ".el"))))
          (created-at (format-time-string "%FT%T%z")))
     (unless (and session-dir
-                 (file-directory-p recovery-path)
-                 (file-in-directory-p recovery-path temporary-file-directory))
+                 (mevedel-session-recovery--local-temporary-p recovery-path))
       (error "Specialized recovery source is not a local temporary directory: %s"
              recovery-path))
     (mevedel-session-control-fs-physical-path root)
@@ -322,12 +333,7 @@ after this function returns."
 
 (defun mevedel-session-recovery--delete-local (path)
   "Delete generated local recovery PATH when it is safely temporary."
-  (when (and (stringp path)
-             (file-directory-p path)
-             (file-in-directory-p path temporary-file-directory)
-             (not (equal (file-name-as-directory (expand-file-name path))
-                         (file-name-as-directory
-                          (expand-file-name temporary-file-directory)))))
+  (when (mevedel-session-recovery--local-temporary-p path)
     (delete-directory path t)))
 
 (defun mevedel-session-recovery-refresh (session)
@@ -460,15 +466,8 @@ that installation fails."
                     :reason failure-reason
                     :manual-recovery recovery-path
                     :manual-recovery-local
-                    (and (stringp recovery-path)
-                         (file-directory-p recovery-path)
-                         (file-in-directory-p
-                          recovery-path temporary-file-directory)
-                         (not (equal
-                               (file-name-as-directory
-                                (expand-file-name recovery-path))
-                               (file-name-as-directory
-                                (expand-file-name temporary-file-directory))))
+                    (and (mevedel-session-recovery--local-temporary-p
+                          recovery-path)
                          recovery-path)
                     :recovery-portable nil
                     :recovery-kind 'rewind))))

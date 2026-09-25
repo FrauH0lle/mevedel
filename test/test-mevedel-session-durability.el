@@ -4881,5 +4881,23 @@
       (mevedel-session-durability-lease-release directory session)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-recovery--local-temporary-p
+  (:doc "accepts a temporary child even when a racing directory stat disagrees")
+  (let* ((child (make-temp-file "mevedel-local-temporary-" t))
+         (escape (expand-file-name "escape" child)))
+    (unwind-protect
+        ;; Concurrent writers make `file-in-directory-p' compare differing
+        ;; stats of the temporary directory itself.
+        (cl-letf (((symbol-function 'file-in-directory-p) #'ignore))
+          (make-symbolic-link invocation-directory escape)
+          (should (mevedel-session-recovery--local-temporary-p child))
+          (should-not (mevedel-session-recovery--local-temporary-p
+                       temporary-file-directory))
+          (should-not (mevedel-session-recovery--local-temporary-p
+                       invocation-directory))
+          ;; A temporary name resolving outside is not temporary.
+          (should-not (mevedel-session-recovery--local-temporary-p escape)))
+      (delete-directory child t))))
+
 (provide 'test-mevedel-session-durability)
 ;;; test-mevedel-session-durability.el ends here
