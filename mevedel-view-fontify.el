@@ -191,9 +191,11 @@ buffer's font-lock refontification cycles."
                    (with-current-buffer buffer
                      (let ((inhibit-read-only t))
                        (erase-buffer)
-                       (insert text)
+                       ;; Markdown heading faces assume a terminating newline.
+                       ;; Keep that sentinel out of the returned view text.
+                       (insert text "\n")
                        (font-lock-ensure)
-                       (buffer-string))))
+                       (buffer-substring (point-min) (1- (point-max))))))
                 ;; Nested buffers and an invalidated reusable buffer belong
                 ;; only to this call, including on error or nonlocal exit.
                 (when (and (not (eq buffer mevedel-view--markdown-fontify-buffer))

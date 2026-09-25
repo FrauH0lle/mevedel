@@ -1027,7 +1027,9 @@ Invalidating an active reusable buffer retires it immediately but lets its owner
 finish reading before killing it. `mevedel-view--fontify-as` treats
 `markdown-mode` as the tag meaning "this body is Markdown" and routes it
 there; every other `:body-mode` is a real major mode and still gets a
-throwaway temp buffer.
+throwaway temp buffer. Fontification appends a temporary newline so the last
+line is highlighted even while typing without a line ending; the returned text
+excludes that newline, preserving the draft and source positions.
 
 Markup delimiters -- heading hashes, emphasis asterisks, code-span
 backticks -- are hidden by default, so `**bold**` reads as bold alone. They
