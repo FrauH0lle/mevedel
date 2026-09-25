@@ -58,7 +58,9 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
       (should (equal hack-local-variables-hook
                      '(mevedel-view-test--sentinel))))))
 
-(mevedel-deftest mevedel-view--fontify-as ()
+(mevedel-deftest mevedel-view--fontify-as
+  (:before-each (mevedel-view--release-markdown-fontify-buffer)
+   :after-each (mevedel-view--release-markdown-fontify-buffer))
   ,test
   (test)
 
@@ -70,6 +72,18 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
       (should (equal diff (substring-no-properties text)))
       (should (eq (if (string-search "-removed" diff) 'diff-removed 'diff-added)
                   (get-text-property (1- (length text)) 'font-lock-face text)))))
+
+  :doc "the reusable Markdown target fontifies its final unterminated line"
+  ;; Diff mode supplies a newline-sensitive fontifier even without TS grammars.
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'diff-mode)))
+    (dolist (source '("@@ -0,0 +1 @@\n+added" "@@ -0,0 +1 @@\n+added\n" ""))
+      (let ((text (mevedel-view--fontify-as source 'markdown-mode)))
+        (should (equal source (substring-no-properties text)))
+        (unless (string-empty-p source)
+          (should (eq 'diff-added
+                      (get-text-property (1- (length text))
+                                         'font-lock-face text)))))))
 
   :doc "fontifies a mode that installs font-lock defaults late"
   ;; `markdown-ts-mode' enables `outline-minor-mode' before

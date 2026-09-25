@@ -95,6 +95,24 @@
           (jit-lock-fontify-now (line-beginning-position) (line-end-position))
           (should-not (get-text-property (+ start 9) 'font-lock-face))))))
 
+  :doc "native Markdown highlights the final heading while typing without newline"
+  (progn
+    (require 'markdown-ts-mode nil t)
+    (skip-unless (mevedel-view--markdown-fontify-mode))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (insert "> quote\n# H\n")
+        (jit-lock-fontify-now)
+        (delete-char -1)
+        (jit-lock-fontify-now)
+        (should (equal "> quote\n# H" (mevedel-view--input-text)))
+        (should (memq 'markdown-ts-heading-1
+                      (ensure-list (get-text-property (1- (point-max))
+                                                      'font-lock-face))))
+        (should-not (text-property-not-all (mevedel-view--input-start)
+                                           (point-max) 'invisible nil)))))
+
   :doc "missing grammars leave the draft editable and clear stale highlighting"
   (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
              (lambda () nil)))
