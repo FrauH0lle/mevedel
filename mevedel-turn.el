@@ -55,7 +55,8 @@
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-goal'
-(declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
+(declare-function mevedel-goal-dispatch-after-turn "mevedel-goal"
+                  (fsm &optional succeeded))
 (declare-function mevedel-goal-persist-failure "mevedel-goal" (fsm))
 (declare-function mevedel-goal-settle-failure
                   "mevedel-goal" (fsm &optional status))
@@ -971,7 +972,7 @@ inverting them drops the turn's file-history checkpoints."
            #'mevedel--turn-end-request
            (lambda (machine)
              (mevedel--turn-after-publication
-              #'mevedel-goal-dispatch-after-turn machine))
+              (lambda (m) (mevedel-goal-dispatch-after-turn m t)) machine))
            (lambda (machine)
              (mevedel--turn-after-publication
               #'mevedel-view--schedule-follow-up-drain machine)))))))

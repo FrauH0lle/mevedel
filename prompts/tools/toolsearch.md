@@ -13,6 +13,7 @@ Useful search keys, subject to the current role and request:
 - `tasks`: session-visible plans/checklists, status, ownership, and dependencies.
 - `agents`: delegate independent work and coordinate retained agents.
 - `web`: web search and page retrieval.
+- `goal`: create, inspect, or finish a persistent session Goal.
 
 ### When NOT to use `ToolSearch`
 

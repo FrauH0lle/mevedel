@@ -28,7 +28,7 @@
 ;; `mevedel-chat'
 (declare-function mevedel--submit-generated-turn
                   "mevedel-chat" (prompt &optional display-text
-                                          prompt-submission))
+                                         prompt-submission))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-pending-inputs-follow-up-changed
@@ -142,6 +142,13 @@ BUFFER defaults to the current buffer."
     (user-error "Goal objective must not be blank"))
   (string-trim objective))
 
+(defun mevedel-goal--assert-token-budget ()
+  "Signal an error unless `mevedel-goal-token-budget' is valid."
+  (unless (or (null mevedel-goal-token-budget)
+              (and (integerp mevedel-goal-token-budget)
+                   (> mevedel-goal-token-budget 0)))
+    (error "Goal token budget must be a positive integer or nil")))
+
 (defun mevedel-goal--valid-plan-reference-p (reference)
   "Return non-nil when REFERENCE is a normalized relative path."
   (or (null reference)
@@ -157,12 +164,10 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
     (error "No active session for Goal"))
   (unless (mevedel-goal--valid-plan-reference-p plan-reference)
     (error "Invalid accepted-plan reference"))
-  (unless (and (or (null mevedel-goal-token-budget)
-                   (and (integerp mevedel-goal-token-budget)
-                        (> mevedel-goal-token-budget 0))))
-    (error "Goal token budget must be a positive integer or nil"))
+  (mevedel-goal--assert-token-budget)
   (mevedel-goal--assert-mutation-authority session)
-  (let* ((now (format-time-string "%FT%T%z"))
+  (let* ((previous (mevedel-session-goal session))
+         (now (format-time-string "%FT%T%z"))
          (goal (mevedel-goal--create
                 :id (or id (mevedel-goal-new-id))
                 :objective objective
@@ -175,7 +180,12 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
                 :created-at now
                 :updated-at now)))
     (setf (mevedel-session-goal session) goal)
-    (mevedel-session-artifacts-save session (current-buffer))
+    (condition-case err
+        (mevedel-session-artifacts-save session (current-buffer))
+      (error
+       (setf (mevedel-session-goal session) previous)
+       (signal (car err) (cdr err))))
+    (setq mevedel-goal--transient-retries 0)
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal)))
     goal))
@@ -261,9 +271,9 @@ never discloses session storage paths."
       (condition-case nil
           (mevedel-plan-read-artifact session artifact)
         (error
-          (mevedel-goal--pause-for-integrity
-           goal session
-           "Accepted-plan artifact no longer matches its accepted hash")))
+         (mevedel-goal--pause-for-integrity
+          goal session
+          "Accepted-plan artifact no longer matches its accepted hash")))
       (condition-case nil
           (mevedel-plan-resource-address reference)
         (error
@@ -286,8 +296,8 @@ never discloses session storage paths."
                                 (number-to-string budget)
                               "unbounded"))
          ("tokens-remaining" . ,(if budget
-                                     (number-to-string (max 0 (- budget used)))
-                                   "unbounded"))
+                                    (number-to-string (max 0 (- budget used)))
+                                  "unbounded"))
          ("turns-run" . ,(number-to-string (mevedel-goal-turns-run goal)))
          ("plan-reference-line" .
           ,(if plan-address
@@ -320,15 +330,17 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
          (buffer (or buffer (current-buffer)))
          (goal (and session (mevedel-session-goal session))))
     (cond
+     ((or (not (buffer-live-p buffer))
+          (not (eq session (buffer-local-value 'mevedel--session buffer))))
+      'unavailable)
      ((not goal) 'no-goal)
      ((not (eq (mevedel-goal-status goal) 'active)) 'inactive)
-     ((and (buffer-live-p buffer)
-           (buffer-local-value 'mevedel--current-request buffer))
-      'request)
+     ((buffer-local-value 'mevedel--current-request buffer) 'request)
      ((mevedel-session-pending-follow-ups session)
       (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer)
       'follow-up)
-     ((mevedel-goal--pending-interaction-p session) 'interaction)
+     ((with-current-buffer buffer
+        (mevedel-goal--pending-interaction-p session)) 'interaction)
      ((mevedel-goal--budget-exhausted-p goal) 'budget)
      (t
       (with-current-buffer buffer
@@ -356,8 +368,12 @@ transport rather than nesting inside a remote operation already in flight."
        (when (and (buffer-live-p buffer)
                   (eq session (buffer-local-value 'mevedel--session buffer)))
          (with-current-buffer buffer
-           (mevedel-goal-continue-if-idle
-            session buffer prompt-submission)))))))
+           (condition-case err
+               (mevedel-goal-continue-if-idle session buffer prompt-submission)
+             (error
+              (mevedel-goal-pause-runtime-failure
+               buffer (format "Goal continuation failed: %s" (error-message-string err)))
+              (message "mevedel: Goal continuation failed: %s" (error-message-string err))))))))))
 
 (defun mevedel-goal--schedule-continuation
     (&optional session buffer prompt-submission)
@@ -368,22 +384,66 @@ transport rather than nesting inside a remote operation already in flight."
       (run-at-time 0 nil #'mevedel-goal--scheduled-continuation
                    session buffer prompt-submission))))
 
+(defun mevedel-goal--start-blocker (session)
+  "Return why a new Goal cannot start in SESSION now, or nil.
+Reads the current buffer's request for request-scoped Plan mode."
+  (let ((current (mevedel-session-goal session))
+        (metadata (mevedel-session-plan-metadata session)))
+    (cond
+     ((or (mevedel-session-plan-mode session)
+          (and mevedel--current-request
+               (mevedel-request-plan-read-only mevedel--current-request)))
+      "Leave Plan mode before starting a Goal")
+     ((and current (not (eq (mevedel-goal-status current) 'complete)))
+      "Finish or clear the current Goal first")
+     ((or (plist-get metadata :implementation-retry)
+          (plist-get metadata :implementation-goal-id))
+      "Finish or cancel the accepted Plan implementation first"))))
+
 (defun mevedel-goal-start (objective &optional prompt-submission)
   "Start a Goal for OBJECTIVE and schedule its first ordinary turn."
-  (let ((current (and (bound-and-true-p mevedel--session)
-                      (mevedel-session-goal mevedel--session))))
-    (unless (bound-and-true-p mevedel--session)
-      (user-error "No mevedel session in this buffer"))
-    (when (and current (not (eq (mevedel-goal-status current) 'complete)))
-      (user-error "Finish or clear the current Goal first"))
-    (when-let* ((metadata (mevedel-session-plan-metadata mevedel--session))
-                ((or (plist-get metadata :implementation-retry)
-                     (plist-get metadata :implementation-goal-id))))
-      (user-error "Finish or cancel the accepted Plan implementation first"))
-    (let ((goal (mevedel-goal-create objective mevedel--session)))
-      (mevedel-goal--schedule-continuation
-       mevedel--session (current-buffer) prompt-submission)
-      goal)))
+  (setq objective (mevedel-goal--validate-objective objective))
+  (unless (bound-and-true-p mevedel--session)
+    (user-error "No mevedel session in this buffer"))
+  (when-let* ((blocker (mevedel-goal--start-blocker mevedel--session)))
+    (user-error "%s" blocker))
+  ;; Validate before settling a replaced Goal below.
+  (mevedel-goal--assert-token-budget)
+  (mevedel-goal--assert-mutation-authority mevedel--session)
+  (let ((current (mevedel-session-goal mevedel--session)))
+    (let* ((fsm (when-let* ((request mevedel--current-request)
+                            ((eq mevedel--session (mevedel-request-session request)))
+                            ((not (or (mevedel-request-ephemeral-p request)
+                                      (mevedel-request-cancelled-p request)
+                                      (mevedel-request-directive-uuid request))))
+                            (machine (mevedel-request-fsm request))
+                            ((eq (current-buffer)
+                                 (plist-get (gptel-fsm-info machine) :buffer))))
+                  machine))
+           (info (and fsm (gptel-fsm-info fsm)))
+           (replacing (and current
+                           (equal (mevedel-goal-id current)
+                                  (plist-get info :mevedel-goal-accounting-id))))
+           (baseline (if replacing
+                         (+ (or (mevedel-goal--known-token-count info) 0)
+                            (or (plist-get info :mevedel-goal-token-baseline) 0))
+                       0)))
+      ;; Preserve the completed Goal's final charge before replacing it.
+      ;; A cleared, unrelated Goal retains its old request attribution.
+      (when replacing (mevedel-goal-settle-turn fsm))
+      (let ((goal (mevedel-goal-create objective mevedel--session)))
+        (when fsm
+          (setq info (gptel-fsm-info fsm))
+          (when replacing
+            (dolist (key '(:mevedel-goal-id :mevedel-goal-accounting-id
+                                            :mevedel-goal-accounted :mevedel-goal-budget-warnings))
+              (cl-remf info key))
+            (setq info (plist-put info :mevedel-goal-token-baseline baseline)))
+          (setf (gptel-fsm-info fsm) info)
+          (mevedel-goal-capture-request fsm))
+        (mevedel-goal--schedule-continuation
+         mevedel--session (current-buffer) prompt-submission)
+        goal))))
 
 (defun mevedel-goal-pause ()
   "Pause the current Goal without interrupting an in-flight request."
@@ -405,8 +465,10 @@ transport rather than nesting inside a remote operation already in flight."
     (mevedel-goal--assert-mutation-authority mevedel--session)
     (when (eq (mevedel-goal-status goal) 'complete)
       (user-error "Completed Goal cannot be resumed"))
-    (when (eq (mevedel-goal-status goal) 'budget-limited)
+    (when (or (eq (mevedel-goal-status goal) 'budget-limited)
+              (mevedel-goal--budget-exhausted-p goal))
       (user-error "Raise or remove the Goal budget before resuming"))
+    (setq mevedel-goal--transient-retries 0)
     (setf (mevedel-goal-status goal) 'active
           (mevedel-goal-reason goal) nil)
     (when-let* ((metadata (mevedel-session-plan-metadata mevedel--session))
@@ -467,6 +529,7 @@ The string `none' removes the limit."
       (mevedel-goal-status goal)))
     (mevedel-goal--persist mevedel--session (current-buffer))
     (when reactivated
+      (setq mevedel-goal--transient-retries 0)
       (mevedel-goal--schedule-continuation mevedel--session (current-buffer)))
     goal))
 
@@ -491,6 +554,9 @@ The string `none' removes the limit."
     (mevedel-goal--assert-mutation-authority session)
     (setf (mevedel-goal-id goal) new-id
           (mevedel-goal-objective goal) objective)
+    (dolist (entry (mevedel-session-pending-follow-ups session))
+      (when (equal old-id (plist-get entry :queued-at-goal-id))
+        (plist-put entry :queued-at-goal-id new-id)))
     (when-let* ((request mevedel--current-request)
                 (fsm (mevedel-request-fsm request))
                 (info (gptel-fsm-info fsm))
@@ -556,9 +622,10 @@ The string `none' removes the limit."
             (plist-put info :mevedel-goal-started-at (float-time))
             (plist-put info :mevedel-goal-estimated-tokens
                        (max 1 (/ (+ (length (prin1-to-string
-                                            (plist-get info :data))) 3)
+                                             (plist-get info :data))) 3)
                                  4)))
-            (when (and plan-path mevedel--current-request)
+            ;; Also revoke a replaced Goal's plan grant.
+            (when mevedel--current-request
               (setf (mevedel-request-goal-plan-read-path
                      mevedel--current-request)
                     plan-path))
@@ -568,15 +635,16 @@ The string `none' removes the limit."
   "Return known normalized input plus output tokens from request INFO."
   (let ((usage (or (plist-get info :tokens-full)
                    (plist-get info :tokens))))
-    (when (listp usage)
+    (when (and (listp usage)
+               (or (plist-member usage :input) (plist-member usage :output)))
       (let ((count (+ (or (plist-get usage :input) 0)
                       (or (plist-get usage :output) 0))))
-        (and (> count 0) count)))))
+        (max 0 (- count (or (plist-get info :mevedel-goal-token-baseline) 0)))))))
 
 (defun mevedel-goal--request-token-count (info)
   "Return normalized input plus output tokens for request INFO."
   (or (mevedel-goal--known-token-count info)
-        (plist-get info :mevedel-goal-estimated-tokens)
+      (plist-get info :mevedel-goal-estimated-tokens)
       1))
 
 (defun mevedel-goal--budget-threshold-crossed-p
@@ -588,7 +656,8 @@ The string `none' removes the limit."
 (defun mevedel-goal--emit-budget-crossings (fsm session goal before)
   "Queue newly crossed budget reminders for GOAL after charging FSM.
 BEFORE is the durable usage before the charge."
-  (when-let* ((budget (mevedel-goal-token-budget goal)))
+  (when-let* (((eq (mevedel-goal-status goal) 'active))
+              (budget (mevedel-goal-token-budget goal)))
     (let* ((info (gptel-fsm-info fsm))
            (after (mevedel-goal-tokens-used goal))
            (warned (plist-get info :mevedel-goal-budget-warnings)))
@@ -627,6 +696,8 @@ Its commit records delivery only after the turn-event injector reaches
 the request payload."
   (when-let* ((info (gptel-fsm-info fsm))
               (goal (mevedel-session-goal session))
+              ((eq (mevedel-goal-status goal) 'active))
+              ((not (plist-get info :mevedel-goal-accounted)))
               ((equal (plist-get info :mevedel-goal-accounting-id)
                       (mevedel-goal-id goal)))
               (budget (mevedel-goal-token-budget goal))
@@ -658,7 +729,9 @@ the request payload."
          (captured-id (plist-get info :mevedel-goal-id))
          (accounting-id (plist-get info :mevedel-goal-accounting-id))
          (buffer (plist-get info :buffer)))
-    (when (and captured-id accounting-id (buffer-live-p buffer))
+    (when (and captured-id accounting-id
+               (not (plist-get info :mevedel-goal-accounted))
+               (buffer-live-p buffer))
       (with-current-buffer buffer
         (when-let* ((goal (and mevedel--session
                                (mevedel-session-goal mevedel--session)))
@@ -672,6 +745,8 @@ the request payload."
                                            info :mevedel-goal-started-at)
                                           (float-time))))))
             (cl-incf (mevedel-goal-turns-run goal))
+            (setf (gptel-fsm-info fsm)
+                  (plist-put info :mevedel-goal-accounted t))
             (mevedel-goal--touch goal)
             (when (fboundp 'mevedel-telemetry-record)
               (mevedel-telemetry-record
@@ -709,7 +784,8 @@ the request payload."
     (let ((session (nth 0 settled))
           (goal (nth 1 settled))
           (before (nth 2 settled)))
-      (setq mevedel-goal--transient-retries 0)
+      (with-current-buffer (plist-get (gptel-fsm-info fsm) :buffer)
+        (setq mevedel-goal--transient-retries 0))
       (mevedel-goal--settle-budget fsm session goal before))))
 
 (defun mevedel-goal-settle-failure (fsm &optional status)
@@ -718,14 +794,15 @@ the request payload."
     (let ((session (nth 0 settled))
           (goal (nth 1 settled))
           (before (nth 2 settled)))
-      (when (eq (mevedel-goal-status goal) 'active)
-        (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
-          (if (and (mevedel-goal--transient-failure-p reason)
-                   (< mevedel-goal--transient-retries 1))
-              (cl-incf mevedel-goal--transient-retries)
-            (setf (mevedel-goal-status goal) 'paused
-                  (mevedel-goal-reason goal) reason)
-            (mevedel-goal--touch goal))))
+      (with-current-buffer (plist-get (gptel-fsm-info fsm) :buffer)
+        (when (eq (mevedel-goal-status goal) 'active)
+          (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
+            (if (and (mevedel-goal--transient-failure-p reason)
+                     (< mevedel-goal--transient-retries 1))
+                (cl-incf mevedel-goal--transient-retries)
+              (setf (mevedel-goal-status goal) 'paused
+                    (mevedel-goal-reason goal) reason)
+              (mevedel-goal--touch goal)))))
       (mevedel-goal--settle-budget fsm session goal before))))
 
 (defun mevedel-goal-persist-failure (fsm)
@@ -737,10 +814,12 @@ the request payload."
     (with-current-buffer buffer
       (mevedel-goal--persist mevedel--session buffer))))
 
-(defun mevedel-goal-dispatch-after-turn (fsm)
-  "Schedule Goal continuation after successful FSM teardown."
+(defun mevedel-goal-dispatch-after-turn (fsm &optional succeeded)
+  "Schedule Goal continuation after FSM teardown.
+A SUCCEEDED root turn leaves any active Goal free to continue; a failed or
+interrupted turn continues only the Goal it was attributed to."
   (when-let* ((info (gptel-fsm-info fsm))
-              ((plist-get info :mevedel-goal-id))
+              ((or succeeded (plist-get info :mevedel-goal-id)))
               (buffer (plist-get info :buffer)))
     (with-current-buffer buffer
       (mevedel-goal--schedule-continuation mevedel--session buffer))))

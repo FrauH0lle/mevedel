@@ -5,6 +5,21 @@ in context across ordinary root conversation turns and continues while the
 session is idle. There is no Goal phase machine: planning, implementation, and
 review are ordinary model work.
 
+Say **"Create a goal for XYZ"** in the ordinary root chat to start one. The
+model uses `CreateGoal`, which preserves the full objective and returns its
+active status and budget. Ordinary tasks do not implicitly authorize Goal
+creation. Explicit user or trusted system/developer instructions do; no separate
+Goal confirmation is added. Tool permissions still apply.
+
+`GetGoal` inspects the current objective, status, reason, budget, known usage,
+elapsed time, settled-turn count, and accepted-plan address. It also works for
+inactive Goals without resuming them. An absent Goal returns `goal: null`;
+null budget and remaining-token fields mean unbounded. Its usage includes
+known usage of the current attributed turn, which can lag provider activity,
+and does not change durable accounting.
+An invalid accepted-plan address is reported as `plan_reference_error`, leaving
+the Goal inspectable without changing its state.
+
 ## Durable state
 
 The session sidecar stores a strict Goal record containing:
@@ -59,10 +74,11 @@ does not create or charge another turn.
 `/goal edit <objective>` revises the live objective and rotates the Goal ID
 while retaining status, budget, accounting, accepted-plan reference, and
 creation time. The revised objective has highest authority; an accepted Plan
-remains binding only where consistent with it. Stale `UpdateGoal` calls from an
-already-running turn are rejected, but that turn is still charged to the
+remains binding only where consistent with it. An already-running turn no longer
+sees `UpdateGoal` and its stale calls are rejected, but that turn is still charged to the
 revised Goal through a separate request-local accounting identity. Only edit
-rotates that identity with the Goal; clearing the Goal and starting an
+rotates that identity and queued follow-up ownership with the Goal, so editing
+a paused Goal cannot release its held input. Clearing the Goal and starting an
 unrelated replacement establishes no accounting lineage. At a supported
 in-flight steering boundary, mevedel also sends the refreshed Goal context on
 a best-effort basis. The next prompt consumes one objective-updated reminder,
@@ -79,6 +95,14 @@ captures its Goal identity at request start and charges tokens, wall time, and
 one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,
 with the request estimate as fallback.
+
+Starting a Goal through `CreateGoal` or the user command also attributes an
+already-running root turn, including its known token usage; elapsed time starts
+at Goal activation. The next provider
+interaction receives Goal facts and policy through the ordinary retained-context
+delivery. The model may complete the Goal in that same turn. Replacing a Goal
+completed earlier in the same turn settles the old Goal first and charges only
+subsequent token usage to the new one. Repeated settlement cannot charge twice.
 
 Compaction does not reconstruct the durable Goal from a summary. Retained
 observations can leave selected history; the context-delivery layer supplies
@@ -97,6 +121,13 @@ model should prioritize the remaining requirements, at 80% it should reassess
 the remaining work and avoid low-value detours, and at 100% it should stop new
 substantive work and wrap up. These need no durable reminder ledger because
 settlement compares usage immediately before and after the monotonic charge.
+Only an active Goal queues budget instructions; a turn that ends paused,
+blocked, or complete queues none for later work. Goal context still reports
+current usage and remaining budget.
+
+`CreateGoal` accepts an optional positive `token_budget`, supplied only when
+explicitly requested. Omission uses `mevedel-goal-token-budget`; the tool cannot
+invent a limit or change the configured default.
 
 Crossing the limit never aborts an in-flight request or tool. When provider
 usage is already known at a tool-result boundary, the first 100% crossing
@@ -139,14 +170,34 @@ heuristic.
 
 A transient transport failure is retried once. Terminal provider, transport,
 compaction, and other runtime failures pause the Goal with a concrete reason.
+This includes a failure to start the scheduled continuation. A new Goal or an
+explicit resume resets the transient-retry allowance. An exhausted paused or
+blocked Goal requires a budget increase or removal before it can resume.
 A completion or blockage already recorded by `UpdateGoal` is terminal and is
 not overwritten by later request failure handling. User interruption also
 pauses the Goal.
+Any successfully settled root turn that leaves an active Goal idle schedules
+its continuation. A failed or interrupted turn not attributed to the Goal
+schedules none, so stopping unrelated work never starts Goal work.
 
-## Completion tool
+## Goal tools
 
-`UpdateGoal` is a permission-free control tool visible only to an active root
-Goal. It accepts exactly:
+`CreateGoal`, `GetGoal`, and `UpdateGoal` use the ordinary tool pipeline and
+are discoverable through `ToolSearch` and `ToolCall` in both the discuss and
+implement presets. Goal turns keep the session's tools, so a Goal started in
+read-only discussion can only investigate. They are session control
+tools; creating a Goal never raises execution permissions. Native schemas and
+the callable catalog use the same visibility checks, and handlers recheck the
+owning root request before acting. Child-agent, context-summary, ephemeral,
+and cancelled requests cannot call them.
+
+Creation is unavailable in Plan mode, directive requests, while an unfinished
+Goal exists, or while accepted Plan implementation is reserved. An inactive
+Goal remains inspectable in the root conversation. A failed creation save
+restores the previous in-memory Goal and schedules no continuation.
+
+`UpdateGoal` is a permission-free control tool visible only to a root request
+attributed to the active Goal. It accepts exactly:
 
 - `complete`; or
 - `blocked` with a nonblank summary, stored as the Goal reason.
@@ -173,8 +224,8 @@ not claims that the tool mechanically verifies completion or classifies blockers
 - `/goal clear` removes Goal state while preserving transcript and artifacts.
 
 A new Goal cannot replace an unfinished Goal or start while accepted Plan
-implementation is preparing or retryable. Plan mode cannot start while the
-session owns an unfinished Goal.
+implementation is preparing or retryable. Ordinary Goal startup and Plan mode
+are mutually exclusive; accepted-plan Goal execution uses its dedicated handoff.
 
 An accepted Plan may select Goal execution after Here/Current, Here/Fresh,
 Here/Summary, Worktree/Fresh, or Worktree/Summary preparation. The prepared

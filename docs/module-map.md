@@ -204,7 +204,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ask-ui.el      Ask form state, controllers, and presentation
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
-  mevedel-tool-goal.el        UpdateGoal terminal-state tool and captured Goal authority checks
+  mevedel-tool-goal.el        CreateGoal/GetGoal/UpdateGoal tools and root-request authority checks
   mevedel-tool-editing.el     SharedRead/Create/Edit model tools
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  native Emacs introspection tools

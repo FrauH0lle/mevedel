@@ -157,7 +157,7 @@ Keep them request-local across temporary removal of all callable tools."
     (plist-put container :tools parsed)))
 
 (defun mevedel-tools--handle-plan-tool-filter (fsm)
-  "Apply Plan and active-Goal request-time tool visibility to FSM."
+  "Apply Plan and Goal request-time tool visibility to FSM."
   (let* ((info (gptel-fsm-info fsm))
          (invocation (plist-get info :mevedel-agent-invocation))
          (buffer (plist-get info :buffer))
@@ -180,20 +180,28 @@ Keep them request-local across temporary removal of all callable tools."
          (apply-patch-visible-p
           (and plan-read-only-p (not directive-plan-p)))
          (tools (plist-get info :tools))
-         (active-root-goal-p
-          (and session
-               (not (or invocation
-                        (mevedel-tools--buffer-local-agent-invocation buffer)))
-               (when-let* ((goal (mevedel-session-goal session)))
-                 (eq (mevedel-goal-status goal) 'active)))))
+         (goal-tools
+          (cl-union
+           (plist-get info :mevedel-goal-tools)
+           (cl-remove-if-not
+            (lambda (tool)
+              (member (gptel-tool-name tool) mevedel-tool-goal-names))
+            tools)
+           :key #'gptel-tool-name :test #'equal)))
+    ;; Goal creation can activate UpdateGoal within this same request.  Keep
+    ;; the offered Goal schemas so a previous WAIT's filtering is reversible.
+    (when goal-tools
+      (plist-put info :mevedel-goal-tools goal-tools)
+      (setq tools (append tools (cl-set-difference
+                                 goal-tools tools
+                                 :key #'gptel-tool-name :test #'equal))))
     (when tools
       (let ((filtered
              (cl-remove-if
               (lambda (tool)
                 (let ((name (gptel-tool-name tool)))
                   (or
-                   (and (equal name "UpdateGoal")
-                        (not active-root-goal-p))
+                   (not (mevedel-tool-goal-available-p name fsm))
                    (and session
                         plan-read-only-p
                         (when-let* ((registered
@@ -205,7 +213,7 @@ Keep them request-local across temporary removal of all callable tools."
                                       (mevedel-tool-groups
                                        registered)))))))))
               tools)))
-        (unless (= (length filtered) (length tools))
+        (unless (equal filtered (plist-get info :tools))
           (plist-put info :tools filtered)
           (mevedel-tools--request-data-set-tools info))))))
 

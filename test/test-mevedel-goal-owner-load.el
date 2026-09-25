@@ -40,7 +40,7 @@
                         (load ,(file-name-concat root "test/test-mevedel-goal.el") nil t)
                         (let ((result
                                (ert-run-test
-                                (ert-get-test 'mevedel-goal-edit/test))))
+                                (ert-get-test 'mevedel-goal-edit/test@2))))
                           (unless (ert-test-passed-p result)
                             (signal (car (ert-test-result-with-condition-condition result))
                                     (cdr (ert-test-result-with-condition-condition result))))))))))

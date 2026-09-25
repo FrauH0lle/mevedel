@@ -1121,7 +1121,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (equal "Read" (plist-get (car payload) :name)))))
       (kill-buffer buf)))
 
-  :doc "exposes UpdateGoal only to a root request with an active Goal"
+  :doc "exposes UpdateGoal only to a root request attributed to an active Goal"
   (let* ((session (mevedel-tools-test--make-session))
          (goal (mevedel-goal--create :id "g1" :status 'active))
          (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
@@ -1133,6 +1133,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
         (progn
           (setf (mevedel-session-goal session) goal)
           (plist-put (gptel-fsm-info fsm) :tools (list update))
+          (plist-put (gptel-fsm-info fsm) :mevedel-goal-id "stale")
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should-not (plist-get (gptel-fsm-info fsm) :tools))
+          (plist-put (gptel-fsm-info fsm) :mevedel-goal-id "g1")
           (mevedel-tools--handle-plan-tool-filter fsm)
           (should (equal '("UpdateGoal")
                          (mapcar #'gptel-tool-name

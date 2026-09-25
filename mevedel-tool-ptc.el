@@ -40,6 +40,11 @@
                   "mevedel-structs" (request))
 (defvar mevedel--current-request)
 
+;; `mevedel-tool-goal'
+(declare-function mevedel-tool-goal-available-p "mevedel-tool-goal"
+                  (name &optional fsm))
+(autoload 'mevedel-tool-goal-available-p "mevedel-tool-goal")
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-call-name "mevedel-tool-registry" (tool))
@@ -120,6 +125,7 @@ and interaction tools require a model turn to consume their result."
            :unrestricted)))
     (seq-filter (lambda (name)
                   (and (not (member name '("ToolCall" "ToolSearch")))
+                       (mevedel-tool-goal-available-p name)
                        (or (eq restriction :unrestricted)
                            (member name restriction))))
                 available)))

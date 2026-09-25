@@ -1248,6 +1248,7 @@ buffer."
                             (when cancelled (funcall active)))))))
                   (mevedel-pipeline--active-tool-use-id
                    (plist-get context :tool-use-id))
+                  (mevedel-tools--current-fsm (plist-get context :fsm))
                   (mevedel-pipeline--active-call-source
                    (plist-get context :call-source))
                   (mevedel-pipeline--auto-apply-edit-p
@@ -1703,8 +1704,9 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                    (or session-dir workspace-root default-directory)))
          (request (mevedel-pipeline--current-request))
          (invocation (mevedel-pipeline--current-invocation))
-         (fsm (and (boundp 'mevedel-tools--current-fsm)
-                   mevedel-tools--current-fsm))
+         (fsm (or (plist-get metadata :fsm)
+                  (and (boundp 'mevedel-tools--current-fsm)
+                       mevedel-tools--current-fsm)))
          (tool-use-id (or (plist-get metadata :tool-use-id)
                           (mevedel-pipeline--current-tool-use-id tool args)))
          (repair-entry
@@ -1881,10 +1883,11 @@ the tool call as a canonical error result rather than escape."
   "Execute TOOL and deliver its canonical structured outcome to CALLBACK.
 
 METADATA may supply `:tool-use-id', `:parent-tool-use-id', `:source',
-`:origin', and a `:progress' callback for a nested caller.  The progress
-callback receives `permission-wait' when the call enters the permission queue.
-Provider-only reminders, persistence, nudges, and transcript side channels are
-not applied.  Return a zero-argument cancellation thunk for the call."
+`:origin', the owning `:fsm', and a `:progress' callback for a nested
+caller.  The progress callback receives `permission-wait' when the call
+enters the permission queue.  Provider-only reminders, persistence,
+nudges, and transcript side channels are not applied.  Return a
+zero-argument cancellation thunk for the call."
   (mevedel-pipeline--run-tool tool callback args t metadata))
 
 

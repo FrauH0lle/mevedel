@@ -127,7 +127,7 @@ created as a side effect of registration and handles serialization."
     ("SharedRead" "SharedCreate" "SharedEdit"
      mevedel-tool-editing mevedel-tool-editing--register)
     ("ToolCall" mevedel-tool-ptc mevedel-tool-ptc--register)
-    ("UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
+    ("CreateGoal" "GetGoal" "UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
