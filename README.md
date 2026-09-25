@@ -36,8 +36,8 @@ Key features:
 - Can easily cycle through between instruction overlays across all buffers.
 - Retained asynchronous child agents plus focused explorer, verifier, and
   reviewer workflows using mevedel’s agent runtime.
-- Durable Goals (`/goal <objective>`) that keep one objective in every root
-  turn and continue automatically while the session is idle.
+- Durable Goals (say "Create a goal for..." or use `/goal <objective>`) that
+  keep one objective in every root turn and continue automatically while idle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, true in-place Rewind,
@@ -680,8 +680,10 @@ keys are `$skill-name` symbols.
 See [`docs/goals.md`](docs/goals.md) for the authoritative context,
 continuation, accounting, failure, and recovery contract.
 
-`/goal <objective>` starts a Goal in the current session. Every ordinary root
-turn receives request-local Goal context and is accounted to the Goal. While
+Say "Create a goal for XYZ" in chat, or use `/goal <objective>`, to start a Goal
+in the current session. The model uses `CreateGoal`; `GetGoal` lets it report
+current status and known usage, including paused or blocked Goals. Every ordinary
+root turn receives request-local Goal context and is accounted to the Goal. While
 active and idle, the session continues with a generic continuation turn until
 the model calls `UpdateGoal` with `complete` or `blocked`. Goal state never
 changes tool permissions.
@@ -1225,9 +1227,8 @@ or external setup encrypts them.
 | `.mevedel/permissions.el` | Persistent permission decisions. |
 | `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
 | `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |
-| `<session>/goals/<goal-id>/current-plan.md` | Mutable proposal for the current Goal cycle. |
-| `<session>/goals/<goal-id>/cycle-NNN-plan.md` | Immutable accepted plan for one Goal cycle. |
-| `<session>/goals/<goal-id>/cycles.el` | Lightweight cycle artifact, review, provider/effort, and timestamp index. |
+| `<session>/session.meta.el` | Session sidecar, including the current durable Goal record. |
+| `<session>/local/plans/` | Session-owned plan proposals and immutable accepted Plan artifacts. |
 
 ## Documentation
 

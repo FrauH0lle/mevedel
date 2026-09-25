@@ -396,6 +396,11 @@
       (dolist (name '("Agent" "FollowupAgent" "SendMessage"
                       "Bash" "Eval" "ApplyPatch"))
         (should-not (member name names)))
+      ;; Goals stay available to read-only discussion.
+      (should (cl-subsetp '("CreateGoal" "GetGoal" "UpdateGoal")
+                          (mapcar #'mevedel-tool-name
+                                  (plist-get resolved :discoverable))
+                          :test #'equal))
       (should-not (plist-get metadata :agents))
       (let ((rules (mevedel-preset--read-only-rules)))
         (dolist (name '("Agent" "FollowupAgent" "SendMessage"

@@ -434,7 +434,10 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :description "Read-only tools for code analysis and discussion"
     :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
             (:discoverable read) (:tool "ToolCall") (:tool "ToolSearch")
-            (:discoverable code) (:discoverable web))
+            (:discoverable code) (:discoverable web)
+            (:discoverable (:tool "CreateGoal"))
+            (:discoverable (:tool "GetGoal"))
+            (:discoverable (:tool "UpdateGoal")))
     :agents ()
     :system (lambda ()
               (mevedel-system-build-prompt
