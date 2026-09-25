@@ -84,6 +84,10 @@ def main():
         print('Provisioned remote target detected: running serially.', flush=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    # A standalone (pkg-built) Eask running this script exports PKG_EXECPATH;
+    # a nested Eask inheriting it starts as plain Node and treats `clean' as a
+    # script path.  Every Eask this runner starts must see its own launch.
+    os.environ.pop('PKG_EXECPATH', None)
     code, clean_seconds = run_logged(EASK + ['clean', 'elc'], output / 'clean.log')
     if code:
         raise SystemExit(f'Cleanup failed; see {output / "clean.log"}')

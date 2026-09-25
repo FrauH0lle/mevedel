@@ -131,6 +131,6 @@ admission, brief-output instructions, 16 KiB accepted text, and the consumer's
 120-second deadline. Provider defaults still impose their own limits. Existing
 captures retain their stored choices; no queued evidence is rewritten. This
 uses native workload/provider configuration rather than inventing a cross-model
-reasoning scale. The evidence, grading, actual request controls, dependency
-hashes, limitations and four failed pilot measurements are retained in
-[the evaluation report](../../.mevedel/shared/journal-reasoning-2026-09-24/report.md).
+reasoning scale. The evaluation's evidence, grading, actual request controls,
+dependency hashes, limitations and four failed pilot measurements are retained
+with the repository's working material rather than in this documentation.
