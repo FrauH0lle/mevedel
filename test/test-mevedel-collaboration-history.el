@@ -9,6 +9,7 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-task)
+(require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-tool-render-data)
@@ -34,7 +35,8 @@
                     "#+begin_tool (ApplyPatch :patch \"patch\")\n"
                     "(:name \"ApplyPatch\" :args (:patch \"patch\"))\n\nApplied patch\n"
                     (mevedel-tool-render-data-format
-                     `(:kind patch :files ((:kind add :path ,artifact :added 1 :deleted 0 :diff "")))
+                     ;; Model-authored relative paths resolve against the artifacts root.
+                     '(:kind patch :files ((:kind add :path "design.html" :added 1 :deleted 0 :diff "")))
                      "old-patch")
                     "#+end_tool\n")
             (dotimes (_ 3)
