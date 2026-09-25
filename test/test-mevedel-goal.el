@@ -685,6 +685,38 @@
                    (car (last (mevedel-session-pending-reminders session))))))
       (kill-buffer buffer))))
 
+(mevedel-deftest mevedel-goal-charge-tokens
+  (:doc "charges the accounted Goal once and leaves the budget limit to settlement")
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create :id "g" :status 'active :token-budget 100
+                                       :tokens-used 40 :time-used-seconds 0 :turns-run 0))
+           (session (mevedel-session--create :name "main" :goal goal))
+           (fsm (gptel-make-fsm :info (list :buffer (current-buffer)
+                                            :mevedel-goal-id "g"
+                                            :mevedel-goal-accounting-id "g"
+                                            :tokens-full '(:input 5 :output 5)))))
+      (setq-local mevedel--session session)
+      (dolist (tokens '(nil 0 -3 1.5))
+        (should-not (mevedel-goal-charge-tokens fsm tokens)))
+      (should (= 40 (mevedel-goal-tokens-used goal)))
+      (should (mevedel-goal-charge-tokens fsm 20))
+      (should (= 60 (mevedel-goal-tokens-used goal)))
+      (should (= 1 (length (mevedel-session-pending-reminders session))))
+      (should (mevedel-goal-charge-tokens fsm 45))
+      (should (= 105 (mevedel-goal-tokens-used goal)))
+      ;; 80% and 100% each queue once; the status waits for settlement.
+      (should (= 3 (length (mevedel-session-pending-reminders session))))
+      (should (eq 'active (mevedel-goal-status goal)))
+      (mevedel-goal-settle-turn fsm)
+      (should (= 115 (mevedel-goal-tokens-used goal)))
+      (should (eq 'budget-limited (mevedel-goal-status goal)))
+      (should (= 3 (length (mevedel-session-pending-reminders session))))
+      ;; A cleared or replaced Goal is never charged for this request.
+      (setf (mevedel-session-goal session)
+            (mevedel-goal--create :id "other" :status 'active :tokens-used 0))
+      (should-not (mevedel-goal-charge-tokens fsm 10))
+      (should (= 0 (mevedel-goal-tokens-used (mevedel-session-goal session)))))))
+
 (mevedel-deftest mevedel-goal-tool-result-budget-warning
   (:doc "warns only for the attributed Goal lineage")
   ,test

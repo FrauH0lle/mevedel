@@ -124,7 +124,9 @@ child created in the same turn exactly once. Peers and deeper descendants are
 not injected; `ListAgents` is the explicit full-tree discovery surface.
 
 A Goal runs in the root session conversation rather than through a special
-agent or phase machine. Child-agent turns are excluded from Goal accounting.
+agent or phase machine. Child-agent turns are excluded from Goal accounting,
+except the completion verifier run by `UpdateGoal`, whose usage the RESULT's
+`:usage` field reports and the Goal is charged.
 Each active root turn receives current Goal facts through retained context delivery, while the existing
 agent tree, capacity, and permission rules remain unchanged. Queued user
 messages steer the Goal before its next automatic continuation.
@@ -328,7 +330,8 @@ falls back to the raw reviewer output and still settles the parent turn.
 `/verify` dispatches the `verifier` agent with verifier-oriented wording:
 inspect adversarially, run or recommend relevant checks when allowed, and
 finish with the verifier prompt's `VERDICT: PASS`, `VERDICT: FAIL`, or
-`VERDICT: PARTIAL` line. The workflow accepts only one exact final verdict;
+`VERDICT: PARTIAL` line. The workflow accepts only one exact final verdict,
+read from the complete settled report rather than the bounded preview;
 malformed reports remain visible but are marked rejected.
 
 While either task runs, the parent view shows an inline `Review` or

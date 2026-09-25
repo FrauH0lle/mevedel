@@ -17,6 +17,9 @@ Mark the active goal complete or blocked.
 - Select the status based on the actual objective and evidence. For `blocked`,
   `summary` must name the recurring condition and the specific input or external
   change needed. Ordinary progress belongs in the response or task tracking.
+- `complete` starts an independent verification of the workspace. The goal
+  completes only if it passes; otherwise the verifier's findings are returned and
+  the goal stays active. Address them, then call `UpdateGoal` again.
 
 ### Examples of good usage
 
