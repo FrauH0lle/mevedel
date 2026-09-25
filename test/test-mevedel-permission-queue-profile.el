@@ -338,6 +338,8 @@
         (progn
           (make-directory cache)
           (with-temp-file input (insert "input"))
+          ;; Unconfined Bash keeps exact defaults regardless of earlier probes.
+          (setf (mevedel-session-sandbox-mode session) 'off)
           (with-current-buffer data
             (org-mode)
             (setq-local mevedel--session session))
