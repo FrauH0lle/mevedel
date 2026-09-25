@@ -20,7 +20,7 @@
 (require 'mevedel-view)
 
 (mevedel-deftest mevedel-permission-queue--confined-git
-  (:quiet t :doc "exact Git grant fails; selected metadata tree permits confined staging and commit")
+  (:quiet t :doc "default and selected metadata trees permit confined staging and commit")
   (let* ((mevedel-sandbox--probe-cache nil)
          (availability (mevedel-sandbox-probe)))
     (unless (plist-get availability :available)
@@ -86,27 +86,15 @@
                           (call-interactively (lookup-key (overlay-get ov 'keymap) "g"))))
                       (setq ov (gethash id mevedel-view--interaction-overlays))
                       (goto-char (overlay-start ov))
-                      (if (zerop index)
-                          (progn
-                            (should-error
-                             (call-interactively (lookup-key (overlay-get ov 'keymap) "a"))
-                             :type 'user-error)
-                            (should-not result)
-                            (should (= 1 (length (mevedel-session-permission-queue session))))
-                            (mevedel-permission-queue--on-head-outcome entry 'deny-once))
-                        (call-interactively (lookup-key (overlay-get ov 'keymap) "a")))))
+                      ;; The first card approves its default recursive tree.
+                      (call-interactively (lookup-key (overlay-get ov 'keymap) "a"))))
                   (let ((deadline (+ (float-time) 15)))
                     (while (and (not result) (< (float-time) deadline))
                       (accept-process-output nil 0.01)))
                   (should result)
-                  (if (zerop index)
-                      (progn
-                        (should (string-match-p "Permission denied" result))
-                        (should-not (string-match-p "filesystem: unrestricted" result))
-                        (should-not (file-exists-p (file-name-concat metadata "index"))))
-                    (should (string-match-p "sandbox: bubblewrap" result))
-                    (should (string-match-p "exit_code=\"0\"" result))
-                    (should (file-exists-p (file-name-concat metadata "index"))))
+                  (should (string-match-p "sandbox: bubblewrap" result))
+                  (should (string-match-p "exit_code=\"0\"" result))
+                  (should (file-exists-p (file-name-concat metadata "index")))
                   (should-not (mevedel-session-permission-queue session)))))
             (with-temp-buffer
               (should (zerop (process-file "git" nil t nil "-C" root "show" "HEAD:example.txt")))
