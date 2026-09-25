@@ -4820,6 +4820,27 @@ Return the start of the inserted disclosure."
      (concat (plist-get display :label) "\n" body) source)
     start))
 
+(defun mevedel-view--prompt-preview (text shared-display)
+  "Return a one-line preview without mailbox blocks from visible TEXT.
+Use SHARED-DISPLAY text when it replaces the original prompt."
+  (let ((visible (or (plist-get shared-display :text) text)))
+    (when (string-match-p "<agent-\\(?:result\\|message\\)\\s-+" visible)
+      (setq visible
+            (with-temp-buffer
+              (insert visible)
+              (goto-char (point-min))
+              (while (re-search-forward
+                      "<agent-\\(?:result\\|message\\)\\s-+" nil t)
+                (goto-char (match-beginning 0))
+                (if-let* ((block (mevedel-transcript--mailbox-any-block-at-point
+                                  (point-max))))
+                    (delete-region (point) (plist-get block :close-end))
+                  (forward-char 1)))
+              (buffer-substring-no-properties (point-min) (point-max)))))
+    (unless (string-blank-p visible)
+      (replace-regexp-in-string
+       "[[:space:]\n]+" " " (string-trim visible)))))
+
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
@@ -4874,6 +4895,8 @@ Return the start of the inserted disclosure."
                      'mevedel-view-guest-header
                    'mevedel-view-user-header)
                  'mevedel-view-type 'turn-header
+                 'mevedel-view-prompt-preview
+                 (mevedel-view--prompt-preview text shared-display)
                  'mevedel-view-turn-role
                  (if directive 'directive 'user)
                  'mevedel-view-collapsed nil))
@@ -6435,6 +6458,8 @@ restore the turn with all inner section state intact.  Signals a
            (stash (buffer-substring turn-start turn-end))
            (context (get-text-property turn-start 'mevedel-view-turn-context))
            (source (get-text-property turn-start 'mevedel-view-source))
+           (prompt-preview
+            (get-text-property turn-start 'mevedel-view-prompt-preview))
            (variant-start
             (text-property-not-all
              turn-start turn-end
@@ -6481,6 +6506,7 @@ restore the turn with all inner section state intact.  Signals a
                                       'mevedel-view-type 'turn-summary
                                       'mevedel-view-source source
                                       'mevedel-view-turn-role role
+                                      'mevedel-view-prompt-preview prompt-preview
                                       'mevedel-view-turn-id id
                                       'mevedel-view-turn-context context
                                       'mevedel-view-directive directive
@@ -7733,7 +7759,9 @@ marker at the end of the inserted block."
                             'font-lock-face
                             (if guest-name
                                 'mevedel-view-guest-header
-                              'mevedel-view-user-header)))
+                              'mevedel-view-user-header)
+                            'mevedel-view-prompt-preview
+                            (mevedel-view--prompt-preview text shared-display)))
         (cond
          (shared-display
           (setq fold-start

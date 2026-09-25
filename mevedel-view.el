@@ -997,6 +997,72 @@ Kills the associated view buffer."
        `(space :align-to (- right (,(string-pixel-width rhs))))
      `(space :align-to (- right ,(string-width rhs))))))
 
+(defun mevedel-view--pinned-prompt (window)
+  "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
+Metadata lives on rendered prompt headers, not in the model transcript."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer))
+             (not (get-text-property
+                   (window-start window) 'mevedel-view-prompt-preview)))
+    (let ((top (min (window-start window)
+                    (or (and (markerp mevedel-view--input-marker)
+                             (marker-position mevedel-view--input-marker))
+                        (point-max))))
+          (pos (min (1+ (window-start window)) (point-max)))
+          found)
+      (while (and (not found) (> pos (point-min)))
+        (let ((edge (previous-single-property-change
+                     pos 'mevedel-view-prompt-preview nil (point-min))))
+          (if (not edge)
+              (setq pos (point-min))
+            (let ((preview (get-text-property
+                            (max (point-min) (1- edge))
+                            'mevedel-view-prompt-preview)))
+              (if (and preview (<= edge top))
+                  (setq found
+                        (cons (or (previous-single-property-change
+                                   edge 'mevedel-view-prompt-preview nil
+                                   (point-min))
+                                  (point-min))
+                              preview))
+                (setq pos edge))))))
+      found)))
+
+(defun mevedel-view--jump-to-pinned-prompt (position &optional event)
+  "Reveal the pinned prompt at POSITION in the clicked window from EVENT."
+  (interactive)
+  (let ((window (if event (posn-window (event-start event))
+                  (selected-window))))
+    (when (and (window-live-p window)
+               (eq (window-buffer window) (current-buffer)))
+      (with-selected-window window
+        (goto-char position)
+        (when (get-text-property (point) 'mevedel-view-stash)
+          (mevedel-view--expand-turn)
+          (goto-char position))
+        (forward-line 1)
+        (when (eq (get-text-property (point) 'mevedel-view-type)
+                  'user-input-summary)
+          (when (get-text-property (point) 'mevedel-view-collapsed)
+            (mevedel-view-render-toggle-user-input)))
+        (goto-char position)
+        (recenter 0)))))
+
+(defun mevedel-view--pinned-prompt-button (preview position width)
+  "Return a clickable PREVIEW at POSITION fitted to WIDTH columns."
+  (let ((map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1]
+                (lambda (event)
+                  (interactive "e")
+                  (mevedel-view--jump-to-pinned-prompt position event)))
+    (propertize
+     (replace-regexp-in-string
+      "%" "%%"
+      (truncate-string-to-width preview (max 0 width) 0 nil "…") t t)
+     'face 'link 'mouse-face 'highlight
+     'help-echo "Jump to this prompt"
+     'local-map map)))
+
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."
   (when (and (boundp 'mevedel--data-buffer)
@@ -1049,10 +1115,13 @@ Kills the associated view buffer."
                           tool-count
                           (if (= tool-count 1) "" "s")))
            (width (mevedel-view--status-strip-width))
+           (window (selected-window))
+           (pinned (mevedel-view--pinned-prompt window))
            (cache-key
             (list data-buffer session-name root target-label
                   pending-publication lease-state mode scope state phase-model
-                  (and goal t) preset-name tools width (display-graphic-p))))
+                  (and goal t) preset-name tools width (display-graphic-p)
+                  window pinned)))
       (if (equal cache-key mevedel-view--status-strip-cache-key)
           mevedel-view--status-strip-cache-value
         (let* ((rhs
@@ -1094,15 +1163,19 @@ Kills the associated view buffer."
                    (string-width rhs)
                    3))
                (root-label
-                (mevedel-view--status-strip-root-label root root-max))
+                (and (not pinned)
+                     (mevedel-view--status-strip-root-label root root-max)))
                (lhs
-                (if (string-empty-p root-label)
+                (if (or pinned (string-empty-p root-label))
                     session-name
                   (format "%s  %s" session-name root-label)))
                (value
                 (concat
                  (mevedel-view--status-strip-button
                   lhs 'top "Open session cockpit")
+                 (when pinned
+                   (concat "  " (mevedel-view--pinned-prompt-button
+                                  (cdr pinned) (car pinned) root-max)))
                  (mevedel-view--status-strip-spacer rhs)
                  rhs)))
           (setq mevedel-view--status-strip-cache-key cache-key

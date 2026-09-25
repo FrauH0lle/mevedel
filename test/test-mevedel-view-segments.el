@@ -261,6 +261,22 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 (mevedel-deftest mevedel-view-go-to-segment ()
   ,test
   (test)
+  :doc "pinned header uses only the currently displayed archived segment"
+  (save-window-excursion
+    (mevedel-view-segments-test--with-view
+      (set-window-buffer (selected-window) view-buf)
+      (mevedel-view-go-to-segment 1)
+      (goto-char (point-min))
+      (search-forward "Archived answer one")
+      (set-window-start nil (line-beginning-position) t)
+      (should (string-search "First prompt" (mevedel-view--status-strip)))
+      (mevedel-view-go-to-segment 2)
+      (goto-char (point-min))
+      (search-forward "Archived answer two")
+      (set-window-start nil (line-beginning-position) t)
+      (should (string-search "Second prompt" (mevedel-view--status-strip)))
+      (should-not (string-search "First prompt" (mevedel-view--status-strip)))))
+
   :doc "direct selection bypasses a missing intervening segment"
   (let* ((directory (make-temp-file "mevedel-view-segment-picker-" t))
          (session

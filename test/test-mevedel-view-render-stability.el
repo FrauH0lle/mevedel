@@ -19,6 +19,31 @@
 (mevedel-deftest mevedel-view-render-live-update/reader-anchors ()
   ,test
   (test)
+  :doc "keeps the pinned prompt and draft through streaming and full redraws"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "*** Visible question\n" nil)
+      (mevedel-view-test--insert-data data-buf "Initial answer.\n" 'response)
+      (with-current-buffer view-buf
+        (switch-to-buffer view-buf)
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
+        (goto-char (point-min))
+        (search-forward "Initial answer.")
+        (set-window-start nil (line-beginning-position) t)
+        (let ((top (window-start)))
+          (should (string-search "Visible question" (mevedel-view--status-strip)))
+          (mevedel-view-stream-begin-turn
+           mevedel-view--status-marker
+           (with-current-buffer data-buf (copy-marker (point-max))))
+          (mevedel-view-test--insert-data data-buf "More output.\n" 'response)
+          (mevedel-view-render-live-update data-buf)
+          (should (= top (window-start)))
+          (should (string-search "Visible question" (mevedel-view--status-strip)))
+          (mevedel-view--full-rerender)
+          (should (string-search "Visible question" (mevedel-view--status-strip)))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+
   :doc "full and retained redraws preserve group readers and composer windows"
   (dolist (retained '(nil t))
     (dolist (target '("Read 4 files" "f0.el" "content 0"))

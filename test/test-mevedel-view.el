@@ -415,6 +415,142 @@
         (funcall command nil)
         (should (eq called 'mode))))))
 
+(mevedel-deftest mevedel-view--pinned-prompt ()
+  ,test
+  (test)
+  :doc "header follows the prompt above the top edge, not point or the newest prompt"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (dolist (prompt '("First question" "Second question"))
+        (mevedel-view-test--insert-data data-buf
+                                        (format "*** %s\n" prompt) nil)
+        (mevedel-view-test--insert-data data-buf
+                                        (apply #'concat (make-list 100 "response line\n"))
+                                        'response))
+      (with-current-buffer view-buf
+        (switch-to-buffer view-buf)
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "First question")
+        (let ((first (line-beginning-position)))
+          (search-forward "Second question")
+          (let ((second (line-beginning-position)))
+            (set-window-start nil (point-min) t)
+            (should-not (string-search "First question" (mevedel-view--status-strip)))
+            (goto-char second)
+            (set-window-start nil first t)
+            (should (get-text-property
+                     (save-excursion (goto-char first)
+                                     (search-backward "You") (point))
+                     'mevedel-view-prompt-preview))
+            (should (equal first (window-start)))
+            (should (mevedel-view--pinned-prompt (selected-window)))
+            (should (string-search "First question" (mevedel-view--status-strip)))
+            (set-window-start
+             nil (save-excursion (goto-char second)
+                                 (search-backward "You\n") (point)) t)
+            (should-not (mevedel-view--pinned-prompt (selected-window)))
+            (set-window-start nil second t)
+            (should (string-search "Second question" (mevedel-view--status-strip))))))))
+
+  :doc "two windows and a status-strip cache follow their own top edges"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (dolist (prompt '("Alpha question" "Beta question"))
+        (mevedel-view-test--insert-data data-buf (format "*** %s\n" prompt) nil)
+        (mevedel-view-test--insert-data
+         data-buf (apply #'concat (make-list 60 "answer\n")) 'response))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((first (save-excursion
+                       (goto-char (point-min))
+                       (search-forward "Alpha question")
+                       (line-beginning-position)))
+              (second (save-excursion
+                        (goto-char (point-min))
+                        (search-forward "Beta question")
+                        (line-beginning-position)))
+              (left (selected-window))
+              right)
+          (set-window-buffer left view-buf)
+          (setq right (split-window-below))
+          (set-window-buffer right view-buf)
+          (set-window-start left first t)
+          (set-window-start right second t)
+          (with-selected-window left
+            (should (string-search "Alpha question" (mevedel-view--status-strip))))
+          (with-selected-window right
+            (should (string-search "Beta question" (mevedel-view--status-strip))))
+          (with-selected-window left
+            (should (string-search "Alpha question" (mevedel-view--status-strip)))))))))
+
+(mevedel-deftest mevedel-view--pinned-prompt-button ()
+  ,test
+  (test)
+  :doc "a narrow preview preserves controls and escapes literal percent signs"
+  (let* ((button (mevedel-view--pinned-prompt-button "Unicode ∑ 100% complete" 4 18))
+         (map (get-text-property 0 'local-map button)))
+    (should (<= (string-width
+                 (replace-regexp-in-string "%%" "%" button t t)) 18))
+    (should (string-match-p "%%" button))
+    (should (string-suffix-p "…" button))
+    (should (lookup-key map [header-line mouse-1]))))
+
+(mevedel-deftest mevedel-view--jump-to-pinned-prompt ()
+  ,test
+  (test)
+  :doc "clicking a pinned folded prompt expands it and brings it to the top"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data
+       data-buf (concat "*** Long question\n"
+                        (apply #'concat (make-list 18 "additional detail\n"))) nil)
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list 80 "answer\n")) 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "You\n")
+        (let ((header (match-beginning 0)))
+          (should (get-text-property (point) 'mevedel-view-collapsed))
+          (mevedel-view-render-toggle-user-input)
+          (goto-char header)
+          (mevedel-view--collapse-turn)
+          (should (string-prefix-p
+                   "Long question additional detail"
+                   (get-text-property header 'mevedel-view-prompt-preview)))
+          (mevedel-view--jump-to-pinned-prompt header)
+          (should (= header (window-start)))
+          (should-not (get-text-property header 'mevedel-view-collapsed))
+          (forward-line 1)
+          (should-not (get-text-property (point) 'mevedel-view-collapsed))))))
+
+  :doc "jump expands an auto-folded input without changing the composer draft"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data
+       data-buf (concat "*** Multi line prompt\n"
+                        (apply #'concat (make-list 20 "body line\n"))) nil)
+      (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
+        (goto-char (point-min))
+        (search-forward "You\n")
+        (let ((header (match-beginning 0)))
+          (should (get-text-property (point) 'mevedel-view-collapsed))
+          (mevedel-view--jump-to-pinned-prompt header)
+          (should (= header (window-start)))
+          (forward-line 1)
+          (should (looking-at-p "Multi line prompt"))
+          (should-not (get-text-property (point) 'mevedel-view-collapsed))
+          (should (string= "> draft\nsecond line"
+                           (buffer-substring-no-properties
+                            (mevedel-view--input-start) (point-max)))))))))
+
 (mevedel-deftest mevedel-view--status-strip ()
   ,test
   (test)

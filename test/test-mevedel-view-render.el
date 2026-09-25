@@ -1223,6 +1223,10 @@
         (should-not (string-search "Earlier answer." text))
         (goto-char (point-min))
         (search-forward "RET: actions")
+        (let ((preview (get-text-property
+                        (match-beginning 0) 'mevedel-view-prompt-preview)))
+          (should (string-match-p "Earlier question" preview))
+          (should-not (string-match-p "Full request" preview)))
         (let ((face (get-text-property (match-beginning 0) 'face)))
           (should (eq 'shadow (plist-get face :inherit)))
           (should
@@ -1238,6 +1242,10 @@
                                        'mouse-face))
         (goto-char (point-min))
         (search-forward "excluded from model context")
+        (let ((preview (get-text-property
+                        (line-beginning-position) 'mevedel-view-prompt-preview)))
+          (should (string-match-p "Explain this" preview))
+          (should-not (string-match-p "Full request" preview)))
         (should-not (get-text-property (line-end-position) 'mouse-face)))
       (goto-char (point-min))
       (search-forward "T3")
@@ -7264,6 +7272,55 @@
               (search-forward "highlight me"))
             (should (eq (get-text-property (match-beginning 0) 'font-lock-face)
                         'font-lock-string-face))))))))
+
+(mevedel-deftest mevedel-view--insert-user-message ()
+  ,test
+  (test)
+  :doc "mailbox blocks mixed with visible prose never become prompt previews"
+  (mevedel-view-test--with-buffers
+    (let ((mailbox (concat
+                    "<agent-result sender=\"/root/worker\" recipient=\"/root\">\n"
+                    "Private agent result\n</agent-result>\n")))
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message
+         (concat mailbox "Actual prompt\n"))
+        (goto-char (point-min))
+        (search-forward "You\n")
+        (should (equal "Actual prompt"
+                       (get-text-property
+                        (match-beginning 0) 'mevedel-view-prompt-preview))))
+      (mevedel-view-test--insert-data
+       data-buf (concat "*** Actual prompt\n" mailbox) nil)
+      (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "You\n")
+        (should (equal "Actual prompt"
+                       (get-text-property
+                        (match-beginning 0) 'mevedel-view-prompt-preview))))))
+
+  :doc "send echo and full render keep the same visible prompt preview"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--insert-user-message "Visible % question\nwith detail")
+      (goto-char (point-min))
+      (search-forward "You\n")
+      (should (equal (get-text-property (match-beginning 0)
+                                        'mevedel-view-prompt-preview)
+                     "Visible % question with detail")))
+    (mevedel-view-test--insert-data
+     data-buf
+     "*** Visible % question\nwith detail\n:PROMPT:\nModel-only context\n:END:\n"
+     nil)
+    (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "You\n")
+      (should (equal (get-text-property (match-beginning 0)
+                                        'mevedel-view-prompt-preview)
+                     "Visible % question with detail")))))
 
 (mevedel-deftest mevedel-view-render-toggle-user-input ()
   ,test
