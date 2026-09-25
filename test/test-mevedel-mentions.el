@@ -88,7 +88,8 @@ Returns (buffer . overlay)."
           (kill-buffer buffer)
           (when (and file
                      (file-exists-p file)
-                     (file-in-directory-p file temporary-file-directory))
+                     (string-prefix-p (file-truename temporary-file-directory)
+                                      (file-truename file)))
             (delete-file file))))))
   (setq mevedel--instruction-states (make-hash-table :test #'equal))
   (setq mevedel--instruction-current-state-key :global))
