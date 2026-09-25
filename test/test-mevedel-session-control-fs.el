@@ -142,6 +142,29 @@
     (should-not (car settled))
     (should (eq 'file-error (car (nth 1 settled)))))
 
+  :doc "reports a program that exits before its request is written as failed"
+  (let ((mevedel-session-control-fs--pipe-local t)
+        (send (symbol-function 'process-send-string))
+        settled)
+    (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
+               (lambda (_) (cons "false" "stat")))
+              ;; Busy-wait without servicing events so the program exits
+              ;; before the write, as it can on a slow runner.
+              ((symbol-function 'process-send-string)
+               (lambda (process string)
+                 (let ((process-id (process-id process)))
+                   (with-timeout (5 (ert-fail "Program never exited"))
+                     (while (file-exists-p (format "/proc/%d" process-id)))))
+                 (funcall send process string))))
+      (mevedel-session-control-fs-run-program-async
+       (list (list :op 'path-exists-p :path "/tmp"))
+       (lambda (results error) (setq settled (list results error)))))
+    (with-timeout (10 (ert-fail "Failed program never settled"))
+      (while (not settled) (accept-process-output nil 0.02)))
+    (should-not (car settled))
+    (should (eq 'file-error (car (nth 1 settled))))
+    (should (equal "Portable control program failed" (nth 1 (nth 1 settled)))))
+
   :doc "counts its dispatch as a remote operation, so work a filter starts defers"
   (let ((mevedel-session-control-fs--pipe-local t)
         busy settled)

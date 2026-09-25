@@ -1167,7 +1167,15 @@ target: callers serialize the ones that touch the same files."
              (setq settled t)
              (when (process-live-p process) (delete-process process))
              (funcall release)
-             (funcall callback nil err))
+             ;; A program that dies before its request is written failed as a
+             ;; whole, just as the sentinel reports an unsuccessful exit.
+             (remhash (or remote "") mevedel-session-control-fs--programs)
+             (funcall callback nil
+                      (if (eq (car err) 'file-error)
+                          err
+                        (list 'file-error "Portable control program failed"
+                              (plist-get (car operations) :path)
+                              (error-message-string err)))))
            nil))))))
 
 (defun mevedel-session-control-fs-physical-path (path)
