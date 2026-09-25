@@ -382,6 +382,34 @@ fixture writes when it derives paths from an unset save path."
       (error "Test changed worktree-root portable controls: %S -> %S"
              before after))))
 
+(defvar mevedel-test--placeholder-root nil
+  "This process's private stand-in for a placeholder workspace root.")
+
+(defun mevedel-test--placeholder-root ()
+  "Return a private directory for tests whose workspace root is incidental.
+Such tests still persist workspace state under their root, and the shared
+temporary directory is an ancestor of every other test directory."
+  (or mevedel-test--placeholder-root
+      (let ((root (file-name-as-directory
+                   (make-temp-file "mevedel-test-root-" t))))
+        (add-hook 'kill-emacs-hook
+                  (lambda () (ignore-errors (delete-directory root t))))
+        (setq mevedel-test--placeholder-root root))))
+
+(defun mevedel-test--assert-no-temporary-root-state ()
+  "Signal, after removing it, when a test leaves state in the temp directory.
+A workspace rooted at `temporary-file-directory' makes every later temporary
+test directory resolve to that workspace."
+  (when-let* ((leaked
+               (seq-filter
+                #'file-exists-p
+                (mapcar (lambda (name)
+                          (expand-file-name name temporary-file-directory))
+                        '(".mevedel")))))
+    (dolist (path leaked)
+      (delete-directory path t))
+    (error "Test left workspace state in the temporary directory: %S" leaked)))
+
 
 ;;
 ;;; TRAMP test helper
@@ -974,7 +1002,8 @@ See also:
                           (when mevedel-test--release-leaked-state-p
                             (mevedel-test--release-leaked-state))
                           (mevedel-test--assert-worktree-controls-unchanged
-                           worktree-controls-before)))))
+                           worktree-controls-before)
+                          (mevedel-test--assert-no-temporary-root-state)))))
               `(ert-deftest
                    ,(intern (concat
                              (format "%s/test" object)

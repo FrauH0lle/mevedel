@@ -1148,7 +1148,7 @@
   :doc "stores directive scope on queued follow-ups"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "queue-scope" :root "/tmp"
+                       :type 'file :id "queue-scope" :root (mevedel-test--placeholder-root)
                        :name "queue-scope"))
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf

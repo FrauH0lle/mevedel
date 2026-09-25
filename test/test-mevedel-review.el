@@ -1068,7 +1068,7 @@
   :doc "persists consumed start context across a full transcript rerender"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "review-context" :root "/tmp"
+                       :type 'file :id "review-context" :root (mevedel-test--placeholder-root)
                        :name "review-context"))
            (session (mevedel-session-create "main" workspace))
            task-context)
