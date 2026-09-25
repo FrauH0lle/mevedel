@@ -44,7 +44,7 @@
    (mevedel-workspace--create
     :type 'project
     :id "agent-control"
-    :root temporary-file-directory
+    :root (mevedel-test--placeholder-root)
     :name "agent-control")))
 
 (defun mevedel-agent-control-test--settle

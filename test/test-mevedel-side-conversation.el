@@ -55,7 +55,7 @@
   :doc "closes the paired side buffers and clears the parent link"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-command-close" :root "/tmp"
+           :type 'file :id "btw-command-close" :root (mevedel-test--placeholder-root)
            :name "btw-command-close"))
          (session (mevedel-session-create "main" workspace))
          side-view side-data)
@@ -90,7 +90,7 @@
   :doc "stops an unsettled remote mutation before the close query runs"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-command-mutation" :root "/tmp"
+           :type 'file :id "btw-command-mutation" :root (mevedel-test--placeholder-root)
            :name "btw-command-mutation"))
          (session (mevedel-session-create "main" workspace))
          (unsettled t)
@@ -119,7 +119,7 @@
   :doc "rejects /btw before the parent has accepted a prompt"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-empty" :root "/tmp" :name "btw-empty"))
+           :type 'file :id "btw-empty" :root (mevedel-test--placeholder-root) :name "btw-empty"))
          (session (mevedel-session-create "main" workspace)))
     (mevedel-view-test--with-buffers
       (with-current-buffer data-buf
@@ -134,7 +134,7 @@
   :doc "rejects /btw during a directive-owned active request"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-directive" :root "/tmp"
+           :type 'file :id "btw-directive" :root (mevedel-test--placeholder-root)
            :name "btw-directive"))
          (session (mevedel-session-create "main" workspace)))
     (mevedel-view-test--with-buffers
@@ -529,7 +529,7 @@
   :doc "opens a paired ephemeral side while hiding inherited context"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw" :root "/tmp" :name "btw"))
+           :type 'file :id "btw" :root (mevedel-test--placeholder-root) :name "btw"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (setf (mevedel-session-plan-mode session) t)
@@ -577,7 +577,7 @@
   :doc "preserves a materialized list-valued gptel system prompt"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-system-list" :root "/tmp"
+           :type 'file :id "btw-system-list" :root (mevedel-test--placeholder-root)
            :name "btw-system-list"))
          (session (mevedel-session-create "main" workspace))
          side-view)
@@ -614,7 +614,7 @@
   :doc "submits an inline prompt and independent multi-turn follow-up"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-multi" :root "/tmp" :name "btw-multi"))
+           :type 'file :id "btw-multi" :root (mevedel-test--placeholder-root) :name "btw-multi"))
          (session (mevedel-session-create "main" workspace))
          side-view
          requests)
@@ -1276,7 +1276,7 @@
   :doc "settles a side request when an earlier terminal handler fails"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-terminal" :root "/tmp"
+           :type 'file :id "btw-terminal" :root (mevedel-test--placeholder-root)
            :name "btw-terminal"))
          (session (mevedel-session-create "main" workspace))
          side-view
@@ -1319,7 +1319,7 @@
   :doc "cuts an active parent at complete context and freezes request locals"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-active" :root "/tmp" :name "btw-active"))
+           :type 'file :id "btw-active" :root (mevedel-test--placeholder-root) :name "btw-active"))
          (session (mevedel-session-create "main" workspace))
          (frozen-memory "/tmp/mevedel-btw-frozen-memory/")
          (frozen-temp "/tmp/mevedel-btw-frozen-temp/")
@@ -1626,7 +1626,7 @@
   :doc "excludes a pending TOOL confirmation while retaining completed prose"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-pending-tool" :root "/tmp"
+           :type 'file :id "btw-pending-tool" :root (mevedel-test--placeholder-root)
            :name "btw-pending-tool"))
          (session (mevedel-session-create "main" workspace))
          side-view)
@@ -1684,7 +1684,7 @@
   :doc "reuses one side and preserves both drafts when inline delivery is refused"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-drafts" :root "/tmp" :name "btw-drafts"))
+           :type 'file :id "btw-drafts" :root (mevedel-test--placeholder-root) :name "btw-drafts"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (mevedel-view-test--with-buffers
@@ -1732,7 +1732,7 @@
   :doc "aborts a response in place and preserves the side draft"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-abort" :root "/tmp" :name "btw-abort"))
+           :type 'file :id "btw-abort" :root (mevedel-test--placeholder-root) :name "btw-abort"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (mevedel-view-test--with-buffers
@@ -1802,7 +1802,7 @@
   :doc "accepts compacted context without projecting its inherited indicator"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-compact" :root "/tmp" :name "btw-compact"))
+           :type 'file :id "btw-compact" :root (mevedel-test--placeholder-root) :name "btw-compact"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (mevedel-view-test--with-buffers
@@ -1831,7 +1831,7 @@
   :doc "discards the side with its parent without listing or persisting it"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "btw-close" :root "/tmp" :name "btw-close"))
+           :type 'file :id "btw-close" :root (mevedel-test--placeholder-root) :name "btw-close"))
          (session (mevedel-session-create "main" workspace))
          side-view side-data side-session)
     (mevedel-view-test--with-buffers

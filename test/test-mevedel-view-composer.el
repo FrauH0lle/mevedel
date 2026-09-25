@@ -160,7 +160,7 @@
   (:doc "selects Discuss result attempts and rejects unavailable actions")
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'file :id "directive-scope" :root "/tmp"
+           :type 'file :id "directive-scope" :root (mevedel-test--placeholder-root)
            :name "directive-scope"))
          (record
           (mevedel-directive--create
@@ -493,7 +493,7 @@
   :doc "preserves independent chat and directive drafts with exact point"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "scope" :root "/tmp" :name "scope"))
+                       :type 'file :id "scope" :root (mevedel-test--placeholder-root) :name "scope"))
            (session (mevedel-session-create "main" workspace))
            (record (mevedel-directive--create
                     :id "directive-1" :request "Explain this code"))
@@ -4460,7 +4460,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a WaitAgent ending during preparation leaves steering queued"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "steering-race" :root "/tmp"
+                       :type 'file :id "steering-race" :root (mevedel-test--placeholder-root)
                        :name "steering-race"))
            (session (mevedel-session-create "main" workspace))
            (fsm (gptel-make-fsm
@@ -4508,7 +4508,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a prepared queue entry survives failure before transcript insertion"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "prepared-retry" :root "/tmp"
+                       :type 'file :id "prepared-retry" :root (mevedel-test--placeholder-root)
                        :name "prepared-retry"))
            (entries '((:event SessionStart :body "reserved retry context")))
            (session (mevedel-session-create "main" workspace))
@@ -4546,7 +4546,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "an undelivered follow-up leaves no active file grant behind"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "grant-retry" :root "/tmp"
+                       :type 'file :id "grant-retry" :root (mevedel-test--placeholder-root)
                        :name "grant-retry"))
            (session (mevedel-session-create "main" workspace))
            (dropped (expand-file-name "dropped.txt" "/tmp"))
@@ -4574,7 +4574,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a plain follow-up failing before insertion gives its grant back"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "grant-plain" :root "/tmp"
+                       :type 'file :id "grant-plain" :root (mevedel-test--placeholder-root)
                        :name "grant-plain"))
            (session (mevedel-session-create "main" workspace))
            (dropped (expand-file-name "dropped.txt" "/tmp"))
@@ -4597,7 +4597,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a follow-up that fails after insertion keeps its file grant"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "grant-kept" :root "/tmp"
+                       :type 'file :id "grant-kept" :root (mevedel-test--placeholder-root)
                        :name "grant-kept"))
            (session (mevedel-session-create "main" workspace))
            (dropped (expand-file-name "kept.txt" "/tmp"))
@@ -4627,7 +4627,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a queued directive follow-up keeps its scope through dispatch"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "directive-queue" :root "/tmp"
+                       :type 'file :id "directive-queue" :root (mevedel-test--placeholder-root)
                        :name "directive-queue"))
            (session (mevedel-session-create "main" workspace))
            (scope '(:directive-id "directive-1" :action discuss
@@ -5416,7 +5416,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a settlement arriving in a prompt hook preserves transcript and draft"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "hook-settlement" :root "/tmp"
+                       :type 'file :id "hook-settlement" :root (mevedel-test--placeholder-root)
                        :name "hook-settlement"))
            (session (mevedel-session-create "main" workspace))
            (draft "> first line\nsecond line")
@@ -5449,7 +5449,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "blocked prompt context is consumed once by the next accepted root input"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "blocked-context" :root "/tmp"
+                       :type 'file :id "blocked-context" :root (mevedel-test--placeholder-root)
                        :name "blocked-context"))
            (session (mevedel-session-create "main" workspace))
            (decisions
@@ -5488,7 +5488,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "accepted Plan follow-up input immediately invalidates stale approval"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "plan-follow-up" :root "/tmp"
+                       :type 'file :id "plan-follow-up" :root (mevedel-test--placeholder-root)
                        :name "plan-follow-up"))
            (selection '(:location here :context current
                         :execution direct :mode edits))
@@ -5526,7 +5526,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "first skill turn orders start, expansion, then submit context"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "ordered-context" :root "/tmp"
+                       :type 'file :id "ordered-context" :root (mevedel-test--placeholder-root)
                        :name "ordered-context"))
            (session (mevedel-session-create "main" workspace))
            accepted-context)
@@ -5561,7 +5561,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "errors before transcript insertion leave pending context for retry"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "callback-rollback" :root "/tmp"
+                       :type 'file :id "callback-rollback" :root (mevedel-test--placeholder-root)
                        :name "callback-rollback"))
            (session (mevedel-session-create "main" workspace))
            retry-context)
@@ -5589,7 +5589,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "send startup failure does not duplicate context already inserted"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "send-failure" :root "/tmp"
+                       :type 'file :id "send-failure" :root (mevedel-test--placeholder-root)
                        :name "send-failure"))
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf
@@ -6039,7 +6039,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "abort makes a late UserPromptSubmit callback inert"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "abort-prompt-hook" :root "/tmp"
+                       :type 'file :id "abort-prompt-hook" :root (mevedel-test--placeholder-root)
                        :name "abort-prompt-hook"))
            (session (mevedel-session-create "main" workspace))
            late-callback
@@ -6072,7 +6072,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "killing the view cancels a late UserPromptSubmit callback"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "kill-prompt-hook" :root "/tmp"
+                       :type 'file :id "kill-prompt-hook" :root (mevedel-test--placeholder-root)
                        :name "kill-prompt-hook"))
            (session (mevedel-session-create "main" workspace))
            late-callback
