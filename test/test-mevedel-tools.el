@@ -121,8 +121,9 @@
              (list (gptel-make-anthropic
                     "cache-anthropic" :key "test"
                     :models '((cache-test :capabilities (tool-use cache))))
+                   ;; A bearer token skips gptel's curl >= 8.9 SigV4 check.
                    (gptel-make-bedrock
-                    "cache-bedrock"
+                    "cache-bedrock" :aws-bearer-token "test"
                     :models '((cache-test :capabilities (tool-use cache))))
                    (gptel-make-openai
                     "cache-openai" :key "test"
