@@ -46,6 +46,20 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual((output / 'clean.log').read_text(),
                                  f'{launcher} clean elc\n')
 
+    def test_launcher_does_not_inherit_the_parent_eask_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            executable = path / 'eask'
+            executable.write_text('#!/bin/sh\necho "${PKG_EXECPATH-unset}"\nexit 3\n')
+            executable.chmod(0o755)
+            output = path / 'reports'
+            subprocess.run(
+                [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'),
+                 '--output', str(output)],
+                env={**os.environ, 'PATH': str(path), 'PKG_EXECPATH': '/parent/eask'},
+                capture_output=True, text=True)
+            self.assertEqual((output / 'clean.log').read_text(), 'unset\n')
+
     def test_partition_covers_inventory_and_balances_measured_cost(self):
         names = ['slow', 'medium', 'short', 'new']
         groups = run_tests.partition_tests(names, {'slow': 10, 'medium': 6, 'short': 4}, 2)
