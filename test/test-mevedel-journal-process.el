@@ -361,9 +361,10 @@
         (mevedel-model-reserve-tokens 0))
     (unwind-protect
         (progn
-          (put 'fast-model :context-window 12)
           (mevedel-test-journal-capture--with-session
            (lambda (session buffer)
+             ;; The fixture rebinds the model's plist, so set the window inside.
+             (put 'fast-model :context-window 12)
              (mevedel-test-journal-capture--turn session buffer "Inspect output" (make-string 12000 #x754c))
              (let* ((workspace (mevedel-session-workspace session))
                     (capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
