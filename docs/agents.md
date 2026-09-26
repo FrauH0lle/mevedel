@@ -144,12 +144,14 @@ agent still called tools, the call settles with its latest response followed by
 a `[Stopped before a final answer: ...]` note, so the caller can tell the report
 is incomplete. Retained follow-ups start a fresh count.
 
-The built-in agents use 150, a runaway bound rather than a budget. Their
-earlier caps (worker 50, explorer 30, verifier 20, reviewer 12) were never
-enforced. Telemetry from 238 agent runs in September 2026 showed medians of
-12-22 samples, 90th percentiles of 34-51, and a maximum of 94, with about three
-tool calls per sample, so enforcing the old caps would have cut about half of
-all verifier and reviewer runs.
+The built-in agents set no cap, as in Claude Code, whose built-in agents also
+leave `maxTurns` unset; Codex has no agent turn limit. Their earlier caps
+(worker 50, explorer 30, verifier 20, reviewer 12) were never enforced.
+Telemetry from 238 agent runs in September 2026 showed medians of 12-22
+samples, 90th percentiles of 34-51, and a maximum of 94, with about three tool
+calls per sample: enforcing the old caps would have cut about half of all
+verifier and reviewer runs, and no run approached a runaway bound worth
+setting by default.
 
 Agent definitions may include `:hooks` using the same declarative hook
 shape as project hook files. These rules are scoped to invocations of that
