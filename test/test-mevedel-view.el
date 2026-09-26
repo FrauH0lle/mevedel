@@ -483,7 +483,34 @@
           (with-selected-window right
             (should (string-search "Beta question" (mevedel-view--status-strip))))
           (with-selected-window left
-            (should (string-search "Alpha question" (mevedel-view--status-strip)))))))))
+            (should (string-search "Alpha question" (mevedel-view--status-strip))))))))
+
+  :doc "a folded summary pins as soon as only its blank separator remains"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf
+                                      "*** First question\nMore text\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "You\n")
+        (let ((header (match-beginning 0)))
+          (goto-char header)
+          (mevedel-view--collapse-turn)
+          (set-window-start nil header t)
+          (should-not (mevedel-view--pinned-prompt (selected-window)))
+          (let ((separator (save-excursion
+                             (goto-char header)
+                             (forward-line 1)
+                             (point))))
+            (set-window-start nil separator t)
+            (should (= separator (window-start)))
+            (should (equal (cons header "First question More text")
+                           (mevedel-view--pinned-prompt
+                            (selected-window))))))))))
 
 (mevedel-deftest mevedel-view--pinned-prompt-button ()
   ,test
@@ -569,7 +596,45 @@
           (should-not (get-text-property (point) 'mevedel-view-collapsed))
           (should (string= "> draft\nsecond line"
                            (buffer-substring-no-properties
-                            (mevedel-view--input-start) (point-max)))))))))
+                            (mevedel-view--input-start) (point-max))))))))
+
+  :doc "a preview click targets its window when another buffer is selected"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "*** First question\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line"))
+      (let ((left (selected-window))
+            (right (split-window-right)))
+        (set-window-buffer left data-buf)
+        (set-window-buffer right view-buf)
+        (with-current-buffer view-buf
+          (goto-char (point-min))
+          (search-forward "You\n")
+          (let* ((header (match-beginning 0))
+                 (response (progn (search-forward "answer")
+                                  (line-beginning-position)))
+                 (button (mevedel-view--pinned-prompt-button
+                          "First question" header 30))
+                 (command (lookup-key
+                           (get-text-property 0 'local-map button)
+                           [header-line mouse-1]))
+                 (event (list 'mouse-1
+                              (list right 'header-line '(10 . 0) 0
+                                    (cons button 0)))))
+            (set-window-start right response t)
+            (set-window-point right response)
+            (select-window left)
+            (should (eq (current-buffer) data-buf))
+            (funcall command event)
+            (should (eq (selected-window) left))
+            (should (= header (window-start right)))
+            (should (equal "> draft\nsecond line"
+                           (with-current-buffer view-buf
+                             (mevedel-view--input-text))))))))))
 
 (mevedel-deftest mevedel-view--status-strip ()
   ,test
