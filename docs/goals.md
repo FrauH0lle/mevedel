@@ -63,8 +63,10 @@ cannot be resumed.
 ## Request context and authority
 
 Before an active root request, mevedel derives current Goal facts from the
-durable record: objective, accounting, remaining budget, and accepted-plan
-reference. Changed facts are delivered as retained context updates, hidden from
+durable record: objective, token budget, turns run, and accepted-plan
+reference. Live token usage is left out because it moves with every charge and
+each change would re-send the whole block; crossing reminders and `GetGoal`
+report it. Changed facts are delivered as retained context updates, hidden from
 ordinary chat presentation but preserved in transcript audit records. Unchanged
 facts remain in selected history; loss of that context causes delivery again.
 The durable record supplies current authority, not the old observations.
@@ -139,7 +141,7 @@ request, counting the root turn's known in-flight usage; at 100% they are
 asked to stop new work and return their findings.
 Only an active Goal queues budget instructions; a turn that ends paused,
 blocked, or complete queues none for later work. Goal context still reports
-current usage and remaining budget.
+the budget, and `GetGoal` reports current usage.
 
 `CreateGoal` accepts an optional positive `token_budget`, supplied only when
 explicitly requested. Omission uses `mevedel-goal-token-budget`; the tool cannot
@@ -249,7 +251,7 @@ checks independently of `plan-implementation` and `verifier`. Invalid review
 policy leaves the Goal active and reports an error rather than falling back.
 
 The installed `prompts/goals/active-context.md` formats current objective,
-accepted-plan reference, and accounting. `prompts/goals/policy.md` separately
+accepted-plan reference, budget, and turns run. `prompts/goals/policy.md` separately
 supplies the completion contract. It requires evidence for the full requested outcome; passing a
 narrower set of checks does not establish completion. A model-reported block
 requires the same impasse across at least three consecutive Goal turns with
