@@ -106,6 +106,7 @@
     (should (string-match-p "Tone and style" main))
     (should (string-match-p "Tool orchestration" main))
     (should (string-match-p "Untrusted tool content" main))
+    (should (string-search "check current sources" main))
     (should (string-match-p "evidence to use for the user's task" main))
     (should (string-match-p "Do not weaken, delete, skip" main))
     (should (string-match-p "final permission denial" main))
