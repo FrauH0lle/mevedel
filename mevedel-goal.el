@@ -95,6 +95,9 @@
                   "mevedel-transport" (key path thunk))
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
+;; `mevedel-turn'
+(declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
+
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-pending-p
                   "mevedel-view-interaction" (&optional view-buffer))
@@ -450,8 +453,21 @@ Reads the current buffer's request for request-scoped Plan mode."
          mevedel--session (current-buffer) prompt-submission)
         goal))))
 
+(defun mevedel-goal--end-running-turn (goal reason)
+  "End the current buffer's root turn charged to GOAL at its tool boundary.
+The turn settles normally instead of sampling the model again, so a user
+control takes effect after the running tools rather than after an arbitrarily
+long turn.  REASON names the control for telemetry."
+  (when-let* ((request mevedel--current-request)
+              (fsm (mevedel-request-fsm request))
+              ((equal (mevedel-goal-id goal)
+                      (plist-get (gptel-fsm-info fsm)
+                                 :mevedel-goal-accounting-id))))
+    (mevedel-turn-end-at-boundary fsm reason)))
+
 (defun mevedel-goal-pause ()
-  "Pause the current Goal without interrupting an in-flight request."
+  "Pause the current Goal, ending its running turn at the next tool boundary.
+Running tools finish and the turn settles; it is not aborted."
   (interactive)
   (let ((goal (mevedel-goal--current)))
     (mevedel-goal--assert-mutation-authority mevedel--session)
@@ -461,6 +477,7 @@ Reads the current buffer's request for request-scoped Plan mode."
           (mevedel-goal-reason goal) "paused by user")
     (mevedel-goal--touch goal)
     (mevedel-goal--persist mevedel--session (current-buffer))
+    (mevedel-goal--end-running-turn goal 'goal-paused)
     goal))
 
 (defun mevedel-goal-resume (&optional steering)
@@ -518,7 +535,8 @@ The string `none' removes the limit."
            (not (memq (mevedel-goal-status goal) '(blocked complete))))
       (setf (mevedel-goal-status goal) 'budget-limited
             (mevedel-goal-reason goal)
-            (format "Token budget reached: %d/%d tokens used" used budget)))
+            (format "Token budget reached: %d/%d tokens used" used budget))
+      (mevedel-goal--end-running-turn goal 'goal-budget-limited))
      ((and (eq (mevedel-goal-status goal) 'budget-limited)
            (or (null budget) (< used budget)))
       (setq reactivated t)
@@ -575,11 +593,14 @@ The string `none' removes the limit."
      (format "Goal objective updated to: %s. The revised objective has highest authority; any accepted plan remains binding only where consistent."
              objective))
     (mevedel-goal--persist session (current-buffer))
-    (when (and (eq (mevedel-goal-status goal) 'active)
-               mevedel--current-request)
-      (ignore-errors
-        (mevedel-agent-control-steer-user
-         session (mevedel-goal-active-context session))))
+    (when (eq (mevedel-goal-status goal) 'active)
+      ;; The next turn starts from the revised objective.  Steering also
+      ;; wakes a root turn waiting in WaitAgent, whose boundary would
+      ;; otherwise arrive only when the wait returns.
+      (when (mevedel-goal--end-running-turn goal 'goal-edited)
+        (ignore-errors
+          (mevedel-agent-control-steer-user
+           session (mevedel-goal-active-context session)))))
     (when (eq (mevedel-goal-status goal) 'active)
       (mevedel-goal--schedule-continuation session (current-buffer)))
     goal))

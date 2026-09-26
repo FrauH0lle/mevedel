@@ -35,8 +35,9 @@ An invalid persisted Goal record loads as no Goal. An active Goal loaded from a
 saved session is demoted to `paused` with a session-resumed reason so recovery
 cannot dispatch work without an explicit `/goal resume`.
 
-The state controls whether another ordinary turn may start. Pausing does not
-abort a turn already running. Runtime failures pause execution; a task-level
+The state controls whether another ordinary turn may start. Pausing ends a
+running Goal turn at its next tool boundary: running tools finish and the turn
+settles normally, without an abort. Runtime failures pause execution; a task-level
 impasse is a separate, model-reported blocked state.
 
 ```mermaid
@@ -79,9 +80,10 @@ sees `UpdateGoal` and its stale calls are rejected, but that turn is still charg
 revised Goal through a separate request-local accounting identity. Only edit
 rotates that identity and queued follow-up ownership with the Goal, so editing
 a paused Goal cannot release its held input. Clearing the Goal and starting an
-unrelated replacement establishes no accounting lineage. At a supported
-in-flight steering boundary, mevedel also sends the refreshed Goal context on
-a best-effort basis. The next prompt consumes one objective-updated reminder,
+unrelated replacement establishes no accounting lineage. Editing an active
+Goal ends its running turn at the next tool boundary, so continuation starts a
+turn from the revised objective; steering also wakes a turn waiting in
+`WaitAgent` with the refreshed context. The next prompt consumes one objective-updated reminder,
 and an active Goal schedules continuation behind the current request gate.
 
 When a Goal references an accepted Plan, each turn validates the reference
@@ -143,7 +145,7 @@ settlement, an otherwise-active Goal at or above the limit becomes
 `/goal budget <N|none>` replaces or removes the durable limit and queues one
 reminder with the old limit, new limit, usage, remaining tokens, and resulting
 status. Lowering the limit to current usage immediately limits a nonterminal
-Goal. Raising it above usage or removing it from a budget-limited Goal
+Goal and ends its running turn at the next tool boundary. Raising it above usage or removing it from a budget-limited Goal
 reactivates the Goal and schedules continuation behind the ordinary request
 gate.
 
@@ -247,7 +249,8 @@ but neither it nor the tool mechanically proves completion or classifies blocker
 
 - `/goal <objective>` starts a Goal and schedules its first turn.
 - Bare `/goal` opens the Goal cockpit.
-- `/goal pause` stops continuation without aborting the current request.
+- `/goal pause` stops continuation and ends the running Goal turn at its next
+  tool boundary without aborting it.
 - `/goal budget <N|none>` replaces or removes the token limit.
 - `/goal edit <objective>` replaces the objective without resetting the run.
 - `/goal resume [steering]` resumes, queueing steering before continuation.
