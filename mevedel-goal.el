@@ -118,6 +118,10 @@
 (defconst mevedel-goal--budget-thresholds '(50 80 100)
   "Percentage crossings that produce Goal budget reminders.")
 
+(defconst mevedel-goal--transient-retry-delays '(15 30 60 120 240)
+  "Seconds before each consecutive retry of a transient Goal failure.
+Their sum outlasts a short network outage such as a dropped Wi-Fi link.")
+
 (defvar-local mevedel-goal--transient-retries 0
   "Transient Goal failures retried since the last successful turn.")
 
@@ -376,12 +380,13 @@ transport rather than nesting inside a remote operation already in flight."
               (message "mevedel: Goal continuation failed: %s" (error-message-string err))))))))))
 
 (defun mevedel-goal--schedule-continuation
-    (&optional session buffer prompt-submission)
-  "Schedule SESSION's Goal continuation check after the current command."
+    (&optional session buffer prompt-submission delay)
+  "Schedule SESSION's Goal continuation check after the current command.
+DELAY is the number of seconds to wait first; nil means none."
   (let ((session (or session mevedel--session))
         (buffer (or buffer (current-buffer))))
     (when (and session (buffer-live-p buffer))
-      (run-at-time 0 nil #'mevedel-goal--scheduled-continuation
+      (run-at-time (or delay 0) nil #'mevedel-goal--scheduled-continuation
                    session buffer prompt-submission))))
 
 (defun mevedel-goal--start-blocker (session)
@@ -795,7 +800,12 @@ the request payload."
   "Return non-nil when REASON describes a retryable transport failure."
   (string-match-p
    (rx (or "timeout" "timed out" "temporar" "connection"
-           "network" "unavailable" "502" "503" "504"))
+           "network" "unavailable" "502" "503" "504"
+           ;; Name resolution, connect, partial transfer, timeout, TLS
+           ;; handshake, empty reply, send and receive failures.
+           (seq "curl failed with exit code "
+                (or "6" "7" "18" "28" "35" "52" "55" "56")
+                word-end)))
    (downcase reason)))
 
 (defun mevedel-goal-settle-turn (fsm)
@@ -818,8 +828,12 @@ the request payload."
         (when (eq (mevedel-goal-status goal) 'active)
           (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
             (if (and (mevedel-goal--transient-failure-p reason)
-                     (< mevedel-goal--transient-retries 1))
-                (cl-incf mevedel-goal--transient-retries)
+                     (< mevedel-goal--transient-retries
+                        (length mevedel-goal--transient-retry-delays)))
+                (message "mevedel: Goal retrying in %ds after: %s"
+                         (nth (cl-incf mevedel-goal--transient-retries)
+                              (cons 0 mevedel-goal--transient-retry-delays))
+                         reason)
               (setf (mevedel-goal-status goal) 'paused
                     (mevedel-goal-reason goal) reason)
               (mevedel-goal--touch goal)))))
@@ -837,12 +851,17 @@ the request payload."
 (defun mevedel-goal-dispatch-after-turn (fsm &optional succeeded)
   "Schedule Goal continuation after FSM teardown.
 A SUCCEEDED root turn leaves any active Goal free to continue; a failed or
-interrupted turn continues only the Goal it was attributed to."
+interrupted turn continues only the Goal it was attributed to, after the
+backoff delay of a retried transient failure."
   (when-let* ((info (gptel-fsm-info fsm))
               ((or succeeded (plist-get info :mevedel-goal-id)))
               (buffer (plist-get info :buffer)))
     (with-current-buffer buffer
-      (mevedel-goal--schedule-continuation mevedel--session buffer))))
+      (mevedel-goal--schedule-continuation
+       mevedel--session buffer nil
+       (unless succeeded
+         (nth mevedel-goal--transient-retries
+              (cons 0 mevedel-goal--transient-retry-delays)))))))
 
 
 
