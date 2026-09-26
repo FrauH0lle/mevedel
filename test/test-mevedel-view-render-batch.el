@@ -107,6 +107,35 @@
         (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
                                         (selected-window)))))
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+  :doc "scrolling onto a pending response still pins and reveals its own prompt"
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (set-window-buffer (selected-window) view-buf)
+      (goto-char (point-min))
+      (search-forward "Response 0 with target text")
+      (set-window-start nil (line-beginning-position) t)
+      (mevedel-view-render-batched-full)
+      (let ((entry (cl-find-if
+                    (lambda (entry)
+                      (and (eq 'assistant (plist-get (car entry) :role))
+                           (with-current-buffer data-buf
+                             (string-search
+                              "Response 4"
+                              (buffer-substring-no-properties
+                               (plist-get (car entry) :start)
+                               (plist-get (car entry) :end))))))
+                    (plist-get mevedel-view-render--batch :pending))))
+        (should entry)
+        (set-window-start nil (nth 1 entry) t)
+        (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
+                                        (selected-window)))))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (mevedel-view--jump-to-pinned-prompt
+         (car (mevedel-view--pinned-prompt (selected-window))))
+        (should (looking-at "You"))
+        (should (save-excursion (forward-line 1) (looking-at "Prompt 4")))
+        (should mevedel-view-render--batch)
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
   :doc "both windows keep their own pinned prompt during deferred rendering"
   (mevedel-batch-test--with-history
     (save-window-excursion
@@ -390,7 +419,7 @@
       (should (= (1- count) (length (plist-get job :pending)))))))
 
 (mevedel-deftest mevedel-view-render--priority-turns/visible-queue
-  (:doc "restores reader anchors immediately and queues other visible turns before offscreen history")
+  (:doc "renders prompts and reader anchors immediately, then queues visible responses before offscreen history")
   (mevedel-batch-test--with-history
     (save-window-excursion
       (set-window-buffer (selected-window) view-buf)
@@ -404,9 +433,10 @@
                        (length (mevedel-view-render--priority-turns turns t)))))
           (mevedel-view-render-batched-full)))
       (should (string-search "Response 1" (buffer-string)))
+      (should (string-search "Prompt 2" (buffer-string)))
       (let ((next (car (car (plist-get mevedel-view-render--batch :pending)))))
         (should (with-current-buffer data-buf
-                  (string-search "Prompt 2"
+                  (string-search "Response 2"
                                  (buffer-substring-no-properties
                                   (plist-get next :start) (plist-get next :end)))))))))
 
