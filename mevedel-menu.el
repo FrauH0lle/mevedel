@@ -753,17 +753,25 @@ unavailable until it changes."
   "Return the one-line Goal cockpit status.
 The full record lives in the Goal info panel."
   (if-let* ((goal (mevedel-menu--current-goal)))
-      (concat
-       (mevedel-menu--face "Goal" 'transient-heading)
-       "  "
-       (mevedel-menu--value (mevedel-goal-objective goal))
-       " · "
-       (mevedel-menu--value (format "%s" (mevedel-goal-status goal))
-                            (if (eq (mevedel-goal-status goal) 'blocked)
-                                'warning
-                              'transient-value))
-       (format " · %d turns · " (mevedel-goal-turns-run goal))
-       (mevedel-menu--value (mevedel-menu--goal-budget-label goal)))
+      (let ((tail
+             (concat
+              " · "
+              (mevedel-menu--value (format "%s" (mevedel-goal-status goal))
+                                   (if (eq (mevedel-goal-status goal) 'blocked)
+                                       'warning
+                                     'transient-value))
+              (format " · %d turns · " (mevedel-goal-turns-run goal))
+              (mevedel-menu--value (mevedel-menu--goal-budget-label goal)))))
+        (concat
+         (mevedel-menu--face "Goal" 'transient-heading)
+         "  "
+         (mevedel-menu--value
+          (truncate-string-to-width
+           (string-clean-whitespace (mevedel-goal-objective goal))
+           ;; Keep status and accounting visible; 6 = "Goal  ".
+           (max 20 (- (frame-width) 6 (string-width tail) 1))
+           nil nil "…"))
+         tail))
     (concat
      (mevedel-menu--face "Goal" 'transient-heading)
      "  "

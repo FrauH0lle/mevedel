@@ -305,6 +305,21 @@
                             "local/plans/accepted.md" "\n"))
             (should-not (string-match-p (regexp-quote needle) text)))))))
 
+  :doc "truncates a long objective so status and accounting fit"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create
+           :id "g1" :objective (concat "Implement\n" (make-string 300 ?x))
+           :status 'active :turns-run 2 :tokens-used 5))
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 80)))
+        (let ((text (substring-no-properties
+                     (mevedel-menu--goal-description))))
+          (should (<= (string-width text) 80))
+          (should (string-match-p "\\`Goal  Implement x+… · active · 2 turns"
+                                  text))
+          (should (string-suffix-p "5 tokens · unbounded" text))))))
+
   :doc "shows the empty state with the way to start a Goal"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
