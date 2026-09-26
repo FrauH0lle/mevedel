@@ -648,6 +648,44 @@
     (should (equal ""
                    (mevedel-view--status-strip-root-label root 9))))
 
+  :doc "a long session name yields to operational controls and then a pinned prompt"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "*** Short prompt\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session
+                    (mevedel-session--create :name (make-string 60 ?S))
+                    gptel-model nil))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "answer")
+        (set-window-start nil (line-beginning-position) t)
+        (dolist (width '(35 50 80))
+          (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                     (lambda () width)))
+            (let ((line (mevedel-view--status-strip)))
+              (should (<= (string-width line) width))
+              (should (string-match-p
+                       (regexp-quote "ask · idle · model none · 0 tools")
+                       line))
+              (if (= width 35)
+                  (should-not (string-search "S" line))
+                (should (string-match-p "\\`S+…" line))
+                (should (text-property-any
+                         0 (length line) 'mevedel-view-cockpit-area 'top line)))
+              (when (= width 80)
+                (should (string-search "Short prompt" line))))))
+        (set-window-start nil (point-min) t)
+        (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                   (lambda () 120)))
+          (let ((line (mevedel-view--status-strip)))
+            (should (string-prefix-p (make-string 60 ?S) line))
+            (should (string-search "0 tools" line)))))))
+
   :doc "status strip shows mevedel-owned session orientation instead of the data header"
   (let* ((root (make-temp-file "mevedel-status-root-" t))
          (workspace (mevedel-workspace-get-or-create
