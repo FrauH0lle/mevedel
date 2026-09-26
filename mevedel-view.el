@@ -1050,18 +1050,20 @@ Metadata lives on rendered prompt headers, not in the model transcript."
 
 (defun mevedel-view--pinned-prompt-button (preview position width)
   "Return a clickable PREVIEW at POSITION fitted to WIDTH columns."
-  (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1]
-                (lambda (event)
-                  (interactive "e")
-                  (mevedel-view--jump-to-pinned-prompt position event)))
-    (propertize
-     (replace-regexp-in-string
-      "%" "%%"
-      (truncate-string-to-width preview (max 0 width) 0 nil "…") t t)
-     'face 'link 'mouse-face 'highlight
-     'help-echo "Jump to this prompt"
-     'local-map map)))
+  (if (<= width 0)
+      ""
+    (let ((map (make-sparse-keymap)))
+      (define-key map [header-line mouse-1]
+                  (lambda (event)
+                    (interactive "e")
+                    (mevedel-view--jump-to-pinned-prompt position event)))
+      (propertize
+       (replace-regexp-in-string
+        "%" "%%"
+        (truncate-string-to-width preview width 0 nil "…") t t)
+       'face 'link 'mouse-face 'highlight
+       'help-echo "Jump to this prompt"
+       'local-map map))))
 
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."
@@ -1173,7 +1175,7 @@ Metadata lives on rendered prompt headers, not in the model transcript."
                 (concat
                  (mevedel-view--status-strip-button
                   lhs 'top "Open session cockpit")
-                 (when pinned
+                 (when (and pinned (> root-max 0))
                    (concat "  " (mevedel-view--pinned-prompt-button
                                   (cdr pinned) (car pinned) root-max)))
                  (mevedel-view--status-strip-spacer rhs)

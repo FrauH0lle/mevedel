@@ -629,8 +629,9 @@ the left side instead shows the session and a one-line preview of that
 prompt. It follows the exchange at the top of each window independently,
 not the buffer point or the most recent submission. A visible prompt header
 does not pin itself; scrolling to a different exchange changes the preview.
-The preview is shortened to leave room for the operational controls and
-clicking it reveals the original prompt, expanding a folded turn or input
+The preview is shortened, or omitted when there is no room, to leave space
+for the operational controls. When present, clicking it reveals the original
+prompt, expanding a folded turn or input
 when necessary. It is view-only: synthetic/model-only context is excluded,
 and archived segments use only their own visible turns.
 The workspace root uses Emacs path abbreviation normally, truncates to
