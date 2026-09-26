@@ -4009,7 +4009,13 @@ Empty string when the turn contains only whitespace or markers."
                    (text (buffer-substring seg-start seg-end)))
               ;; Strip org heading prefix (e.g., "*** ")
               (when (string-match "\\`\\*+ " text)
-                (setq text (substring text (match-end 0))))
+                (setq text (substring text (match-end 0)))
+                ;; The heading's own drawer (e.g. an agent task path) is
+                ;; metadata, not prompt text.
+                (when (string-match
+                       "\\`\\([^\n]*\n\\):PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
+                       text)
+                  (setq text (replace-match "\\1" t nil text))))
               ;; Strip hidden view render-data side channels.
               (setq text (mevedel-view--strip-render-data-display-text text))
               ;; Strip hidden hook audit side channels; they render as separate
