@@ -495,7 +495,27 @@
                  (replace-regexp-in-string "%%" "%" button t t)) 18))
     (should (string-match-p "%%" button))
     (should (string-suffix-p "…" button))
-    (should (lookup-key map [header-line mouse-1]))))
+    (should (lookup-key map [header-line mouse-1])))
+
+  :doc "exhausted preview budgets omit the prompt entirely"
+  (dolist (width '(-10 0))
+    (should (equal "" (mevedel-view--pinned-prompt-button
+                       "Long prompt that must yield to controls" 4 width))))
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "*** Very long prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
+      (with-current-buffer view-buf
+        (switch-to-buffer view-buf)
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "Answer.")
+        (set-window-start nil (line-beginning-position) t)
+        (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                   (lambda () 1)))
+          (let ((header (mevedel-view--status-strip)))
+            (should (string-match-p "ask · idle" header))
+            (should-not (string-match-p "Very long prompt" header))))))))
 
 (mevedel-deftest mevedel-view--jump-to-pinned-prompt ()
   ,test

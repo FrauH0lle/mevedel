@@ -64,6 +64,48 @@
         (should (save-excursion (goto-char (window-start)) (looking-at "Response 2")))
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should (equal "target text" (buffer-substring-no-properties (region-beginning) (region-end))))))
+  :doc "a reader's pinned prompt survives before deferred turns are rendered"
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (set-window-buffer (selected-window) view-buf)
+      (goto-char (point-min))
+      (search-forward "Response 2 with target text")
+      (set-window-start nil (line-beginning-position) t)
+      (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
+                                      (selected-window)))))
+      (mevedel-view-render-batched-full)
+      (should mevedel-view-render--batch)
+      (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
+                                      (selected-window)))))
+      (should (string-search "Prompt 2" (mevedel-view--status-strip)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
+        (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
+                                        (selected-window))))))))
+  :doc "both windows keep their own pinned prompt during deferred rendering"
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (let ((left (selected-window))
+            (right (split-window-right)))
+        (set-window-buffer left view-buf)
+        (set-window-buffer right view-buf)
+        (goto-char (point-min))
+        (search-forward "Response 1 with target text")
+        (set-window-start left (line-beginning-position) t)
+        (search-forward "Response 4 with target text")
+        (set-window-start right (line-beginning-position) t)
+        (mevedel-view-render-batched-full)
+        (should (equal "Prompt 1" (cdr (mevedel-view--pinned-prompt left))))
+        (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt right))))
+        (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                   (lambda () 300)))
+          (should (string-search "Prompt 1"
+                                 (with-selected-window left
+                                   (mevedel-view--status-strip))))
+          (should (string-search "Prompt 4"
+                                 (with-selected-window right
+                                   (mevedel-view--status-strip))))))))
   :doc "in-flight history uses the existing synchronous reconciliation"
   (mevedel-batch-test--with-history
     (mevedel-view-stream-begin-turn

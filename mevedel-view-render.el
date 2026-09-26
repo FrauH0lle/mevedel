@@ -230,6 +230,7 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--header-string
                   "mevedel-view" (data-buf))
+(declare-function mevedel-view--pinned-prompt "mevedel-view" (window))
 (declare-function mevedel-view--render-status
                   "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
@@ -7277,6 +7278,11 @@ selection and window starts; other visible turns may follow in callbacks."
     (when (and mark-active (mark))
       (push (cons (region-beginning) (1+ (region-end))) ranges))
     (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      ;; The response at the top is anchored, but its governing user turn
+      ;; can be farther up.  Keep that header in the immediate projection.
+      (when anchors-only
+        (when-let* ((pinned (mevedel-view--pinned-prompt window)))
+          (push (cons (car pinned) (1+ (car pinned))) ranges)))
       (push (cons (window-start window)
                   (if anchors-only
                       (1+ (window-start window))
