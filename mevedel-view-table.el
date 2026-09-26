@@ -91,6 +91,9 @@ running to the window edge instead of stopping at the last cell."
     wrap-prefix)
   "Text properties carried from a table's source onto its rendering.")
 
+(defvar mevedel-view-table--streaming-p nil
+  "Non-nil while decorating an unfinished streamed response.")
+
 
 ;;
 ;;; Table discovery
@@ -954,7 +957,8 @@ layout targets; otherwise a window showing the buffer is used."
 (defun mevedel-view-table-decorate (start end avoid-ranges)
   "Discover Markdown pipe tables between START and END.
 Views retain source and defer formatting until idle.  Other buffers render
-immediately.  Tables overlapping AVOID-RANGES or exempt text stay raw."
+immediately.  Tables overlapping AVOID-RANGES or exempt text stay raw.
+Tables in an unfinished streamed response remain raw until terminal projection."
   (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
     (let* ((beg (car table)) (end (cdr table))
            (source (mevedel-view--markdown-source beg end)))
@@ -964,6 +968,7 @@ immediately.  Tables overlapping AVOID-RANGES or exempt text stay raw."
          beg end
          (list 'mevedel-view-table-source source
                'mevedel-view-table-width nil
+               'mevedel-view-table-streaming mevedel-view-table--streaming-p
                'mevedel-view-no-linkify t
                'rear-nonsticky
                (mevedel-view-table--rear-nonsticky
@@ -991,7 +996,9 @@ source with a nil width is a table awaiting its first prettification."
           ;; A fold may end inside a table: continue at its next display
           ;; property boundary instead of skipping the entire source span.
           (setq next (min next (next-char-property-change pos end))))
-         ((and source (not (eql width (get-text-property pos 'mevedel-view-table-width))))
+         ((and source
+               (not (get-text-property pos 'mevedel-view-table-streaming))
+               (not (eql width (get-text-property pos 'mevedel-view-table-width))))
           (setq found
                 (list (previous-single-property-change
                        (1+ pos) 'mevedel-view-table-source nil (point-min))

@@ -457,7 +457,36 @@
                      (lambda (text) (setq spinner text))))
             (mevedel-compact-target--main-start nil))
           (should (equal "Compacting..." spinner)))
-      (kill-buffer view-buffer))))
+      (kill-buffer view-buffer)))
+
+  :doc "starting compaction keeps expanded tools open and preserves the draft"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"first.el\"))\n\nFirst result\n"
+     '(tool . "compact-call-1"))
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"second.el\"))\n\nSecond result\n"
+     '(tool . "compact-call-2"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (dolist (name '("first.el" "second.el"))
+        (goto-char (point-min))
+        (search-forward name)
+        (mevedel-view-toggle-section)
+        (should-not (get-text-property (point) 'mevedel-view-collapsed)))
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (with-current-buffer data-buf
+      (mevedel-compact-target--main-start nil))
+    (with-current-buffer view-buf
+      (should (equal "Compacting..." mevedel-view--spinner-status))
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (dolist (name '("first.el" "second.el"))
+        (goto-char (point-min))
+        (search-forward name)
+        (should-not (get-text-property (point) 'mevedel-view-collapsed)))
+      (goto-char (point-min))
+      (should (search-forward "First result" nil t))
+      (should (search-forward "Second result" nil t)))))
 
 (mevedel-deftest mevedel-compact-target--agent-start ()
   ,test
@@ -555,7 +584,61 @@
       (with-current-buffer view-buf
         (should (string= draft (mevedel-view--input-text)))
         (should (= (point)
-                   (+ (mevedel-view--input-start) point-offset)))))))
+                   (+ (mevedel-view--input-start) point-offset))))))
+
+  :doc "successful rotation retains expansion only for surviving tool rows"
+  (mevedel-view-test--with-buffers
+    (let* ((tempdir (make-temp-file "mevedel-compact-fold-" t))
+           (workspace (mevedel-workspace-get-or-create
+                       'project "compact-fold" tempdir "compact-fold"))
+           (session (mevedel-session-create "main" workspace))
+           tail-start)
+      (unwind-protect
+          (progn
+            (mevedel-view-test--insert-data data-buf "*** Old prompt\n" nil)
+            (mevedel-view-test--insert-data
+             data-buf
+             "(:name \"Read\" :args (:file_path \"old.el\"))\n\nOld result\n"
+             '(tool . "compact-old"))
+            (mevedel-view-test--insert-data data-buf "Old response.\n" 'response)
+            (with-current-buffer data-buf
+              (setq tail-start (point-max)))
+            (mevedel-view-test--insert-data data-buf "*** Recent prompt\n" nil)
+            (mevedel-view-test--insert-data
+             data-buf
+             "(:name \"Read\" :args (:file_path \"recent.el\"))\n\nRecent result\n"
+             '(tool . "compact-recent"))
+            (mevedel-view-test--insert-data data-buf "Recent response.\n" 'response)
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (mevedel-session-artifacts-ensure-files session data-buf))
+            (with-current-buffer view-buf
+              (mevedel-view--full-rerender)
+              (dolist (name '("old.el" "recent.el"))
+                (goto-char (point-min))
+                (search-forward name)
+                (mevedel-view-toggle-section)
+                (should-not (get-text-property (point) 'mevedel-view-collapsed)))
+              (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+            (with-current-buffer data-buf
+              (let ((tail (buffer-substring tail-start (point-max))))
+                (mevedel-compact-target--main-apply
+                 (mevedel-compact-target-main-target)
+                 test-mevedel-compact--valid-summary tail nil nil nil 1)
+                (mevedel-compact-target--main-complete nil t)))
+            (should (= 2 (mevedel-session-current-segment session)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (should-not (search-forward "old.el" mevedel-view--input-marker t))
+              (goto-char (point-min))
+              (search-forward "recent.el")
+              (should-not (get-text-property (point) 'mevedel-view-collapsed))
+              (should (search-forward "Recent result" nil t))
+              (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))))
+        (mevedel-session-persistence-lock-release
+         (or (mevedel-session-save-path session) tempdir) session)
+        (mevedel-workspace-clear-registry)
+        (delete-directory tempdir t)))))
 
 (mevedel-deftest mevedel-compact-target--agent-complete ()
   ,test

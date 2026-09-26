@@ -161,5 +161,53 @@
                           (should (timerp mevedel-view--realign-timer)))
                       (mevedel-view--cancel-realign-timer)))))
 
+(mevedel-deftest mevedel-view-table-rerender/streaming ()
+  ,test
+  (test)
+  :doc "idle passes leave an unfinished response raw, then format after settlement"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let ((draft "> draft\nsecond line") response-start)
+        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq response-start (copy-marker (point-max))))
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (mevedel-view-stream-begin-turn
+           mevedel-view--status-marker response-start)
+          (mevedel-view-test--insert-composer-draft draft 3))
+        (mevedel-view-test--insert-data
+         data-buf "| A | B |\n|---|---|\n| alpha |" 'response)
+        (with-current-buffer view-buf
+          (unwind-protect
+              (progn
+                (mevedel-view-render-live-update data-buf)
+                (goto-char (point-min))
+                (search-forward "| A | B |")
+                (should (get-text-property
+                         (match-beginning 0) 'mevedel-view-table-streaming))
+                (mevedel-view--realign-markdown)
+                (should-not (string-search "│" (buffer-string)))
+                (mevedel-view--full-rerender)
+                (mevedel-view--realign-markdown)
+                (should (string-search "| A | B |" (buffer-string)))
+                (should-not (string-search "│" (buffer-string)))
+                (mevedel-view-test--insert-data data-buf " beta |\n" 'response)
+                (mevedel-view-render-live-update data-buf)
+                (mevedel-view--realign-markdown)
+                (should (string-search "| alpha | beta |" (buffer-string)))
+                (should-not (string-search "│" (buffer-string)))
+                (mevedel-view-render-settle
+                 data-buf response-start
+                 (with-current-buffer data-buf (point-max)))
+                (goto-char (point-min))
+                (search-forward "| A | B |")
+                (should-not (get-text-property
+                             (match-beginning 0) 'mevedel-view-table-streaming))
+                (mevedel-view--realign-markdown)
+                (should (string-search "│ alpha │ beta │" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text))))
+            (mevedel-view--cancel-realign-timer)))))))
+
 (provide 'test-mevedel-view-table-deferred)
 ;;; test-mevedel-view-table-deferred.el ends here

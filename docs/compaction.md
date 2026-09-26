@@ -508,7 +508,9 @@ Old segment files remain on disk and stay available through
 `mevedel-rewind`. The live view skips the leading summary block when
 rendering the visible transcript and shows a compacted-conversation
 separator in its place, while the summary remains model-visible for
-future requests.
+future requests. Expanded tool rows surviving in the preserved tail
+remain expanded after the view rebuild; rows archived with the old segment
+do not transfer their disclosure state into the successor.
 
 Continuation after compaction resets gptel's stream insertion state at the end
 of the new transcript. Response, reasoning, and tool output therefore follow
