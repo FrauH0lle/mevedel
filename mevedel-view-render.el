@@ -7284,8 +7284,9 @@ turn.  SAVED-STATES restores matching disclosure state."
 (defun mevedel-view-render--priority-turns (turns &optional anchors-only)
   "Return TURNS visible to the current view's readers.
 With ANCHORS-ONLY, return only turns needed immediately to restore point,
-selection and window starts; other visible turns may follow in callbacks."
-  (let ((ranges (list (cons (point) (1+ (point))))) sources selected)
+selection and window starts, plus their governing prompts; other visible
+turns may follow in callbacks."
+  (let ((ranges (list (cons (point) (1+ (point))))) sources selected prompt)
     (when (and mark-active (mark))
       (push (cons (region-beginning) (1+ (region-end))) ranges))
     (dolist (window (get-buffer-window-list (current-buffer) nil t))
@@ -7309,12 +7310,20 @@ selection and window starts; other visible turns may follow in callbacks."
             (push start sources))
           (setq pos (next-single-property-change pos 'mevedel-view-source nil end)))))
     (dolist (turn turns)
+      (when (and anchors-only (eq (plist-get turn :role) 'user))
+        (setq prompt turn))
       (when (seq-some (lambda (source)
                        (and (<= (plist-get turn :start) source)
                             (< source (plist-get turn :end)))) sources)
+        (when (and anchors-only prompt (not (eq prompt turn))
+                   (not (memq prompt selected)))
+          (push prompt selected))
         (push turn selected)))
     ;; A new view has no source anchors.  Its current conversation comes first.
-    (or (nreverse selected) (last turns))))
+    (or (nreverse selected)
+        (if (and anchors-only prompt (not (eq prompt (car (last turns)))))
+            (list prompt (car (last turns)))
+          (last turns)))))
 
 (defun mevedel-view-render--batch-turn (job entry)
   "Replace JOB's placeholder ENTRY with its canonical rendered turn."

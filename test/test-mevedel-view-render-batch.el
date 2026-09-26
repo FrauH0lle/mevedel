@@ -83,6 +83,30 @@
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
         (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
                                         (selected-window))))))))
+  :doc "moving to another rendered response during a batch pins its own prompt"
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (set-window-buffer (selected-window) view-buf)
+      (goto-char (point-min))
+      (search-forward "Response 0 with target text")
+      (set-window-start nil (line-beginning-position) t)
+      (search-forward "Response 4 with target text")
+      (mevedel-view-render-batched-full)
+      (should mevedel-view-render--batch)
+      (goto-char (point-min))
+      (search-forward "Response 4 with target text")
+      (set-window-start nil (line-beginning-position) t)
+      (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
+                                      (selected-window)))))
+      (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                 (lambda () 300)))
+        (should (string-search "Prompt 4" (mevedel-view--status-strip))))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
+        (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
+                                        (selected-window)))))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
   :doc "both windows keep their own pinned prompt during deferred rendering"
   (mevedel-batch-test--with-history
     (save-window-excursion
