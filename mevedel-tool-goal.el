@@ -43,6 +43,9 @@
 (declare-function mevedel-tools--context-for "mevedel-tools" (fsm))
 (defvar mevedel-tools--current-fsm)
 
+;; `mevedel-turn'
+(declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
+
 (defconst mevedel-tool-goal-names '("CreateGoal" "GetGoal" "UpdateGoal")
   "Goal tools whose visibility follows the owning root request.")
 
@@ -185,7 +188,7 @@ GOAL's accepted plan, when it has one, is included verbatim."
   "Return the tool result explaining why OUTCOME did not complete the Goal."
   (list :status 'error
         :result
-        (format "Goal remains active: completion verification %s. Address the findings, then call UpdateGoal again.\n\n%s"
+        (format "Goal remains active: completion verification %s. This turn ends here; the next Goal turn addresses the findings, then calls UpdateGoal again.\n\n%s"
                 (pcase (plist-get outcome :verdict)
                   ('fail "returned FAIL")
                   ('partial "returned PARTIAL")
@@ -197,8 +200,10 @@ GOAL's accepted plan, when it has one, is included verbatim."
 (defun mevedel-tool-goal--handle-update (callback args)
   "Handle UpdateGoal ARGS from the current root request through CALLBACK.
 Blocked settles at once.  Completion is accepted only when an independent
-verifier passes it; any other verdict returns its report and keeps the Goal
-active.  The verifier's token usage is charged to the Goal."
+verifier passes it; any other verdict returns its report, keeps the Goal
+active, and ends the turn at this tool boundary so the rejected attempt
+settles as its own Goal turn before continuation.  The verifier's token usage
+is charged to the Goal."
   (let* ((fsm (mevedel-tool-goal--request "UpdateGoal"))
          (session mevedel--session)
          (goal-id (plist-get (gptel-fsm-info fsm) :mevedel-goal-id))
@@ -238,6 +243,7 @@ active.  The verifier's token usage is charged to the Goal."
                   (funcall callback reply)))))
             (t
              (mevedel-goal-charge-tokens fsm usage)
+             (mevedel-turn-end-at-boundary fsm 'goal-verification-failed)
              (funcall callback
                       (mevedel-tool-goal--verification-failure outcome))))))
        'goal-review))))

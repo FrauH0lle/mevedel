@@ -217,7 +217,12 @@ no account of the implementer's work or test results; it discovers the
 changes and current state itself. Only a final `VERDICT: PASS` completes the
 Goal, and only if it is still the same active Goal. FAIL, PARTIAL, a report
 without exactly one final verdict line, or a verifier failure returns the
-report as the tool result and leaves the Goal active. An unreadable accepted
+report as the tool result, leaves the Goal active, and ends the root turn at
+that tool boundary. The rejected attempt therefore settles as its own Goal turn:
+it is counted, captured by the journal, and checkpointed, queued follow-ups get
+their turn, and ordinary continuation starts the next attempt with the report
+in its history. The "same condition across three consecutive Goal turns" rule
+for `blocked` thus counts completion attempts. An unreadable accepted
 plan refuses verification. A user abort interrupts the verifier and pauses the
 Goal as for any Goal turn. Canonical turn settlement still persists the final
 accounting.

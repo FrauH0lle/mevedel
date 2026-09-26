@@ -543,6 +543,18 @@ the machine's request identity keys a degraded settlement. Transport cancellatio
 releases the settlement fence and clears the machine's settlement stamp so a
 later terminal transition can retry it.
 
+`mevedel-turn-end-at-boundary` lets a harness caller end a running root or
+agent turn without aborting it. Once the current tool results are recorded,
+the machine moves to `DONE` instead of sampling again, so the turn settles as a
+completed one: accounting, journal capture, the checkpoint, queued input, and
+Goal continuation run as usual. Errors and pending same-turn steering take
+precedence, so steering is delivered and the turn ends at the following
+boundary. The request is a transition rule added by
+`mevedel-preset--build-transitions`, which root and agent machines both use; an
+agent turn ended this way settles from its `DONE` handler. gptel's own
+post-tool `:stop` differs: it records an error and fails the turn. Callers:
+an UpdateGoal completion rejected by its verifier ([Goals](goals.md#goal-tools)).
+
 Terminal continuations settle once and recheck request and session ownership
 between lifecycle steps. Old patch and directive-attempt evidence remains tied
 to the captured request; an obsolete continuation cannot replace current patch

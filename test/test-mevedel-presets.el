@@ -63,7 +63,21 @@
      (equal '(error-p tool-p mevedel-tools--pending-steering-p t)
             (mapcar #'car rules)))
     (should (eq 'WAIT
-                (cdr (assq #'mevedel-tools--pending-steering-p rules))))))
+                (cdr (assq #'mevedel-tools--pending-steering-p rules)))))
+
+  :doc "ends a turn at its tool results only when asked, after errors and steering"
+  (let ((fsm (gptel-make-fsm
+              :state 'TRET
+              :table (mevedel-preset--build-transitions
+                      (copy-tree (default-value 'gptel-send--transitions)))
+              :info (list :tool-result '(result)))))
+    (should (eq 'WAIT (gptel--fsm-next fsm)))
+    (plist-put (gptel-fsm-info fsm) :mevedel-end-turn 'test)
+    (should (eq 'DONE (gptel--fsm-next fsm)))
+    (plist-put (gptel-fsm-info fsm) :steering-message "steer")
+    (should (eq 'TSTR (gptel--fsm-next fsm)))
+    (plist-put (gptel-fsm-info fsm) :error "failed")
+    (should (eq 'ERRS (gptel--fsm-next fsm)))))
 
 (mevedel-deftest mevedel-preset--build-handlers
   (:before-each (mevedel-workspace-clear-registry)
