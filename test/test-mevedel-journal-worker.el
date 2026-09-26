@@ -50,6 +50,28 @@
          (when timer (cancel-timer timer))
          (when (and process (process-live-p process)) (delete-process process)))))))
 
+(mevedel-deftest mevedel-journal-worker--read ()
+  ,test
+  (test)
+  :doc "round-trips text holding NUL bytes beside non-ASCII characters"
+  ;; Coding detection would read such a file as raw bytes, leaving every
+  ;; non-ASCII string unibyte and unserializable as JSON.
+  (let* ((file (make-temp-file "mevedel-journal-worker-" nil ".el"))
+         (evidence (concat "Mevedel\u2019s header\n\\x89PNG\r\n"
+                           (string ?\C-z ?\n 0 0) "\u2014 done"))
+         (value (list :prepared (list :capture (list :evidence evidence)))))
+    (unwind-protect
+        (progn
+          (mevedel-journal-worker--write file value)
+          (let ((read (plist-get (plist-get (plist-get (mevedel-journal-worker--read file)
+                                                       :prepared)
+                                            :capture)
+                                 :evidence)))
+            (should (equal evidence read))
+            (should (multibyte-string-p read))
+            (should (json-serialize (list :evidence read)))))
+      (delete-file file))))
+
 (mevedel-deftest mevedel-journal-worker--run ()
   ,test
   (test)

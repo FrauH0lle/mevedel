@@ -753,7 +753,10 @@ turn index, model policy and client identity. It receives no source mutation
 lease or provider object. The editor retains request admission while allowing
 input, then checks the same live root, request, saved head and source authority
 before publishing and pinning. Changed or cancelled sources cannot publish late
-results; preparation has a 120-second timeout. Terminal hooks and queued requests
+results; preparation has a 120-second timeout. The child's request and reply
+files use an explicit lossless coding: detection read evidence holding a NUL
+byte, such as binary tool output, as raw bytes and broke every non-ASCII string.
+Terminal hooks and queued requests
 wait for settlement, and collection is offered afterward. Explicit checkpointing,
 compaction/close, PID-lock sessions and remote roots use the same preparation
 and publication operations synchronously.
