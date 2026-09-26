@@ -606,7 +606,8 @@ The string `none' removes the limit."
     goal))
 
 (defun mevedel-goal-pause-runtime-failure (buffer reason)
-  "Pause BUFFER's active Goal with runtime failure REASON."
+  "Pause BUFFER's active Goal for REASON, such as a runtime failure.
+A hook that stops the turn pauses the Goal through here as well."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when-let* ((session mevedel--session)

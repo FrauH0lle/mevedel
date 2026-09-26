@@ -46,8 +46,11 @@
                   "mevedel-execution-target" (cl-x) t)
 
 ;; `mevedel-goal'
+(declare-function mevedel-goal-pause-runtime-failure
+                  "mevedel-goal" (buffer reason))
 (declare-function mevedel-goal-tool-result-budget-warning
                   "mevedel-goal" (session fsm))
+(autoload 'mevedel-goal-pause-runtime-failure "mevedel-goal")
 (autoload 'mevedel-goal-tool-result-budget-warning "mevedel-goal")
 
 ;; `mevedel-hooks'
@@ -206,6 +209,7 @@
                   "mevedel-turn" (request source reason))
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
+(declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
@@ -979,6 +983,25 @@ permission or handler work begins."
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))
      (list :reason reason))))
 
+(defun mevedel-pipeline--hook-stop-p (decision)
+  "Return non-nil when hook DECISION asks to stop processing."
+  (and (plist-member decision :continue)
+       (not (plist-get decision :continue))))
+
+(defun mevedel-pipeline--stop-turn-for-hook (context event decision)
+  "End CONTEXT's turn at its tool boundary for EVENT's stopping DECISION.
+A root turn also pauses its active Goal, whose continuation would otherwise
+restart the stopped work."
+  (when-let* ((fsm (plist-get context :fsm))
+              ((mevedel-turn-end-at-boundary fsm 'hook-stop)))
+    (let ((reason (format "%s hook stopped the turn: %s"
+                          event
+                          (or (plist-get decision :stop-reason)
+                              "no reason given"))))
+      (unless (plist-get context :invocation)
+        (mevedel-goal-pause-runtime-failure (plist-get context :buffer) reason))
+      (message "mevedel: %s" reason))))
+
 (defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
   "Run `PreToolUse' hooks for CONTEXT, then call NEXT or FAIL.
 
@@ -995,9 +1018,7 @@ can tighten policy or skip a prompt without overriding explicit denies."
      'PreToolUse
      (mevedel-hooks-tool-event-plist 'PreToolUse context)
      (lambda (decision)
-       (let ((stopped-p
-              (and (plist-member decision :continue)
-                   (not (plist-get decision :continue))))
+       (let ((stopped-p (mevedel-pipeline--hook-stop-p decision))
              (denied-p
               (eq (plist-get decision :permission-decision) 'deny)))
          (cond
@@ -1025,6 +1046,9 @@ can tighten policy or skip a prompt without overriding explicit denies."
               (list :outcome 'deny
                     :raw-outcome `(deny . ,reason)
                     :via 'pre-tool-hook))
+             (when stopped-p
+               (mevedel-pipeline--stop-turn-for-hook
+                context 'PreToolUse decision))
              (mevedel-tool-permission-deny
               updated fail
               (if stopped-p reason (format "Permission denied: %s" reason))
@@ -1560,6 +1584,8 @@ explicit `:updated-result' changes the model-visible tool result."
      (lambda (decision)
        (let ((context (mevedel-hooks-record-tool-context
                        context decision event)))
+         (when (mevedel-pipeline--hook-stop-p decision)
+           (mevedel-pipeline--stop-turn-for-hook context event decision))
          (setq context
                (mevedel-hooks-record-tool-audit
                 context

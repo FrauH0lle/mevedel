@@ -1450,6 +1450,55 @@ cover, so the permission step's warning about it is captured here."
 		   (should-not failed)
 		   (should (equal result "ok"))))
 
+(mevedel-deftest mevedel-pipeline--stop-turn-for-hook
+  ()
+  ,test
+  (test)
+  :doc "a post-tool stop keeps the result, ends the root turn, and pauses its Goal"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create :id "g" :objective "Ship" :status 'active))
+           (session (mevedel-session--create :name "main" :goal goal))
+           (fsm (gptel-make-fsm :info (list :buffer (current-buffer))))
+           (context (list :tool (mevedel-tool--create :name "Read")
+                          :args nil :result "ok" :fsm fsm
+                          :buffer (current-buffer)
+                          :default-directory default-directory))
+           messages result)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback '(:continue nil :stop-reason "halt"))))
+                ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        (mevedel-pipeline--step-post-tool-hooks
+         context (lambda (ctx) (setq result (plist-get ctx :result))) #'ignore)
+        ;; A second stop in the same turn changes nothing.
+        (mevedel-pipeline--stop-turn-for-hook context 'PostToolUse
+                                              '(:continue nil)))
+      (should (equal "ok" result))
+      (should (eq 'hook-stop (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should (equal "PostToolUse hook stopped the turn: halt"
+                     (mevedel-goal-reason goal)))
+      (should (equal '("mevedel: PostToolUse hook stopped the turn: halt")
+                     messages))))
+
+  :doc "an agent's stop ends only the agent turn"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create :id "g" :objective "Ship" :status 'active))
+           (fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+      (setq-local mevedel--session
+                  (mevedel-session--create :name "main" :goal goal))
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (mevedel-pipeline--stop-turn-for-hook
+         (list :fsm fsm :buffer (current-buffer)
+               :invocation (mevedel-agent-invocation--create))
+         'PreToolUse '(:continue nil :stop-reason "no")))
+      (should (eq 'hook-stop (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
+      (should (eq 'active (mevedel-goal-status goal))))))
+
 (mevedel-deftest mevedel-pipeline--step-post-tool-hooks/buffer-local
 		 (:doc "runs native post hooks in the captured dispatch buffer")
 		 ,test

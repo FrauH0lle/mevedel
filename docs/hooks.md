@@ -31,11 +31,11 @@ Supported events and their control effects:
 | `SessionStart` | root context epoch begins | source (`startup`, `resume`, `clear`, `compact`, `rewind`, `restore`, `fork`) | add context only |
 | `UserPromptSubmit` | before a root or retained-agent task input is sent | none | block, add context, rewrite prompt |
 | `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
-| `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
+| `PreToolUse` | after validation, before permission | tool name | deny, ask, stop the turn, add context, rewrite args |
 | `PermissionRequest` | once before any permission card enters the shared queue | tool name | allow, deny, ask |
 | `PermissionDenied` | once after a final tool denial | tool name | add feedback/context only |
-| `PostToolUse` | after handler and result shaping | tool name | add context, replace result, mark feedback |
-| `PostToolUseFailure` | after a handler reports or signals failure | tool name | add context, replace result |
+| `PostToolUse` | after handler and result shaping | tool name | stop the turn, add context, replace result, mark feedback |
+| `PostToolUseFailure` | after a handler reports or signals failure | tool name | stop the turn, add context, replace result |
 | `PreCompact` | before manual/automatic compaction | trigger (`manual`, `auto`) | block, add context |
 | `PostCompact` | after compaction completes | trigger | notification/logging |
 | `SubagentStart` | once before a retained-agent identity is published | agent role | block, add context |
@@ -302,7 +302,8 @@ handlers.
 
 Decision plist fields:
 
-- `:continue nil`: stop processing where supported.
+- `:continue nil`: stop processing where supported. From a tool event it ends
+  the turn at the current tool boundary (see below).
 - `:stop-reason`: user-facing reason.
 - `:system-message`: user-visible warning/status.
 - `:additional-context`: developer/model context to inject into the next
@@ -368,6 +369,15 @@ can add context or persist oversized output. `:raw-result` is available
 for audit, formatting, redaction, or repair hooks that need the handler's
 original output.  Post-tool hooks cannot block already-completed tool side
 effects; they may replace feedback with `:updated-result` or add context.
+
+A `:continue nil` decision from `PreToolUse`, `PostToolUse`, or
+`PostToolUseFailure` stops the turn, matching Claude Code's `continue: false`.
+`PreToolUse` still denies its tool call. The turn then ends at the current
+tool boundary: the batch's tool results are recorded and the turn settles
+normally instead of sampling the model again. On a root turn an active Goal
+is paused with the stop reason, because continuation would otherwise restart
+the stopped work; an agent's stop ends only that agent turn. A fail-closed
+handler's failure is such a decision too.
 Only a handler execution reaches a post-use hook: canonical success emits
 `PostToolUse`, while explicit or signaled handler failure emits
 `PostToolUseFailure`.  Validation, permission, and aborted-interaction
