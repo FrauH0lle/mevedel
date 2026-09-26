@@ -215,6 +215,7 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view--after-header-position
                   "mevedel-view-render" ())
+(declare-function mevedel-view--expand-turn "mevedel-view-render" ())
 (declare-function mevedel-view--full-rerender
                   "mevedel-view-render"
                   (&optional transcript-buffer source-changed-p))
@@ -227,10 +228,12 @@
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-batched-full "mevedel-view-render" ())
-(declare-function mevedel-view-render-resume-batch "mevedel-view-render" ())
 (declare-function mevedel-view-render-initialize
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-invalidate-live-tail
+                  "mevedel-view-render" ())
+(declare-function mevedel-view-render-resume-batch "mevedel-view-render" ())
+(declare-function mevedel-view-render-toggle-user-input
                   "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
 
