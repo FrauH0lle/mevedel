@@ -206,7 +206,7 @@ attributed to the active Goal. It accepts exactly:
 - `blocked` with a nonblank summary, stored as the Goal reason.
 
 `blocked` takes effect at once. `complete` is a completion claim: the tool
-runs the `verifier` agent in a separate request, using the `verifier`
+runs the `verifier` agent in a separate request, using the `goal-review`
 workload's model and effort, while the Goal stays active. The verifier receives
 the exact objective and, when the Goal has one, the accepted plan verbatim, but
 no account of the implementer's work or test results; it discovers the
@@ -217,6 +217,13 @@ report as the tool result and leaves the Goal active. An unreadable accepted
 plan refuses verification. A user abort interrupts the verifier and pauses the
 Goal as for any Goal turn. Canonical turn settlement still persists the final
 accounting.
+
+The `goal-review` workload defaults to the `strong` tier. It selects only the
+completion check's model and reasoning effort; `/verify` and ordinary verifier
+agents continue to use `verifier`. Empty tier fields inherit session policy.
+For example, `:model-workloads ((goal-review :tier strong))` configures completion
+checks independently of `plan-implementation` and `verifier`. Invalid review
+policy leaves the Goal active and reports an error rather than falling back.
 
 The installed `prompts/goals/active-context.md` formats current objective,
 accepted-plan reference, and accounting. `prompts/goals/policy.md` separately

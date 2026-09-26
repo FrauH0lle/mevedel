@@ -16,6 +16,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar gptel-reasoning-effort)
+
 
 ;;
 ;;; Provider and tier resolution
@@ -414,6 +416,26 @@
       (should (eq 'balanced-model
                   (plist-get (mevedel-model-resolve-workload 'plan-implementation)
                              :model)))))
+  :doc "Goal review uses strong independently of the ordinary verifier policy"
+  (mevedel-skills-test--with-model-backends
+    (let ((mevedel-model-workloads
+           (eval (car (get 'mevedel-model-workloads 'standard-value)) t))
+          (mevedel-model-tiers
+           '((strong :provider "Balanced:balanced-model" :effort high)
+             (balanced :provider "Fast:fast-model" :effort low)))
+          (gptel-backend (gptel-get-backend "Fast"))
+          (gptel-model 'fast-model)
+          (gptel-reasoning-effort 'medium))
+      (should (equal (list :backend (gptel-get-backend "Balanced")
+                          :model 'balanced-model :effort 'high)
+                     (mevedel-model-resolve-workload 'goal-review)))
+      (should (equal (list :backend (gptel-get-backend "Fast")
+                          :model 'fast-model :effort 'low)
+                     (mevedel-model-resolve-workload 'verifier)))
+      (setq mevedel-model-tiers '((strong) (balanced)))
+      (should (equal (list :backend gptel-backend
+                          :model 'fast-model :effort 'medium)
+                     (mevedel-model-resolve-workload 'goal-review)))))
   :doc "the buddy workload defaults to the fast tier"
   (mevedel-models-test--with-backends
     (let ((mevedel-model-tiers '((fast :provider "Fast:fast-model")))

@@ -334,6 +334,12 @@ finish with the verifier prompt's `VERDICT: PASS`, `VERDICT: FAIL`, or
 read from the complete settled report rather than the bounded preview;
 malformed reports remain visible but are marked rejected.
 
+Goal completion uses the same verifier role and verdict contract, but selects
+its model and effort through `goal-review` (default tier: `strong`). `/verify`
+and ordinary verifier agents retain the `verifier` workload. The Goal check
+receives the exact objective and any accepted plan with `context: none`, so it
+discovers evidence independently of the implementation conversation.
+
 While either task runs, the parent view shows an inline `Review` or
 `Verify` handle backed by transcript metadata. The handle updates with
 running/done/error state and recent tool-call counts like other agent

@@ -27,7 +27,8 @@
 (declare-function mevedel-plan-resource-address "mevedel-plan" (relative-path))
 
 ;; `mevedel-review'
-(declare-function mevedel-review-verify "mevedel-review" (prompt callback))
+(declare-function mevedel-review-verify "mevedel-review"
+                  (prompt callback &optional workload))
 (autoload 'mevedel-review-verify "mevedel-review")
 
 ;; `mevedel-structs'
@@ -238,7 +239,8 @@ active.  The verifier's token usage is charged to the Goal."
             (t
              (mevedel-goal-charge-tokens fsm usage)
              (funcall callback
-                      (mevedel-tool-goal--verification-failure outcome))))))))))
+                      (mevedel-tool-goal--verification-failure outcome))))))
+       'goal-review))))
 
 (defun mevedel-tool-goal--register ()
   "Register Goal creation, inspection, and completion tools."

@@ -86,6 +86,12 @@
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
+;; `mevedel-models'
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
+(autoload 'mevedel-model-resolve-workload "mevedel-models")
+
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-commit
                   "mevedel-prompt-submission" (submission))
@@ -1120,12 +1126,13 @@ OUTCOME's `:result' is a bounded preview that can omit the final line."
 
 (defun mevedel-review--run-task
     (prompt hint callback &optional submit-context progress-callback command
-            cwd target)
+            cwd target workload)
   "Run and await the dedicated validation leaf for PROMPT and HINT.
 CALLBACK receives the normalized fork-style outcome. SUBMIT-CONTEXT is appended
 when non-empty. PROGRESS-CALLBACK receives the invocation before dispatch.
 COMMAND defaults to `review'. CWD and TARGET schedule package preparation only
-after the parent has accepted the review turn; cancellation covers preparation."
+after the parent has accepted the review turn; cancellation covers preparation.
+WORKLOAD overrides the role's model policy when non-nil."
   (let* ((command (or command 'review))
          (session mevedel--session)
          (request mevedel--current-request)
@@ -1188,6 +1195,9 @@ after the parent has accepted the review turn; cancellation covers preparation."
                                    message #'prepared
                                    :agent (mevedel-agent-resolve-role (mevedel-review--command-agent-name command))
                                    :context "none"
+                                   :model-policy
+                                   (and workload
+                                        (mevedel-model-resolve-workload workload))
                                    :description (or hint (mevedel-review--command-description command))
                                    :skill-permission-rules
                                    (if (eq command 'verify) (mevedel-review--verify-permission-rules)
@@ -1209,17 +1219,17 @@ after the parent has accepted the review turn; cancellation covers preparation."
           (unless settled-p
             (mevedel-request-push-canceller request #'cancel)))))))
 
-(defun mevedel-review-verify (prompt callback)
+(defun mevedel-review-verify (prompt callback &optional workload)
   "Run the verifier for PROMPT from the current root request.
 CALLBACK receives one outcome plist.  A verified report has `:verdict' `pass',
 `fail' or `partial' with its bounded `:result'; a report without exactly one
 final VERDICT line has `:verification-rejected'.  Failures carry `:status'
 `error' with `:reason' and `:message'.  Any outcome may carry the verifier's
 token `:usage'.  Cancelling the request interrupts the verifier and drops its
-outcome."
+outcome.  WORKLOAD overrides the verifier's model policy when non-nil."
   (mevedel-review--ensure-dispatch-deps 'verify)
   (mevedel-review--run-task prompt "Verify Goal completion" callback
-                            nil nil 'verify))
+                            nil nil 'verify nil nil workload))
 
 (defun mevedel-review--transform-command-outcome (outcome &optional command)
   "Transform validation OUTCOME for COMMAND before parent insertion."
