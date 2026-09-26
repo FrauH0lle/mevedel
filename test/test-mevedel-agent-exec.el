@@ -767,6 +767,49 @@ fire-count and payload."
     (should (equal '(t "whole" "chunk") bookkept))))
 
 
+(mevedel-deftest mevedel-agent-exec--handle-wait-turn ()
+  ,test
+  (test)
+  :doc "counts each sample, warns near the cap, and ends the capped turn"
+  (let* ((inv (mevedel-agent-invocation--create
+               :agent (mevedel-agent--create :name "explorer" :max-turns 5)
+               :reminders (list (mevedel-reminders-make-max-turns-warning))
+               :turn-count 0))
+         (fsm (gptel-make-fsm :info (list :mevedel-agent-invocation inv)))
+         (types (lambda ()
+                  (mapcar (lambda (entry) (plist-get entry :type))
+                          (plist-get (gptel-fsm-info fsm)
+                                     :mevedel-reminder-entries)))))
+    (dotimes (_ 3) (mevedel-agent-exec--handle-wait-turn fsm))
+    (should (= 3 (mevedel-agent-invocation-turn-count inv)))
+    (should-not (funcall types))
+    (mevedel-agent-exec--handle-wait-turn fsm)
+    (should (equal '(max-turns-warning) (funcall types)))
+    ;; Delivery commits the one-shot warning.
+    (mapc #'funcall (plist-get (gptel-fsm-info fsm) :mevedel-reminder-commits))
+    (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))
+    (mevedel-agent-exec--handle-wait-turn fsm)
+    (should (equal '(max-turns-warning max-turns-limit) (funcall types)))
+    (should (string-search "final turn (5 of 5)"
+                           (plist-get (cadr (plist-get (gptel-fsm-info fsm)
+                                                       :mevedel-reminder-entries))
+                                      :body)))
+    (should (eq 'agent-turn-limit
+                (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
+    ;; A later sample of the same ended turn neither re-warns nor repeats.
+    (mevedel-agent-exec--handle-wait-turn fsm)
+    (should (= 2 (length (funcall types)))))
+
+  :doc "counts agents without a cap without staging anything"
+  (let* ((inv (mevedel-agent-invocation--create
+               :agent (mevedel-agent--create :name "explorer") :turn-count 0))
+         (fsm (gptel-make-fsm :info (list :mevedel-agent-invocation inv))))
+    (mevedel-agent-exec--handle-wait-turn fsm)
+    (should (= 1 (mevedel-agent-invocation-turn-count inv)))
+    (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+    (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))))
+
+
 (mevedel-deftest mevedel-agent-exec--handle-done-ended ()
   ,test
   (test)

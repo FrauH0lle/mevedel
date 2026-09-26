@@ -101,6 +101,13 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--agent-transform
                   "mevedel-reminders" (fsm))
+(declare-function mevedel-reminders--collect-from
+                  "mevedel-reminders" (reminders turn-count ctx))
+(declare-function mevedel-reminders--stage-batch
+                  "mevedel-reminders" (fsm entries commits))
+(declare-function mevedel-reminder-type "mevedel-reminders" (cl-x) t)
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
@@ -111,6 +118,9 @@
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-plan-tool-filter
                   "mevedel-tools" (fsm))
+
+;; `mevedel-turn'
+(declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
 
 (defvar mevedel-agent-exec-debug nil
   "Non-nil enables request-driver lifecycle diagnostics.")
@@ -176,6 +186,33 @@ running Org save machinery synchronously on every tool boundary."
       (mevedel-agent-conversation-record-activity
        inv '(:type waiting :summary "waiting")))))
 
+(defun mevedel-agent-exec--handle-wait-turn (fsm)
+  "Count FSM's model request toward its agent's `max-turns' cap.
+Every WAIT samples the model once, so each counts as one agent turn.  Near
+the cap the one-shot max-turns warning is staged; the request that reaches it
+is the last one: it is told to answer now and its turn ends after any tools
+it still calls, settling with its latest response."
+  (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
+    (let* ((count (cl-incf (mevedel-agent-invocation-turn-count inv)))
+           (agent (mevedel-agent-invocation-agent inv))
+           (max-turns (and agent (mevedel-agent-max-turns agent))))
+      (when max-turns
+        (if (>= count max-turns)
+            (when (mevedel-turn-end-at-boundary fsm 'agent-turn-limit)
+              (mevedel-reminders-stage-entry
+               fsm 'max-turns-limit
+               (format "This is your final turn (%d of %d). Reply now with your findings for the caller; any tools you still call run, then your turn ends."
+                       count max-turns)))
+          (let ((staged
+                 (mevedel-reminders--collect-from
+                  (seq-filter (lambda (reminder)
+                                (eq 'max-turns-warning
+                                    (mevedel-reminder-type reminder)))
+                              (mevedel-agent-invocation-reminders inv))
+                  count inv)))
+            (mevedel-reminders--stage-batch
+             fsm (plist-get staged :entries) (plist-get staged :commits))))))))
+
 (defun mevedel-agent-exec--handle-done-ended (fsm)
   "Settle FSM's agent turn when it ended at a tool boundary.
 Such a turn reaches DONE from its tool results, after the stream's terminal
@@ -231,6 +268,7 @@ the terminal event through the request callback's exactly-once retry gate."
      ,#'mevedel-tools--handle-message-inject
      ,#'mevedel-tools--handle-plan-tool-filter
      ,#'mevedel-agent-exec--handle-wait-activity
+     ,#'mevedel-agent-exec--handle-wait-turn
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage
           ,#'mevedel-compact-estimation-record-token-baseline
@@ -260,7 +298,8 @@ where FN is called when the FSM transitions into (or out of) STATE.
 Additions:
 
 - `WAIT' injects the caller's compact direct-child roster, inbound messages,
-  and system reminders before sampling.
+  and system reminders before sampling, and counts the sample toward the
+  agent's `max-turns' cap.
 - `TRET' gains `mevedel-agent-exec--handle-tret-save' so transcripts are durable
   across long tool loops (gptel's post-response hook fires only at DONE/ABRT,
   not TRET).

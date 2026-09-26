@@ -124,8 +124,10 @@ Agent invocations carry their own reminder roster (configured reminders and
 max-turns warning), cloned at spawn. `mevedel-reminders--agent-transform` runs in every agent
 request's transform list and collects that roster with the invocation
 as firing context; delivery, commits, and the injection record ride
-the shared WAIT injector. Turn events queue against the invocation as
-owner exactly as on the root path.
+the shared WAIT injector. The max-turns warning is instead evaluated at
+every agent WAIT, where each model sample is counted, so it fires inside
+long tool loops ([Agents](agents.md)). Turn events queue against the
+invocation as owner exactly as on the root path.
 
 ## Implemented reminders
 

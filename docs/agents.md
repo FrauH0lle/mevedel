@@ -136,6 +136,13 @@ invocation time. Registered buffer-locally via `mevedel-agents--specs` per
 request (no caching). Each invocation gets a cloned reminder list with
 independent `last-fired`.
 
+An optional `:max-turns` caps one Agent call's model samples; the built-in
+agents set it. Every sample of the tool loop counts as one turn. At 80% the
+agent receives a one-shot warning to wrap up. The sample that reaches the cap
+tells the agent to answer now and ends its turn at the next tool boundary, so
+the call settles with the agent's latest response instead of looping on.
+Retained follow-ups start a fresh count.
+
 Agent definitions may include `:hooks` using the same declarative hook
 shape as project hook files. These rules are scoped to invocations of that
 agent and are folded into the agent invocation layer before skill-scoped
