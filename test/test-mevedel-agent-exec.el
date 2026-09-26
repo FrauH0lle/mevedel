@@ -743,6 +743,30 @@ fire-count and payload."
     (should-not (mevedel-agent-exec--invocation-from-fsm (gptel-make-fsm)))))
 
 
+(mevedel-deftest mevedel-agent-exec--wrap-callback ()
+  ,test
+  (test)
+  :doc "forwards inserts to gptel's stock callback chosen from final :stream"
+  ;; gptel installs its default `:callback' only when the provider request
+  ;; is sent, possibly after `gptel-request' returned, so the wrapper must
+  ;; not depend on a callback captured at dispatch.
+  (let (inserted bookkept)
+    (cl-letf (((symbol-function 'gptel-curl--stream-insert-response)
+               (lambda (resp _info &optional _raw)
+                 (push (cons 'stream resp) inserted)))
+              ((symbol-function 'gptel--insert-response)
+               (lambda (resp _info &optional _raw)
+                 (push (cons 'plain resp) inserted))))
+      (let ((wrapped (mevedel-agent-exec--wrap-callback
+                      (lambda (resp _info &rest _)
+                        (push resp bookkept)))))
+        (funcall wrapped "chunk" (list :stream t))
+        (funcall wrapped "whole" (list :buffer nil))
+        (funcall wrapped t (list :stream t))))
+    (should (equal '((plain . "whole") (stream . "chunk")) inserted))
+    (should (equal '(t "whole" "chunk") bookkept))))
+
+
 (mevedel-deftest mevedel-agent-exec--handle-tret-save ()
 		 ,test
 		 (test)

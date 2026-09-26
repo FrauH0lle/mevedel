@@ -43,6 +43,10 @@
 (declare-function gptel--update-tool-call "ext:gptel" (fsm))
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-with-preset "ext:gptel" (name &rest body))
+(declare-function gptel--insert-response "ext:gptel"
+                  (response info &optional raw))
+(declare-function gptel-curl--stream-insert-response "ext:gptel"
+                  (response info &optional raw))
 (defvar gptel--fsm-last)
 (defvar gptel-send--transitions)
 
@@ -391,9 +395,7 @@ Returns the spawned FSM."
           :transforms (list #'gptel--transform-add-context
                             #'mevedel-reminders--agent-transform)))
       (let* ((req-info (gptel-fsm-info fsm))
-             (gptel-cb (plist-get req-info :callback))
-             (wrapped
-              (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+             (wrapped (mevedel-agent-exec--wrap-callback mevedel-cb)))
         ;; `gptel-request' replaces the FSM info plist wholesale, so
         ;; every mevedel key must be installed on the plist it built.
         ;; The terminal callback is what settles the invocation from the
@@ -417,13 +419,11 @@ Returns the spawned FSM."
               (plist-put req-info :callback wrapped)))
       fsm)))
 
-(defun mevedel-agent-exec--wrap-callback (gptel-cb mevedel-cb)
+(defun mevedel-agent-exec--wrap-callback (mevedel-cb)
   "Build the wrap-and-chain callback for the agent-buffer dispatch path.
 
-GPTEL-CB is gptel's stock insertion callback captured from the FSM's
-`:callback' info slot (typically `gptel--insert-response' or
-`gptel-curl--stream-insert-response').  MEVEDEL-CB is the bookkeeping
-callback returned by `mevedel-agent-exec--make-callback'.
+MEVEDEL-CB is the bookkeeping callback returned by
+`mevedel-agent-exec--make-callback'.
 
 For each event delivered by gptel:
 
@@ -431,19 +431,28 @@ For each event delivered by gptel:
   produce no buffer insertion; gptel's stock callback would be a no-op insert
   path.
 - insertable events (string chunks, `(tool-call . ...)`, `(tool-result . ...)`,
-  etc.): forward to GPTEL-CB first so the agent buffer reflects the event, then
-  run MEVEDEL-CB so the partial accumulator and finalize gating see the
-  post-insert state.
+  etc.): forward to gptel's stock insertion callback first so the agent buffer
+  reflects the event, then run MEVEDEL-CB so the partial accumulator and
+  finalize gating see the post-insert state.
+
+The stock callback is chosen per event from the request's final `:stream',
+as `gptel-curl-get-response' would.  gptel installs its default only when
+the provider request is sent, which can happen after `gptel-request'
+returns (edited-file diffs are prepared asynchronously), so it cannot be
+captured at dispatch.
 
 Insertion errors are diagnostic only.  The adapter retains a terminal event
 whose runtime handoff fails and retries it from an owned timer."
   (lambda (response &rest rest)
     (let ((terminal (memq response '(t nil abort))))
       (unless terminal
-        (when gptel-cb
-          (condition-case err (apply gptel-cb response rest)
-            (error
-             (message "mevedel: gptel insertion callback errored: %S" err)))))
+        (condition-case err
+            (apply (if (plist-get (car rest) :stream)
+                       #'gptel-curl--stream-insert-response
+                     #'gptel--insert-response)
+                   response rest)
+          (error
+           (message "mevedel: gptel insertion callback errored: %S" err))))
       (when mevedel-cb
         (apply mevedel-cb response rest)))))
 
