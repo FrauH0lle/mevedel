@@ -1129,7 +1129,7 @@
   (let ((agent (mevedel-agent-get "verifier")))
     (should agent)
     (should (equal "verifier" (mevedel-agent-name agent)))
-    (should (= 20 (mevedel-agent-max-turns agent)))
+    (should (= 150 (mevedel-agent-max-turns agent)))
     ;; The frozen role prompt owns its verification contract.
     (should (null (mevedel-agent-reminders agent))))
 

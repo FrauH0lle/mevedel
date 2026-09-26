@@ -103,6 +103,16 @@ fire-count and payload."
 							   (should (equal "Found 2 defcustoms with :set"
 									  (car (car fired))))))
 
+		 :doc "appends the stop note of a turn ended before a final answer"
+		 (mevedel-agent-exec-test--with-callback cb
+							 (let ((info (list :stream t
+									   :mevedel-agent-stop-note "[Stopped.]")))
+							   (funcall cb "Checking one more file" info)
+							   (funcall cb t info)
+							   (should (string-suffix-p
+								    "Checking one more file\n\n[Stopped.]"
+								    (car (car fired))))))
+
 		 :doc "streaming: reasoning stream events pass through without firing"
 		 ;; gptel delivers reasoning as (reasoning . TEXT) and closes the
 		 ;; block with the improper list (reasoning . t).  Neither is a
@@ -823,9 +833,22 @@ fire-count and payload."
          (fsm (gptel-make-fsm :info info)))
     (mevedel-agent-exec--handle-done-ended fsm)
     (should-not delivered)
-    (plist-put info :mevedel-end-turn 'test)
+    (plist-put info :mevedel-end-turn 'hook-stop)
     (mevedel-agent-exec--handle-done-ended fsm)
-    (should (equal '((t)) delivered))))
+    (should (equal '((t)) delivered))
+    (should (equal "[Stopped before a final answer: a hook stopped the turn.]"
+                   (plist-get info :mevedel-agent-stop-note))))
+
+  :doc "names the agent's cap when the turn limit stopped it"
+  (let* ((info (list :mevedel-end-turn 'agent-turn-limit
+                     :mevedel-agent-invocation
+                     (mevedel-agent-invocation--create
+                      :agent (mevedel-agent--create :name "explorer"
+                                                    :max-turns 150))
+                     :mevedel-agent-terminal-callback #'ignore)))
+    (mevedel-agent-exec--handle-done-ended (gptel-make-fsm :info info))
+    (should (equal "[Stopped before a final answer: the 150-turn limit was reached.]"
+                   (plist-get info :mevedel-agent-stop-note)))))
 
 
 (mevedel-deftest mevedel-agent-exec--handle-tret-save ()

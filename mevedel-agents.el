@@ -534,7 +534,7 @@ delegation authority."
     environment
     skill-policy
     skills)
-  :max-turns 50)
+  :max-turns 150)
 
 (mevedel-define-agent explorer
   :description "Read-only exploration agent for codebase investigation and, when
@@ -565,7 +565,7 @@ modifies files."
     environment
     skill-policy
     skills)
-  :max-turns 30)
+  :max-turns 150)
 
 (mevedel-define-agent verifier
   :description "Adversarial verification specialist.  Read-only -- \
@@ -585,7 +585,7 @@ review.  Cannot edit, write, or create files."
     resources
     workspace-config
     environment)
-  :max-turns 20)
+  :max-turns 150)
 
 (mevedel-define-agent reviewer
   :description "Dedicated code review agent.  Read-only -- inspects diffs and \
@@ -600,7 +600,7 @@ returns prioritized structured findings as JSON."
     resources
     workspace-config
     environment)
-  :max-turns 12)
+  :max-turns 150)
 
 
 ;;
