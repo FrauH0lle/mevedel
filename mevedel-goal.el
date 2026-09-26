@@ -25,6 +25,9 @@
                   (session message &optional before-wake metadata))
 (autoload 'mevedel-agent-control-steer-user "mevedel-agent-control")
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-goal-fsm "mevedel-agents" (cl-x) t)
+
 ;; `mevedel-chat'
 (declare-function mevedel--submit-generated-turn
                   "mevedel-chat" (prompt &optional display-text
@@ -64,6 +67,11 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-queue-turn-event
+                  "mevedel-reminders" (buffer key body &optional commit))
+(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
+
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
@@ -97,6 +105,7 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-pending-p
@@ -686,9 +695,24 @@ A hook that stops the turn pauses the Goal through here as well."
   (and (< (* before 100) (* budget percentage))
        (>= (* after 100) (* budget percentage))))
 
+(defun mevedel-goal--budget-crossing-body (percentage used budget)
+  "Return the root reminder for crossing PERCENTAGE with USED of BUDGET."
+  (format "Goal token budget crossed %d%%: %d/%d tokens used; %d remain. %s"
+          percentage used budget (max 0 (- budget used))
+          (pcase percentage
+            (50 "Prioritize the remaining requirements.")
+            (80 "Reassess the remaining work and avoid low-value detours.")
+            (_ "Stop new substantive work and wrap up the current response; do not create a separate wrap-up turn."))))
+
+(defun mevedel-goal--budget-event-key (percentage)
+  "Return the turn-event key for a PERCENTAGE budget crossing."
+  (intern (format "goal-budget-%d" percentage)))
+
 (defun mevedel-goal--emit-budget-crossings (fsm session goal before)
-  "Queue newly crossed budget reminders for GOAL after charging FSM.
-BEFORE is the durable usage before the charge."
+  "Report budget thresholds GOAL newly crossed by a charge to root FSM.
+BEFORE is the durable usage before the charge.  While FSM's turn still runs,
+a crossing reaches it at its next provider request; otherwise it waits for the
+next root request."
   (when-let* (((eq (mevedel-goal-status goal) 'active))
               (budget (mevedel-goal-token-budget goal)))
     (let* ((info (gptel-fsm-info fsm))
@@ -699,15 +723,13 @@ BEFORE is the durable usage before the charge."
                    (mevedel-goal--budget-threshold-crossed-p
                     before after budget percentage))
           (push percentage warned)
-          (mevedel-session-enqueue-pending-reminder
-           session
-           (format
-            "Goal token budget crossed %d%%: %d/%d tokens used; %d remain. %s"
-            percentage after budget (max 0 (- budget after))
-            (pcase percentage
-              (50 "Prioritize the remaining requirements.")
-              (80 "Reassess the remaining work and avoid low-value detours.")
-              (_ "Stop new substantive work and wrap up the current response."))))))
+          (let ((body (mevedel-goal--budget-crossing-body
+                       percentage after budget)))
+            (unless (and (not (plist-get info :mevedel-goal-accounted))
+                         (mevedel-reminders-queue-turn-event
+                          (plist-get info :buffer)
+                          (mevedel-goal--budget-event-key percentage) body))
+              (mevedel-session-enqueue-pending-reminder session body)))))
       (plist-put info :mevedel-goal-budget-warnings warned)
       (setf (gptel-fsm-info fsm) info))))
 
@@ -743,10 +765,12 @@ turn's settlement still applies the budget limit."
       (mevedel-goal--emit-budget-crossings fsm session goal before)
       goal)))
 
-(defun mevedel-goal-tool-result-budget-warning (session fsm)
-  "Return the one-shot 100% tool warning entry for SESSION's FSM.
-Its commit records delivery only after the turn-event injector reaches
-the request payload."
+(defun mevedel-goal-tool-result-budget-warnings (session fsm)
+  "Return budget warning entries newly crossed by root FSM's known usage.
+SESSION owns FSM's Goal.  Durable usage plus the turn's known provider usage
+is compared with the budget at a tool-result boundary, so a long turn hears
+about each crossing before it settles.  Each entry holds `:key', `:body', and
+a `:commit' that records delivery once the injector reaches the payload."
   (when-let* ((info (gptel-fsm-info fsm))
               (goal (mevedel-session-goal session))
               ((eq (mevedel-goal-status goal) 'active))
@@ -754,27 +778,99 @@ the request payload."
               ((equal (plist-get info :mevedel-goal-accounting-id)
                       (mevedel-goal-id goal)))
               (budget (mevedel-goal-token-budget goal))
-              (current (mevedel-goal--known-token-count info))
-              (before (mevedel-goal-tokens-used goal))
-              (after (+ before current))
-              ((not (memq 100
-                          (plist-get info :mevedel-goal-budget-warnings))))
-              ((mevedel-goal--budget-threshold-crossed-p
-                before after budget 100)))
+              (current (mevedel-goal--known-token-count info)))
+    (let* ((before (mevedel-goal-tokens-used goal))
+           (after (+ before current)))
+      (cl-loop
+       for percentage in mevedel-goal--budget-thresholds
+       unless (memq percentage (plist-get info :mevedel-goal-budget-warnings))
+       when (mevedel-goal--budget-threshold-crossed-p
+             before after budget percentage)
+       collect
+       (let ((percentage percentage))
+         (list
+          :key (mevedel-goal--budget-event-key percentage)
+          :body (mevedel-goal--budget-crossing-body percentage after budget)
+          :commit
+          (lambda ()
+            (let ((current (gptel-fsm-info fsm)))
+              (unless (memq percentage
+                            (plist-get current :mevedel-goal-budget-warnings))
+                (plist-put current :mevedel-goal-budget-warnings
+                           (cons percentage
+                                 (plist-get current
+                                            :mevedel-goal-budget-warnings)))
+                (setf (gptel-fsm-info fsm) current))))))))))
+
+(defun mevedel-goal-accounting-fsm (&optional buffer)
+  "Return the root request FSM whose Goal pays for work started in BUFFER.
+In an agent's buffer this is the FSM its invocation inherited; otherwise it
+is BUFFER's running root request when that request is charged to a Goal."
+  (with-current-buffer (or buffer (current-buffer))
+    (if-let* ((invocation (and (boundp 'mevedel--agent-invocation)
+                               mevedel--agent-invocation)))
+        (mevedel-agent-invocation-goal-fsm invocation)
+      (when-let* ((request (and (boundp 'mevedel--current-request)
+                                mevedel--current-request))
+                  (fsm (mevedel-request-fsm request))
+                  ((plist-get (gptel-fsm-info fsm)
+                              :mevedel-goal-accounting-id)))
+        fsm))))
+
+(defun mevedel-goal-charge-agent-progress (fsm)
+  "Charge agent request FSM's usage since its last charge to its Goal.
+Runs after each tool batch and at the end of the request, so the Goal budget
+tracks agent work while it happens rather than once it returns."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (invocation (plist-get info :mevedel-agent-invocation))
+              (goal-fsm (mevedel-agent-invocation-goal-fsm invocation))
+              (known (mevedel-goal--known-token-count info))
+              (delta (- known (or (plist-get info :mevedel-goal-charged) 0)))
+              ((> delta 0)))
+    (setf (gptel-fsm-info fsm) (plist-put info :mevedel-goal-charged known))
+    (mevedel-goal-charge-tokens goal-fsm delta)))
+
+(defun mevedel-goal-agent-budget-notice (fsm)
+  "Return a budget notice entry for agent request FSM, or nil.
+The notice names the highest threshold its Goal has reached that this request
+was not yet told about.  Usage includes the root turn's known in-flight usage.
+The entry holds `:body' and a delivery `:commit'."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (invocation (plist-get info :mevedel-agent-invocation))
+              (goal-fsm (mevedel-agent-invocation-goal-fsm invocation))
+              (root (gptel-fsm-info goal-fsm))
+              (buffer (plist-get root :buffer))
+              ((buffer-live-p buffer))
+              (session (buffer-local-value 'mevedel--session buffer))
+              (goal (mevedel-session-goal session))
+              ((eq (mevedel-goal-status goal) 'active))
+              ((equal (plist-get root :mevedel-goal-accounting-id)
+                      (mevedel-goal-id goal)))
+              (budget (mevedel-goal-token-budget goal))
+              (used (+ (mevedel-goal-tokens-used goal)
+                       (if (plist-get root :mevedel-goal-accounted)
+                           0
+                         (or (mevedel-goal--known-token-count root) 0))))
+              (level (cl-loop for percentage
+                              in (reverse mevedel-goal--budget-thresholds)
+                              when (>= (* used 100) (* budget percentage))
+                              return percentage))
+              ((> level (or (plist-get info :mevedel-goal-budget-level) 0))))
     (list
      :body
-     (format
-      "Goal token budget reached (%d/%d tokens currently known). Stop new substantive work and wrap up the current response; do not create a separate wrap-up turn."
-      after budget)
+     (if (>= level 100)
+         (format "The Goal this work belongs to has used its whole token budget (%d/%d tokens). Stop new work and return your findings to your caller now."
+                 used budget)
+       (format "The Goal this work belongs to has used %d%% of its token budget (%d/%d tokens). %s"
+               level used budget
+               (if (>= level 80)
+                   "Keep to the essentials your caller needs and avoid detours."
+                 "Prioritize what your caller needs.")))
      :commit
      (lambda ()
-       (let ((current (gptel-fsm-info fsm)))
-         (unless (memq 100 (plist-get current :mevedel-goal-budget-warnings))
-           (plist-put current :mevedel-goal-budget-warnings
-                      (cons 100
-                            (plist-get current
-                                       :mevedel-goal-budget-warnings)))
-           (setf (gptel-fsm-info fsm) current)))))))
+       (setf (gptel-fsm-info fsm)
+             (plist-put (gptel-fsm-info fsm)
+                        :mevedel-goal-budget-level level))))))
 
 (defun mevedel-goal--settle-accounting (fsm)
   "Charge FSM and return its session, Goal, and prior usage, or nil."

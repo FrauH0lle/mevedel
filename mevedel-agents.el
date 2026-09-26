@@ -365,6 +365,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (parent-session nil)
   (parent-data-buffer nil)
   (parent-turn nil :type (or null integer))
+  ;; Root request FSM whose Goal pays for this invocation's usage, or nil.
+  (goal-fsm nil)
   (buffer nil)
   (transcript-relative-path nil :type (or null string))
   (transcript-status nil :type (or null symbol))

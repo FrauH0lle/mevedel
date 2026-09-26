@@ -820,6 +820,20 @@ fire-count and payload."
     (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))))
 
 
+(mevedel-deftest mevedel-agent-exec--handle-wait-goal-budget ()
+  ,test
+  (test)
+  :doc "stages a due Goal budget notice with its delivery commit"
+  (let ((fsm (gptel-make-fsm :info (list :buffer nil))))
+    (cl-letf (((symbol-function 'mevedel-goal-agent-budget-notice)
+               (lambda (_fsm) (list :body "Budget at 50%." :commit #'ignore))))
+      (mevedel-agent-exec--handle-wait-goal-budget fsm))
+    (should (equal '((:type goal-budget :body "Budget at 50%."))
+                   (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
+    (should (memq #'ignore (plist-get (gptel-fsm-info fsm)
+                                      :mevedel-reminder-commits)))))
+
+
 (mevedel-deftest mevedel-agent-exec--handle-done-ended ()
   ,test
   (test)

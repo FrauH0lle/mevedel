@@ -226,6 +226,8 @@
          (agent (mevedel-agent-runtime-test--agent))
          (configuration
           (mevedel-agent-runtime-test--configuration agent))
+         (root-fsm (gptel-make-fsm
+                    :info (list :mevedel-goal-accounting-id "goal-1")))
          provider-callback
          seen-invocation
          settlements
@@ -235,7 +237,8 @@
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--current-request
-                      (mevedel-request--create :plan-read-only t))
+                      (mevedel-request--create :plan-read-only t
+                                               :fsm root-fsm))
           (cl-letf
               (((symbol-function
                  'mevedel-agent-exec-freeze-configuration)
@@ -288,6 +291,9 @@
                     (lambda (inv response event)
                       (push (list inv response event) settlements)))))
               (should (eq invocation seen-invocation))
+              ;; The Goal-charged root request pays for the agent.
+              (should (eq root-fsm
+                          (mevedel-agent-invocation-goal-fsm invocation)))
               (should
                (mevedel-agent-invocation-plan-read-only invocation))
               (should (eq 'provider-fsm

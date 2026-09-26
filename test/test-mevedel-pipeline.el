@@ -957,10 +957,11 @@ cover, so the permission step's warning about it is captured here."
             (setq-local mevedel--current-request
                         (mevedel-request--create :id "budget-request")))
           (cl-letf (((symbol-function
-                      'mevedel-goal-tool-result-budget-warning)
+                      'mevedel-goal-tool-result-budget-warnings)
                      (lambda (_session _fsm)
-                       (list :body "Wrap up now."
-                             :commit #'ignore))))
+                       (list (list :key 'goal-budget-100
+                                   :body "Wrap up now."
+                                   :commit #'ignore)))))
             (mevedel-pipeline--step-goal-budget-warning
              (list :result "tool output" :session 'session :fsm 'fsm
                    :buffer chat-buf)
@@ -970,13 +971,13 @@ cover, so the permission step's warning about it is captured here."
             (should (equal
                      "Wrap up now."
                      (plist-get
-                      (cdr (assoc 'goal-budget
+                      (cdr (assoc 'goal-budget-100
                                   (plist-get mevedel-reminders--turn-events
                                              :items)))
                       :body)))
             (should (functionp
                      (plist-get
-                      (cdr (assoc 'goal-budget
+                      (cdr (assoc 'goal-budget-100
                                   (plist-get mevedel-reminders--turn-events
                                              :items)))
                       :commit)))))

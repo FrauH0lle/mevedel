@@ -197,7 +197,7 @@ and `verify-callback' delivers the verifier outcome."
 (mevedel-deftest mevedel-tool-goal--handle-update ()
   ,test
   (test)
-  :doc "completes only after the verifier passes and charges its usage"
+  :doc "completes only after the verifier passes, leaving its usage to agent accounting"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship the parser"))
     (let ((goal (mevedel-session-goal session))
@@ -214,9 +214,10 @@ and `verify-callback' delivers the verifier outcome."
       (should (equal "Goal status changed to complete" (plist-get outcome :result)))
       (should (eq 'complete (mevedel-goal-status goal)))
       (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))
-      (should (= 7 (mevedel-goal-tokens-used goal)))
+      ;; The verifier agent charges itself; the RESULT usage is not re-charged.
+      (should (= 0 (mevedel-goal-tokens-used goal)))
       (mevedel-goal-settle-turn fsm)
-      (should (= 32 (mevedel-goal-tokens-used goal)))
+      (should (= 25 (mevedel-goal-tokens-used goal)))
       (should (eq 'inactive (mevedel-goal-continue-if-idle session (current-buffer))))))
 
   :doc "returns every non-passing verdict as findings, keeps the Goal active, and ends the turn"
@@ -243,7 +244,7 @@ and `verify-callback' delivers the verifier outcome."
           (should (eq 'active (mevedel-goal-status goal)))
           (should (eq 'goal-verification-failed
                       (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))))
-      (should (= 20 (mevedel-goal-tokens-used goal)))))
+      (should (= 0 (mevedel-goal-tokens-used goal)))))
 
   :doc "blocks immediately without verification"
   (mevedel-tool-goal-test--with-request
@@ -285,7 +286,7 @@ and `verify-callback' delivers the verifier outcome."
         (should (eq 'error (plist-get outcome :status)))
         (should-not (eq 'complete (mevedel-goal-status goal))))))
 
-  :doc "a cancelled call only charges a late verdict"
+  :doc "a cancelled call ignores a late verdict"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship"))
     (let ((goal (mevedel-session-goal session))
@@ -299,7 +300,7 @@ and `verify-callback' delivers the verifier outcome."
                  '(:status ok :kind fork :verdict pass :result "ok" :usage 4))
         (should (eq cancelled outcome)))
       (should (eq 'active (mevedel-goal-status goal)))
-      (should (= 4 (mevedel-goal-tokens-used goal)))))
+      (should (= 0 (mevedel-goal-tokens-used goal)))))
 
   :doc "completes through ToolCall after the dispatch binding unwinds"
   (mevedel-tool-goal-test--with-request
