@@ -16,6 +16,11 @@
 (declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
 (autoload 'mevedel-toggle-tasks "mevedel-tool-task")
 
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-segments
+                  "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
+
 ;; `mevedel-view'
 (defvar mevedel-view--display-map)
 
@@ -121,6 +126,55 @@
   "Forget every remembered source-backed disclosure state."
   (setq mevedel-view-disclosure--source-states
         (make-hash-table :test #'equal)))
+
+(defun mevedel-view-disclosure-compaction-tool-states ()
+  "Capture tool disclosure states before the current transcript rotates.
+Include remembered children hidden inside collapsed parent rows."
+  (when (and (markerp mevedel-view--input-marker)
+             (marker-position mevedel-view--input-marker))
+    (mevedel-view-disclosure-capture-state
+     (point-min) (marker-position mevedel-view--input-marker)))
+  (let (states)
+    (when (hash-table-p mevedel-view-disclosure--source-states)
+      (maphash
+       (lambda (key value)
+         (when (and (eq (car-safe key) 'source)
+                    (eq (car-safe (nth 3 key)) 'tool)
+                    (stringp (cadr (nth 3 key))))
+           (push (cons key value) states)))
+       mevedel-view-disclosure--source-states))
+    states))
+
+(defun mevedel-view-disclosure-rebase-compaction-tool-states (states data-buffer)
+  "Rekey STATES for tool rows still present in DATA-BUFFER after rotation.
+STATES came from `mevedel-view-disclosure-compaction-tool-states'.
+Never carry a removed tool's state into the successor transcript."
+  (when (and states (buffer-live-p data-buffer))
+    (let ((starts (make-hash-table :test #'equal)))
+      (with-current-buffer data-buffer
+        (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
+          (when (eq (car segment) 'tool)
+            (let ((pos (cadr segment))
+                  (end (caddr segment))
+                  id)
+              (while (and (< pos end) (not id))
+                (let ((prop (get-text-property pos 'gptel)))
+                  (when (and (consp prop) (eq (car prop) 'tool)
+                             (stringp (cdr prop))
+                             (not (equal (cdr prop) "")))
+                    (setq id (cdr prop))))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              (when id (puthash id (cadr segment) starts))))))
+      (dolist (entry states)
+        (remhash (car entry) mevedel-view-disclosure--source-states))
+      (dolist (entry states)
+        (when-let* ((id (cadr (nth 3 (car entry))))
+                    (start (gethash id starts)))
+          (let ((key (copy-tree (car entry))))
+            (setcar (nthcdr 2 key) start)
+            (mevedel-view-disclosure-record-state-for-key key (cdr entry))))))))
 
 (defvar mevedel-view-disclosure--settling-p nil
   "Non-nil while the terminal settle render is computing state keys.

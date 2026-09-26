@@ -367,6 +367,9 @@
 (defvar mevedel-view--pending-tool-calls)
 (defvar mevedel-view-spinner-frames)
 
+;; `mevedel-view-table'
+(defvar mevedel-view-table--streaming-p)
+
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-bounds-at
                   "mevedel-view-zone" (&optional position))
@@ -5549,8 +5552,20 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                             start response-end)
                            (mevedel-view--decorate-agent-message-blocks
                             start response-end)
-                           (mevedel-view--decorate-markdown-in-range
-                            start response-end)
+                           ;; Idle table layout must not prettify an unfinished
+                           ;; streamed response: the next chunk would replace it
+                           ;; with raw source again.  Terminal reconciliation
+                           ;; redecorates without this flag.
+                           (let ((mevedel-view-table--streaming-p
+                                  (and (not mevedel-view-disclosure--settling-p)
+                                       (markerp mevedel-view--data-turn-start)
+                                       (marker-position mevedel-view--data-turn-start)
+                                       (mevedel-view-stream-in-flight-turn-start-position)
+                                       (>= seg-start
+                                           (marker-position
+                                            mevedel-view--data-turn-start)))))
+                             (mevedel-view--decorate-markdown-in-range
+                              start response-end))
                            (goto-char response-end)
                            (set-marker response-end nil)))
                          (mevedel-view--mark-live-render-unit

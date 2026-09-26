@@ -166,6 +166,12 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-disclosure-compaction-tool-states
+                  "mevedel-view-disclosure" ())
+(declare-function mevedel-view-disclosure-rebase-compaction-tool-states
+                  "mevedel-view-disclosure" (states data-buffer))
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
@@ -412,10 +418,20 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
     (target summary tail-text pending-text hook-audits
             auto preserved-tail-turns)
   "Apply main-session TARGET compaction and arrange its file reminder."
-  (let ((session (plist-get target :session)))
+  (let* ((session (plist-get target :session))
+         (view-buffer (and (buffer-live-p mevedel--view-buffer)
+                           mevedel--view-buffer))
+         (tool-states
+          (and view-buffer
+               (with-current-buffer view-buffer
+                 (mevedel-view-disclosure-compaction-tool-states)))))
     (mevedel-compact-target--apply
      summary tail-text pending-text hook-audits
      (mevedel-compact-target--execution-row-archive-text target))
+    (when (and view-buffer tool-states)
+      (with-current-buffer view-buffer
+        (mevedel-view-disclosure-rebase-compaction-tool-states
+         tool-states (plist-get target :buffer))))
     (mevedel-compact-target--commit-execution-row-archive target)
     ;; The one-shot accepted-plan reference may have been delivered in
     ;; a turn this compaction just summarized away; resetting its fired

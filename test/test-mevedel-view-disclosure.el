@@ -38,6 +38,50 @@
     (should (= 10 (nth 2 key)))
     (should (equal '(record-id) (nthcdr 4 key)))))
 
+(mevedel-deftest mevedel-view-disclosure-rebase-compaction-tool-states ()
+  ,test
+  (test)
+  :doc "moves surviving tool and hidden child states without reviving archived rows"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Read\" :args nil)\n\nArchived result\n"
+     '(tool . "archived-call"))
+    (let ((old-end (with-current-buffer data-buf (point-max))))
+      (mevedel-view-test--insert-data
+       data-buf "(:name \"Read\" :args nil)\n\nSurviving result\n"
+       '(tool . "surviving-call"))
+      (with-current-buffer view-buf
+        (let* ((old-key (list 'source 'tool-summary 1
+                              '(tool "archived-call")))
+               (new-key (list 'source 'tool-summary old-end
+                              '(tool "surviving-call")))
+               (child-key (list 'source 'tool-child old-end
+                                '(tool "surviving-call") 1)))
+          (mevedel-view-disclosure-record-state-for-key old-key nil)
+          (mevedel-view-disclosure-record-state-for-key new-key nil)
+          (mevedel-view-disclosure-record-state-for-key child-key nil)
+          (let ((states (mevedel-view-disclosure-compaction-tool-states)))
+            (should (= 3 (length states)))
+            (with-current-buffer data-buf
+              (delete-region (point-min) old-end)
+              (goto-char (point-min))
+              (insert "Leading compacted summary\n"))
+            (mevedel-view-disclosure-rebase-compaction-tool-states
+             states data-buf)
+            (let ((new-start (length "Leading compacted summary\n")))
+              (cl-flet ((rebased (key)
+                          (let ((copy (copy-tree key)))
+                            (setcar (nthcdr 2 copy) (1+ new-start))
+                            copy)))
+                (should-not (mevedel-view-disclosure-state-for-key old-key))
+                (should-not (mevedel-view-disclosure-state-for-key new-key))
+                (should (equal (cons (rebased new-key) nil)
+                               (mevedel-view-disclosure-state-for-key
+                                (rebased new-key))))
+                (should (equal (cons (rebased child-key) nil)
+                               (mevedel-view-disclosure-state-for-key
+                                (rebased child-key))))))))))))
+
 (mevedel-deftest mevedel-view-toggle-section ()
   ,test
   (test)
