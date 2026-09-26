@@ -779,6 +779,32 @@
     (should-not (plist-get (gptel-fsm-info fsm)
                            :mevedel-goal-budget-warnings))))
 
+(mevedel-deftest mevedel-goal--end-running-turn
+  ()
+  ,test
+  (test)
+  :doc "pause and a reached budget end only the running turn charged to the Goal"
+  (dolist (case '((pause "goal-1" goal-paused)
+                  (pause "other" nil)
+                  (budget "goal-1" goal-budget-limited)))
+    (with-temp-buffer
+      (let* ((goal (mevedel-goal--create
+                    :id "goal-1" :objective "Ship" :status 'active
+                    :token-budget 100 :tokens-used 60))
+             (session (mevedel-session--create :name "main" :goal goal))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer (current-buffer)
+                               :mevedel-goal-accounting-id (nth 1 case)))))
+        (setq-local mevedel--session session
+                    mevedel--current-request
+                    (mevedel-request--create :session session :fsm fsm))
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore))
+          (pcase (car case)
+            ('pause (mevedel-goal-pause))
+            ('budget (mevedel-goal-set-budget "50"))))
+        (should (eq (nth 2 case)
+                    (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))))))
+
 (mevedel-deftest mevedel-goal-edit
   ()
   ,test
@@ -840,6 +866,9 @@
           (should saved)
           (should scheduled)
           (should (equal (list session "updated context") refreshed))
+          (should (eq 'goal-edited
+                      (mevedel-turn-end-requested-p
+                       (gptel-fsm-info request-fsm))))
           (should (equal "goal-2" (mevedel-goal-id goal)))
           (should (equal "New objective" (mevedel-goal-objective goal)))
           (should (eq 'active (mevedel-goal-status goal)))

@@ -554,7 +554,8 @@ boundary. The request is a transition rule added by
 agent turn ended this way settles from its `DONE` handler. gptel's own
 post-tool `:stop` differs: it records an error and fails the turn. Callers:
 an UpdateGoal completion rejected by its verifier ([Goals](goals.md#goal-tools))
-and an agent reaching its `:max-turns` cap ([Agents](agents.md)).
+an agent reaching its `:max-turns` cap ([Agents](agents.md)), and the Goal
+pause, budget-limit, and edit controls.
 
 Terminal continuations settle once and recheck request and session ownership
 between lifecycle steps. Old patch and directive-attempt evidence remains tied
