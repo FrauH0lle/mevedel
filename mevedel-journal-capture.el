@@ -351,20 +351,32 @@ scheduler itself declines work while exit inhibits scheduling."
     (nreverse sealed)))
 
 (defun mevedel-journal-capture--turns (session)
-  "Return SESSION's durably indexed completed turns with stable identities."
+  "Return SESSION's durably indexed completed turns with stable identities.
+A turn that auto-compaction carried into a later segment is read from its
+recorded `:continuation' there; that segment's inherited summary covers the
+work before the compaction."
   (let (turns)
     (dolist (segment (mevedel-session-prompt-index session))
       (dolist (prompt (cdr segment))
-        (when (and (integerp (plist-get prompt :cum-turn))
-                   (<= (plist-get prompt :cum-turn) (mevedel-session-turn-count session))
-                   (stringp (plist-get prompt :fork-point-id))
-                   (integerp (plist-get prompt :transcript-cutoff)))
-          (push (list :number (plist-get prompt :cum-turn)
-                      :id (secure-hash 'sha256 (plist-get prompt :fork-point-id))
-                      :fork-point (plist-get prompt :fork-point-id)
-                      :segment (car segment) :start (plist-get prompt :pos)
-                      :end (plist-get prompt :transcript-cutoff))
-                turns))))
+        (let* ((continuation (and (not (plist-get prompt :fork-point-id))
+                                  (plist-get prompt :continuation)))
+               (source (or continuation prompt)))
+          (when (and (integerp (plist-get prompt :cum-turn))
+                     (<= (plist-get prompt :cum-turn)
+                         (mevedel-session-turn-count session))
+                     (stringp (plist-get source :fork-point-id))
+                     (integerp (plist-get source :transcript-cutoff)))
+            (push (list :number (plist-get prompt :cum-turn)
+                        :id (secure-hash 'sha256
+                                         (plist-get source :fork-point-id))
+                        :fork-point (plist-get source :fork-point-id)
+                        :segment (if continuation
+                                     (plist-get continuation :segment)
+                                   (car segment))
+                        :start (plist-get (if continuation continuation prompt)
+                                          (if continuation :start :pos))
+                        :end (plist-get source :transcript-cutoff))
+                  turns)))))
     (sort turns (lambda (left right) (< (plist-get left :number) (plist-get right :number))))))
 
 (defun mevedel-journal-capture--source-directory (workspace capture)
