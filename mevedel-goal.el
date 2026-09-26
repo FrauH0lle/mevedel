@@ -301,19 +301,17 @@ never discloses session storage paths."
   "Render request-local active Goal context for SESSION, or nil."
   (when-let* ((goal (mevedel-session-goal session))
               ((eq (mevedel-goal-status goal) 'active)))
+    ;; Live usage stays out: it moves with every charge, and each change
+    ;; would re-deliver the whole block.  Crossing reminders and GetGoal
+    ;; report usage instead.
     (let* ((budget (mevedel-goal-token-budget goal))
-           (used (mevedel-goal-tokens-used goal))
            (plan-address (mevedel-goal--resolve-plan-reference goal session)))
       (mevedel-system-render-prompt-file
        "prompts/goals/active-context.md"
        `(("objective" . ,(mevedel-goal-objective goal))
-         ("tokens-used" . ,(number-to-string used))
          ("token-budget" . ,(if budget
-                                (number-to-string budget)
+                                (format "%d tokens" budget)
                               "unbounded"))
-         ("tokens-remaining" . ,(if budget
-                                    (number-to-string (max 0 (- budget used)))
-                                  "unbounded"))
          ("turns-run" . ,(number-to-string (mevedel-goal-turns-run goal)))
          ("plan-reference-line" .
           ,(if plan-address

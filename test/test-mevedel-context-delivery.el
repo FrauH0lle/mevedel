@@ -273,7 +273,11 @@
                                        :status 'active :tokens-used 100 :turns-run 1))
             (mevedel-context-delivery-stage fsm)
             (mevedel-reminders--handle-inject fsm)
+            ;; Usage moves with every charge and re-sends nothing.
             (cl-incf (mevedel-goal-tokens-used (mevedel-session-goal session)))
+            (mevedel-context-delivery-stage fsm)
+            (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+            (cl-incf (mevedel-goal-turns-run (mevedel-session-goal session)))
             (mevedel-context-delivery-stage fsm)
             (should (equal '(context-active-goal)
                            (mapcar (lambda (entry) (plist-get entry :type))

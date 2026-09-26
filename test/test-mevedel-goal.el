@@ -190,8 +190,9 @@
                (lambda (_path values) (setq replacements values) "context")))
       (should (equal "context" (mevedel-goal-active-context session))))
     (should (equal "unbounded" (cdr (assoc "token-budget" replacements))))
-    (should (equal "unbounded"
-                   (cdr (assoc "tokens-remaining" replacements)))))
+    ;; Usage changes with every charge and would re-deliver the context.
+    (should-not (assoc "tokens-used" replacements))
+    (should-not (assoc "tokens-remaining" replacements)))
   (let* ((root (make-temp-file "mevedel-goal-plan-address-" t))
          (relative "local/plans/accepted-20260813-120000.md")
          (plan-file (file-name-concat root relative))
