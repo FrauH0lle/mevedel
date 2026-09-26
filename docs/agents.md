@@ -136,12 +136,20 @@ invocation time. Registered buffer-locally via `mevedel-agents--specs` per
 request (no caching). Each invocation gets a cloned reminder list with
 independent `last-fired`.
 
-An optional `:max-turns` caps one Agent call's model samples; the built-in
-agents set it. Every sample of the tool loop counts as one turn. At 80% the
-agent receives a one-shot warning to wrap up. The sample that reaches the cap
-tells the agent to answer now and ends its turn at the next tool boundary, so
-the call settles with the agent's latest response instead of looping on.
-Retained follow-ups start a fresh count.
+An optional `:max-turns` caps one Agent call's model samples. Every sample of
+the tool loop counts as one turn, however many tools it calls. At 80% the agent
+receives a one-shot warning to wrap up. The sample that reaches the cap tells
+the agent to answer now and ends its turn at the next tool boundary. If the
+agent still called tools, the call settles with its latest response followed by
+a `[Stopped before a final answer: ...]` note, so the caller can tell the report
+is incomplete. Retained follow-ups start a fresh count.
+
+The built-in agents use 150, a runaway bound rather than a budget. Their
+earlier caps (worker 50, explorer 30, verifier 20, reviewer 12) were never
+enforced. Telemetry from 238 agent runs in September 2026 showed medians of
+12-22 samples, 90th percentiles of 34-51, and a maximum of 94, with about three
+tool calls per sample, so enforcing the old caps would have cut about half of
+all verifier and reviewer runs.
 
 Agent definitions may include `:hooks` using the same declarative hook
 shape as project hook files. These rules are scoped to invocations of that

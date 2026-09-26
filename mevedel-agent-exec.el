@@ -216,11 +216,26 @@ it still calls, settling with its latest response."
 (defun mevedel-agent-exec--handle-done-ended (fsm)
   "Settle FSM's agent turn when it ended at a tool boundary.
 Such a turn reaches DONE from its tool results, after the stream's terminal
-event already deferred to the pending tool use, so deliver it now."
+event already deferred to the pending tool use, so deliver it now.  The
+agent stopped without a final answer, so its result says why."
   (let ((info (gptel-fsm-info fsm)))
-    (when-let* (((plist-get info :mevedel-end-turn))
+    (when-let* ((reason (plist-get info :mevedel-end-turn))
                 (callback (plist-get info :mevedel-agent-terminal-callback)))
       (plist-put info :tool-use nil)
+      (plist-put info :mevedel-agent-stop-note
+                 (format "[Stopped before a final answer: %s.]"
+                         (pcase reason
+                           ('agent-turn-limit
+                            (let* ((inv (plist-get
+                                         info :mevedel-agent-invocation))
+                                   (agent (and inv (mevedel-agent-invocation-agent
+                                                    inv))))
+                              (format "the %s-turn limit was reached"
+                                      (or (and agent
+                                               (mevedel-agent-max-turns agent))
+                                          "configured"))))
+                           ('hook-stop "a hook stopped the turn")
+                           (_ (format "%s" reason)))))
       (funcall callback t info))))
 
 (defun mevedel-agent-exec--handle-done-save (fsm)
@@ -655,7 +670,11 @@ partial-len=%d :tool-use=%S :stream=%S"
                                           inv)))
                                    (setq partial-prefix text)
                                    (setcar partial-cell text)
-                                   (or final-response text))
+                                   (if-let* ((note (plist-get
+                                                    info :mevedel-agent-stop-note)))
+                                       (concat (or final-response text)
+                                               "\n\n" note)
+                                     (or final-response text)))
                                (error
                                 (list
                                  :mevedel-agent-terminal-status 'error
