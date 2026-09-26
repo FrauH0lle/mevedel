@@ -104,7 +104,10 @@
 ;; `mevedel-presets'
 (declare-function mevedel--wrap-terminal-handlers
                   "mevedel-presets" (handlers &optional transitions))
+(declare-function mevedel-preset--build-transitions
+                  "mevedel-presets" (transitions))
 (autoload 'mevedel--wrap-terminal-handlers "mevedel-presets")
+(autoload 'mevedel-preset--build-transitions "mevedel-presets")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--handle-inject
@@ -795,7 +798,8 @@ FROZEN-CONTEXT is the materialized gptel context plist."
                   (mevedel--wrap-terminal-handlers
                    handlers (default-value 'gptel-send--transitions))))
     (setq-local gptel-send--transitions
-                (copy-tree (default-value 'gptel-send--transitions))
+                (mevedel-preset--build-transitions
+                 (copy-tree (default-value 'gptel-send--transitions)))
                 gptel-prompt-transform-functions
                 '(mevedel--transform-expand-mentions
                   mevedel-transcript-exclude-directive-turns

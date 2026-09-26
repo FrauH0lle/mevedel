@@ -794,16 +794,22 @@
              (session (mevedel-session--create :name "main" :goal goal))
              (fsm (gptel-make-fsm
                    :info (list :buffer (current-buffer)
-                               :mevedel-goal-accounting-id (nth 1 case)))))
+                               :mevedel-goal-accounting-id (nth 1 case))))
+             woken)
         (setq-local mevedel--session session
                     mevedel--current-request
                     (mevedel-request--create :session session :fsm fsm))
-        (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore))
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
+                  ((symbol-function 'mevedel-agent-control-steer-user)
+                   (lambda (_session message) (setq woken message))))
           (pcase (car case)
             ('pause (mevedel-goal-pause))
             ('budget (mevedel-goal-set-budget "50"))))
         (should (eq (nth 2 case)
-                    (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))))))
+                    (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
+        ;; A turn waiting in WaitAgent is woken to reach its boundary.
+        (should (equal (and (nth 2 case) t)
+                       (and woken (string-match-p "Stop here" woken) t)))))))
 
 (mevedel-deftest mevedel-goal-edit
   ()

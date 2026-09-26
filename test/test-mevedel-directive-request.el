@@ -380,6 +380,14 @@
 			     (should (string-match-p "Use the first detail" captured-prompt))
 			     (should (eq captured-chat (plist-get captured-args :buffer)))
 			     (should (markerp (plist-get captured-args :position)))
+                             ;; Harness callers can end the directive turn at
+                             ;; a tool boundary.
+                             (should (rassq 'DONE
+                                            (cdr (assq 'TRET (gptel-fsm-table
+                                                              captured-fsm)))))
+                             (should (assq #'mevedel-turn-end-requested-p
+                                           (cdr (assq 'TRET (gptel-fsm-table
+                                                             captured-fsm)))))
                              (should override-validated)
                              (let* ((transforms
                                      (plist-get captured-args :transforms))

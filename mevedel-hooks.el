@@ -1117,7 +1117,11 @@ stubs or user code, so the boundary stays defensive at one owner."
                (or (mevedel-hooks--safe-decision base) nil)))
         (next (mevedel-hooks--normalize-decision next)))
     (when next
-      (when (plist-member next :continue)
+      ;; Any handler's stop wins, as in Claude Code: a later
+      ;; `continue: true' must not cancel it.
+      (when (and (plist-member next :continue)
+                 (not (and (plist-member base :continue)
+                           (not (plist-get base :continue)))))
         (setq base (plist-put base :continue (plist-get next :continue))))
       (dolist (key '(:stop-reason :system-message :permission-reason
 				  :updated-input :updated-result))

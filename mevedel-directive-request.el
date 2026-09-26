@@ -43,6 +43,7 @@
 (declare-function gptel-request "ext:gptel-request")
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-prompt-transform-functions)
+(defvar gptel-request--transitions)
 (defvar gptel-stream)
 
 ;; `mevedel-chat'
@@ -139,6 +140,8 @@
   "mevedel-plan-handoff")
 
 ;; `mevedel-presets'
+(declare-function mevedel-preset--build-transitions
+                  "mevedel-presets" (transitions))
 (declare-function mevedel-preset-apply "mevedel-presets"
 		  (name &optional buffer))
 (defvar mevedel--directive-read-only-request-p)
@@ -761,7 +764,10 @@ settling."
 					  gptel-model (plist-get model-policy :model)
 					  gptel-reasoning-effort
 					  (plist-get model-policy :effort))))))
-				:fsm (gptel-make-fsm :handlers gptel-send--handlers))))
+				:fsm (gptel-make-fsm
+				      :table (mevedel-preset--build-transitions
+					      (copy-tree gptel-request--transitions))
+				      :handlers gptel-send--handlers))))
 			 (setf (gptel-fsm-info fsm)
 			       (plist-put (gptel-fsm-info fsm)
 					  :mevedel-request-callback request-callback))

@@ -74,6 +74,9 @@
     (should (eq 'WAIT (gptel--fsm-next fsm)))
     (plist-put (gptel-fsm-info fsm) :mevedel-end-turn 'test)
     (should (eq 'DONE (gptel--fsm-next fsm)))
+    ;; Queued mevedel steering is delivered before the turn ends.
+    (cl-letf (((symbol-function 'mevedel-tools--pending-steering-p) #'always))
+      (should (eq 'WAIT (gptel--fsm-next fsm))))
     (plist-put (gptel-fsm-info fsm) :steering-message "steer")
     (should (eq 'TSTR (gptel--fsm-next fsm)))
     (plist-put (gptel-fsm-info fsm) :error "failed")
