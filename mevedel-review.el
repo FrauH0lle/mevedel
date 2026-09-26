@@ -18,6 +18,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-transport)
 
+(eval-when-compile (require 'mevedel-agents))
+
 ;; `gptel'
 (declare-function gptel--update-status
                   "ext:gptel" (status &optional face))
@@ -60,8 +62,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-verdict
                   "mevedel-agents" (cl-x) t)
-(declare-function \(setf\ mevedel-agent-invocation-verdict\)
-                  "mevedel-agents" (value cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 
