@@ -656,39 +656,68 @@
 (mevedel-deftest mevedel-review-verify ()
   ,test
   (test)
-  :doc "dispatches the verifier for Goal completion and returns verdict and usage"
-  (let ((data (generate-new-buffer " *mevedel-review-verify*"))
-        captured-options captured-message outcome)
-    (unwind-protect
-        (with-current-buffer data
-          (setq-local mevedel--session
-                      (mevedel-session--create :authority-mode 'pid-lock :name "goal"))
-          (setq-local mevedel--current-request
-                      (mevedel-request--create :session mevedel--session))
-          (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                     (lambda (_session task-name message callback &rest options)
-                       (setq captured-options options captured-message message)
-                       (funcall callback
-                                (list :outcome 'success
-                                      :record (mevedel-agent-record--create
-                                               :path (concat "/root/" task-name))))
-                       #'ignore)))
-            (mevedel-review-verify "Is the objective met?"
-                                   (lambda (value) (setq outcome value)))
-            (should (equal "Is the objective met?" captured-message))
-            (should (equal "verifier"
-                           (mevedel-agent-name (plist-get captured-options :agent))))
-            (should (equal "none" (plist-get captured-options :context)))
-            (should (equal "Verify Goal completion"
-                           (plist-get captured-options :description)))
-            (should (equal (mevedel-review--verify-permission-rules)
-                           (plist-get captured-options :skill-permission-rules)))
-            (funcall (plist-get captured-options :result-handler)
-                     '(:outcome completed :payload "evidence\nVERDICT: FAIL"
-                       :sender "/root/verify" :usage 42))
-            (should (eq 'fail (plist-get outcome :verdict)))
-            (should (= 42 (plist-get outcome :usage)))))
-      (kill-buffer data))))
+  :doc "uses Goal review policy with the verifier role and returns verdict and usage"
+  (mevedel-skills-test--with-model-backends
+    (let ((data (generate-new-buffer " *mevedel-review-verify*"))
+          captured-options captured-message outcome)
+      (unwind-protect
+          (with-current-buffer data
+            (setq-local gptel-backend (gptel-get-backend "Fast")
+                        gptel-model 'fast-model
+                        gptel-reasoning-effort 'low
+                        mevedel-model-workloads
+                        '((goal-review :provider "Balanced:balanced-model" :effort high)
+                          (verifier :provider "Missing:model")))
+            (setq-local mevedel--session
+                        (mevedel-session--create :authority-mode 'pid-lock :name "goal"))
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session mevedel--session))
+            (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                       (lambda (_session task-name message callback &rest options)
+                         (setq captured-options options captured-message message)
+                         (funcall callback
+                                  (list :outcome 'success
+                                        :record (mevedel-agent-record--create
+                                                 :path (concat "/root/" task-name))))
+                         #'ignore)))
+              (mevedel-review-verify "Is the objective met?"
+                                     (lambda (value) (setq outcome value))
+                                     'goal-review)
+              (should (equal (mevedel-model-resolve-workload 'goal-review)
+                             (plist-get captured-options :model-policy)))
+              (should (eq 'fast-model gptel-model))
+              (should (eq 'low gptel-reasoning-effort))
+              (should (equal "Is the objective met?" captured-message))
+              (should (equal "verifier"
+                             (mevedel-agent-name (plist-get captured-options :agent))))
+              (should (equal "none" (plist-get captured-options :context)))
+              (should (equal "Verify Goal completion"
+                             (plist-get captured-options :description)))
+              (should (equal (mevedel-review--verify-permission-rules)
+                             (plist-get captured-options :skill-permission-rules)))
+              (funcall (plist-get captured-options :result-handler)
+                       '(:outcome completed :payload "evidence\nVERDICT: FAIL"
+                                  :sender "/root/verify" :usage 42))
+              (should (eq 'fail (plist-get outcome :verdict)))
+              (should (= 42 (plist-get outcome :usage)))))
+        (kill-buffer data))))
+
+  :doc "rejects invalid Goal review policy without dispatch or verifier fallback"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "goal")
+                mevedel--current-request
+                (mevedel-request--create :session mevedel--session)
+                mevedel-model-workloads
+                '((goal-review :provider "Missing:model")))
+    (let (outcome)
+      (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (&rest _args) (ert-fail "Unexpected verifier dispatch"))))
+        (mevedel-review-verify "Check completion"
+                               (lambda (value) (setq outcome value))
+                               'goal-review))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (eq 'agent-dispatch-failed (plist-get outcome :reason)))
+      (should (string-match-p "Missing" (plist-get outcome :message))))))
 
 (mevedel-deftest mevedel-review--run-task ()
   ,test
@@ -775,6 +804,8 @@
                       (mevedel-session--create :authority-mode 'pid-lock :name "verify"))
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
+          (setq-local mevedel-model-workloads
+                      '((goal-review :provider "Missing:model")))
           (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                      (lambda (_session task-name _message callback
                               &rest options)
@@ -790,6 +821,7 @@
              (lambda (result) (setq outcome result))
              nil nil 'verify)
             (should-not (plist-get captured-options :role))
+            (should-not (plist-get captured-options :model-policy))
             (should (equal "verifier"
                            (mevedel-agent-name
                             (plist-get captured-options :agent))))

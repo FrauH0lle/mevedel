@@ -9,7 +9,8 @@ user/system controls handle pause and budget limits, while runtime failures
 pause rather than making claims about task feasibility. Planning, approval,
 model routing, and prose-verdict parsing are not Goal phases. The one
 independent check is at the completion claim: `UpdateGoal(complete)` runs the
-`verifier` agent in a separate request, with the exact objective and any
+`verifier` agent in a separate request, using the `goal-review` workload
+(default tier: `strong`), with the exact objective and any
 accepted plan but no implementer claims, and completes the Goal only on its
 fixed final `VERDICT: PASS` line. Any other verdict returns the findings to the
 still-active Goal. This keeps a small lifecycle with explicit terminal tool
@@ -38,5 +39,10 @@ the lifecycle, not because of a measured failure. Completion review returned
 once the `plan-implementation` workload let accepted plans run on a
 deliberately cheaper implementer: that model should not also be the sole judge
 of whether the full objective is achieved. The check is limited to the
-completion claim and reuses the existing verifier agent, its workload, and its
+completion claim and reuses the existing verifier agent and its
 verdict line, so no Goal phase, review record, or prose parsing returns.
+
+Completion checks initially shared the `verifier` workload. Configuring a
+stronger Goal acceptance model therefore also raised the cost of ordinary
+verification. The dedicated `goal-review` workload separates those choices
+while retaining the same verifier role, isolated context, and completion gate.

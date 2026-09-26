@@ -68,6 +68,7 @@ session backend, model, and reasoning effort."
 (defcustom mevedel-model-workloads
   '((planning :tier balanced)
     (plan-implementation)
+    (goal-review :tier strong)
     (naming :tier fast)
     (explorer :tier fast)
     (verifier :tier balanced)
