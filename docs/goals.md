@@ -171,7 +171,11 @@ remain held until the Goal resumes. Once a Goal is complete, the next queued
 follow-up is an ordinary non-Goal message. There is no maximum-turn or no-tool
 heuristic.
 
-A transient transport failure is retried once. Terminal provider, transport,
+Transient transport failures are retried up to five consecutive times, after
+15, 30, 60, 120, and 240 seconds, so a short network outage does not pause the
+Goal. They include timeouts, connection and network errors, HTTP 502-504, and
+curl's name-resolution, connect, transfer, TLS, empty-reply, send, and receive
+exit codes. A successful turn resets the count. Terminal provider, transport,
 compaction, and other runtime failures pause the Goal with a concrete reason.
 This includes a failure to start the scheduled continuation. A new Goal or an
 explicit resume resets the transient-retry allowance. An exhausted paused or

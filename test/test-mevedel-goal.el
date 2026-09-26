@@ -470,7 +470,7 @@
       (should (= 60 (mevedel-goal-tokens-used goal)))
       (should-not (mevedel-session-pending-reminders session))))
 
-  :doc "retries one transient failure and pauses on the next or terminal failure"
+  :doc "retries transient failures with backoff and pauses once exhausted or terminal"
   (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
@@ -483,33 +483,50 @@
           (with-current-buffer buffer
             (setq-local mevedel--session session
                         mevedel-goal--transient-retries 0))
-          (let ((fsm (gptel-make-fsm
-                      :info (list :buffer buffer :mevedel-goal-id "goal-1"
-                                  :mevedel-goal-accounting-id "goal-1"
-                                  :error "temporary network timeout"))))
-            (mevedel-goal-settle-failure fsm 'error)
-            (should (eq 'active (mevedel-goal-status goal)))
-            (should (= 1 (buffer-local-value 'mevedel-goal--transient-retries buffer)))
-            ;; A second failed turn, not a duplicate settlement of the first.
-            (mevedel-goal-settle-failure
-             (gptel-make-fsm
-              :info (list :buffer buffer :mevedel-goal-id "goal-1"
-                          :mevedel-goal-accounting-id "goal-1"
-                          :error "temporary network timeout"))
-             'error)
+          (let (messages)
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (push (apply #'format format-string args) messages))))
+              ;; Each is a separate failed turn, not a duplicate settlement.
+              (dolist (reason '("temporary network timeout"
+                                "Curl failed with exit code 6. See Curl manpage for details."
+                                "Curl failed with exit code 56."
+                                "temporary network timeout"
+                                "temporary network timeout"))
+                (mevedel-goal-settle-failure
+                 (gptel-make-fsm
+                  :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                              :mevedel-goal-accounting-id "goal-1"
+                              :error reason))
+                 'error)
+                (should (eq 'active (mevedel-goal-status goal))))
+              (should (= 5 (buffer-local-value
+                            'mevedel-goal--transient-retries buffer)))
+              (should (string-match-p "retrying in 15s" (car (last messages))))
+              (should (string-match-p "retrying in 240s" (car messages)))
+              (mevedel-goal-settle-failure
+               (gptel-make-fsm
+                :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                            :mevedel-goal-accounting-id "goal-1"
+                            :error "temporary network timeout"))
+               'error))
+            (should (= 5 (length messages)))
             (should (eq 'paused (mevedel-goal-status goal)))
             (should (string-match-p "timeout" (mevedel-goal-reason goal))))
           (setf (mevedel-goal-status goal) 'active
                 (mevedel-goal-reason goal) nil)
           (with-current-buffer buffer
             (setq-local mevedel-goal--transient-retries 0))
-          (mevedel-goal-settle-failure
-           (gptel-make-fsm
-            :info (list :buffer buffer :mevedel-goal-id "goal-1"
-                        :mevedel-goal-accounting-id "goal-1"
-                        :error "authentication failed"))
-           'error)
-          (should (eq 'paused (mevedel-goal-status goal)))
+          (dolist (reason '("authentication failed"
+                            "Curl failed with exit code 60."))
+            (setf (mevedel-goal-status goal) 'active)
+            (mevedel-goal-settle-failure
+             (gptel-make-fsm
+              :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                          :mevedel-goal-accounting-id "goal-1"
+                          :error reason))
+             'error)
+            (should (eq 'paused (mevedel-goal-status goal))))
           (setf (mevedel-goal-status goal) 'complete
                 (mevedel-goal-reason goal) nil)
           (mevedel-goal-settle-failure
@@ -861,18 +878,29 @@
   (:doc "continues any active Goal after success but only its own after failure")
   (with-temp-buffer
     (let ((scheduled 0)
+          delay
           (unattributed (gptel-make-fsm :info (list :buffer (current-buffer))))
           (attributed (gptel-make-fsm :info (list :buffer (current-buffer)
                                                   :mevedel-goal-id "g"))))
       (setq-local mevedel--session (mevedel-session--create :name "main"))
       (cl-letf (((symbol-function 'mevedel-goal--schedule-continuation)
-                 (lambda (&rest _) (cl-incf scheduled))))
+                 (lambda (&rest args)
+                   (cl-incf scheduled)
+                   (setq delay (nth 3 args)))))
         (mevedel-goal-dispatch-after-turn unattributed)
         (should (= 0 scheduled))
         (mevedel-goal-dispatch-after-turn unattributed t)
         (should (= 1 scheduled))
+        (should-not delay)
         (mevedel-goal-dispatch-after-turn attributed)
-        (should (= 2 scheduled))))))
+        (should (= 2 scheduled))
+        (should (eql 0 delay))
+        ;; A retried transient failure waits out its backoff delay.
+        (setq-local mevedel-goal--transient-retries 2)
+        (mevedel-goal-dispatch-after-turn attributed)
+        (should (eql 30 delay))
+        (mevedel-goal-dispatch-after-turn attributed t)
+        (should-not delay)))))
 
 (mevedel-deftest mevedel-goal--known-token-count
   (:doc "distinguishes zero normalized usage from unavailable usage and applies the baseline")
