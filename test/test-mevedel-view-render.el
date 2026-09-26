@@ -6132,6 +6132,16 @@
 	  (should-not (string-match-p "GPTEL_SYSTEM" text))
 	  (should-not (string-match-p "hidden system prompt" text))))
 
+  :doc "an agent task heading's property drawer is stripped"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "* Agent Task: Verify\n:PROPERTIES:\n"
+              ":MEVEDEL_AGENT_PATH: /root/verify\n:END:\n\nCheck it.\n"))
+    (let* ((seg (list 'user (point-min)
+                      (with-current-buffer data-buf (point-max))))
+           (text (mevedel-view--user-turn-text (list seg) data-buf)))
+      (should (equal "Agent Task: Verify\n\nCheck it." text))))
+
   :doc "hook context blocks are stripped from visible user turn text"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
