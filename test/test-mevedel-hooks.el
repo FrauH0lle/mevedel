@@ -1346,7 +1346,8 @@
      '(:additional-context ("a" "b") :system-message "active")))))
 
 (mevedel-deftest mevedel-hooks-merge-decisions
-		 (:doc "merges contexts and keeps restrictive permission precedence")
+		 (:doc "merges contexts and keeps restrictive permission and stop precedence")
+		 (progn
 		 (let* ((first '(:permission-decision allow
 						      :additional-context ("a")
 						      :updated-result "one"))
@@ -1364,7 +1365,17 @@
 		     (should (equal (plist-get decision :additional-context)
 				    '("a" "b")))
 		     (should (equal (plist-get decision :updated-result) "one"))
-		     (should (equal (plist-get decision :permission-reason) "no")))))
+		     (should (equal (plist-get decision :permission-reason) "no"))))
+		 ;; A later `continue: true' cannot cancel an earlier stop.
+		 (let ((decision
+			(mevedel-hooks-merge-decisions
+			 (mevedel-hooks-merge-decisions
+			  (mevedel-hooks-merge-decisions nil '(:continue t))
+			  '(:continue nil :stop-reason "stop now"))
+			 '(:continue t))))
+		   (should (plist-member decision :continue))
+		   (should-not (plist-get decision :continue))
+		   (should (equal "stop now" (plist-get decision :stop-reason))))))
 
 (mevedel-deftest mevedel-hooks-merge-decisions/malformed
   (:doc "ignores malformed base and next decisions")

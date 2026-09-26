@@ -37,7 +37,10 @@ cannot dispatch work without an explicit `/goal resume`.
 
 The state controls whether another ordinary turn may start. Pausing ends a
 running Goal turn at its next tool boundary: running tools finish and the turn
-settles normally, without an abort. Runtime failures pause execution; a task-level
+settles normally, without an abort. A turn waiting in `WaitAgent` is woken with
+a steering note so it reaches that boundary; pending user steering is still
+delivered first. Lowering the budget to current usage and editing the objective
+end the turn the same way. Runtime failures pause execution; a task-level
 impasse is a separate, model-reported blocked state.
 
 ```mermaid
@@ -82,8 +85,8 @@ rotates that identity and queued follow-up ownership with the Goal, so editing
 a paused Goal cannot release its held input. Clearing the Goal and starting an
 unrelated replacement establishes no accounting lineage. Editing an active
 Goal ends its running turn at the next tool boundary, so continuation starts a
-turn from the revised objective; steering also wakes a turn waiting in
-`WaitAgent` with the refreshed context. The next prompt consumes one objective-updated reminder,
+turn from the revised objective; a turn waiting in `WaitAgent` is woken with
+the refreshed context. The next prompt consumes one objective-updated reminder,
 and an active Goal schedules continuation behind the current request gate.
 
 When a Goal references an accepted Plan, each turn validates the reference

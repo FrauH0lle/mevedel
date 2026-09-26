@@ -377,7 +377,8 @@ tool boundary: the batch's tool results are recorded and the turn settles
 normally instead of sampling the model again. On a root turn an active Goal
 is paused with the stop reason, because continuation would otherwise restart
 the stopped work; an agent's stop ends only that agent turn. A fail-closed
-handler's failure is such a decision too.
+handler's failure is such a decision too. When several handlers run, any
+stop wins: a later `continue: true` does not cancel it.
 Only a handler execution reaches a post-use hook: canonical success emits
 `PostToolUse`, while explicit or signaled handler failure emits
 `PostToolUseFailure`.  Validation, permission, and aborted-interaction

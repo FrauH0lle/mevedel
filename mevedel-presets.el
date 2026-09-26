@@ -551,8 +551,8 @@ Has no effect when no extras are registered for PRESET-NAME."
   "Add mevedel's turn continuation rules to copied TRANSITIONS.
 A final response with pending same-turn steering continues through WAIT.
 Tool results end the turn instead of sampling again once
-`mevedel-turn-end-at-boundary' asked for that; errors and steering still
-take precedence."
+`mevedel-turn-end-at-boundary' asked for that; errors and gptel or mevedel
+steering still take precedence, so queued steering is delivered first."
   (when-let* ((type-entry (assq 'TYPE transitions))
               (rules (cdr type-entry)))
     (setcdr type-entry
@@ -565,7 +565,8 @@ take precedence."
                      (1- (length rules)))))
       (setcdr tret-entry
               (append (seq-take rules index)
-                      (list (cons #'mevedel-turn-end-requested-p 'DONE))
+                      (list (cons #'mevedel-tools--pending-steering-p 'WAIT)
+                            (cons #'mevedel-turn-end-requested-p 'DONE))
                       (seq-drop rules index)))))
   transitions)
 

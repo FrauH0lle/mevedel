@@ -550,8 +550,9 @@ completed one: accounting, journal capture, the checkpoint, queued input, and
 Goal continuation run as usual. Errors and pending same-turn steering take
 precedence, so steering is delivered and the turn ends at the following
 boundary. The request is a transition rule added by
-`mevedel-preset--build-transitions`, which root and agent machines both use; an
-agent turn ended this way settles from its `DONE` handler. gptel's own
+`mevedel-preset--build-transitions`, which root, agent, directive, and
+side-conversation machines all use; an agent turn ended this way settles from
+its `DONE` handler. gptel's own
 post-tool `:stop` differs: it records an error and fails the turn. Callers:
 an UpdateGoal completion rejected by its verifier ([Goals](goals.md#goal-tools))
 an agent reaching its `:max-turns` cap ([Agents](agents.md)), the Goal pause,
