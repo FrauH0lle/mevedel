@@ -629,8 +629,10 @@ the left side instead shows the session and a one-line preview of that
 prompt. It follows the exchange at the top of each window independently,
 not the buffer point or the most recent submission. A visible prompt header
 does not pin itself; scrolling to a different exchange changes the preview.
-The preview is shortened, or omitted when there is no room, to leave space
-for the operational controls. When present, clicking it reveals the original
+The session name is also shortened or omitted in tight layouts so a long
+name cannot hide the operational controls. The preview is shortened, or
+omitted when there is no room, to leave space for those controls. Clicking
+the preview reveals the original
 prompt, expanding a folded turn or input
 when necessary. It is view-only: synthetic/model-only context is excluded,
 and archived segments use only their own visible turns.

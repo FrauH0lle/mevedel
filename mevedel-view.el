@@ -1162,9 +1162,16 @@ Metadata lives on rendered prompt headers, not in the model transcript."
                         (mevedel-view--status-strip-button
                          tools 'tools "Open tools cockpit")))
                  " · "))
+               (session-max
+                (max 0 (min (if pinned 24 (string-width session-name))
+                            (- width (string-width rhs) 3))))
+               (session-label
+                (if (zerop session-max) ""
+                  (truncate-string-to-width session-name session-max
+                                            0 nil "…")))
                (root-max
                 (- width
-                   (string-width session-name)
+                   (string-width session-label)
                    (string-width rhs)
                    3))
                (root-label
@@ -1172,8 +1179,8 @@ Metadata lives on rendered prompt headers, not in the model transcript."
                      (mevedel-view--status-strip-root-label root root-max)))
                (lhs
                 (if (or pinned (string-empty-p root-label))
-                    session-name
-                  (format "%s  %s" session-name root-label)))
+                    session-label
+                  (format "%s  %s" session-label root-label)))
                (value
                 (concat
                  (mevedel-view--status-strip-button
