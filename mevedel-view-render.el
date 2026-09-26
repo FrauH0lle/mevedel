@@ -6517,6 +6517,11 @@ restore the turn with all inner section state intact.  Signals a
                                       'keymap mevedel-view--display-map
                                       'front-sticky '(read-only keymap)
                                       'rear-nonsticky '(read-only keymap)))
+                  ;; The trailing blank line is not a visible prompt header.
+                  (when prompt-preview
+                    (remove-text-properties
+                     (- (point) 2) (point)
+                     '(mevedel-view-prompt-preview nil)))
                   (when directive
                     (add-text-properties
                      summary-start
