@@ -407,7 +407,7 @@
     (cl-letf (((symbol-function 'mevedel-menu-open)
                (lambda (area) (setq called area))))
       (let* ((map (get-text-property 0 'local-map button))
-             (command (lookup-key map [header-line mouse-1])))
+             (command (lookup-key map [tab-line mouse-1])))
         (should (eq (get-text-property 0 'mevedel-view-cockpit-area button)
                     'mode))
         (should (string= button "Mode"))
@@ -437,7 +437,7 @@
           (search-forward "Second question")
           (let ((second (line-beginning-position)))
             (set-window-start nil (point-min) t)
-            (should-not (string-search "First question" (mevedel-view--status-strip)))
+            (should-not (mevedel-view--sticky-prompt-line))
             (goto-char second)
             (set-window-start nil first t)
             (should (get-text-property
@@ -446,13 +446,19 @@
                      'mevedel-view-prompt-preview))
             (should (equal first (window-start)))
             (should (mevedel-view--pinned-prompt (selected-window)))
-            (should (string-search "First question" (mevedel-view--status-strip)))
+            (should (string-search "First question"
+                                   (mevedel-view--sticky-prompt-line)))
+            (should-not (string-search "First question"
+                                       (mevedel-view--status-strip)))
+            (should (string-search "mevedel/"
+                                   (mevedel-view--status-strip)))
             (set-window-start
              nil (save-excursion (goto-char second)
                                  (search-backward "You\n") (point)) t)
             (should-not (mevedel-view--pinned-prompt (selected-window)))
             (set-window-start nil second t)
-            (should (string-search "Second question" (mevedel-view--status-strip))))))))
+            (should (string-search "Second question"
+                                   (mevedel-view--sticky-prompt-line))))))))
 
   :doc "two windows and a status-strip cache follow their own top edges"
   (save-window-excursion
@@ -479,11 +485,11 @@
           (set-window-start left first t)
           (set-window-start right second t)
           (with-selected-window left
-            (should (string-search "Alpha question" (mevedel-view--status-strip))))
+            (should (string-search "Alpha question" (mevedel-view--sticky-prompt-line))))
           (with-selected-window right
-            (should (string-search "Beta question" (mevedel-view--status-strip))))
+            (should (string-search "Beta question" (mevedel-view--sticky-prompt-line))))
           (with-selected-window left
-            (should (string-search "Alpha question" (mevedel-view--status-strip))))))))
+            (should (string-search "Alpha question" (mevedel-view--sticky-prompt-line))))))))
 
   :doc "a folded summary pins as soon as only its blank separator remains"
   (save-window-excursion
@@ -511,6 +517,40 @@
             (should (equal (cons header "First question More text")
                            (mevedel-view--pinned-prompt
                             (selected-window))))))))))
+
+(mevedel-deftest mevedel-view--sticky-prompt-line ()
+  ,test
+  (test)
+  :doc "two windows share stable rows but compute different prompt text"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "*** First question\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((window (selected-window))
+              (other (split-window-right)))
+          (set-window-buffer window view-buf)
+          (set-window-buffer other view-buf)
+          (goto-char (point-min))
+          (search-forward "answer")
+          (set-window-start window (line-beginning-position) t)
+          (set-window-start other (point-min) t)
+          (should (equal header-line-format
+                         '(:eval (mevedel-view--sticky-prompt-line))))
+          (should (equal tab-line-format
+                         '(:eval (mevedel-view--status-strip))))
+          (with-selected-window window
+            (should (string-search "First question"
+                                   (mevedel-view--sticky-prompt-line))))
+          (with-selected-window other
+            (should-not (mevedel-view--sticky-prompt-line)))
+          (set-window-start window (point-min) t)
+          (should-not (mevedel-view--sticky-prompt-line))
+          (set-window-buffer window data-buf)
+          (with-current-buffer data-buf
+            (should-not (local-variable-p 'tab-line-format))))))))
 
 (mevedel-deftest mevedel-view--pinned-prompt-button ()
   ,test
@@ -542,7 +582,9 @@
                    (lambda () 1)))
           (let ((header (mevedel-view--status-strip)))
             (should (string-match-p "ask · idle" header))
-            (should-not (string-match-p "Very long prompt" header))))))))
+            (should-not (string-match-p "Very long prompt" header))
+            (should (string-search "Very long prompt"
+                                   (mevedel-view--sticky-prompt-line)))))))))
 
 (mevedel-deftest mevedel-view--jump-to-pinned-prompt ()
   ,test
@@ -648,7 +690,7 @@
     (should (equal ""
                    (mevedel-view--status-strip-root-label root 9))))
 
-  :doc "a long session name yields to operational controls and then a pinned prompt"
+  :doc "a long session name yields to controls; the prompt has its own row"
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data data-buf "*** Short prompt\n" nil)
@@ -677,8 +719,9 @@
                 (should (string-match-p "\\`S+…" line))
                 (should (text-property-any
                          0 (length line) 'mevedel-view-cockpit-area 'top line)))
-              (when (= width 80)
-                (should (string-search "Short prompt" line))))))
+              (should-not (string-search "Short prompt" line))
+              (should (string-search "Short prompt"
+                                     (mevedel-view--sticky-prompt-line))))))
         (set-window-start nil (point-min) t)
         (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
                    (lambda () 120)))
@@ -872,7 +915,7 @@
                          'mevedel-view-cockpit-area area line))
                    (map (and pos (get-text-property pos 'local-map line)))
                    (command (and map
-                                 (lookup-key map [header-line mouse-1]))))
+                                 (lookup-key map [tab-line mouse-1]))))
               (should pos)
               (should command)
               (setq called nil)
@@ -887,7 +930,7 @@
                    0 (length line)
                    'mevedel-view-cockpit-area 'tools line))
              (map (get-text-property pos 'local-map line))
-             (command (lookup-key map [header-line mouse-1]))
+             (command (lookup-key map [tab-line mouse-1]))
              (gptel-called nil))
         (cl-letf (((symbol-function 'gptel-menu)
                    (lambda ()
@@ -910,6 +953,8 @@
             (should (equal header-line-format "GPTEL HEADER")))
           (with-current-buffer view-buf
             (should (equal header-line-format
+                           '(:eval (mevedel-view--sticky-prompt-line))))
+            (should (equal tab-line-format
                            '(:eval (mevedel-view--status-strip))))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))

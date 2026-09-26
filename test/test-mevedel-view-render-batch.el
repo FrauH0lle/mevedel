@@ -77,7 +77,7 @@
       (should mevedel-view-render--batch)
       (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
                                       (selected-window)))))
-      (should (string-search "Prompt 2" (mevedel-view--status-strip)))
+      (should (string-search "Prompt 2" (mevedel-view--sticky-prompt-line)))
       (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
@@ -98,9 +98,7 @@
       (set-window-start nil (line-beginning-position) t)
       (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
                                       (selected-window)))))
-      (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
-                 (lambda () 300)))
-        (should (string-search "Prompt 4" (mevedel-view--status-strip))))
+      (should (string-search "Prompt 4" (mevedel-view--sticky-prompt-line)))
       (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
@@ -151,14 +149,12 @@
         (mevedel-view-render-batched-full)
         (should (equal "Prompt 1" (cdr (mevedel-view--pinned-prompt left))))
         (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt right))))
-        (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
-                   (lambda () 300)))
-          (should (string-search "Prompt 1"
-                                 (with-selected-window left
-                                   (mevedel-view--status-strip))))
-          (should (string-search "Prompt 4"
-                                 (with-selected-window right
-                                   (mevedel-view--status-strip))))))))
+        (should (string-search "Prompt 1"
+                               (with-selected-window left
+                                 (mevedel-view--sticky-prompt-line))))
+        (should (string-search "Prompt 4"
+                               (with-selected-window right
+                                 (mevedel-view--sticky-prompt-line)))))))
   :doc "in-flight history uses the existing synchronous reconciliation"
   (mevedel-batch-test--with-history
     (mevedel-view-stream-begin-turn

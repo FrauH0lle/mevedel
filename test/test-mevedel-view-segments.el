@@ -269,13 +269,13 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (goto-char (point-min))
       (search-forward "Archived answer one")
       (set-window-start nil (line-beginning-position) t)
-      (should (string-search "First prompt" (mevedel-view--status-strip)))
+      (should (string-search "First prompt" (mevedel-view--sticky-prompt-line)))
       (mevedel-view-go-to-segment 2)
       (goto-char (point-min))
       (search-forward "Archived answer two")
       (set-window-start nil (line-beginning-position) t)
-      (should (string-search "Second prompt" (mevedel-view--status-strip)))
-      (should-not (string-search "First prompt" (mevedel-view--status-strip)))))
+      (should (string-search "Second prompt" (mevedel-view--sticky-prompt-line)))
+      (should-not (string-search "First prompt" (mevedel-view--sticky-prompt-line)))))
 
   :doc "direct selection bypasses a missing intervening segment"
   (let* ((directory (make-temp-file "mevedel-view-segment-picker-" t))

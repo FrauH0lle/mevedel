@@ -623,21 +623,24 @@ numbers worth counting, and they cost four columns of an already narrow frame.
 
 ## Status Strip And Cockpit Routing
 
-The view buffer header line is mevedel-owned chrome. It shows session
+The view buffer tab line is mevedel-owned chrome. It shows session
 orientation on the left as `SESSION  WORKSPACE-ROOT` and operational
 state on the right as `MODE · REQUEST-STATE · MODEL · TOOL-COUNT`.
 When a user or directive prompt has scrolled above a window's top edge,
-the left side instead shows the session and a one-line preview of that
-prompt. It follows the exchange at the top of each window independently,
-not the buffer point or the most recent submission. A visible prompt header
-does not pin itself; scrolling to a different exchange changes the preview.
-The session name is also shortened or omitted in tight layouts so a long
-name cannot hide the operational controls. The preview is shortened, or
-omitted when there is no room, to leave space for those controls. Clicking
-the preview reveals the original
-prompt, expanding a folded turn or input
-when necessary. It is view-only: synthetic/model-only context is excluded,
-and archived segments use only their own visible turns.
+a separate header line below the status strip shows a one-line clickable prompt
+preview. The project path and session name remain in the status strip. The
+row stays reserved (empty when the original prompt header is visible), so
+scrolling never shifts the transcript vertically. The preview
+follows the exchange at the top of each window independently, not the buffer
+point or the most recent submission. A visible prompt header does not pin
+itself; scrolling to a different exchange changes the preview. In tight
+windows, the prompt preview truncates to its own row's width, without taking
+space from the operational controls. Clicking it reveals the original prompt,
+expanding a folded turn or input when necessary. It is view-only:
+synthetic/model-only context is excluded, and archived segments use only their
+own visible turns.
+The session name is shortened or omitted in tight layouts so a long name
+cannot hide the operational controls.
 The workspace root uses Emacs path abbreviation normally, truncates to
 the final directory when space is tight, and disappears before the
 right-side state is dropped. Clickable parts route to session cockpit
@@ -1113,6 +1116,10 @@ background queue sorted by cursor distance. Interactive visibility uses Emacs's
 current window end, reusing completed redisplay and accounting for variable-height
 rows. Changed window contents or scroll positions request an updated boundary;
 batch rendering, which has no glyph matrices, uses its line-motion approximation.
+Tables in an unfinished streamed response stay raw even if that timer runs;
+terminal reconciliation replaces the live projection with a pending table,
+which the same idle timer then formats once. This avoids relaying out a table
+on each stream update or alternating between its raw and rendered forms.
 
 `mevedel-view-mode` schedules that job from decoration, window size/buffer
 changes, scrolling, and commands. Each buffer owns one cancellable timer;

@@ -782,7 +782,9 @@ existing `mevedel--view-buffer' binding untouched.  A
     ;; columns of a directive frame that is already narrow.
     (setq-local display-line-numbers nil)
     (unless mevedel-view--agent-transcript-p
-      (setq header-line-format '(:eval (mevedel-view--status-strip)))))
+      (setq header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
+      (setq-local tab-line-format
+                  '(:eval (mevedel-view--status-strip)))))
   (unless (plist-get options :preserve-data-view-buffer)
     (with-current-buffer data-buf
       (setq-local mevedel--view-buffer view-buf)
@@ -959,7 +961,7 @@ Kills the associated view buffer."
          (command (lambda (&optional _event)
                     (interactive "e")
                     (mevedel-menu-open area))))
-    (define-key map [header-line mouse-1] command)
+    (define-key map [tab-line mouse-1] command)
     (propertize label
                 'face 'link
                 'mouse-face 'highlight
@@ -992,7 +994,7 @@ Kills the associated view buffer."
       (if (<= (string-width tail) max-width) tail "")))))
 
 (defun mevedel-view--status-strip-spacer (rhs)
-  "Return a spacer that right-aligns RHS in the header line."
+  "Return a spacer that right-aligns RHS in the tab line."
   (propertize
    " " 'display
    (if (and (fboundp 'string-pixel-width)
@@ -1068,6 +1070,15 @@ Metadata lives on rendered prompt headers, not in the model transcript."
        'help-echo "Jump to this prompt"
        'local-map map))))
 
+(defun mevedel-view--sticky-prompt-line ()
+  "Return the current window's pinned prompt on its own header line."
+  (when-let* ((pinned (mevedel-view--pinned-prompt (selected-window))))
+    (let* ((width (max 0 (1- (window-body-width (selected-window)))))
+           (label (if (> width 8) "Prompt  " "")))
+      (concat (propertize label 'face 'shadow)
+              (mevedel-view--pinned-prompt-button
+               (cdr pinned) (car pinned) (- width (string-width label)))))))
+
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."
   (when (and (boundp 'mevedel--data-buffer)
@@ -1120,13 +1131,11 @@ Metadata lives on rendered prompt headers, not in the model transcript."
                           tool-count
                           (if (= tool-count 1) "" "s")))
            (width (mevedel-view--status-strip-width))
-           (window (selected-window))
-           (pinned (mevedel-view--pinned-prompt window))
            (cache-key
             (list data-buffer session-name root target-label
                   pending-publication lease-state mode scope state phase-model
                   (and goal t) preset-name tools width (display-graphic-p)
-                  window pinned)))
+                  (selected-window))))
       (if (equal cache-key mevedel-view--status-strip-cache-key)
           mevedel-view--status-strip-cache-value
         (let* ((rhs
@@ -1163,7 +1172,7 @@ Metadata lives on rendered prompt headers, not in the model transcript."
                          tools 'tools "Open tools cockpit")))
                  " · "))
                (session-max
-                (max 0 (min (if pinned 24 (string-width session-name))
+                (max 0 (min (string-width session-name)
                             (- width (string-width rhs) 3))))
                (session-label
                 (if (zerop session-max) ""
@@ -1175,19 +1184,15 @@ Metadata lives on rendered prompt headers, not in the model transcript."
                    (string-width rhs)
                    3))
                (root-label
-                (and (not pinned)
-                     (mevedel-view--status-strip-root-label root root-max)))
+                (mevedel-view--status-strip-root-label root root-max))
                (lhs
-                (if (or pinned (string-empty-p root-label))
+                (if (string-empty-p root-label)
                     session-label
                   (format "%s  %s" session-label root-label)))
                (value
                 (concat
                  (mevedel-view--status-strip-button
                   lhs 'top "Open session cockpit")
-                 (when (and pinned (> root-max 0))
-                   (concat "  " (mevedel-view--pinned-prompt-button
-                                  (cdr pinned) (car pinned) root-max)))
                  (mevedel-view--status-strip-spacer rhs)
                  rhs)))
           (setq mevedel-view--status-strip-cache-key cache-key

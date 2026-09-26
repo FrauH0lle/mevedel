@@ -438,6 +438,7 @@ display type, and recreates it otherwise."
       (set-window-parameter window 'mode-line-format 'none)
       (set-window-parameter window 'header-line-format
                             '(:eval (mevedel-directive-frame--header)))
+      (set-window-parameter window 'tab-line-format 'none)
       (set-window-fringes window 0 0))
     (mevedel-directive-frame--paint-border frame)
     frame))
