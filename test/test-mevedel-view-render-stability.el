@@ -32,16 +32,16 @@
         (search-forward "Initial answer.")
         (set-window-start nil (line-beginning-position) t)
         (let ((top (window-start)))
-          (should (string-search "Visible question" (mevedel-view--status-strip)))
+          (should (string-search "Visible question" (mevedel-view--sticky-prompt-line)))
           (mevedel-view-stream-begin-turn
            mevedel-view--status-marker
            (with-current-buffer data-buf (copy-marker (point-max))))
           (mevedel-view-test--insert-data data-buf "More output.\n" 'response)
           (mevedel-view-render-live-update data-buf)
           (should (= top (window-start)))
-          (should (string-search "Visible question" (mevedel-view--status-strip)))
+          (should (string-search "Visible question" (mevedel-view--sticky-prompt-line)))
           (mevedel-view--full-rerender)
-          (should (string-search "Visible question" (mevedel-view--status-strip)))
+          (should (string-search "Visible question" (mevedel-view--sticky-prompt-line)))
           (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
 
   :doc "full and retained redraws preserve group readers and composer windows"
