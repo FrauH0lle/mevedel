@@ -227,7 +227,8 @@ zone boundaries advance past history inserted immediately before them, keeping
 status, interaction, and progress overlays outside the transcript.
 
 Scheduled full refreshes of settled history prepare the canonical source once,
-render the turns needed to restore point, selection, and window anchors immediately,
+render the turns needed to restore point, selection, and window anchors and
+their governing prompt turns immediately,
 then replace other visible turns and offscreen turn placeholders one per timer
 callback, in that priority order. Each callback
 captures the current draft and reader state, so typing between callbacks is
