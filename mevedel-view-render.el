@@ -7479,6 +7479,14 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :index mevedel-transcript--tool-block-index
                       :audits mevedel-transcript-audit--decode-cache))
            installed)
+      ;; A reader can move onto any pending response before its callback.
+      ;; Project chat prompts now so each such response has a real header
+      ;; above it, with both a preview and a click target.  Keep the costly
+      ;; assistant turns deferred.
+      (unless agent
+        (dolist (turn (plist-get plan :turns))
+          (when (eq (plist-get turn :role) 'user)
+            (push turn immediate))))
       (setq mevedel-view-render--batch job)
       (unwind-protect
           (progn

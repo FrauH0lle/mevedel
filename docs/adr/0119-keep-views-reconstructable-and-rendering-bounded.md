@@ -31,8 +31,11 @@ replacements refresh source-backed handles, with full projection as the fallback
 for unavailable source or generic rows without retained-agent metadata. Distinct
 agent paths share a per-view queue, drained one path per callback; duplicate paths
 coalesce and view teardown cancels the queue.
-Scheduled settled-history rebuilds likewise render reader-visible turns first
-and fill the remaining turns one per callback. Each callback preserves fresh
+Scheduled settled-history rebuilds render reader-visible turns and all chat
+prompt turns first, then fill the remaining response turns one per callback.
+This gives a window moved onto a pending response the correct pinned prompt
+and a real prompt header to reveal on click, before its response is rendered.
+Each callback preserves fresh
 reader/composer state and validates its source generation. Losing focus pauses
 the job; source changes replace it. In-flight reconciliation, explicit immediate
 refreshes, and other writers' correctness fallbacks remain synchronous. A batch
@@ -105,6 +108,12 @@ requiring a second transcript model, because it falls back to complete projectio
 when source anchors are stale. Session state and interactions can refresh without
 parsing the transcript.
 
+Rendering prompt turns immediately reuses the canonical display text and click
+target rather than building a second, partial prompt projector for pending
+placeholders. It makes initial batch work proportional to the number and size of
+chat prompts, even when their responses remain deferred; it does not guarantee
+bounded first-paint latency for prompt-heavy histories.
+
 ## Consequences
 
 Rendering caches and fold state are disposable. A missing Markdown grammar gives
@@ -114,6 +123,14 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: prompt-first deferred history
+
+Originally only reader-visible turns and their anchors were rendered before
+callbacks; all other turns stayed pending. Scrolling to a pending response
+between callbacks could then pin a prompt from an earlier exchange and send a
+click to the wrong turn. The prompt-first projection replaces that behavior to
+keep window-local navigation correct during the deferred interval.
 
 ### September 2026: audit memo capacity during long requests
 
