@@ -451,6 +451,35 @@
        (should-not (mevedel-journal-capture-seal session buffer 'session-end))
        (should-not (mevedel-journal-capture-trigger workspace capture))))))
 
+(mevedel-deftest mevedel-journal-capture--turns ()
+  ,test
+  (test)
+  :doc "reads a turn continued past auto-compaction from its later segment"
+  (let ((session (mevedel-session--create
+                  :turn-count 4
+                  :prompt-index
+                  '((2)
+                    (1 (:turn 1 :file-turn 1 :cum-turn 3 :pos 1
+                        :fork-point-id "fp-3" :transcript-cutoff 90)
+                       (:turn 2 :file-turn 2 :cum-turn 4 :pos 95
+                        :continuation (:segment 2 :start 40
+                                       :fork-point-id "fp-4"
+                                       :transcript-cutoff 700)))))))
+    (should (equal '((3 1 1 90 "fp-3") (4 2 40 700 "fp-4"))
+                   (mapcar (lambda (turn)
+                             (list (plist-get turn :number)
+                                   (plist-get turn :segment)
+                                   (plist-get turn :start)
+                                   (plist-get turn :end)
+                                   (plist-get turn :fork-point)))
+                           (mevedel-journal-capture--turns session)))))
+
+  :doc "skips turns without a fork point or continuation"
+  (should-not (mevedel-journal-capture--turns
+               (mevedel-session--create
+                :turn-count 1
+                :prompt-index '((1 (:turn 1 :file-turn 1 :cum-turn 1 :pos 1)))))))
+
 (mevedel-deftest mevedel-journal-capture--freeze-policy ()
   ,test
   (test)

@@ -1096,6 +1096,15 @@ rather than recounted from the start of the buffer per turn, which matters
 because the rebuild runs on every settled save and a live segment is
 bounded only by the compaction threshold.
 
+A turn that auto-compaction carries into a new segment keeps its prompt entry
+in the segment where it started, and that segment never sees the turn's final
+response. When such a turn settles in a segment with no prompt of its own, the
+save writes its fork point there and adds a `:continuation` plist (segment,
+resume position after the inherited summary, fork-point ID, and transcript
+cutoff) to the original entry. The entry itself is unchanged, so turn
+numbering, rewind, and fork behave as before; journal capture reads the turn
+from its continuation.
+
 Delivered reminders and completed tool-response fragments also persist as
 trusted transcript records. The [history adapter](tools.md#retained-provider-history)
 preserves reminder message boundaries and exact tool-call grouping across

@@ -196,6 +196,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x))
+(declare-function mevedel-request-turn "mevedel-structs" (cl-x))
 (declare-function mevedel-session-control-transfer "mevedel-structs" (cl-x))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -850,6 +851,61 @@ SOURCE-START and SOURCE-END must bound one rendered assistant turn."
             (or (null next-position) (< start next-position)))))
    fork-points))
 
+(defun mevedel-session-artifacts--continued-prompt (session)
+  "Return SESSION's latest prompt entry when its turn continues in this segment.
+Auto-compaction during a turn carries the turn into a new segment, so its
+response ends in a segment that has no prompt of its own and its entry in the
+earlier segment never receives a fork point there."
+  (let* ((segment (or (mevedel-session-current-segment session) 1))
+         (index (mevedel-session-prompt-index session))
+         latest)
+    (unless (cdr (assoc segment index))
+      (dolist (entry index)
+        (when (< (car entry) segment)
+          (dolist (prompt (cdr entry))
+            (when (or (null latest)
+                      (> (plist-get prompt :cum-turn)
+                         (plist-get latest :cum-turn)))
+              (setq latest prompt)))))
+      (and latest (not (plist-get latest :fork-point-id)) latest))))
+
+(defun mevedel-session-artifacts--continuation-start (buffer)
+  "Return where a turn continued into BUFFER's segment resumes.
+That is after the inherited compaction summary, or at the last prompt the
+compaction copied forward."
+  (with-current-buffer buffer
+    (let ((tail (mevedel-session-artifacts--segment-tail-prompt-count)))
+      (or (and (> tail 0)
+               (plist-get (nth (1- tail)
+                               (mevedel-session-artifacts-collect-prompts
+                                buffer))
+                          :pos))
+          (plist-get (mevedel-session-artifacts-segment-summary-bounds) :end)
+          (point-min)))))
+
+(defun mevedel-session-artifacts--record-continuation
+    (session buffer fork-points)
+  "Record the continued turn's fork point from FORK-POINTS in SESSION's index.
+The entry gains `:continuation' naming the current segment, where in BUFFER
+the turn resumes, and its fork point, so a completed turn that spans an
+auto-compaction is still indexed.  Other consumers keep the entry unchanged."
+  (when-let* ((prompt (mevedel-session-artifacts--continued-prompt session))
+              ((not (plist-get prompt :continuation)))
+              (segment (or (mevedel-session-current-segment session) 1))
+              (fork-point
+               (cl-find-if (lambda (candidate)
+                             (and (eql (plist-get candidate :cum-turn)
+                                       (plist-get prompt :cum-turn))
+                                  (eql (plist-get candidate :segment) segment)))
+                           fork-points)))
+    (plist-put prompt :continuation
+               (list :segment segment
+                     :start (mevedel-session-artifacts--continuation-start
+                             buffer)
+                     :fork-point-id (plist-get fork-point :fork-point-id)
+                     :transcript-cutoff
+                     (plist-get fork-point :transcript-cutoff)))))
+
 (defun mevedel-session-artifacts-update-prompt-index (session buffer)
   "Refresh the live segment's prompt list in SESSION from BUFFER's contents.
 
@@ -909,19 +965,38 @@ that prompt's model turn."
     (if cell
         (setcdr cell with-cum)
       (setf (mevedel-session-prompt-index session)
-            (cons (cons current-seg with-cum) index)))))
+            (cons (cons current-seg with-cum) index)))
+    (unless with-cum
+      (mevedel-session-artifacts--record-continuation
+       session buffer fork-points))))
 
 (defun mevedel-session-artifacts--ensure-latest-fork-point
     (session buffer)
-  "Attach a durable fork-point marker to SESSION's latest response in BUFFER."
+  "Attach a durable fork-point marker to SESSION's latest response in BUFFER.
+A turn continued into this segment by auto-compaction gets its marker here
+too, after the response it finished with."
   (let* ((segment (or (mevedel-session-current-segment session) 1))
-         (prompt (car (last (cdr (assoc
-                                  segment
-                                  (mevedel-session-prompt-index session)))))))
+         (own (car (last (cdr (assoc
+                               segment
+                               (mevedel-session-prompt-index session))))))
+         (continued
+          (unless own
+            (when-let* ((prompt (mevedel-session-artifacts--continued-prompt
+                                 session))
+                        ((not (plist-get prompt :continuation)))
+                        ;; Only the turn settling now continues here.
+                        (request (with-current-buffer buffer
+                                   (bound-and-true-p mevedel--current-request)))
+                        ((eql (mevedel-request-turn request)
+                              (plist-get prompt :cum-turn))))
+              prompt)))
+         (prompt (or own continued)))
     (when (and prompt (not (plist-get prompt :fork-point-id)))
       (with-current-buffer buffer
         (save-excursion
-          (goto-char (plist-get prompt :pos))
+          (goto-char (if continued
+                         (mevedel-session-artifacts--continuation-start buffer)
+                       (plist-get prompt :pos)))
           (when (text-property-search-forward 'gptel 'response t)
             (goto-char (point-max))
             (insert

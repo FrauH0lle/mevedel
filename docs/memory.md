@@ -743,7 +743,9 @@ session and any committed publication head. A newer checkpoint supersedes an
 unsealed predecessor only when it contains all that predecessor's turns.
 Published and sealed turns stay outside later checkpoints; replacement
 branches use distinct persisted fork-point identities even when turn numbers
-repeat. Storage failure reports a warning without failing the conversation save.
+repeat. A turn that spanned an auto-compaction is captured from the segment
+where it finished, whose inherited summary stands for the earlier part
+([Sessions](sessions.md)). Storage failure reports a warning without failing the conversation save.
 
 For deferred root-turn settlement on local Linux portable sessions, a batch
 Emacs child prepares that checkpoint from the committed publication and frozen

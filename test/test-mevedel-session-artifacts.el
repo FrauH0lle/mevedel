@@ -3952,6 +3952,52 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (should (= 2 (plist-get prompt :reserved-turn)))))))
 
 
+(mevedel-deftest mevedel-session-artifacts--ensure-latest-fork-point ()
+  ,test
+  (test)
+  :doc "indexes a settling turn that auto-compaction carried into a new segment"
+  (let* ((prompt (list :turn 1 :file-turn 1 :cum-turn 4 :pos 1
+                       :preview "Implement the plan"))
+         (session (mevedel-session--create
+                   :current-segment 2 :turn-count 4
+                   :prompt-index (list (list 1 prompt)))))
+    (with-temp-buffer
+      (org-mode)
+      (insert (mevedel-session-artifacts-summary-block "Work so far."))
+      (let ((resume (point)))
+        (insert (propertize "Finished the remaining checks.\n"
+                            'gptel 'response))
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :turn 4))
+        (should (mevedel-session-artifacts--ensure-latest-fork-point
+                 session (current-buffer)))
+        (mevedel-session-artifacts-update-prompt-index session (current-buffer))
+        (let ((continuation (plist-get prompt :continuation)))
+          (should (eql 2 (plist-get continuation :segment)))
+          (should (<= (plist-get continuation :start) resume))
+          (should (stringp (plist-get continuation :fork-point-id)))
+          (should (> (plist-get continuation :transcript-cutoff) resume)))
+        ;; The entry keeps its own shape, and the next save changes nothing.
+        (should-not (plist-get prompt :fork-point-id))
+        (should-not (mevedel-session-artifacts--ensure-latest-fork-point
+                     session (current-buffer))))))
+
+  :doc "leaves an earlier unfinished turn alone when another request settles"
+  (let* ((prompt (list :turn 1 :file-turn 1 :cum-turn 3 :pos 1 :preview "Try"))
+         (session (mevedel-session--create
+                   :current-segment 2 :turn-count 3
+                   :prompt-index (list (list 1 prompt)))))
+    (with-temp-buffer
+      (org-mode)
+      (insert (mevedel-session-artifacts-summary-block "Work so far."))
+      (insert (propertize "Copied answer.\n" 'gptel 'response))
+      (setq-local mevedel--current-request (mevedel-request--create :turn 5))
+      (should-not (mevedel-session-artifacts--ensure-latest-fork-point
+                   session (current-buffer)))
+      (mevedel-session-artifacts-update-prompt-index session (current-buffer))
+      (should-not (plist-get prompt :continuation)))))
+
+
 (mevedel-deftest mevedel-session-artifacts--latest-user-message-from-index ()
   ,test
   (test)
