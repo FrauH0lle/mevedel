@@ -61,6 +61,23 @@
 (defvar mevedel-journal-worker--stopping nil
   "Non-nil while all maintenance children are being stopped on teardown.")
 
+(defun mevedel-journal-worker--write (file value)
+  "Print VALUE to FILE for the other side of a worker exchange.
+The coding is explicit and lossless: detection would read a file holding a NUL
+byte, such as tool output from a binary file, as raw bytes and turn every
+non-ASCII string into unibyte bytes."
+  (let ((coding-system-for-write 'utf-8-emacs-unix))
+    (with-temp-file file
+      (let ((print-length nil) (print-level nil))
+        (prin1 value (current-buffer))))))
+
+(defun mevedel-journal-worker--read (file)
+  "Read the value `mevedel-journal-worker--write' printed to FILE."
+  (with-temp-buffer
+    (let ((coding-system-for-read 'utf-8-emacs-unix))
+      (insert-file-contents file))
+    (let ((read-eval nil)) (read (current-buffer)))))
+
 (defun mevedel-journal-worker-supported-p (workspace)
   "Return non-nil when WORKSPACE can use a local maintenance child."
   (and (not mevedel-journal-worker--child-p)
@@ -88,15 +105,14 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
          process)
     (condition-case err
         (progn
-          (with-temp-file request
-            (let ((print-length nil) (print-level nil))
-              (prin1 (list :root root :operation operation :force force
-                           :cleanup-at (mevedel-workspace-journal-cleanup-at workspace)
-                           :age mevedel-journal-max-age-days
-                           :history-age mevedel-memory-history-max-age-days
-                           :journal-enabled (bound-and-true-p mevedel-journal-enabled)
-                           :payload payload)
-                     (current-buffer))))
+          (mevedel-journal-worker--write
+           request
+           (list :root root :operation operation :force force
+                 :cleanup-at (mevedel-workspace-journal-cleanup-at workspace)
+                 :age mevedel-journal-max-age-days
+                 :history-age mevedel-memory-history-max-age-days
+                 :journal-enabled (bound-and-true-p mevedel-journal-enabled)
+                 :payload payload))
           (setq process
                 (make-process
                  :name "mevedel-journal-worker" :noquery t :connection-type 'pipe
@@ -121,9 +137,7 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                                                (<= (file-attribute-size (file-attributes reply))
                                                    (if (memq operation '(capture-prepare memory-prepare memory-publish generation-observations)) (* 8 1024 1024) 4096)))
                                     (error "Journal worker exited with status %s" (process-exit-status child)))
-                                  (with-temp-buffer
-                                    (insert-file-contents reply)
-                                    (let ((read-eval nil)) (read (current-buffer)))))
+                                  (mevedel-journal-worker--read reply))
                               (error (list :error (error-message-string failure))))))
                        (unwind-protect (funcall callback result)
                          (delete-directory directory t)))))))
@@ -149,9 +163,7 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
   (unless noninteractive (error "Journal worker requires batch Emacs"))
   (require 'mevedel-journal-recovery)
   (require 'mevedel-journal-cleanup)
-  (let* ((options (with-temp-buffer
-                    (insert-file-contents request)
-                    (let ((read-eval nil)) (read (current-buffer)))))
+  (let* ((options (mevedel-journal-worker--read request))
          (root (plist-get options :root))
          (workspace (mevedel-workspace--create :root root :id root :type 'project))
          (mevedel-journal-worker--child-p t)
@@ -226,8 +238,7 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                      (list :ok t :count count :more mevedel-journal-cleanup--more
                            :cleanup-at (mevedel-workspace-journal-cleanup-at workspace))))))
             (error (list :error (truncate-string-to-width (error-message-string err) 1000))))))
-    (with-temp-file reply
-      (let ((print-length nil) (print-level nil)) (prin1 result (current-buffer))))))
+    (mevedel-journal-worker--write reply result)))
 
 (provide 'mevedel-journal-worker)
 ;;; mevedel-journal-worker.el ends here
