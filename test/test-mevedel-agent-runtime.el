@@ -654,6 +654,10 @@
          (mevedel-agent-runtime-queue-execution-completion
           invocation "/root/explore" "First Bash exited with code 0"))
         (should-not (mevedel-session-messages session))
+        ;; A still-working agent reads its own completion first.
+        (should (equal (if response-first-p nil '(EXECUTION))
+                       (mapcar (lambda (msg) (plist-get msg :type))
+                               (mevedel-agent-record-mailbox record))))
         (should-not finalizations)
         (setq live-p nil)
         (should
@@ -669,10 +673,38 @@
                            "Second Bash exited with code 1")
                          (mapcar (lambda (msg) (plist-get msg :payload)) messages))))
         (should (equal "Agent answer" (mevedel-agent-record-settled-result record)))
+        (should-not (mevedel-agent-record-mailbox record))
         (should (equal '(completed) finalizations))
         (should-not
          (mevedel-agent-runtime-queue-execution-completion
           invocation "/root/explore" "duplicate"))))))
+
+(mevedel-deftest mevedel-agent-runtime-queue-execution-completion/read
+  (:doc "does not forward a completion the working agent already read")
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (record (mevedel-agent-record--create
+                  :path "/root/explore" :parent-path "/root"
+                  :activity 'running :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/explore" record))
+          (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (invocation response event)
+            (mevedel-agent-control--settle
+             session record invocation response event)))
+    (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+               (lambda (_invocation) nil))
+              ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore))
+      (mevedel-agent-runtime-queue-execution-completion
+       invocation "/root/explore" "Probe output")
+      ;; The agent's next WAIT delivers and clears its mailbox.
+      (should (mevedel-agent-control-context-mailbox invocation))
+      (mevedel-agent-control-clear-context-mailbox invocation)
+      (mevedel-agent-runtime--handle-provider-result invocation "Agent answer"))
+    (should (equal '(RESULT)
+                   (mapcar (lambda (msg) (plist-get msg :type))
+                           (mevedel-agent-control-context-mailbox session))))))
 
 (defun test-mevedel-agent-runtime--terminal-settlement-events (artifact-p)
   "Return a local portable session's terminal persistence events.

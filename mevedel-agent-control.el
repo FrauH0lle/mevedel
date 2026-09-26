@@ -610,14 +610,15 @@ Return the resolved recipient path.  Sending never activates a turn."
     recipient))
 
 (defun mevedel-agent-control-enqueue-execution-result (session owner body)
-  "Queue yielded execution BODY for root OWNER in SESSION."
-  (unless (and (equal owner "/root") (stringp body))
-    (error "Invalid root execution result"))
+  "Queue yielded execution BODY for its OWNER in SESSION.
+The owner reads it at its next provider request, like the root does."
+  (unless (and (mevedel-agent-path-p owner) (stringp body))
+    (error "Invalid execution result"))
   (mevedel-agent-control--enqueue
-   session "/root"
+   session owner
    (list :type 'EXECUTION
-         :sender "/root"
-         :recipient "/root"
+         :sender owner
+         :recipient owner
          :payload body
          :timestamp (current-time)))
   t)
@@ -893,6 +894,16 @@ Return rollback and post-commit delivery closures for INVOCATION."
            (previous-blockers (mevedel-agent-record-blockers record))
            (previous-result (mevedel-agent-record-settled-result record))
            (previous-outcome (mevedel-agent-record-settled-outcome record))
+           ;; Completions of the agent's own Bash it never read go to the
+           ;; caller with the result.
+           (own-path (mevedel-agent-record-path record))
+           (own-queue (mevedel-agent-record-mailbox record))
+           (unread-executions          ; newest first, like the queue
+            (cl-remove-if-not
+             (lambda (item)
+               (and (eq (plist-get item :type) 'EXECUTION)
+                    (equal (plist-get item :sender) own-path)))
+             own-queue))
            ;; Normalized input plus output, excluding cached input, while the
            ;; child FSM is still attached.  Callers may charge it elsewhere.
            (usage
@@ -912,7 +923,8 @@ Return rollback and post-commit delivery closures for INVOCATION."
                    (mevedel-agent-record-settled-outcome record)
                    previous-outcome)
              (mevedel-agent-control--set-mailbox-queue
-              session recipient previous-queue))
+              session recipient previous-queue)
+             (setf (mevedel-agent-record-mailbox record) own-queue))
            (deliver ()
              (mevedel-agent-control-cancel-wait
               session (mevedel-agent-record-path record))
@@ -943,8 +955,17 @@ Return rollback and post-commit delivery closures for INVOCATION."
                    :sender (mevedel-agent-record-path record)
                    :recipient recipient :payload body
                    :timestamp (current-time)))
-           (mevedel-agent-invocation-runtime-execution-results invocation))
+           ;; Both lists are newest first; completions after the answer
+           ;; are the newer ones.
+           (append
+            (mevedel-agent-invocation-runtime-execution-results invocation)
+            (mapcar (lambda (item) (plist-get item :payload))
+                    unread-executions)))
           (cons result previous-queue)))
+        (when unread-executions
+          (setf (mevedel-agent-record-mailbox record)
+                (cl-remove-if (lambda (item) (memq item unread-executions))
+                              own-queue)))
         (cons #'rollback #'deliver)))))
 
 (defun mevedel-agent-control--record-invocation
