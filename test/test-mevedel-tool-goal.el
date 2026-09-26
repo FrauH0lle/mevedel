@@ -213,12 +213,13 @@ and `verify-callback' delivers the verifier outcome."
       (should (eq 'success (plist-get outcome :status)))
       (should (equal "Goal status changed to complete" (plist-get outcome :result)))
       (should (eq 'complete (mevedel-goal-status goal)))
+      (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))
       (should (= 7 (mevedel-goal-tokens-used goal)))
       (mevedel-goal-settle-turn fsm)
       (should (= 32 (mevedel-goal-tokens-used goal)))
       (should (eq 'inactive (mevedel-goal-continue-if-idle session (current-buffer))))))
 
-  :doc "returns every non-passing verdict as findings and keeps the Goal active"
+  :doc "returns every non-passing verdict as findings, keeps the Goal active, and ends the turn"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship"))
     (let ((goal (mevedel-session-goal session)))
@@ -239,7 +240,9 @@ and `verify-callback' delivers the verifier outcome."
           (should (string-search "Goal remains active" (plist-get outcome :result)))
           (should (string-search (nth 1 case) (plist-get outcome :result)))
           (should (string-search (nth 2 case) (plist-get outcome :result)))
-          (should (eq 'active (mevedel-goal-status goal)))))
+          (should (eq 'active (mevedel-goal-status goal)))
+          (should (eq 'goal-verification-failed
+                      (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))))
       (should (= 20 (mevedel-goal-tokens-used goal)))))
 
   :doc "blocks immediately without verification"

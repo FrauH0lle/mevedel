@@ -13,7 +13,8 @@ independent check is at the completion claim: `UpdateGoal(complete)` runs the
 (default tier: `strong`), with the exact objective and any
 accepted plan but no implementer claims, and completes the Goal only on its
 fixed final `VERDICT: PASS` line. Any other verdict returns the findings to the
-still-active Goal. This keeps a small lifecycle with explicit terminal tool
+still-active Goal and ends the root turn at that tool boundary, so each rejected
+attempt settles as its own Goal turn and continuation starts the next. This keeps a small lifecycle with explicit terminal tool
 calls and a completion contract supplied in Goal context. Assessing repository
 evidence remains model judgment; neither tool nor verifier proves completion.
 
@@ -46,3 +47,13 @@ Completion checks initially shared the `verifier` workload. Configuring a
 stronger Goal acceptance model therefore also raised the cost of ordinary
 verification. The dedicated `goal-review` workload separates those choices
 while retaining the same verifier role, isolated context, and completion gate.
+
+Rejected completion claims first returned their findings inside the same root
+turn. In a September 2026 session the implementer answered six verifier rounds
+and two compactions without ever yielding, so one root turn ran from 21:56 to
+09:01: the Goal showed zero turns and zero elapsed time all night, the journal
+had a single capture of the whole night to summarize, queued follow-ups could
+not run, and a network drop lost the only checkpoint. The "same condition
+across three consecutive Goal turns" rule for `blocked` could never apply to
+repeated rejections. Ending the turn at the rejected claim gives those
+mechanisms their boundaries without a time or token heuristic.

@@ -767,6 +767,24 @@ fire-count and payload."
     (should (equal '(t "whole" "chunk") bookkept))))
 
 
+(mevedel-deftest mevedel-agent-exec--handle-done-ended ()
+  ,test
+  (test)
+  :doc "delivers the terminal event only for a turn ended at its tool results"
+  (let* (delivered
+         (info (list :tool-use '((:name "Read"))
+                     :mevedel-agent-terminal-callback
+                     (lambda (event callback-info)
+                       (push (cons event (plist-get callback-info :tool-use))
+                             delivered))))
+         (fsm (gptel-make-fsm :info info)))
+    (mevedel-agent-exec--handle-done-ended fsm)
+    (should-not delivered)
+    (plist-put info :mevedel-end-turn 'test)
+    (mevedel-agent-exec--handle-done-ended fsm)
+    (should (equal '((t)) delivered))))
+
+
 (mevedel-deftest mevedel-agent-exec--handle-tret-save ()
 		 ,test
 		 (test)

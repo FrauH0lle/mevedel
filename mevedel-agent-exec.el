@@ -93,6 +93,11 @@
 (declare-function mevedel--compact-handle-agent-wait
                   "mevedel-compact" (fsm))
 
+;; `mevedel-presets'
+(declare-function mevedel-preset--build-transitions
+                  "mevedel-presets" (transitions))
+(autoload 'mevedel-preset--build-transitions "mevedel-presets")
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--agent-transform
                   "mevedel-reminders" (fsm))
@@ -171,6 +176,16 @@ running Org save machinery synchronously on every tool boundary."
       (mevedel-agent-conversation-record-activity
        inv '(:type waiting :summary "waiting")))))
 
+(defun mevedel-agent-exec--handle-done-ended (fsm)
+  "Settle FSM's agent turn when it ended at a tool boundary.
+Such a turn reaches DONE from its tool results, after the stream's terminal
+event already deferred to the pending tool use, so deliver it now."
+  (let ((info (gptel-fsm-info fsm)))
+    (when-let* (((plist-get info :mevedel-end-turn))
+                (callback (plist-get info :mevedel-agent-terminal-callback)))
+      (plist-put info :tool-use nil)
+      (funcall callback t info))))
+
 (defun mevedel-agent-exec--handle-done-save (fsm)
   "Run gptel's post-response hooks for FSM and checkpoint their changes.
 Once terminal publication has committed the answer, defer this extra save.
@@ -228,6 +243,7 @@ the terminal event through the request callback's exactly-once retry gate."
           ,#'gptel--handle-tool-result
           ,#'mevedel-agent-exec--handle-tret-save)
     (DONE ,#'mevedel-compact-estimation-record-token-baseline
+          ,#'mevedel-agent-exec--handle-done-ended
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-done-save)
     (ABRT ,#'mevedel-compact-estimation-record-token-baseline
@@ -249,7 +265,9 @@ Additions:
   across long tool loops (gptel's post-response hook fires only at DONE/ABRT,
   not TRET).
 - `DONE' is added with `gptel--handle-post-insert' delegation so
-  `gptel-post-response-functions' actually runs in the agent buffer.
+  `gptel-post-response-functions' actually runs in the agent buffer, and
+  settles a turn that `mevedel-turn-end-at-boundary' ended at its tool
+  results.
 - `ABRT' drives the transcript through finalization with status
   `aborted'.")
 
@@ -375,8 +393,10 @@ Returns the spawned FSM."
                       (copy-marker (point-max) nil)))
            (partial (format "%s result for task: %s\n\n"
                             (capitalize agent-type) description))
-           (fsm (gptel-make-fsm :table gptel-send--transitions
-                                :handlers mevedel-agent-exec--handlers))
+           (fsm (gptel-make-fsm
+                 :table (mevedel-preset--build-transitions
+                         (copy-tree (default-value 'gptel-send--transitions)))
+                 :handlers mevedel-agent-exec--handlers))
            (mevedel-cb
             (mevedel-agent-exec--make-callback
              main-cb agent-type description where (list partial))))

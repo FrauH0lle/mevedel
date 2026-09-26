@@ -18,8 +18,9 @@ Mark the active goal complete or blocked.
   `summary` must name the recurring condition and the specific input or external
   change needed. Ordinary progress belongs in the response or task tracking.
 - `complete` starts an independent verification of the workspace. The goal
-  completes only if it passes; otherwise the verifier's findings are returned and
-  the goal stays active. Address them, then call `UpdateGoal` again.
+  completes only if it passes; otherwise the verifier's findings are returned,
+  the goal stays active, and the turn ends. The next goal turn addresses them,
+  then calls `UpdateGoal` again.
 
 ### Examples of good usage
 

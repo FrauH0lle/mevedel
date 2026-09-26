@@ -270,6 +270,31 @@ replacement path in `mevedel-request-begin'."
 
 
 ;;
+;;; Ending a turn at a tool boundary
+
+(defun mevedel-turn-end-at-boundary (fsm reason)
+  "End FSM's turn once its current tool results are recorded.
+Instead of sampling the model again, FSM moves to DONE and settles like any
+completed turn: accounting, journal capture, the checkpoint, queued input,
+and any Goal continuation all run.  Pending steering is delivered first, so
+the turn then ends at the following boundary.  REASON is a symbol naming the
+caller for telemetry.  Return non-nil when this call made the request."
+  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+              ((not (plist-get info :mevedel-end-turn))))
+    (setf (gptel-fsm-info fsm) (plist-put info :mevedel-end-turn reason))
+    (when-let* ((buffer (plist-get info :buffer))
+                ((buffer-live-p buffer))
+                (session (buffer-local-value 'mevedel--session buffer))
+                ((fboundp 'mevedel-telemetry-record)))
+      (mevedel-telemetry-record session 'turn-end-requested :reason reason))
+    t))
+
+(defun mevedel-turn-end-requested-p (info)
+  "Return the reason INFO's turn ends at this tool boundary, or nil."
+  (plist-get info :mevedel-end-turn))
+
+
+;;
 ;;; Request identity and admission
 
 (defun mevedel-current-origin ()

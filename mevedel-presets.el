@@ -33,6 +33,7 @@
 
 ;; `gptel-request'
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
+(declare-function gptel--tool-result-p "ext:gptel-request" (info))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
@@ -547,13 +548,25 @@ Has no effect when no extras are registered for PRESET-NAME."
 ;;; FSM handler chain builder
 
 (defun mevedel-preset--build-transitions (transitions)
-  "Add same-turn steering continuation to copied TRANSITIONS."
+  "Add mevedel's turn continuation rules to copied TRANSITIONS.
+A final response with pending same-turn steering continues through WAIT.
+Tool results end the turn instead of sampling again once
+`mevedel-turn-end-at-boundary' asked for that; errors and steering still
+take precedence."
   (when-let* ((type-entry (assq 'TYPE transitions))
               (rules (cdr type-entry)))
     (setcdr type-entry
             (append (butlast rules)
                     (list (cons #'mevedel-tools--pending-steering-p 'WAIT))
                     (last rules))))
+  (when-let* ((tret-entry (assq 'TRET transitions))
+              (rules (cdr tret-entry)))
+    (let ((index (or (cl-position #'gptel--tool-result-p rules :key #'car)
+                     (1- (length rules)))))
+      (setcdr tret-entry
+              (append (seq-take rules index)
+                      (list (cons #'mevedel-turn-end-requested-p 'DONE))
+                      (seq-drop rules index)))))
   transitions)
 
 (defun mevedel-preset--final-patch-handler (fsm &optional continuation)

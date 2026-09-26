@@ -28,6 +28,17 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-turn-end-at-boundary ()
+  ,test
+  (test)
+  :doc "records the first reason once and reports it to the transition rule"
+  (let ((fsm (gptel-make-fsm :info (list :buffer nil))))
+    (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))
+    (should (mevedel-turn-end-at-boundary fsm 'first))
+    (should-not (mevedel-turn-end-at-boundary fsm 'second))
+    (should (eq 'first (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
+    (should-not (mevedel-turn-end-at-boundary nil 'none))))
+
 (mevedel-deftest mevedel--turn-stamp-settled ()
   ,test
   (test)
