@@ -35,7 +35,10 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-commit-session
                   "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-enqueue-execution-result
+                  "mevedel-agent-control" (session owner body))
 (autoload 'mevedel-agent-control-commit-session "mevedel-agent-control")
+(autoload 'mevedel-agent-control-enqueue-execution-result "mevedel-agent-control")
 (defvar mevedel-agent-control-suppress-persistence)
 
 ;; `mevedel-agent-conversation'
@@ -605,17 +608,22 @@
 (defun mevedel-agent-runtime-queue-execution-completion
     (context owner body)
   "Secure yielded Bash BODY for invocation CONTEXT owned by OWNER.
-Settle a held provider response once its last owned execution has finished."
+While the agent still works, BODY goes to its own mailbox and reaches it at
+its next provider request.  Once it has answered, BODY goes to its caller with
+the result, and a held response settles after its last owned execution."
   (when (and (mevedel-agent-invocation-p context)
              (equal owner (mevedel-agent-invocation-require-path context))
              (stringp body)
              (not (mevedel-agent-invocation-runtime-settled-p context)))
-    (push body
-          (mevedel-agent-invocation-runtime-execution-results context))
-    (when-let* ((response
-                 (mevedel-agent-invocation-runtime-pending-response context))
-                ((not (mevedel-agent-runtime--execution-live-p context))))
-      (mevedel-agent-runtime--settle context response))
+    (if-let* ((response
+               (mevedel-agent-invocation-runtime-pending-response context)))
+        (progn
+          (push body
+                (mevedel-agent-invocation-runtime-execution-results context))
+          (unless (mevedel-agent-runtime--execution-live-p context)
+            (mevedel-agent-runtime--settle context response)))
+      (mevedel-agent-control-enqueue-execution-result
+       (mevedel-agent-invocation-parent-session context) owner body))
     t))
 
 

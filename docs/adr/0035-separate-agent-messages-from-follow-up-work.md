@@ -27,9 +27,13 @@ parent or broadcast. Outcomes are completed, errored, or interrupted; payloads
 carry the final response, concise failure, or interruption reason with useful
 partial text. A workflow awaiting its child may consume that exact committed
 record through its result handler; failed delivery leaves it for ordinary mail.
-Captured yielded Bash completions are committed alongside that result as separate
-`EXECUTION` records to the spawn parent, with the child as sender. They do not
-alter the final-response payload or the workflow result handler's input.
+A yielded Bash completion that arrives while the child still works reaches the
+child itself, as `EXECUTION` mail read at its next provider request, like the
+root's own completions. Completions the child can no longer read, because they
+arrive after its final answer or remain unread at settlement, are committed
+alongside that result as separate `EXECUTION` records to the spawn parent, with
+the child as sender. They do not alter the final-response payload or the
+workflow result handler's input.
 
 Inline terminal previews use a 32,768-character head-and-tail budget and point
 to the persisted transcript when truncated. Complete settled results and
@@ -54,6 +58,13 @@ turning the model into a delivery-protocol participant.
 
 ## Decision history
 
+- **Deliver a working child's completions to the child.** All captured
+  completions used to go to the parent at settlement. A September 2026 Goal
+  verifier yielded four probe scripts, never polled them, and gave its verdict
+  without their results; the root then received all four afterwards as
+  unexplained `Bash completed` rows. The completion owner is the child
+  (ADR 0024), so it now reads completions while it works, and the parent gets
+  only those the child could not read.
 - **Separate captured Bash output from terminal results.** Previously the runtime
   concatenated every captured completion onto the final response. A persisted
   reviewer result contained JSON followed by two Bash test logs inside one result
