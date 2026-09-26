@@ -202,8 +202,7 @@ GOAL's accepted plan, when it has one, is included verbatim."
 Blocked settles at once.  Completion is accepted only when an independent
 verifier passes it; any other verdict returns its report, keeps the Goal
 active, and ends the turn at this tool boundary so the rejected attempt
-settles as its own Goal turn before continuation.  The verifier's token usage
-is charged to the Goal."
+settles as its own Goal turn before continuation."
   (let* ((fsm (mevedel-tool-goal--request "UpdateGoal"))
          (session mevedel--session)
          (goal-id (plist-get (gptel-fsm-info fsm) :mevedel-goal-id))
@@ -217,35 +216,31 @@ is charged to the Goal."
                  (list :result (mevedel-tool-goal-update
                                 status (plist-get args :summary)
                                 session goal-id)))
-      ;; ponytail: tokens a verifier spent before a user abort are not charged;
-      ;; read its FSM from a request canceller if abort accounting matters.
+      ;; The verifier charges its own usage to the Goal as it runs, like
+      ;; any agent started from a Goal turn.
       (mevedel-review-verify
        (mevedel-tool-goal--verification-prompt
         session (mevedel-session-goal session))
        (lambda (outcome)
-         (let ((usage (plist-get outcome :usage)))
-           (cond
-            ((not (funcall active-p))
-             (mevedel-goal-charge-tokens fsm usage))
-            ((eq (plist-get outcome :verdict) 'pass)
-             (funcall
-              commit
-              (lambda ()
-                (let ((reply
-                       (condition-case err
-                           (list :result (mevedel-tool-goal-update
-                                          'complete nil session goal-id))
-                         (error
-                          (list :status 'error
-                                :result (format "Error: %s"
-                                                (error-message-string err)))))))
-                  (mevedel-goal-charge-tokens fsm usage)
-                  (funcall callback reply)))))
-            (t
-             (mevedel-goal-charge-tokens fsm usage)
-             (mevedel-turn-end-at-boundary fsm 'goal-verification-failed)
-             (funcall callback
-                      (mevedel-tool-goal--verification-failure outcome))))))
+         (cond
+          ((not (funcall active-p)))
+          ((eq (plist-get outcome :verdict) 'pass)
+           (funcall
+            commit
+            (lambda ()
+              (let ((reply
+                     (condition-case err
+                         (list :result (mevedel-tool-goal-update
+                                        'complete nil session goal-id))
+                       (error
+                        (list :status 'error
+                              :result (format "Error: %s"
+                                              (error-message-string err)))))))
+                (funcall callback reply)))))
+          (t
+           (mevedel-turn-end-at-boundary fsm 'goal-verification-failed)
+           (funcall callback
+                    (mevedel-tool-goal--verification-failure outcome)))))
        'goal-review))))
 
 (defun mevedel-tool-goal--register ()

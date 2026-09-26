@@ -196,12 +196,15 @@ or restore. If all selected sections are absent, all are delivered again. Explic
 
 ### Runtime status and event reminders
 
-- **Goal budget:** turn settlement queues one-shot 50%, 80%, and 100%
-  crossing events; budget changes queue one event with old and new
-  limits. When provider usage is already known at a tool-result
-  boundary, the pipeline queues the first 100% warning as a turn event
-  delivered at the same WAIT, so an in-flight turn can wrap up without
-  an extra request; the fsm guard suppresses the settlement duplicate.
+- **Goal budget:** every Goal charge (root settlement or agent progress)
+  reports each newly crossed 50%, 80%, or 100% threshold once, as a turn
+  event for a still-running root turn or a pending reminder otherwise;
+  budget changes queue one event with old and new limits. At each root
+  tool-result boundary the pipeline also checks known in-flight usage and
+  queues newly crossed thresholds as turn events delivered at the same WAIT;
+  the fsm guard suppresses the settlement duplicate. Agents charged to the
+  Goal receive a notice of the highest threshold reached at their next WAIT
+  ([Goals](goals.md#token-budget)).
 - **Mention expansions:** `@ref`/`@file`/`@mcp`/`@agent` contents and
   rejection notices are staged entries (typed by mention key).
   Deduplication commits only once the payload exists, so a cancelled

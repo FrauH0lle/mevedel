@@ -93,6 +93,12 @@
 (declare-function mevedel--compact-handle-agent-wait
                   "mevedel-compact" (fsm))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-agent-budget-notice "mevedel-goal" (fsm))
+(declare-function mevedel-goal-charge-agent-progress "mevedel-goal" (fsm))
+(autoload 'mevedel-goal-agent-budget-notice "mevedel-goal")
+(autoload 'mevedel-goal-charge-agent-progress "mevedel-goal")
+
 ;; `mevedel-presets'
 (declare-function mevedel-preset--build-transitions
                   "mevedel-presets" (transitions))
@@ -213,6 +219,12 @@ it still calls, settling with its latest response."
             (mevedel-reminders--stage-batch
              fsm (plist-get staged :entries) (plist-get staged :commits))))))))
 
+(defun mevedel-agent-exec--handle-wait-goal-budget (fsm)
+  "Stage a Goal budget notice for agent request FSM when one is due."
+  (when-let* ((notice (mevedel-goal-agent-budget-notice fsm)))
+    (mevedel-reminders-stage-entry
+     fsm 'goal-budget (plist-get notice :body) (plist-get notice :commit))))
+
 (defun mevedel-agent-exec--handle-done-ended (fsm)
   "Settle FSM's agent turn when it ended at a tool boundary.
 Such a turn reaches DONE from its tool results, after the stream's terminal
@@ -284,6 +296,7 @@ the terminal event through the request callback's exactly-once retry gate."
      ,#'mevedel-tools--handle-plan-tool-filter
      ,#'mevedel-agent-exec--handle-wait-activity
      ,#'mevedel-agent-exec--handle-wait-turn
+     ,#'mevedel-agent-exec--handle-wait-goal-budget
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage
           ,#'mevedel-compact-estimation-record-token-baseline
@@ -294,15 +307,19 @@ the terminal event through the request callback's exactly-once retry gate."
           ,#'gptel--update-tool-ask)
     (TRET ,#'gptel--handle-post-tool
           ,#'gptel--handle-tool-result
+          ,#'mevedel-goal-charge-agent-progress
           ,#'mevedel-agent-exec--handle-tret-save)
     (DONE ,#'mevedel-compact-estimation-record-token-baseline
+          ,#'mevedel-goal-charge-agent-progress
           ,#'mevedel-agent-exec--handle-done-ended
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-done-save)
     (ABRT ,#'mevedel-compact-estimation-record-token-baseline
+          ,#'mevedel-goal-charge-agent-progress
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-abort-save)
     (ERRS ,#'mevedel-compact-estimation-record-token-baseline
+          ,#'mevedel-goal-charge-agent-progress
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-errs-save))
   "Handler table for the mevedel sub-agent FSM.
@@ -315,6 +332,8 @@ Additions:
 - `WAIT' injects the caller's compact direct-child roster, inbound messages,
   and system reminders before sampling, and counts the sample toward the
   agent's `max-turns' cap.
+- `WAIT' also tells the agent when the Goal paying for it crosses a budget
+  threshold; `TRET' and the terminal states charge its usage to that Goal.
 - `TRET' gains `mevedel-agent-exec--handle-tret-save' so transcripts are durable
   across long tool loops (gptel's post-response hook fires only at DONE/ABRT,
   not TRET).

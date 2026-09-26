@@ -734,7 +734,7 @@
       (should-not (mevedel-goal-charge-tokens fsm 10))
       (should (= 0 (mevedel-goal-tokens-used (mevedel-session-goal session)))))))
 
-(mevedel-deftest mevedel-goal-tool-result-budget-warning
+(mevedel-deftest mevedel-goal-tool-result-budget-warnings
   (:doc "warns only for the attributed Goal lineage")
   ,test
   (test)
@@ -752,17 +752,34 @@
     (setf (mevedel-session-goal session) goal)
     (dolist (status '(complete blocked paused))
       (setf (mevedel-goal-status goal) status)
-      (should-not (mevedel-goal-tool-result-budget-warning session fsm)))
+      (should-not (mevedel-goal-tool-result-budget-warnings session fsm)))
     (setf (mevedel-goal-status goal) 'active)
-    (let ((warning
-           (mevedel-goal-tool-result-budget-warning session fsm)))
-      (should (string-match-p "Stop new substantive work"
-                              (plist-get warning :body)))
+    (let ((warnings
+           (mevedel-goal-tool-result-budget-warnings session fsm)))
+      (should (= 1 (length warnings)))
+      (should (eq 'goal-budget-100 (plist-get (car warnings) :key)))
+      (should (string-match-p "crossed 100%.*Stop new substantive work"
+                              (plist-get (car warnings) :body)))
       (should-not (plist-get (gptel-fsm-info fsm)
                              :mevedel-goal-budget-warnings))
-      (funcall (plist-get warning :commit)))
-    (should-not (mevedel-goal-tool-result-budget-warning session fsm))
+      (funcall (plist-get (car warnings) :commit)))
+    (should-not (mevedel-goal-tool-result-budget-warnings session fsm))
     (should (= 90 (mevedel-goal-tokens-used goal))))
+
+  :doc "reports every threshold one long turn crosses, once each"
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-1" :objective "Ship" :status 'active
+                :token-budget 100 :tokens-used 40))
+         (fsm (gptel-make-fsm
+               :info '(:mevedel-goal-accounting-id "goal-1"
+                       :tokens-full (:input 40 :output 5)))))
+    (setf (mevedel-session-goal session) goal)
+    (let ((warnings (mevedel-goal-tool-result-budget-warnings session fsm)))
+      (should (equal '(goal-budget-50 goal-budget-80)
+                     (mapcar (lambda (w) (plist-get w :key)) warnings)))
+      (mapc (lambda (w) (funcall (plist-get w :commit))) warnings))
+    (should-not (mevedel-goal-tool-result-budget-warnings session fsm)))
 
   :doc "does not warn a current Goal with a different identity"
   (let* ((session (mevedel-session--create :name "main"))
@@ -775,9 +792,101 @@
                        :mevedel-goal-accounting-id "goal-old"
                        :tokens-full (:input 100 :output 0)))))
     (setf (mevedel-session-goal session) replacement)
-    (should-not (mevedel-goal-tool-result-budget-warning session fsm))
+    (should-not (mevedel-goal-tool-result-budget-warnings session fsm))
     (should-not (plist-get (gptel-fsm-info fsm)
                            :mevedel-goal-budget-warnings))))
+
+(mevedel-deftest mevedel-goal-accounting-fsm ()
+  ,test
+  (test)
+  :doc "finds the Goal-charged root request, inherited by agent buffers"
+  (let ((root (gptel-make-fsm :info (list :mevedel-goal-accounting-id "g")))
+        (plain (gptel-make-fsm :info (list :buffer nil))))
+    (with-temp-buffer
+      (setq-local mevedel--current-request (mevedel-request--create :fsm root))
+      (should (eq root (mevedel-goal-accounting-fsm)))
+      (setq-local mevedel--current-request (mevedel-request--create :fsm plain))
+      (should-not (mevedel-goal-accounting-fsm)))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :goal-fsm root))
+      (should (eq root (mevedel-goal-accounting-fsm))))))
+
+(mevedel-deftest mevedel-goal-charge-agent-progress ()
+  ,test
+  (test)
+  :doc "charges only new agent usage and reports crossings to the running root turn"
+  (let* ((root-buffer (generate-new-buffer " *mevedel-goal-agent-charge*"))
+         (goal (mevedel-goal--create :id "g" :objective "Ship" :status 'active
+                                     :token-budget 100 :tokens-used 40))
+         (session (mevedel-session--create :name "main" :goal goal))
+         (root (gptel-make-fsm
+                :info (list :buffer root-buffer :mevedel-goal-accounting-id "g")))
+         (agent-info (list :mevedel-agent-invocation
+                           (mevedel-agent-invocation--create :goal-fsm root)
+                           :tokens-full (list :input 8 :output 2)))
+         (agent (gptel-make-fsm :info agent-info)))
+    (unwind-protect
+        (progn
+          (with-current-buffer root-buffer
+            (setq-local mevedel--session session
+                        mevedel--current-request
+                        (mevedel-request--create :session session :fsm root)))
+          (mevedel-goal-charge-agent-progress agent)
+          (should (= 50 (mevedel-goal-tokens-used goal)))
+          (with-current-buffer root-buffer
+            (should (assq 'goal-budget-50
+                          (plist-get mevedel-reminders--turn-events :items))))
+          (should-not (mevedel-session-pending-reminders session))
+          ;; Only usage since the last charge counts.
+          (plist-put (gptel-fsm-info agent) :tokens-full (list :input 12 :output 3))
+          (mevedel-goal-charge-agent-progress agent)
+          (should (= 55 (mevedel-goal-tokens-used goal)))
+          (mevedel-goal-charge-agent-progress agent)
+          (should (= 55 (mevedel-goal-tokens-used goal)))
+          ;; After the root turn settled, a crossing waits for the next request.
+          (plist-put (gptel-fsm-info root) :mevedel-goal-accounted t)
+          (plist-put (gptel-fsm-info agent) :tokens-full (list :input 40 :output 0))
+          (mevedel-goal-charge-agent-progress agent)
+          (should (= 80 (mevedel-goal-tokens-used goal)))
+          (should (string-match-p "crossed 80%"
+                                  (car (mevedel-session-pending-reminders session)))))
+      (kill-buffer root-buffer)))
+
+  :doc "leaves agents without a Goal uncharged"
+  (let ((agent (gptel-make-fsm
+                :info (list :mevedel-agent-invocation
+                            (mevedel-agent-invocation--create)
+                            :tokens-full (list :input 8 :output 2)))))
+    (should-not (mevedel-goal-charge-agent-progress agent))))
+
+(mevedel-deftest mevedel-goal-agent-budget-notice ()
+  ,test
+  (test)
+  :doc "tells an agent the highest threshold reached, once, counting root in-flight usage"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create :id "g" :objective "Ship" :status 'active
+                                       :token-budget 100 :tokens-used 70))
+           (root (gptel-make-fsm
+                  :info (list :buffer (current-buffer)
+                              :mevedel-goal-accounting-id "g"
+                              :tokens-full (list :input 10 :output 5))))
+           (agent (gptel-make-fsm
+                   :info (list :mevedel-agent-invocation
+                               (mevedel-agent-invocation--create :goal-fsm root)))))
+      (setq-local mevedel--session
+                  (mevedel-session--create :name "main" :goal goal))
+      (let ((notice (mevedel-goal-agent-budget-notice agent)))
+        (should (string-match-p "used 80% of its token budget (85/100"
+                                (plist-get notice :body)))
+        (funcall (plist-get notice :commit)))
+      (should-not (mevedel-goal-agent-budget-notice agent))
+      (setf (mevedel-goal-tokens-used goal) 90)
+      (should (string-match-p "whole token budget (105/100.*return your findings"
+                              (plist-get (mevedel-goal-agent-budget-notice agent)
+                                         :body)))
+      (setf (mevedel-goal-status goal) 'paused)
+      (should-not (mevedel-goal-agent-budget-notice agent)))))
 
 (mevedel-deftest mevedel-goal--end-running-turn
   ()

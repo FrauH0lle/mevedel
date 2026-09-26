@@ -91,6 +91,10 @@
 (autoload 'mevedel-execution-owner-live-p "mevedel-execution")
 (autoload 'mevedel-execution-stop-owner "mevedel-execution")
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-accounting-fsm "mevedel-goal" (&optional buffer))
+(autoload 'mevedel-goal-accounting-fsm "mevedel-goal")
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
                   "mevedel-hooks" (decision event type &optional omit-context))
@@ -946,6 +950,8 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-parent-data-buffer invocation) parent-buffer
           (mevedel-agent-invocation-parent-turn invocation)
           (mevedel-current-turn session)
+          (mevedel-agent-invocation-goal-fsm invocation)
+          (mevedel-goal-accounting-fsm parent-buffer)
           (mevedel-agent-invocation-plan-read-only invocation)
           (mevedel-plan-read-only-request-p)
           (mevedel-agent-invocation-parent-tool-use-id invocation)

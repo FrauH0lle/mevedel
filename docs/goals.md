@@ -99,10 +99,12 @@ Child-agent, context-summary, and control requests are not Goal turns. A root tu
 captures its Goal identity at request start and charges tokens, wall time, and
 one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,
-with the request estimate as fallback. The completion verifier started by
-`UpdateGoal` is not a Goal turn either, but its normalized usage is charged to
-the Goal the root request is accounted to when its verdict arrives. Usage a
-verifier spent before a user abort is not charged.
+with the request estimate as fallback. Agents started from a Goal turn,
+including nested agents and the completion verifier started by `UpdateGoal`,
+are not Goal turns either, but they charge their normalized usage to the Goal
+that root request is accounted to: after each tool batch and when the agent
+request ends, whether it completes, fails, or is aborted. The budget therefore
+bounds the whole run, not only the root conversation.
 
 Starting a Goal through `CreateGoal` or the user command also attributes an
 already-running root turn, including its known token usage; elapsed time starts
@@ -124,11 +126,17 @@ observations.
 
 The optional token budget is the user-selected runaway bound. Request context
 and the cockpit display bounded usage as used/limit and otherwise say
-`unbounded`. Charging a turn emits one-shot crossing reminders: at 50% the
-model should prioritize the remaining requirements, at 80% it should reassess
-the remaining work and avoid low-value detours, and at 100% it should stop new
-substantive work and wrap up. These need no durable reminder ledger because
-settlement compares usage immediately before and after the monotonic charge.
+`unbounded`. Every charge, from a settling root turn or an agent, emits
+one-shot crossing reminders: at 50% the model should prioritize the remaining
+requirements, at 80% it should reassess the remaining work and avoid low-value
+detours, and at 100% it should stop new substantive work and wrap up. These
+need no durable reminder ledger because each charge compares usage immediately
+before and after the monotonic charge, so every threshold is crossed exactly
+once. A crossing reaches a root turn that is still running at its next
+provider request, otherwise the next root request. Agents running for the
+Goal are told the highest threshold reached so far at their next provider
+request, counting the root turn's known in-flight usage; at 100% they are
+asked to stop new work and return their findings.
 Only an active Goal queues budget instructions; a turn that ends paused,
 blocked, or complete queues none for later work. Goal context still reports
 current usage and remaining budget.
@@ -137,11 +145,12 @@ current usage and remaining budget.
 explicitly requested. Omission uses `mevedel-goal-token-budget`; the tool cannot
 invent a limit or change the configured default.
 
-Crossing the limit never aborts an in-flight request or tool. When provider
-usage is already known at a tool-result boundary, the first 100% crossing
-queues one hidden reminder turn event, delivered at the same WAIT as the tool
-result, asking the model to stop new substantive work and wrap up the current
-response. It does not create a budget-exempt wrap-up turn. At
+Crossing the limit never aborts an in-flight request or tool. At each root
+tool-result boundary, durable usage plus the turn's known provider usage is
+checked as well, so a long turn hears about each 50%, 80%, or 100% crossing
+through a hidden turn event delivered at the same WAIT as the tool result. The
+100% reminder asks the model to stop new substantive work and wrap up the
+current response. It does not create a budget-exempt wrap-up turn. At
 settlement, an otherwise-active Goal at or above the limit becomes
 `budget-limited`; a `complete` or `blocked` decision from that turn wins.
 
