@@ -61,18 +61,23 @@
 (mevedel-deftest mevedel-view-tool-outcomes/execution ()
   ,test
   (test)
-  :doc "failed execution headers expose outcome and exit code"
+  :doc "failed execution headers stay compact while details retain the exit code"
   (let* ((data '(:status error :state completed :outcome failure
                          :termination exited :exit-code 1 :wall-time-seconds 311.7))
          (rendering (mevedel-tool-exec--render-bash "Bash" '(:command "test runner") "failed" data)))
-    (should (string-search "failure · exit 1 · 311.7s" (plist-get rendering :header))))
+    (should (equal "Bash: test runner · failed · 311.7s"
+                   (plist-get rendering :header)))
+    (should (string-search "failure · exit 1 · 311.7s"
+                           (plist-get rendering :body))))
   :doc "expected nonzero outcomes stay successful"
   (let ((data '(:status success :state completed :outcome no-match
                         :termination exited :exit-code 1)))
-    (should (equal "Bash: grep needle file (no-match · exit 1)"
-                   (plist-get (mevedel-tool-exec--render-bash
-                               "Bash" '(:command "grep needle file") "" data)
-                              :header))))
+    (let ((rendering (mevedel-tool-exec--render-bash
+                      "Bash" '(:command "grep needle file") "" data)))
+      (should (equal "Bash: grep needle file · finished"
+                     (plist-get rendering :header)))
+      (should (string-search "Details: no-match · exit 1"
+                             (plist-get rendering :body)))))
   :doc "abnormal termination remains visible without an exit code"
   (should (equal "failure · timeout"
                  (mevedel-tool-exec-format-execution-metadata

@@ -331,6 +331,14 @@
 (declare-function mevedel-view-prepare-initialize "mevedel-view-prepare" ())
 (defvar mevedel-view-prepare-enabled)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
+(declare-function mevedel-session-artifacts-read-transcript-segment
+                  "mevedel-session-artifacts" (session descriptor))
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
+
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-go-to-segment
                   "mevedel-view-segments" (&optional number))
@@ -2078,9 +2086,21 @@ Execution outcome remains independent of lifecycle and disclosure state."
                (mevedel-view--operation-line
                 marker marker-face header nil nil
                 (mevedel-view--rendering-header-face rendering)))))
-        (if-let* ((agent-path (plist-get rendering :agent-path)))
-            (mevedel-view--buttonize-agent-header-label line agent-path)
-          line)))))
+        (when-let* ((agent-path (plist-get rendering :agent-path)))
+          (setq line (mevedel-view--buttonize-agent-header-label
+                      line agent-path)))
+        (when-let* ((id (plist-get rendering :execution-control-id)))
+          (setq line
+                (concat line "  "
+                        (propertize
+                         "[Show result]"
+                         'font-lock-face 'link
+                         'mouse-face 'highlight
+                         'help-echo "RET: open the controlled execution"
+                         'mevedel-view-zone-activate
+                         (lambda ()
+                           (mevedel-view-audit-show-control-result id))))))
+        line))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -2216,6 +2236,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
     (setq body-start (copy-marker (point)))
     (insert fontified)
+    (when (memq vtype '(tool-summary tool-child))
+      (mevedel-view-audit-insert-history-link rendering))
     (unless (eq (char-before) ?\n)
       (insert "\n"))
     (add-text-properties ins-start (point)
@@ -2315,13 +2337,48 @@ the text it returned.  A row's sandbox disclosure travels with it, so
 folding a run into a group does not lose the boundary it ran with."
   (let* ((name (plist-get child :tool))
          (args (plist-get child :args))
-         (result (plist-get child :result))
+         (data (mevedel-view-segments-display-buffer))
+         (direct (mevedel-tool-render-data-direct-call
+                  name (plist-get child :render-data)))
+         (child-id (or (and (equal name "Bash")
+                            (stringp (plist-get child :id))
+                            (plist-get child :id))
+                       (and (equal (plist-get direct :tool) "Bash")
+                            (stringp (plist-get direct :id))
+                            (plist-get direct :id))))
+         (terminal (and child-id
+                        (mevedel-view--execution-terminal-render-data
+                         data child-id
+                         (plist-get (or (plist-get direct :render-data)
+                                        (plist-get child :render-data))
+                                    :execution-id))))
+         (event (and (not terminal) child-id
+                     (bound-and-true-p mevedel-view--execution-events)
+                     (hash-table-p mevedel-view--execution-events)
+                     (gethash child-id mevedel-view--execution-events)))
+         (progress (and (eq (plist-get event :type) 'progress)
+                        (append (copy-sequence (plist-get event :facts))
+                                (list :status 'success :live-execution-p t))))
+         (latest (or terminal progress))
+         (result (cond
+                  ((plist-member latest :execution-output)
+                   (or (plist-get latest :execution-output) ""))
+                  (progress (or (plist-get event :output-tail) ""))
+                  (t (plist-get child :result))))
          (child-status (plist-get child :status))
          (render-data
-          (if (memq child-status '(success error failed denied blocked))
+          (cond ((and latest direct)
+                 (plist-put
+                  (copy-sequence (plist-get child :render-data)) :calls
+                  (list (plist-put
+                         (plist-put (copy-sequence direct)
+                                    :render-data latest)
+                         :status (plist-get latest :status)))))
+                (latest latest)
+                ((memq child-status '(success error failed denied blocked))
               (plist-put (copy-sequence (plist-get child :render-data)) :status
-                         (if (eq child-status 'success) 'success 'error))
-            (plist-get child :render-data)))
+                         (if (eq child-status 'success) 'success 'error)))
+                (t (plist-get child :render-data))))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
           (if (memq (plist-get child :kind) '(reasoning mailbox))
@@ -2333,14 +2390,17 @@ folding a run into a group does not lose the boundary it ran with."
     (when rendering
       (setq rendering (copy-sequence rendering))
       (dolist (cell (list (cons :vtype 'tool-child)
-                          (cons :hidden-p nil)
                           (cons :expandable-p t)
                           (cons :coalesce-key nil)
                           (cons :hook-audits nil)
                           (cons :force-expanded-p nil)
                           (cons :initially-collapsed-p t)))
         (setq rendering (plist-put rendering (car cell) (cdr cell))))
-      (when (and (memq child-status '(warning running cancelled))
+      (when child-id
+        (setq rendering (plist-put rendering :tool-use-id child-id))
+        (setq rendering (plist-put rendering :execution-id
+                                  (plist-get render-data :execution-id))))
+      (when (and (not latest) (memq child-status '(warning running cancelled))
                  (not (eq (mevedel-view--rendering-status rendering) 'error)))
         (setq rendering (plist-put rendering :status child-status)))
       (when-let* ((summary (plist-get render-data :sandbox-summary)))
@@ -2404,6 +2464,7 @@ of SOURCE's coordinates because section bounds compare source identity
 with `eq', which is what separates one row from the next and from the
 body of the block that ran them."
   (when-let* ((rendering (mevedel-view--child-call-rendering child))
+              ((not (plist-get rendering :hidden-p)))
               (source (or (plist-get child :source) source))
               (source (and (consp source) (cons (car source) (cdr source)))))
     (let* ((key (mevedel-view--child-call-state-key child source))
@@ -2625,6 +2686,39 @@ retaining them would keep every child result in the header cache."
                  :child-calls nil)
     rendering))
 
+(defun mevedel-view--execution-terminal-render-data
+    (data-buf tool-use-id &optional yielded-id)
+  "Return TOOL-USE-ID's latest completion, including after segment rotation.
+An archived row still belongs to the live transcript: completion may have
+arrived in an intermediate segment after the source row was archived.
+YIELDED-ID limits older-segment inspection to yielded executions."
+  (or (and (buffer-live-p mevedel--data-buffer)
+           (not (eq mevedel--data-buffer data-buf))
+           (mevedel-execution-transcript-pending-render-data
+            mevedel--data-buffer tool-use-id))
+      (and (buffer-live-p data-buf)
+           (mevedel-execution-transcript-pending-render-data
+            data-buf tool-use-id))
+      (when (and yielded-id (buffer-live-p mevedel--data-buffer)
+                 (not (eq mevedel--data-buffer data-buf)))
+        (when-let* ((session (buffer-local-value
+                              'mevedel--session mevedel--data-buffer)))
+          (catch 'found
+            (dolist (descriptor (reverse (mevedel-session-artifacts-transcript-segments
+                                          session mevedel--data-buffer)))
+              (when (and (eq (plist-get descriptor :status) 'readable)
+                         (not (plist-get descriptor :current-p)))
+                (when-let* ((older (condition-case nil
+                                      (mevedel-session-artifacts-read-transcript-segment
+                                       session descriptor)
+                                    (error nil))))
+                  (unwind-protect
+                      (when-let* ((terminal
+                                   (mevedel-execution-transcript-pending-render-data
+                                    older tool-use-id)))
+                        (throw 'found terminal))
+                    (kill-buffer older))))))))))
+
 (defun mevedel-view--render-tool-call (call data-buf &optional collapsed-only)
   "Render parsed CALL from DATA-BUF using the current view and tool registry.
 COLLAPSED-ONLY requests summary-only renderer work.  Source preparation must
@@ -2638,21 +2732,46 @@ finish before this function invokes registered renderers or reads live events."
             (and (bound-and-true-p mevedel-view--execution-events)
                  (hash-table-p mevedel-view--execution-events)
                  (gethash tool-use-id mevedel-view--execution-events)))
+           (call-render-data (plist-get call :render-data))
            (terminal-render-data
             (and (equal name "Bash")
-                 (buffer-live-p data-buf)
-                 (mevedel-execution-transcript-pending-render-data
-                  data-buf tool-use-id)))
+                 (mevedel-view--execution-terminal-render-data
+                  data-buf tool-use-id
+                  (plist-get call-render-data :execution-id))))
            (event-type (plist-get event :type))
-           (call-render-data (plist-get call :render-data))
+           (direct-child (mevedel-tool-render-data-direct-call
+                          name call-render-data))
+           (direct-terminal
+            (and (equal (plist-get direct-child :tool) "Bash")
+                 (stringp (plist-get direct-child :id))
+                 (mevedel-view--execution-terminal-render-data
+                  data-buf (plist-get direct-child :id)
+                  (plist-get (plist-get direct-child :render-data)
+                             :execution-id))))
+           (direct-event
+            (and (not direct-terminal)
+                 (stringp (plist-get direct-child :id))
+                 (bound-and-true-p mevedel-view--execution-events)
+                 (hash-table-p mevedel-view--execution-events)
+                 (gethash (plist-get direct-child :id)
+                          mevedel-view--execution-events)))
+           (direct-progress
+            (and (eq (plist-get direct-event :type) 'progress)
+                 (append (copy-sequence (plist-get direct-event :facts))
+                         (list :status 'success :live-execution-p t))))
+           (direct-latest (or direct-terminal direct-progress))
            (result
             (cond
              ((eq event-type 'progress)
               (or (plist-get event :output-tail) ""))
-             ((plist-member call-render-data :execution-output)
-              (or (plist-get call-render-data :execution-output) ""))
              ((plist-member terminal-render-data :execution-output)
               (or (plist-get terminal-render-data :execution-output) ""))
+             ((plist-member direct-latest :execution-output)
+              (or (plist-get direct-latest :execution-output) ""))
+             ((plist-member call-render-data :execution-output)
+              (or (plist-get call-render-data :execution-output) ""))
+             (direct-progress
+              (or (plist-get direct-event :output-tail) ""))
              (t (plist-get call :result))))
            (render-data
             (if (eq event-type 'progress)
@@ -2663,15 +2782,22 @@ finish before this function invokes registered renderers or reads live events."
                          :live-execution-p t)))
               (or terminal-render-data call-render-data)))
            (tool (mevedel-tool-get name))
-           (custom (and tool
-                        (mevedel-view--invoke-renderer
-                         tool
-                         render-data
-                         args
-                         result)))
-           (rendering (or custom
+           custom rendering)
+      ;; Direct ToolCall rows unwrap the child without creating a separate view
+      ;; row.  Reconcile its settled facts before that shortcut invokes Bash's
+      ;; renderer, just as a separately rendered compound child would do.
+      (when direct-latest
+        (setq render-data
+              (plist-put (copy-sequence render-data) :calls
+                         (list (plist-put
+                                (plist-put (copy-sequence direct-child)
+                                           :render-data direct-latest)
+                                :status (plist-get direct-latest :status))))))
+      (setq custom (and tool (mevedel-view--invoke-renderer
+                              tool render-data args result)))
+      (setq rendering (or custom
                           (mevedel-view--generic-tool-rendering
-                           name args result collapsed-only render-data))))
+                           name args result collapsed-only render-data)))
       (when-let* (((eq (plist-get rendering :vtype) 'agent-handle))
                   (path (plist-get render-data :path)))
         (setq rendering (plist-put rendering :agent-path path)))
@@ -2810,8 +2936,14 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
 
 (defun mevedel-view-render--refresh-tool-row-now (data-buffer tool-use-id)
   "Rediscover TOOL-USE-ID in DATA-BUFFER with projection ownership held."
-  (when-let* ((region
-              (mevedel-view--tool-row-region data-buffer tool-use-id)))
+  (let ((owner tool-use-id) region)
+    ;; Compound children share the outer gptel segment.  Refresh that row for
+    ;; both attended events and deferred updates when focus returns.
+    (while (and (not region) owner)
+      (setq region (mevedel-view--tool-row-region data-buffer owner)
+            owner (and (string-match "/[0-9]+\\'" owner)
+                       (substring owner 0 (match-beginning 0)))))
+    (when region
     (let* ((start (nth 0 region))
            (end (nth 1 region))
            (bounds (nth 2 region))
@@ -2858,7 +2990,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
                       (put-text-property
                        insert-start (point)
                        'mevedel-view-turn-id turn-id)))))))))
-        t))))
+        t)))))
 
 
 ;;
@@ -4146,6 +4278,10 @@ Empty string when the turn contains only whitespace or markers."
 (autoload 'mevedel-view--user-turn-hook-audits "mevedel-view-audit")
 (autoload 'mevedel-view--format-hook-audit-block "mevedel-view-audit")
 (autoload 'mevedel-view--insert-hook-audit-block "mevedel-view-audit")
+(autoload 'mevedel-view-audit-insert-history-link "mevedel-view-audit")
+(autoload 'mevedel-view-audit-show-control-result "mevedel-view-audit")
+(autoload 'mevedel-view-audit-mailbox-breadcrumb "mevedel-view-audit")
+(autoload 'mevedel-view-audit-breadcrumb-present-p "mevedel-view-audit")
 (autoload 'mevedel-view-audit-toggle-hook-audit "mevedel-view-audit")
 (autoload 'mevedel-view--decorate-code-blocks-in-range
   "mevedel-view-markdown")
@@ -4472,36 +4608,6 @@ are left bare, while blank lines between payload lines keep the gutter."
     (prog1 (marker-position end-marker)
       (set-marker end-marker nil))))
 
-(defun mevedel-view--bash-completion-summary (text)
-  "Return compact visible execution facts from Bash completion TEXT."
-  (when (string-match "<bash-execution[^<>]*?/>[[:space:]]*\\'" text)
-    (condition-case nil
-        (with-temp-buffer
-          (insert (match-string 0 text))
-          (let* ((attributes (cadr (car (xml-parse-region
-                                         (point-min) (point-max)))))
-                 (id (alist-get 'execution_id attributes))
-                 (exit-code (alist-get 'exit_code attributes))
-                 (outcome (alist-get 'outcome attributes))
-                 (termination (alist-get 'termination attributes))
-                 (wall-time (alist-get 'wall_time_seconds attributes))
-                 (lines (alist-get 'output_lines attributes))
-                 (bytes (alist-get 'output_bytes attributes)))
-            (and id
-                 (string-join
-                  (delq nil
-                        (list id
-                              outcome
-                              termination
-                              (and exit-code (format "exit %s" exit-code))
-                              (and wall-time
-                                   (format "%.1fs"
-                                           (string-to-number wall-time)))
-                              (and lines (format "%s lines" lines))
-                              (and bytes (format "%s bytes" bytes))))
-                  " · "))))
-      (error nil))))
-
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
   "Replace OPEN-REGEX/CLOSE-TAG regions from START to END with mailbox cards.
@@ -4536,23 +4642,7 @@ hint.  Searches that region."
                   close)
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
-                     (execution-p
-                      (and (eq kind 'agent-message)
-                           (string-match-p
-                            "\\_<type=\"EXECUTION\""
-                            (match-string-no-properties 0))))
                      (sender (match-string-no-properties 1))
-                     (bash-summary
-                      (and execution-p
-                           (save-excursion
-                             (goto-char open-end)
-                             (when-let* ((close
-                                          (mevedel-transcript--mailbox-find-close
-                                           open-regex close-tag
-                                           (marker-position end-marker))))
-                               (mevedel-view--bash-completion-summary
-                                (buffer-substring-no-properties
-                                 open-end (car close)))))))
                      (attribution (mevedel-view--insert-attribution sender))
                      (inhibit-read-only t))
                 (delete-region open-start open-end)
@@ -4561,27 +4651,23 @@ hint.  Searches that region."
                       (card-id (gensym "mevedel-view-mailbox-")))
                   (insert "  ")
                   (insert (propertize
-                           (if (or bash-summary (eq kind 'agent-result))
+                           (if (eq kind 'agent-result)
                                "✓ "
                              "✉ ")
                            'font-lock-face
-                           (if (or bash-summary (eq kind 'agent-result))
+                           (if (eq kind 'agent-result)
                                'mevedel-view-tool-marker
                              'mevedel-view-mailbox-header)
                            'mevedel-view-mailbox t))
                   (insert (propertize
                            (cond
-                            (bash-summary "Bash completed · ")
                             ((eq kind 'agent-result) "Finished ")
                             (t "message "))
                            'font-lock-face 'mevedel-view-mailbox-header
                            'mevedel-view-mailbox t))
-                  ;; The bash and result cards name their sender
-                  ;; directly; only a plain message reads as "from
-                  ;; PATH".  All three take the attribution string, so
-                  ;; the sender keeps its face and click target -- the
-                  ;; bash card used to insert it bare.
-                  (if (or bash-summary (eq kind 'agent-result))
+                  ;; Result cards name their sender directly; a plain
+                  ;; message reads as "from PATH".
+                  (if (eq kind 'agent-result)
                       (let ((label-start (point)))
                         (insert attribution)
                         (when (string-prefix-p "from " attribution)
@@ -4594,13 +4680,6 @@ hint.  Searches that region."
                                  (mevedel-transcript--mailbox-find-close
                                   open-regex close-tag
                                   (marker-position end-marker))))
-                      (when bash-summary
-                        (let ((old-end (car close)))
-                          (delete-region body-start old-end)
-                          (goto-char body-start)
-                          (insert bash-summary "\n")
-                          (setcdr close (+ (cdr close) (- (point) old-end)))
-                          (setcar close (point))))
                       (let* ((body-end (car close))
                              (close-end (cdr close))
                              (body-line-count
@@ -4699,11 +4778,38 @@ collapse threshold, click gating, and vtype tag are uniform with
 Multiple `<agent-message>' blocks in one user turn produce one mailbox
 card each, in source order.  Non-matching prose in the same turn
 remains as ordinary user text."
-  (mevedel-view--decorate-mailbox-block
-   "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>"
-   "</agent-message>"
-   start end
-   'agent-message))
+  (let ((open "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>")
+        (end-marker (copy-marker end t)))
+    (unwind-protect
+        (save-excursion
+          (goto-char start)
+          (while (re-search-forward open end-marker t)
+            (let* ((begin (match-beginning 0))
+                   (sender (match-string-no-properties 1))
+                   (execution-p (string-match-p
+                                 "\\_<type=\"EXECUTION\""
+                                 (match-string-no-properties 0)))
+                   (body-start (match-end 0))
+                   (close (and execution-p
+                               (save-excursion
+                                 (goto-char body-start)
+                                 (mevedel-transcript--mailbox-find-close
+                                  open "</agent-message>" end-marker))))
+                   (record (and close
+                                (mevedel-view-audit-mailbox-breadcrumb
+                                 (buffer-substring-no-properties
+                                  body-start (car close)) sender))))
+              (when record
+                (let ((inhibit-read-only t))
+                  (delete-region begin (cdr close))
+                  (goto-char begin)
+                  (unless (mevedel-view-audit-breadcrumb-present-p record begin)
+                    (mevedel-view--insert-hook-audit-block record)
+                    (mevedel-view-render-add-display-properties
+                     begin (point) 'execution-breadcrumb)))))))
+          (mevedel-view--decorate-mailbox-block
+           open "</agent-message>" start end-marker 'agent-message))
+      (set-marker end-marker nil)))
 
 (defun mevedel-view--mailbox-only-text-p (text)
   "Return non-nil if TEXT is only mailbox delivery blocks.

@@ -11,6 +11,17 @@
 (declare-function mevedel-collaboration--artifact-fields
                   "mevedel-collaboration-artifact-projection" (render-data))
 
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-pending-render-data
+                  "mevedel-execution-transcript" (data-buffer tool-use-id))
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-list-user
+                  "mevedel-execution" (session))
+
+;; `mevedel-structs'
+(defvar mevedel--session)
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
 
@@ -207,6 +218,103 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
      (list :diff (mevedel-collaboration--truncate-bytes
                   patch mevedel-collaboration--max-tool-result-bytes)))))
 
+(defun mevedel-collaboration--routine-poll-p (name args data status)
+  "Return non-nil for a successful, empty-input WriteStdin observation.
+Do not discard failed control operations, even when the requested input was
+empty.  A process exiting unsuccessfully is not a failed control operation."
+  (and (equal name "WriteStdin")
+       (equal (or (plist-get args :chars) "") "")
+       (or (eq (plist-get data :control-succeeded-p) t)
+           (and (not (plist-member data :control-succeeded-p))
+                (not (memq status '(error denied cancelled blocked failed)))
+                (not (memq (plist-get data :status)
+                           '(error denied cancelled blocked failed)))))))
+
+(defun mevedel-collaboration--execution-output (data)
+  "Return retained whole execution output from DATA when available.
+An empty string is meaningful: a completed command may produce no output."
+  (when (and (plist-member data :execution-output)
+             (stringp (plist-get data :execution-output)))
+    (plist-get data :execution-output)))
+
+(defun mevedel-collaboration--live-bash-data (parsed)
+  "Return PARSED with the owner's live Bash tail when its process is running.
+The snapshot is bounded by the execution owner; terminal render data replaces
+it once the command settles.  No polling row becomes a second output owner."
+  (let* ((data (plist-get parsed :render-data))
+         (id (plist-get data :execution-id))
+         (live (and id mevedel--session
+                    (fboundp 'mevedel-execution-list-user)
+                    (cl-find id (mevedel-execution-list-user mevedel--session)
+                             :key (lambda (record)
+                                    (plist-get record :execution-id))
+                             :test #'equal))))
+    (if (and live (eq (plist-get live :state) 'running))
+        (let ((copy (copy-sequence parsed)))
+          (plist-put copy :render-data
+                     (plist-put
+                      (plist-put (copy-sequence data) :status 'running)
+                      :execution-output
+                      (or (plist-get live :output-tail) ""))))
+      parsed)))
+
+(defun mevedel-collaboration--direct-facts (data direct)
+  "Return DIRECT's authoritative child facts rather than a stale wrapper status.
+The direct-call helper copies the child's result status into render data; a
+terminal Bash event or failed control operation may have newer facts."
+  (let ((child-facts (plist-get (car (plist-get data :calls)) :render-data)))
+    (if (or (memq (plist-get child-facts :status)
+                  '(error denied cancelled blocked failed))
+            (and (equal (plist-get direct :tool) "Bash")
+                 (memq (plist-get child-facts :state)
+                       '(completed interrupted lost))))
+        child-facts
+      (plist-get direct :render-data))))
+
+(defun mevedel-collaboration--reconcile-ptc-children (data-buffer parsed)
+  "Return PARSED with pending terminal facts for its nested Bash children.
+PTC children use their own tool-use ids, but have no separate gptel segment;
+their completion may therefore be retained in the execution transcript's
+pending table rather than patched into the outer ToolCall render data.  Keep
+the raw parsed model value and transcript metadata unchanged."
+  (cl-labels
+      ((reconcile (data depth)
+         (if (or (> depth 16) (not (eq (plist-get data :kind) 'ptc)))
+             data
+           (let* ((changed nil)
+                  (children
+                  (mapcar
+                   (lambda (child)
+                     (let* ((prior (plist-get child :render-data))
+                            (nested (and (equal (plist-get child :tool) "ToolCall")
+                                         (reconcile prior (1+ depth))))
+                            (terminal
+                             (and (equal (plist-get child :tool) "Bash")
+                                  (stringp (plist-get child :id))
+                                  (mevedel-execution-transcript-pending-render-data
+                                   data-buffer (plist-get child :id)))))
+                       (if (or terminal (and nested (not (eq prior nested))))
+                           (progn
+                             (setq changed t)
+                             (let ((copy (plist-put
+                                          (copy-sequence child) :render-data
+                                          (or terminal nested))))
+                               (if terminal
+                                   (plist-put copy :status
+                                              (plist-get terminal :status))
+                                 copy)))
+                         child)))
+                   (plist-get data :calls))))
+             (if changed
+                 (plist-put (copy-sequence data) :calls children)
+               data)))))
+    (let* ((data (plist-get parsed :render-data))
+           (updated (and (equal (plist-get parsed :name) "ToolCall")
+                         (reconcile data 0))))
+      (if (and updated (not (eq data updated)))
+          (plist-put (copy-sequence parsed) :render-data updated)
+        parsed))))
+
 
 (defun mevedel-collaboration-tool-presentation (parsed)
   "Return a bounded browser presentation tree for PARSED.
@@ -223,15 +331,34 @@ are exported, with one shared text/structure budget across the entire tree."
                (when (< (length bounded) (length value)) (setq truncated t))
                (setq remaining (- remaining (string-bytes bounded)))
                bounded)))
-         (node (name args result data id depth &optional batch)
-           (if (or (< remaining 512) (> depth 16))
+         (node (name args result data id depth &optional batch status)
+           (if (or (mevedel-collaboration--routine-poll-p name args data status)
+                   (when-let* ((direct
+                                (mevedel-tool-render-data-direct-call name data)))
+                     (mevedel-collaboration--routine-poll-p
+                      (plist-get direct :tool) (plist-get direct :args)
+                      (mevedel-collaboration--direct-facts data direct)
+                      (plist-get direct :status))))
+               nil
+             (if (or (< remaining 512) (> depth 16))
                (progn (setq truncated t) nil)
              ;; Reserve structural JSON keys per node as well as its strings.
              (setq remaining (- remaining 256))
              (let* ((direct (mevedel-tool-render-data-direct-call name data))
                     (name (if direct (plist-get direct :tool) name))
                     (args (if direct (plist-get direct :args) args))
-                    (data (if direct (plist-get direct :render-data) data))
+                    (data (if direct
+                              (mevedel-collaboration--direct-facts data direct)
+                            data))
+                    (data (if (equal name "Bash")
+                              (plist-get
+                               (mevedel-collaboration--live-bash-data
+                                (list :render-data data))
+                               :render-data)
+                            data))
+                    (result (or (and (equal name "Bash")
+                                     (mevedel-collaboration--execution-output data))
+                                result))
                     (tool (and (stringp name) (mevedel-tool-for-call name)))
                     (rendering
                      (or (and tool (mevedel-view--invoke-renderer tool data args result))
@@ -270,16 +397,23 @@ are exported, with one shared text/structure budget across the entire tree."
                         while (>= remaining 512) do
                         (push (node (plist-get child :tool) (plist-get child :args)
                                     (plist-get child :result)
-                                    (plist-put (copy-sequence (plist-get child :render-data))
-                                               :status (plist-get child :status))
-                                    (plist-get child :id) (1+ depth) (plist-get child :batch))
+                                    (let ((facts (copy-sequence
+                                                  (plist-get child :render-data))))
+                                      (if (and (equal (plist-get child :tool) "Bash")
+                                               (memq (plist-get facts :state)
+                                                     '(completed interrupted lost)))
+                                          facts
+                                        (plist-put facts :status
+                                                   (plist-get child :status))))
+                                    (plist-get child :id) (1+ depth)
+                                    (plist-get child :batch) (plist-get child :status))
                               children))
                (when (or (< (length attachments) (length (plist-get data :attachments)))
                          (< (length children) (length (plist-get rendering :child-calls))))
                  (setq truncated t))
                (when attachments (setq row (plist-put row :attachments (vconcat (delq nil (nreverse attachments))))))
                (when children (setq row (plist-put row :children (vconcat (delq nil (nreverse children))))))
-               row))))
+               row)))))
       (condition-case nil
           (let ((row (node (plist-get parsed :name) (plist-get parsed :args)
                            (plist-get parsed :result) (plist-get parsed :render-data)
@@ -295,7 +429,20 @@ are exported, with one shared text/structure budget across the entire tree."
          (tool-use-id (plist-get parsed :tool-use-id)))
     (unless (stringp name)
       (error "Canonical tool projection failed"))
-    (let* ((id (if tool-use-id
+    (unless (or (mevedel-collaboration--routine-poll-p
+                 name (plist-get parsed :args) (plist-get parsed :render-data)
+                 (or (plist-get (plist-get parsed :render-data) :status)
+                     (and (string-match-p mevedel-collaboration--tool-error-regexp
+                                          result)
+                          'error)))
+                (when-let* ((direct (mevedel-tool-render-data-direct-call
+                                     name (plist-get parsed :render-data))))
+                  (mevedel-collaboration--routine-poll-p
+                   (plist-get direct :tool) (plist-get direct :args)
+                   (mevedel-collaboration--direct-facts
+                    (plist-get parsed :render-data) direct)
+                   (plist-get direct :status))))
+      (let* ((id (if tool-use-id
                    (format "tool-%s" tool-use-id)
                  (mevedel-collaboration--stable-record-id
                   "tool" raw occurrence)))
@@ -306,7 +453,11 @@ are exported, with one shared text/structure budget across the entire tree."
                        (if (string-match-p mevedel-collaboration--tool-error-regexp result)
                            "failed" "completed")))
            (result (mevedel-collaboration--truncate-bytes
-                    result mevedel-collaboration--max-tool-result-bytes))
+                    (or (and (equal name "Bash")
+                             (mevedel-collaboration--execution-output
+                              (plist-get parsed :render-data)))
+                        result)
+                    mevedel-collaboration--max-tool-result-bytes))
            (truncated (string-suffix-p "\n[truncated]" result)))
       (apply #'mevedel-collaboration--record
              id "tool"
@@ -319,7 +470,7 @@ are exported, with one shared text/structure budget across the entire tree."
              :identity-fixed (and tool-use-id t)
              :presentation presentation
              (mevedel-collaboration--tool-extras
-              name (plist-get parsed :args))))))
+              name (plist-get parsed :args)))))))
 
 (defun mevedel-collaboration--tool-segment-records
     (data-buffer segment &optional occurrence)
@@ -331,6 +482,17 @@ a mixed patch retains the ordinary row and adds child cards."
     (let* ((start (cadr segment))
            (end (caddr segment))
            (parsed (mevedel-view--tool-call-parse data-buffer start end))
+           (terminal (and (equal (plist-get parsed :name) "Bash")
+                          (plist-get parsed :tool-use-id)
+                          (mevedel-execution-transcript-pending-render-data
+                           data-buffer (plist-get parsed :tool-use-id))))
+           (parsed (if terminal
+                       (plist-put (copy-sequence parsed) :render-data terminal)
+                     (if (equal (plist-get parsed :name) "Bash")
+                         (mevedel-collaboration--live-bash-data parsed)
+                       parsed)))
+           (parsed (mevedel-collaboration--reconcile-ptc-children
+                    data-buffer parsed))
            (base (mevedel-collaboration--tool-record
                   parsed (buffer-substring-no-properties start end)
                   occurrence))
@@ -371,7 +533,7 @@ a mixed patch retains the ordinary row and adds child cards."
           (setq record (append record fields))
           (push record cards)))
       (setq cards (nreverse cards))
-      (if pure cards (cons base cards)))))
+      (if pure cards (delq nil (cons base cards))))))
 
 (defun mevedel-collaboration--directive-at (ranges position)
   "Return the directive id owning POSITION per directive RANGES, or nil."
@@ -527,6 +689,29 @@ attributed to a collaboration guest carry that guest's name."
        (equal (plist-get pending :name)
               (format "%s" (plist-get info :name)))))
 
+(defun mevedel-collaboration--suppressed-tool-landed-p (data-buffer entry)
+  "Return non-nil when a hidden canonical poll has settled ENTRY.
+Only consider tool segments inserted after ENTRY began, and require the same
+call key; a previous identical poll must not consume a later pending call."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (cl-some
+       (lambda (segment)
+         (when (and (eq (car segment) 'tool)
+                    (>= (cadr segment)
+                        (or (plist-get entry :baseline-buffer-end)
+                            (point-min))))
+           (let ((parsed (mevedel-view--tool-call-parse
+                          data-buffer (cadr segment) (caddr segment))))
+             (and parsed
+                  (equal (plist-get entry :call-key)
+                         (mevedel-collaboration--tool-call-key parsed))
+                  (null (mevedel-collaboration--tool-record
+                         parsed
+                         (buffer-substring-no-properties
+                          (cadr segment) (caddr segment))))))))
+       (mevedel-transcript-segments (point-min) (point-max))))))
+
 (defun mevedel-collaboration--project-records (room)
   "Return the current semantic projection for ROOM.
 
@@ -571,7 +756,10 @@ completion instead of seeing a duplicate tool card."
                     (plist-put (plist-put candidate :id
                                           (plist-get entry :id))
                                :identity-fixed t)))
-          (push entry remaining))))
+          (unless (and (not (equal status "running"))
+                       (mevedel-collaboration--suppressed-tool-landed-p
+                        (plist-get room :data-buffer) entry))
+            (push entry remaining)))))
     (setq remaining (nreverse remaining))
     ;; A room plist is never empty, so this mutates in place and the
     ;; room registry keeps pointing at the same object.

@@ -310,6 +310,8 @@ operation rather than a successful or semantic non-error result."
             (format "%d lines" (or (plist-get facts :output-lines) 0)))
           (when (plist-member facts :output-bytes)
             (format "%d bytes" (or (plist-get facts :output-bytes) 0)))
+          (when-let* ((workdir (plist-get facts :workdir)))
+            (format "cwd %s" workdir))
           (plist-get facts :execution-id)))
    " · "))
 
@@ -359,11 +361,11 @@ stopped command's outcome."
                     (mevedel-tool-exec--execution-facts-xml facts))))
          (status
           (cond
-           (force-success-p 'success)
            ;; A start failure has no completed state to judge by; facts
            ;; alone would report the command successful with a "Failed
            ;; to start process" body.
            (error-data 'error)
+           (force-success-p 'success)
            ((or (not (eq (plist-get facts :state) 'completed))
                 (memq (plist-get facts :outcome)
                       '(success no-match different false)))
@@ -478,6 +480,9 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
      session owner execution-id
      (lambda (observation)
        (let* ((envelope
+               ;; Keep the model-visible tool status unchanged.  Presentation
+               ;; separately distinguishes a collected command failure from
+               ;; a failed control operation.
                (mevedel-tool-exec--observation-envelope observation))
               (render-data
                (copy-sequence (plist-get envelope :render-data))))
@@ -489,6 +494,9 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
                 render-data :observation-output-p
                 (not (string-empty-p (or (plist-get observation :output)
                                          "")))))
+         (setq render-data
+               (plist-put render-data :control-succeeded-p
+                          (not (plist-get observation :error))))
          (funcall callback
                   (plist-put envelope :render-data render-data))))
      :chars chars :wait-ms wait-ms :request mevedel--current-request)))
@@ -518,9 +526,13 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (mevedel-execution-stop
      session owner execution-id
      (lambda (observation)
-       (funcall callback
-                (mevedel-tool-exec--observation-envelope
-                 observation nil t))))))
+       (let ((envelope (mevedel-tool-exec--observation-envelope
+                        observation nil t)))
+         (funcall callback
+                  (plist-put
+                   envelope :render-data
+                   (plist-put (plist-get envelope :render-data)
+                              :execution-control 'stop))))))))
 
 
 ;;
@@ -758,76 +770,91 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
 (defun mevedel-tool-exec--render-bash (name args result render-data)
   "Rendering plist for the Bash tool.
 NAME is \"Bash\".  ARGS carries `:command'.  RESULT is stdout/stderr.
-Header shows a truncated first line of the command; body fontifies as
-`sh-mode'."
+Header shows the command and minimal state; the expanded body retains
+the full command, bounded output and execution details."
   (when (stringp result)
     (let* ((write-stdin-p (equal name "WriteStdin"))
+           (stop-p (equal name "StopExecution"))
            (cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
-           (body
-            (unless (and (bound-and-true-p mevedel-tool-render-summary-only)
-                         (not (plist-get render-data :live-execution-p)))
-              (let ((output
-                     (replace-regexp-in-string
-                      "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result)))
-                (if write-stdin-p
-                    output
-                  (concat "$ " cmd
-                          (unless (string-empty-p output) "\n\n")
-                          output)))))
-           (status (plist-get render-data :status))
-           (state (plist-get render-data :state))
-           (execution-id
-            (or (plist-get render-data :execution-id)
-                (plist-get args :execution_id)))
            (control
             (or (plist-get render-data :execution-control)
                 (and write-stdin-p
-                     (if (string-empty-p
-                          (or (plist-get args :chars) ""))
-                         'poll
-                       'input))))
-           (coalesce-key
-            (and write-stdin-p
-                 (eq status 'success)
-                 (eq control 'poll)
-                 (not (plist-get render-data :observation-output-p))
-                 (stringp execution-id)
-                 (format "WriteStdin:%s" execution-id)))
-           (metadata
-            (and state
-                 (mevedel-tool-exec-format-execution-metadata
-                  render-data))))
-      (let ((rendering
-             (list
-              :header
-              (concat
-               (if write-stdin-p
-                   (format "%s: %s"
-                           (or name "WriteStdin")
-                           (if (eq control 'poll)
-                               "polled background process"
-                             "sent input to background process"))
-                 (format "%s: %s"
-                         (or name "Bash")
-                         (mevedel--truncate-display first-line 60 "...")))
-               (and metadata (format " (%s)" metadata)))
-              :body body
-              :body-mode 'sh-mode
-              :status status
-              :hidden-p
-              (and write-stdin-p
-                   (eq status 'success)
-                   (eq state 'running)
-                   (eq control 'poll)
-                   (not (plist-get render-data :observation-output-p)))
-              :force-expanded-p
-              (and (plist-get render-data :live-execution-p) t)
-              :initially-collapsed-p
-              (not (plist-get render-data :live-execution-p)))))
-        (if coalesce-key
-            (plist-put rendering :coalesce-key coalesce-key)
-          rendering)))))
+                     (if (string-empty-p (or (plist-get args :chars) ""))
+                         'poll 'input))
+                (and stop-p 'stop)))
+           (status (plist-get render-data :status))
+           (state (plist-get render-data :state))
+           (facts (and state
+                       (mevedel-tool-exec-format-execution-metadata
+                        render-data)))
+           (body
+            (unless (bound-and-true-p mevedel-tool-render-summary-only)
+              (let ((output
+                     (replace-regexp-in-string
+                      "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result)))
+                (string-join
+                 (delq nil
+                       (list (unless (or write-stdin-p stop-p)
+                               (concat "$ " cmd))
+                             (and (eq control 'input)
+                                  (format "Submitted input:\n%s"
+                                          (plist-get args :chars)))
+                             (unless (string-empty-p output) output)
+                             (and facts (format "Details: %s" facts))
+                             (when-let* ((path (plist-get render-data :output-path)))
+                               (format "Retained output: %s" path))))
+                 "\n\n"))))
+           (label
+            (cond
+             ((eq state 'lost) "lost execution")
+             ((and (eq state 'completed)
+                   (memq (plist-get render-data :termination)
+                         '(stopped owner-stopped interrupted signaled)))
+              "interrupted")
+             ((eq state 'running) "running")
+             ((eq state 'completed)
+              (if (eq (plist-get render-data :outcome) 'failure)
+                  "failed" "finished"))
+             ((eq status 'error) "failed")
+             (state (symbol-name state)))))
+      (list :header
+            (cond
+             ((eq control 'poll)
+              (format "WriteStdin: observation %s"
+                      (if (and (eq status 'error)
+                               (not (plist-get render-data :control-succeeded-p)))
+                          "failed" (or label "finished"))))
+             ((eq control 'input)
+              (format "WriteStdin: %s%s"
+                      (if (equal (plist-get args :chars) "\C-c")
+                          "interrupted process" "sent input")
+                      (if (and (eq status 'error)
+                               (not (plist-get render-data :control-succeeded-p)))
+                          " · failed" "")))
+             (stop-p (format "StopExecution: %s"
+                             (if (eq status 'error) "failed"
+                               (or label "stopped"))))
+             (t (concat
+                 (format "%s: %s" (or name "Bash")
+                         (mevedel--truncate-display first-line 60 "..."))
+                 (and label (format " · %s" label))
+                 (when (plist-member render-data :wall-time-seconds)
+                   (format " · %.1fs"
+                           (or (plist-get render-data :wall-time-seconds) 0)))
+                 (when (> (or (plist-get render-data :omitted-output-bytes) 0) 0)
+                   " · output truncated"))))
+            :body body
+            :body-mode 'sh-mode
+            :status status
+            :execution-control-id
+            (and (memq control '(input stop))
+                 (or (plist-get render-data :execution-id)
+                     (plist-get args :execution_id)))
+            :hidden-p (and (eq control 'poll)
+                           (or (eq status 'success)
+                               (plist-get render-data :control-succeeded-p)))
+            :initially-collapsed-p t))))
 
 (defun mevedel-tool-exec--render-eval (name args result _render-data)
   "Return rendering plist for Eval NAME with ARGS and RESULT."
