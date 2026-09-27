@@ -58,4 +58,14 @@ or a claim about later checkouts.
   runner makes this smoke run unsuitable for isolated callback-cost claims.
   A sequence of static screenshots and timer statistics cannot establish a
   person's perception of smoothness during a live request in the host Emacs;
-  that subjective check still needs a safe fresh session or user observation.
+  that subjective check needed a safe fresh session or user observation.
+- At the user's request, a separate fresh Emacs displayed the production
+  renderer with simulated response chunks for 18 seconds on 2026-09-27.
+  The local preview script `.scratch/spinner-production-user-preview.el`
+  switched from automatic to saving policy at 7 seconds and changed theme
+  at 11 seconds; it exited successfully with an empty error log
+  (`artifact://executions/execution-61YyDx.log`). The user reported,
+  "Yes, it looked good". This is direct visual feedback about the preview,
+  not evidence that they typed or scrolled, nor a live request in their older
+  already-loaded host Emacs. The separate graphical smoke run above covered
+  synthetic typing and scrolling without changing the host Emacs.
