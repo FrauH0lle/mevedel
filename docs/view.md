@@ -319,11 +319,13 @@ default), independently of the request label. Color styles use 64 theme-derived
 shades and a 3.6-second cycle; the prepared frames are cached with a bounded
 animated prefix so long labels remain readable. If colors cannot be resolved
 on a display, color styles fall back to a glyph indicator; when Braille is
-unavailable on its target display, the indicator uses ASCII. An undisplayed
-status or a new pending-tool row starts with a portable frame until its
-display is known. If the same indicator is visible in multiple display
+unavailable on its target display, the indicator uses ASCII. When either dots
+glyph is unavailable, `dots` uses a same-width ASCII pattern at the same speed.
+An undisplayed status or a new pending-tool row starts with a portable frame
+until its display is known. If the same indicator is visible in multiple display
 frames, color styles use a portable glyph rather than a palette prepared for
-only one frame; configured glyph styles remain unchanged. Glyph animations
+only one frame; configured glyph styles retain their cadence (with ASCII
+substitution only where a target display lacks the glyphs). Glyph animations
 keep their natural cadence (roughly 120 ms for braille/ascii, slower for
 dots/ellipsis); raising the frame-rate ceiling does not accelerate them.
 A color style falling back to a glyph also uses that glyph cadence, not

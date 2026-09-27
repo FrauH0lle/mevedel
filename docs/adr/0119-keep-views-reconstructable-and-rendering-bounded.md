@@ -65,10 +65,13 @@ offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
 pending-tool rows use compact braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; glyphs have a
 natural, slower cadence; colorless displays use the glyph fallback cadence
-rather than waking at the color rate. A global reduced-motion switch disables
-decorative updates, not semantic progress or elapsed metadata. Hidden and
-offscreen views suspend animation wakeups without changing the broader
-attention gate for transcript rendering.
+rather than waking at the color rate. Braille and dots use same-width ASCII
+substitutes at the same cadence on displays missing their glyphs. Dots check
+only frames showing their target span and cache glyph support until the next
+semantic tick (or theme invalidation), not at every decorative frame. A global
+reduced-motion switch disables decorative updates, not semantic progress or
+elapsed metadata. Hidden and offscreen views suspend animation wakeups
+without changing the broader attention gate for transcript rendering.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
 external power permits the configured 60-fps normal ceiling, and battery,

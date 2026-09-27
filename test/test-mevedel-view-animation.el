@@ -174,5 +174,79 @@
                       'braille "Working" 0 'default :multiple)
                      "- Working")))))
 
+(mevedel-deftest mevedel-view-animation-missing-dots
+  (:doc "Dots retain cadence and width when either glyph is unavailable.")
+  (progn
+    (dolist (missing '(?● ?·))
+      (let ((mevedel-view-animation--dots-cache nil))
+        (cl-letf (((symbol-function 'char-displayable-p)
+                   (lambda (char) (not (eq char missing)))))
+          (should (equal (mevedel-view-animation-frame
+                          'dots "Working" 0 'default)
+                         "*... Working"))
+          (should (equal (mevedel-view-animation-frame
+                          'dots "Working" 0.24 'default)
+                         ".*.. Working"))
+          (should (= (string-width (mevedel-view-animation-frame
+                                    'dots "Working" 0 'default))
+                     (string-width (mevedel-view-animation-frame
+                                    'dots "Working" 0.24 'default)))))))
+    (let ((mevedel-view-animation--dots-cache nil))
+      (cl-letf (((symbol-function 'char-displayable-p)
+                 (lambda (_char) t)))
+        (should (equal (mevedel-view-animation-frame
+                        'dots "Working" 0 'default)
+                       "●··· Working"))
+        (cl-letf (((symbol-function 'get-buffer-window-list)
+                   (lambda (&rest _) nil)))
+          (should (equal (mevedel-view-animation-frame
+                          'dots "Working" 0 'default :multiple)
+                         "*... Working")))))
+    (should (member "*... " mevedel-view-animation-prefixes))))
+
+(mevedel-deftest mevedel-view-animation-dots-target-cache
+  (:doc "Dots probe only their displayed frames and refresh at semantic cadence.")
+  (let ((mevedel-view-animation--cache nil)
+        (mevedel-view-animation--dots-cache nil)
+        (queries 0)
+        (visible (selected-frame)))
+    (cl-letf (((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
+               (lambda (frame)
+                 (cl-incf queries)
+                 (eq frame visible))))
+      (should (equal "●··· Working"
+                     (mevedel-view-animation-frame
+                      'dots "Working" 0 'default (list visible))))
+      (should (equal "·●·· Working"
+                     (mevedel-view-animation-frame
+                      'dots "Working" 0.24 'default (list visible))))
+      (should (= queries 1))
+      (should (equal "*... Working"
+                     (mevedel-view-animation-frame
+                      'dots "Working" 0 'default (list visible 'unsupported))))
+      (should (= queries 2))
+      (mevedel-view-animation-check-colors)
+      (should (equal "●··· Working"
+                     (mevedel-view-animation-frame
+                      'dots "Working" 0 'default (list visible))))
+      (should (= queries 3)))))
+
+(mevedel-deftest mevedel-view-animation-dots-selected-frame-cache
+  (:doc "An omitted dots display target follows the current selected frame.")
+  (let ((mevedel-view-animation--dots-cache nil)
+        (selected 'supported)
+        (queries 0))
+    (cl-letf (((symbol-function 'selected-frame) (lambda () selected))
+              ((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
+               (lambda (frame)
+                 (cl-incf queries)
+                 (eq frame 'supported))))
+      (should (equal (mevedel-view-animation-frame 'dots "Working" 0 'default)
+                     "●··· Working"))
+      (setq selected 'unsupported)
+      (should (equal (mevedel-view-animation-frame 'dots "Working" 0 'default)
+                     "*... Working"))
+      (should (= queries 2)))))
+
 (provide 'test-mevedel-view-animation)
 ;;; test-mevedel-view-animation.el ends here

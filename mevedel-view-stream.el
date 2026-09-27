@@ -529,20 +529,24 @@ more than one distinct frame can display the buffer."
                     (< pos (or (window-end window) (point-min)))))
              (get-buffer-window-list (current-buffer) nil t))))
 
-(defun mevedel-view--animation-target-frame (target)
+(defun mevedel-view--animation-target-frame (target &optional all)
   "Return TARGET's visible frame, or `:multiple' across display frames.
 Color display properties cannot use two palettes simultaneously, so the
-caller uses a glyph fallback when more than one frame shows the span."
+caller uses a glyph fallback when more than one frame shows the span.
+When ALL is non-nil, return the frames actually showing TARGET instead;
+glyph styles can check their display support without inspecting unrelated
+windows."
   (let ((position (marker-position (car target)))
-        found)
+        found frames)
     (dolist (window (get-buffer-window-list (current-buffer) nil t))
       (when (and (eq (frame-visible-p (window-frame window)) t)
                  (<= (window-start window) position)
                  (< position (or (window-end window) (point-min))))
+        (when all (cl-pushnew (window-frame window) frames))
         (if (and found (not (eq found (window-frame window))))
             (setq found :multiple)
           (unless found (setq found (window-frame window))))))
-    found))
+    (if all (nreverse frames) found)))
 
 (defun mevedel-view--animation-visible-p ()
   "Return non-nil when a progress or pending-tool animation can be seen."
@@ -703,8 +707,9 @@ MAIN means use the actual color/glyph rendering of the request label."
                    (start (marker-position (car target)))
                    (end (marker-position (cdr target)))
                    (label (buffer-substring-no-properties start end))
-                   (display-frame (mevedel-view--animation-target-frame target))
-                   (style mevedel-view-spinner-style))
+                   (style mevedel-view-spinner-style)
+                   (display-frame (mevedel-view--animation-target-frame
+                                   target (eq style 'dots))))
               (when (or (not (memq style '(shimmer breathe bounce)))
                         (mevedel-view-animation-color-ready-p
                          style label 'mevedel-view-spinner display-frame))
@@ -721,7 +726,8 @@ MAIN means use the actual color/glyph rendering of the request label."
                      target 'mevedel-view-inline-spinner-frame)
                 (let* ((start (marker-position (car target)))
                        (display-frame
-                        (mevedel-view--animation-target-frame target))
+                        (mevedel-view--animation-target-frame
+                         target (eq mevedel-view-tool-spinner-style 'dots)))
                        (frame (mevedel-view-animation-frame
                                mevedel-view-tool-spinner-style "" seconds
                                'mevedel-view-ephemeral display-frame)))
