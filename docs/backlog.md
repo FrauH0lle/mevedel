@@ -23,11 +23,19 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 Prepared historical tools now update their containing turn. Three paired stress
 replays reduced median completion from 806 to 539 ms; worst typing delay remained
-about 118 ms. Bound source segmentation, individual native operations and large
-turn insertion, and extend batching to remaining synchronous callers without
-losing live text. Consider independently trusted summary/payload storage for old
-hidden metadata; the current producer already emits bounded direct-call metadata.
-Preserve failure classification, source ownership and expansion behavior.
+about 118 ms. Scheduled settled-history refreshes now stage full-context
+segmentation, grouping, Markdown and tool preparation. A 27-case frozen replay
+reduced median maximum terminal input delay from 180.9 to 77.8 ms for a cold
+root refresh and from 180.5 to 39.4 ms for a cold agent refresh, but doubled
+scheduled settlement time; warm root still reached 101.6 ms. Synchronous cold
+renders remain around 265 ms root / 247 ms agent. Bound remaining atomic tool
+group/turn insertion, scanner repair and allocation-driven GC; investigate
+display-only synchronous callers without losing live text. Consider independently
+trusted summary/payload storage for old hidden metadata only if evidence
+warrants the cost; the current producer emits bounded direct-call metadata.
+Preserve failure classification, source ownership and expansion behavior. The
+paired raw-result hashes and caveats are in
+`work://shared/transcript-redraw-2026-09-27/report.md`.
 
 Subprocess experiments isolated GC but added startup, snapshot/export costs and
 about 196 MiB worker RSS. Revisit immutable offload only where those costs are

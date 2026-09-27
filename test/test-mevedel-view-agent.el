@@ -143,6 +143,11 @@
                 (let ((before (buffer-string)))
                   (mevedel-view-open-agent-transcript path)
                   (setq agent-view (window-buffer (selected-window)))
+                  (with-current-buffer agent-view
+                    (should (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
+                    (cl-loop repeat 100 while mevedel-view-render--batch do
+                      (mevedel-view-render--batch-step
+                       agent-view mevedel-view-render--batch)))
                   (should (with-current-buffer agent-view
                             (and buffer-read-only
                                  (string-search "Retained response" (buffer-string)))))
@@ -691,7 +696,7 @@
          (data-buffer (generate-new-buffer " *agent-inspection-data*"))
          (view-buffer (generate-new-buffer " *agent-inspection-view*"))
          (parent-view (generate-new-buffer " *agent-inspection-parent*"))
-         seen)
+         seen scheduled)
     (unwind-protect
         (cl-letf (((symbol-function
                     'mevedel-session-artifacts-find-artifact-noselect)
@@ -704,7 +709,8 @@
                      data-buffer))
                   ((symbol-function 'mevedel-view--ensure)
                    (lambda (&rest _) view-buffer))
-                  ((symbol-function 'mevedel-view--full-rerender) #'ignore)
+                  ((symbol-function 'mevedel-view-render-batched-full)
+                   (lambda () (setq scheduled t)))
                   ((symbol-function
                     'mevedel-transcript-restore-properties)
                    #'ignore))
@@ -715,6 +721,7 @@
                 (list :session session :relative-path relative)
                 parent-view)))
           (should (equal (list session relative t) seen))
+          (should scheduled)
           (with-current-buffer data-buffer
             (should (equal "published transcript" (buffer-string)))
             (should buffer-read-only)))
@@ -743,7 +750,7 @@
                        (setq preserve-data-view-buffer
                              (plist-get options :preserve-data-view-buffer))
                        view-buffer))
-                    ((symbol-function 'mevedel-view--full-rerender) #'ignore)
+                    ((symbol-function 'mevedel-view-render-batched-full) #'ignore)
                     ((symbol-function 'mevedel-transcript-restore-properties)
                      (lambda () (setq restored t))))
             (mevedel-view--ensure-agent-transcript-view

@@ -319,6 +319,13 @@ beginning of the buffer."
 (defvar mevedel-transcript--control-lines nil
   "Candidate control-line positions shared within one structural scan.")
 
+(defconst mevedel-transcript--control-line-regexp
+  (concat "^\\(?:#\\+\\(?:begin_\\|end_\\)"
+          "\\|<\\(?:/?\\(?:system-reminder\\|hook-context"
+          "\\|task-background\\|agent-message\\|agent-result\\)"
+          "\\|!-- /?mevedel-\\)\\|\\*+ <\\|:PROMPT:\\|:END:\\)")
+  "Candidate prefix regexp shared by direct and resumable scans.")
+
 (defun mevedel-transcript--control-line-positions ()
   "Return a vector of candidate control lines in the accessible buffer.
 Index prefixes only; the existing parsers still validate each complete marker."
@@ -326,12 +333,7 @@ Index prefixes only; the existing parsers still validate each complete marker."
     (save-match-data
       (goto-char (point-min))
       (let (positions)
-        (while (re-search-forward
-                (concat "^\\(?:#\\+\\(?:begin_\\|end_\\)"
-                        "\\|<\\(?:/?\\(?:system-reminder\\|hook-context"
-                        "\\|task-background\\|agent-message\\|agent-result\\)"
-                        "\\|!-- /?mevedel-\\)\\|\\*+ <\\|:PROMPT:\\|:END:\\)")
-                nil t)
+        (while (re-search-forward mevedel-transcript--control-line-regexp nil t)
           (push (match-beginning 0) positions))
         (vconcat (nreverse positions))))))
 
@@ -358,21 +360,6 @@ search bounds and match data, including a match ending partway through a line."
         (setq low (1+ low)))
       (unless found (goto-char origin))
       found)))
-
-(defun mevedel-transcript--delimited-ranges (type open close start end)
-  "Return complete TYPE ranges delimited by OPEN and CLOSE in START..END."
-  (let (ranges)
-    (save-excursion
-      (goto-char start)
-      (while (mevedel-transcript--search-control-line open end)
-        (let ((block-start (match-beginning 0))
-              (next (match-end 0)))
-          (if (mevedel-transcript--search-control-line close end)
-              (let ((block-end (match-end 0)))
-                (push (list type block-start block-end) ranges)
-                (goto-char block-end))
-            (goto-char next)))))
-    (nreverse ranges)))
 
 (defun mevedel-transcript--system-reminder-range-at-point (limit)
   "Return complete system-reminder bounds at point before LIMIT.
@@ -401,44 +388,6 @@ nested inside the outer body do not close it early."
           (list start body-start body-end block-end)
         (goto-char origin)
         nil))))
-
-(defun mevedel-transcript--system-reminder-ranges (start end)
-  "Return complete nesting-aware system-reminder ranges in START..END."
-  (let (ranges)
-    (save-excursion
-      (goto-char start)
-      (while (mevedel-transcript--search-control-line
-              "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" end)
-        (goto-char (match-beginning 0))
-        (if-let* ((range
-                   (mevedel-transcript--system-reminder-range-at-point end)))
-            (progn
-              (push (list 'reminder (car range) (nth 3 range)) ranges)
-              (goto-char (nth 3 range)))
-          (forward-char 1))))
-    (nreverse ranges)))
-
-(defun mevedel-transcript--mailbox-ranges (start end)
-  "Return complete mailbox ranges in START..END."
-  (let (ranges)
-    (save-excursion
-      (goto-char start)
-      (while (mevedel-transcript--search-control-line
-              "^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)"
-              end)
-        (let ((line-start (match-beginning 0)))
-          (goto-char line-start)
-          (search-forward "<" end)
-          (backward-char 1)
-          (if-let* ((block
-                     (mevedel-transcript--mailbox-any-block-at-point end)))
-              (progn
-                (push (list 'mailbox line-start
-                            (plist-get block :close-end))
-                      ranges)
-                (goto-char (plist-get block :close-end)))
-            (goto-char (1+ line-start))))))
-    (nreverse ranges)))
 
 (defun mevedel-transcript--structure-priority (range)
   "Return overlay priority for structural RANGE."
@@ -559,35 +508,81 @@ stay valid inside a container payload: backends really do nest a tool
 call inside a reasoning block, and a tool block really does carry its
 own render-data.")
 
-(defun mevedel-transcript--structural-ranges (start end base-segments)
+(defconst mevedel-transcript--range-scans
+  '((reasoning "^#\\+begin_reasoning\\b" "^#\\+end_reasoning[^\n]*\n?")
+    (mailbox)
+    (reminder)
+    (hook-context "^<hook-context>[ \t]*$" "^</hook-context>[ \t]*\n?")
+    (task-background "^<task-background>[ \t]*$" "^</task-background>[ \t]*\n?")
+    (render-data "^<!-- mevedel-render-data -->[ \t]*$"
+                 "^<!-- /mevedel-render-data -->[ \t]*\\(?:\n\\(?:[ \t\r]*\n\\)*\\)?")
+    (prompt "^:PROMPT:[ \t]*$" "^:END:[ \t]*\n?")
+    (ignored "^<!-- mevedel-hook-audit -->[ \t]*$"
+             "^<!-- /mevedel-hook-audit -->[ \t]*\\(?:\n[ \t\r]*\\)*"))
+  "Canonical control searches in structural precedence order.")
+
+(defun mevedel-transcript--next-raw-range (spec pos end)
+  "Return (NEXT . RANGE) for the next SPEC candidate from POS to END.
+RANGE is nil when a malformed opener was skipped.  Return nil only when
+there are no more candidates.  Search for closes against the complete
+source, not a work-slice boundary."
+  (save-excursion
+    (goto-char pos)
+    (pcase (car spec)
+      ('reminder
+       (when (mevedel-transcript--search-control-line
+              "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" end)
+         (goto-char (match-beginning 0))
+         (let ((start (point))
+               (range (mevedel-transcript--system-reminder-range-at-point end)))
+           (if range
+               (cons (nth 3 range) (list 'reminder start (nth 3 range)))
+             (cons (1+ start) nil)))))
+      ('mailbox
+       (when (mevedel-transcript--search-control-line
+              "^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)"
+              end)
+         (let ((start (match-beginning 0)))
+           (goto-char start)
+           (search-forward "<" end)
+           (backward-char 1)
+           (let ((block (mevedel-transcript--mailbox-any-block-at-point end)))
+             (if block
+                 (cons (plist-get block :close-end)
+                       (list 'mailbox start (plist-get block :close-end)))
+               (cons (1+ start) nil))))))
+      (_
+       (when (mevedel-transcript--search-control-line (cadr spec) end)
+         (let ((start (match-beginning 0))
+               (next (match-end 0)))
+           (if (mevedel-transcript--search-control-line (caddr spec) end)
+               (let ((finish (match-end 0)))
+                 (cons finish (list (car spec) start finish)))
+             (cons next nil))))))))
+
+(defun mevedel-transcript--raw-ranges (start end)
+  "Return canonical candidate ranges in START..END before validation."
+  (let (ranges)
+    (dolist (spec mevedel-transcript--range-scans)
+      (let ((pos start) next)
+        (while (setq next (mevedel-transcript--next-raw-range spec pos end))
+          (setq pos (car next))
+          (when (cdr next)
+            (push (cdr next) ranges)))))
+    (nreverse ranges)))
+
+(defun mevedel-transcript--structural-ranges (start end base-segments
+                                                    &optional prepared-ranges)
   "Return canonical control ranges in START..END.
 BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
-tool blocks.  Each result is `(TYPE START END VALUE...)'."
+tool blocks.  Each result is `(TYPE START END VALUE...)'.
+PREPARED-RANGES, when non-nil, is a cons whose cdr holds candidates
+collected by a resumable scan of this same source."
   (let* ((mevedel-transcript--control-lines
-          (mevedel-transcript--control-line-positions))
-         (ranges
-         (append
-          (mevedel-transcript--delimited-ranges
-           'reasoning "^#\\+begin_reasoning\\b" "^#\\+end_reasoning[^\n]*\n?"
-           start end)
-          (mevedel-transcript--mailbox-ranges start end)
-          (mevedel-transcript--system-reminder-ranges start end)
-          (mevedel-transcript--delimited-ranges
-           'hook-context "^<hook-context>[ \t]*$"
-           "^</hook-context>[ \t]*\n?" start end)
-          (mevedel-transcript--delimited-ranges
-           'task-background "^<task-background>[ \t]*$"
-           "^</task-background>[ \t]*\n?" start end)
-          (mevedel-transcript--delimited-ranges
-           'render-data "^<!-- mevedel-render-data -->[ \t]*$"
-           "^<!-- /mevedel-render-data -->[ \t]*\\(?:\n\\(?:[ \t\r]*\n\\)*\\)?"
-           start end)
-          (mevedel-transcript--delimited-ranges
-           'prompt "^:PROMPT:[ \t]*$" "^:END:[ \t]*\n?" start end)
-          (mevedel-transcript--delimited-ranges
-           'ignored "^<!-- mevedel-hook-audit -->[ \t]*$"
-           "^<!-- /mevedel-hook-audit -->[ \t]*\\(?:\n[ \t\r]*\\)*"
-           start end))))
+          (or mevedel-transcript--control-lines
+              (mevedel-transcript--control-line-positions)))
+         (ranges (if prepared-ranges (cdr prepared-ranges)
+                   (mevedel-transcript--raw-ranges start end))))
     (let (tool-ranges)
       (dolist (block (mevedel-transcript--org-tool-blocks-overlapping
                       base-segments start end))
@@ -765,19 +760,192 @@ a tool remains part of that tool.  Do not modify either input list."
         (push (list seg-type seg-start end) segments)))
     (nreverse segments)))
 
+(cl-defstruct (mevedel-transcript--scan
+               (:constructor mevedel-transcript--make-scan))
+  "One full-source canonical segmentation pass."
+  buffer tick low high start end phase pos type properties controls
+  control-lines raw-index raw-pos raw-ranges result)
+
+(defun mevedel-transcript-scan-start (start end)
+  "Start a resumable canonical scan between START and END in this buffer.
+Capture the effective narrowing; later steps restore that restriction even
+when the caller widened the source buffer.  Callers must discard a job
+after any source text or property change."
+  (let* ((low (point-min))
+         (high (point-max))
+         (from (or (previous-single-property-change
+                    (min (1+ start) high) 'gptel nil low)
+                   low)))
+    (setq from (mevedel-transcript--skip-leading-properties-drawer from)
+          from (mevedel-transcript--skip-leading-summary-block from))
+    (mevedel-transcript--make-scan
+     :buffer (current-buffer) :tick (buffer-modified-tick)
+     :low low :high high :start start :end end
+     :phase 'properties :pos from :type (mevedel-transcript--classify-gptel-prop
+                                        (get-text-property from 'gptel))
+     :properties nil :controls nil)))
+
+(defun mevedel-transcript-scan-cancel (job)
+  "Release retained intermediate data in transcript scan JOB."
+  (setf (mevedel-transcript--scan-phase job) 'cancelled
+        (mevedel-transcript--scan-buffer job) nil
+        (mevedel-transcript--scan-properties job) nil
+        (mevedel-transcript--scan-controls job) nil
+        (mevedel-transcript--scan-control-lines job) nil
+        (mevedel-transcript--scan-raw-ranges job) nil
+        (mevedel-transcript--scan-result job) nil)
+  nil)
+
+(defun mevedel-transcript-scan-result (job)
+  "Return JOB's canonical segments once it is complete, or nil."
+  (when (eq (mevedel-transcript--scan-phase job) 'done)
+    (mevedel-transcript--scan-result job)))
+
+(defun mevedel-transcript--scan-properties-step (job)
+  "Advance JOB by at most 128 complete gptel property runs."
+  (let ((pos (mevedel-transcript--scan-pos job))
+        (to (or (next-single-property-change
+                 (mevedel-transcript--scan-end job) 'gptel nil (point-max))
+                (point-max)))
+        (count 0))
+    (while (and (< pos to) (< count 128))
+      (let ((next (next-single-property-change pos 'gptel nil to)))
+        (push (list (mevedel-transcript--scan-type job) pos next)
+              (mevedel-transcript--scan-properties job))
+        (setq pos next)
+        (when (< pos to)
+          (setf (mevedel-transcript--scan-type job)
+                (mevedel-transcript--classify-gptel-prop
+                 (get-text-property pos 'gptel))))
+        (cl-incf count)))
+    (setf (mevedel-transcript--scan-pos job) pos)
+    (when (>= pos to)
+      (setf (mevedel-transcript--scan-properties job)
+            (nreverse (mevedel-transcript--scan-properties job))
+            (mevedel-transcript--scan-start job)
+            (if (mevedel-transcript--scan-properties job)
+                (cadr (car (mevedel-transcript--scan-properties job)))
+              (mevedel-transcript--scan-start job))
+            (mevedel-transcript--scan-end job)
+            (if (mevedel-transcript--scan-properties job) to
+              (mevedel-transcript--scan-end job))
+            (mevedel-transcript--scan-pos job) (point-min)
+            (mevedel-transcript--scan-phase job) 'controls))))
+
+(defun mevedel-transcript--scan-controls-step (job)
+  "Index a bounded source span and at most 128 control prefixes for JOB."
+  (save-excursion
+    (goto-char (mevedel-transcript--scan-pos job))
+    (let* ((count 0)
+           (limit (min (point-max) (+ (point) 16384)))
+           (finished nil))
+      (while (and (< count 128)
+                  (re-search-forward mevedel-transcript--control-line-regexp
+                                     limit t))
+        (push (match-beginning 0) (mevedel-transcript--scan-controls job))
+        (cl-incf count))
+      ;; Search limits may cut across the fixed candidate prefix.  Revisit
+      ;; the final 64 characters on the next step, without repeating matches
+      ;; already found in this one.  Every indexed match ends before LIMIT.
+      (setq finished (and (< count 128) (= limit (point-max))))
+      (setf (mevedel-transcript--scan-pos job)
+            (if (= count 128) (point)
+              (max (point) (min limit
+                                (max (mevedel-transcript--scan-pos job)
+                                     (- limit 64))))))
+      (when finished
+        (setf (mevedel-transcript--scan-control-lines job)
+              (vconcat (nreverse (mevedel-transcript--scan-controls job)))
+              (mevedel-transcript--scan-controls job) nil
+              (mevedel-transcript--scan-pos job)
+              (mevedel-transcript--scan-start job)
+              (mevedel-transcript--scan-raw-pos job)
+              (mevedel-transcript--scan-start job)
+              (mevedel-transcript--scan-phase job) 'raw)))))
+
+(defun mevedel-transcript--scan-raw-step (job)
+  "Collect at most 32 complete control candidates for JOB."
+  (let* ((spec (nth (or (mevedel-transcript--scan-raw-index job) 0)
+                    mevedel-transcript--range-scans))
+         (pos (mevedel-transcript--scan-raw-pos job))
+         (count 0)
+         next)
+    (if (null spec)
+        (setf (mevedel-transcript--scan-phase job) 'finish)
+      (while (and (< count 32)
+                  (setq next (mevedel-transcript--next-raw-range
+                              spec pos (mevedel-transcript--scan-end job))))
+        (setq pos (car next))
+        (when (cdr next)
+          (push (cdr next) (mevedel-transcript--scan-raw-ranges job)))
+        (cl-incf count))
+      (setf (mevedel-transcript--scan-raw-pos job) pos)
+      (unless next
+        (setf (mevedel-transcript--scan-raw-index job)
+              (1+ (or (mevedel-transcript--scan-raw-index job) 0))
+              (mevedel-transcript--scan-raw-pos job)
+              (mevedel-transcript--scan-start job))))))
+
+(defun mevedel-transcript-scan-step (job)
+  "Advance JOB by one cooperative unit; return non-nil when complete.
+All steps run in JOB's original source buffer and effective narrowing.
+Tool-block recovery, trust validation, and final neighbor repairs are
+currently atomic stages; a single exceptionally large block can exceed
+the caller's timer budget."
+  (pcase (mevedel-transcript--scan-phase job)
+    ('done t)
+    ('cancelled (error "Transcript scan cancelled"))
+    (_
+     (let ((source (mevedel-transcript--scan-buffer job)))
+       (unless (buffer-live-p source)
+         (error "Transcript scan source is dead"))
+       (with-current-buffer source
+         (unless (eql (buffer-modified-tick) (mevedel-transcript--scan-tick job))
+           (error "Transcript scan source changed"))
+         (save-excursion
+           (save-restriction
+             (widen)
+             (narrow-to-region (mevedel-transcript--scan-low job)
+                               (mevedel-transcript--scan-high job))
+             (let ((mevedel-transcript--control-lines
+                    (mevedel-transcript--scan-control-lines job)))
+               (pcase (mevedel-transcript--scan-phase job)
+                 ('properties (mevedel-transcript--scan-properties-step job))
+                 ('controls (mevedel-transcript--scan-controls-step job))
+                 ('raw (mevedel-transcript--scan-raw-step job))
+                 ('finish
+                  (let* ((segments (mevedel-transcript--scan-properties job))
+                         (start (mevedel-transcript--scan-start job))
+                         (end (mevedel-transcript--scan-end job))
+                         (ranges (mevedel-transcript--structural-ranges
+                                  start end segments
+                                  (cons t (nreverse
+                                           (mevedel-transcript--scan-raw-ranges
+                                            job)))))
+                         (result (mevedel-transcript--finish-segments
+                                  segments ranges start end)))
+                    (setf (mevedel-transcript--scan-result job) result
+                          (mevedel-transcript--scan-phase job) 'done
+                          (mevedel-transcript--scan-properties job) nil
+                          (mevedel-transcript--scan-controls job) nil
+                          (mevedel-transcript--scan-raw-ranges job) nil
+                          (mevedel-transcript--scan-control-lines job) nil))))))))
+       (eq (mevedel-transcript--scan-phase job) 'done)))))
+
 (defun mevedel-transcript-segments (start end)
   "Return canonical transcript segments between START and END.
-Each segment is `(TYPE START END)'.  TYPE is `user',
-`response', `tool', `reasoning', `mailbox', `reminder',
-`hook-context', `render-data', `prompt', or
-`ignored'.  Structural control ranges override stale `gptel' property
-runs and incomplete control text remains ordinary transcript text."
-  (let* ((segments (mevedel-transcript--property-segments start end))
-         (scan-start (if segments (cadr (car segments)) start))
-         (scan-end (if segments (caddr (car (last segments))) end))
-         (ranges (mevedel-transcript--structural-ranges
-                  scan-start scan-end segments)))
-    (setq segments (mevedel-transcript--overlay-ranges segments ranges))
+Each segment is `(TYPE START END)'.  Structural control ranges override
+stale `gptel' runs; incomplete controls remain ordinary transcript text."
+  (let ((job (mevedel-transcript-scan-start start end)))
+    (unwind-protect
+        (progn
+          (while (not (mevedel-transcript-scan-step job)))
+          (mevedel-transcript-scan-result job))
+      (mevedel-transcript-scan-cancel job))))
+
+(defun mevedel-transcript--finish-segments (segments ranges scan-start scan-end)
+  "Apply RANGES and canonical neighbor repairs to SEGMENTS in source bounds."
+  (let ((segments (mevedel-transcript--overlay-ranges segments ranges)))
     (dolist (span
              (mevedel-transcript-audit-buffer-spans 'fork-point scan-start scan-end))
       (let ((prompt-start (plist-get span :end))
