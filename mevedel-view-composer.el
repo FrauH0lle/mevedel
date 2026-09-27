@@ -680,6 +680,9 @@ composer body.")
 (defvar-local mevedel-view--armed-session-fork-return-point nil
   "View position to restore when cancelling a historical session fork.")
 
+(defvar-local mevedel-view--armed-session-fork-overlay nil
+  "Overlay dimming the turns an armed session fork leaves out.")
+
 (defvar-local mevedel-view--historical-composer-overlay nil
   "Overlay hiding the live composer during archived segment inspection.")
 
@@ -713,6 +716,7 @@ composer body.")
   (when mevedel-view--armed-session-fork
     (setq mevedel-view--armed-session-fork nil)
     (mevedel-view--interaction-unregister 'armed-session-fork)
+    (mevedel-view--dim-unforked-turns)
     (when (mevedel-view-historical-segment-p)
       (mevedel-view-composer-set-historical-visible nil)
       (when mevedel-view--armed-session-fork-return-point
@@ -721,6 +725,37 @@ composer body.")
               (mevedel-view--input-marker-position)))))
     (setq mevedel-view--armed-session-fork-return-point nil)
     t))
+
+(defun mevedel-view--dim-unforked-turns ()
+  "Dim the rendered turns after the armed session fork's response.
+Redraws replace the transcript text, so the armed row's interaction render
+calls this again to place the overlay on the new text."
+  (when (overlayp mevedel-view--armed-session-fork-overlay)
+    (delete-overlay mevedel-view--armed-session-fork-overlay)
+    (setq mevedel-view--armed-session-fork-overlay nil))
+  (when-let* ((cutoff (plist-get mevedel-view--armed-session-fork
+                                 :transcript-cutoff)))
+    (let ((pos (point-min))
+          (limit (mevedel-view--input-marker-position))
+          start end)
+      (while (< pos limit)
+        (let ((next (or (next-single-property-change
+                         pos 'mevedel-view-turn-id nil limit)
+                        limit)))
+          (when (get-text-property pos 'mevedel-view-turn-id)
+            (when-let* (((not start))
+                        (source-start
+                         (mevedel-view-disclosure-source-start
+                          (get-text-property pos 'mevedel-view-source)))
+                        ((>= source-start cutoff)))
+              (setq start pos))
+            (setq end next))
+          (setq pos next)))
+      (when start
+        (setq mevedel-view--armed-session-fork-overlay
+              (make-overlay start end))
+        (overlay-put mevedel-view--armed-session-fork-overlay
+                     'face 'shadow)))))
 
 (defun mevedel-view-cancel-composer-state ()
   "Cancel the active composer mode, including directive scope."
@@ -758,6 +793,7 @@ composer body.")
     (when (mevedel-view-historical-segment-p)
       (setq mevedel-view--armed-session-fork-return-point (point))
       (mevedel-view-composer-set-historical-visible t))
+    (setq mevedel-view--armed-session-fork target)
     (mevedel-view--interaction-register
      (list :kind 'preview
            :id 'armed-session-fork
@@ -767,8 +803,8 @@ composer body.")
                    label (plist-get target :cum-turn))
            :keymap mevedel-view--armed-session-fork-map
            :help-echo (format "Cancel %s Fork"
-                              (capitalize label))))
-    (setq mevedel-view--armed-session-fork target)
+                              (capitalize label))
+           :after-render #'mevedel-view--dim-unforked-turns))
     (goto-char (point-max))))
 
 (defun mevedel-view--assert-live-tip (&optional allow-armed-fork)

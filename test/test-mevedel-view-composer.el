@@ -970,6 +970,53 @@
           (should (equal "> child draft\nsecond line"
                          (mevedel-view--input-text))))))))
 
+(mevedel-deftest mevedel-view--dim-unforked-turns ()
+  ,test
+  (test)
+  :doc "dims turns after the armed response across redraws until cancel"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :authority-mode 'pid-lock
+            :name "source"
+            :session-id "source-id"
+            :current-segment 1))
+          cutoff)
+      (mevedel-view-test--insert-data data-buf "*** First prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
+      (setq cutoff (with-current-buffer data-buf (point-max)))
+      (mevedel-view-test--insert-data data-buf "\n\n*** Second prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--full-rerender)
+        (cl-flet ((dimmed-p (text)
+                    (goto-char (point-min))
+                    (search-forward text)
+                    (seq-some (lambda (overlay)
+                                (eq 'shadow (overlay-get overlay 'face)))
+                              (overlays-at (match-beginning 0)))))
+          (cl-letf (((symbol-function 'mevedel-view-fork-point-at-point)
+                     (lambda ()
+                       (list :fork-point-id "stable-1" :cum-turn 1
+                             :transcript-cutoff cutoff)))
+                    ((symbol-function
+                      'mevedel-session-rewind-assert-stable-source)
+                     #'ignore))
+            (mevedel-view-arm-conversation-fork))
+          (should-not (dimmed-p "First answer."))
+          (should (dimmed-p "Second prompt"))
+          (should (dimmed-p "Second answer."))
+          (should-not (dimmed-p "Fork conversation from Assistant turn 1"))
+          (mevedel-view--full-rerender)
+          (should-not (dimmed-p "First answer."))
+          (should (dimmed-p "Second answer."))
+          (mevedel-view-cancel-session-fork)
+          (should-not (dimmed-p "Second answer."))
+          (should-not mevedel-view--armed-session-fork-overlay))))))
+
 (mevedel-deftest mevedel-view-arm-worktree-fork ()
   ,test
   (test)

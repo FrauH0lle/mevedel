@@ -1416,7 +1416,7 @@ a committed head.
 `f` in the session cockpit arms a Conversation Fork and `F` arms a Worktree
 Fork from the settled assistant response at point. Both focus the existing
 composer draft. The interaction row identifies the assistant turn and fork
-type; `[Cancel]` or `C-c C-k` disarms it without changing the draft. An empty
+type, and the turns after that response are dimmed; `[Cancel]` or `C-c C-k` disarms it without changing the draft. An empty
 prompt, a local command, a failed syntax or mention preflight, or cancellation
 creates no child.
 

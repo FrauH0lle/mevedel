@@ -730,8 +730,10 @@ the segment descriptors and verified bytes from `mevedel-session-artifacts.el`;
 it does not implement another storage or transcript parser.
 
 Arming a Fork adds a temporary interaction row naming the selected assistant
-turn and Fork type. It focuses the existing composer, and cancellation removes
-only the row while preserving the draft. The next accepted child prompt
+turn and Fork type, and dims the rendered turns after that response, which the
+child will not inherit. The row's render hook reapplies the dim after redraws.
+It focuses the existing composer, and cancellation removes the row and the dim
+while preserving the draft. The next accepted child prompt
 publishes a new session. Conversation Fork discloses that current files may be
 newer than its conversation and remain shared; Worktree Fork discloses its
 linked worktree and best-effort historical-file restoration. Provenance is
