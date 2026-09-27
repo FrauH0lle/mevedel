@@ -71,16 +71,17 @@ BODY can release it by setting RELEASED and inspect WORKER."
 (mevedel-deftest mevedel-view-prepare ()
   ,test
   (test)
-  :doc "shows a pending row immediately and converges without changing the draft"
+  :doc "shows a pending row after staged preparation and preserves the draft"
   (mevedel-prepare-test--with-tool
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
-      (mevedel-view-render-batched-full)
-      (should mevedel-view-prepare--jobs)
-      (should (string-search "Custom: preparing result" (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (mevedel-prepare-test--wait
-       (lambda () (and (not mevedel-view-prepare--jobs) (not mevedel-view-render--batch))))
-      (should (equal expected (buffer-substring-no-properties (point-min) (point-max))))))
+      (mevedel-prepare-test--paused
+        (should mevedel-view-prepare--jobs)
+        (should (string-search "Custom: preparing result" (buffer-string)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (setq released t)
+        (mevedel-prepare-test--wait
+         (lambda () (and (not mevedel-view-prepare--jobs) (not mevedel-view-render--batch))))
+        (should (equal expected (buffer-substring-no-properties (point-min) (point-max)))))))
   :doc "new typing and selection survive publication"
   (mevedel-prepare-test--with-tool
     (mevedel-view-render-batched-full)
@@ -219,12 +220,12 @@ BODY can release it by setting RELEASED and inspect WORKER."
   (test)
   :doc "a synchronous full render retires pending preparation"
   (mevedel-prepare-test--with-tool
-    (mevedel-view-render-batched-full)
-    (should mevedel-view-prepare--jobs)
-    (mevedel-view--full-rerender)
-    (should-not mevedel-view-prepare--jobs)
-    (should-not mevedel-view-prepare--timer)
-    (should-not (string-search "preparing result" (buffer-string)))))
+    (mevedel-prepare-test--paused
+      (should mevedel-view-prepare--jobs)
+      (mevedel-view--full-rerender)
+      (should-not mevedel-view-prepare--jobs)
+      (should-not mevedel-view-prepare--timer)
+      (should-not (string-search "preparing result" (buffer-string))))))
 
 (mevedel-deftest mevedel-view-prepare/checkpoints ()
   ,test

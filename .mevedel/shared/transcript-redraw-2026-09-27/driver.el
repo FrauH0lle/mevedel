@@ -1,4 +1,11 @@
 ;;; driver.el --- Isolated settled transcript replay -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Graphical-independent, fresh-process replay of a frozen transcript.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'json)
 (require 'gptel-openai)

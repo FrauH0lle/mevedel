@@ -1,4 +1,11 @@
 ;;; launch-test.el --- Eask-owned measurement launcher -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Runs one transcript replay in a fresh Emacs using isolated Eask dependencies.
+
+;;; Code:
+
 (require 'helpers (expand-file-name "test/helpers.el"))
 (mevedel-deftest transcript-redraw-probe ()
   (let ((process-environment (copy-sequence process-environment)))

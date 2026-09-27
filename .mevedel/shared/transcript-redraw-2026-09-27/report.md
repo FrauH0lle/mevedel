@@ -32,8 +32,26 @@ indivisible. The chosen smaller preparation slices trade almost twice the
 settlement time for more responsive terminal input; they do not establish a
 10 ms hard callback bound.
 
-These probes use isolated terminal Emacs; they do not measure graphical
-painted-input latency, full-session loading, or all real-time streaming paths.
+Two separate graphical `emacs -Q` children also checked the frozen root and
+agent cases using the available Markdown grammars and Noto Sans Mono (the local
+substitute for the configured but unavailable Fira Mono). The offscreen frames
+kept the user's running editor untouched; the child alone bypassed the normal
+unfocused-view pause to permit projection without stealing focus. Both views
+settled without pending work and their scheduled history and source mappings
+matched an immediate canonical full rerender. The private results are
+`.scratch/transcript-redraw-2026-09-27/graphical-{root,agent}.json`. This is
+**graphical parity**, not a graphical input-latency result: no physical keyboard
+events were injected, the frame was not actually focused, and the diagnostic
+`forced-redisplay-ms` field includes a subsequent synchronous full rerender;
+it is not a paint-time observation. The terminal probes likewise do not measure
+graphical painted-input latency, full-session loading, or all streaming paths.
+The replay harness acquired documentation-only Elisp headers after timing; the
+paired trial harness hashes recorded in their raw results were identical.
+Final verification compiled 208 files without warnings. After adjusting two
+large-tool tests to wait for the new staged preparation checkpoint, their
+focused suite passed 25/25; the complete isolated Eask run covered 8,661 cases
+with zero unexpected results and 22 conditional skips. The full-suite report is
+`.scratch/test-suite-performance/20260927-092650/`.
 The original pre-implementation measurements and protocol follow unchanged.
 
 Measured 2026-09-27 against `51a2ffe` (`fix(view): Place status above the pinned
