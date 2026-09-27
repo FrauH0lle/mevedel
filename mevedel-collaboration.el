@@ -73,6 +73,8 @@
                   "mevedel-collaboration-projection" (id kind &rest fields))
 (declare-function mevedel-collaboration--record-without-revision
                   "mevedel-collaboration-projection" (record))
+(declare-function mevedel-collaboration--routine-poll-p
+                  "mevedel-collaboration-projection" (name args data status))
 (declare-function mevedel-collaboration--reuse-record-ids
                   "mevedel-collaboration-projection" (old new))
 (declare-function mevedel-collaboration--stable-record-id
@@ -904,7 +906,9 @@ never touched: that is a report, not a teardown."
   "Publish a running tool record for gptel tool-call INFO.
 Runs from a buffer-local hook, so the current buffer names the room."
   (when-let* ((room (mevedel-collaboration--room-for-buffer
-                     (current-buffer))))
+                     (current-buffer)))
+              ((not (mevedel-collaboration--routine-poll-p
+                     (plist-get info :name) (plist-get info :args) nil nil))))
     (progn
       (let* ((name (format "%s" (plist-get info :name)))
              (call-key (mevedel-collaboration--tool-call-key info))
@@ -941,6 +945,9 @@ Runs from a buffer-local hook, so the current buffer names the room."
                          :pending t
                          :identity-fixed t
                          :call-key call-key
+                         :baseline-buffer-end
+                         (with-current-buffer (plist-get room :data-buffer)
+                           (point-max))
                          :baseline-tool-count
                          (length (mevedel-collaboration--tool-records canonical))
                          :baseline-record-count (length canonical)
@@ -980,8 +987,13 @@ Runs from a buffer-local hook, so the current buffer names the room."
           (let ((fields (mevedel-collaboration--tool-result-fields
                          (plist-get info :result))))
             (dolist (key '(:status :result :truncated))
-              (setf (plist-get entry key) (plist-get fields key)))
-            (mevedel-collaboration--publish room))))))
+              (setf (plist-get entry key) (plist-get fields key)))))
+        ;; Empty-input observations have no pending row, but their owner may
+        ;; now have a new live output tail or terminal facts to publish.
+        (when (or entry
+                  (and (equal (plist-get info :name) "WriteStdin")
+                       (equal (or (plist-get (plist-get info :args) :chars) "") "")))
+          (mevedel-collaboration--publish room)))))
   nil)
 
 (defun mevedel-collaboration--safe-pre-tool (info)

@@ -74,6 +74,40 @@ input only to PTY executions. A single Ctrl-C character interrupts the process
 group in either PTY or pipe mode. Do not send input to a finished execution or
 start a replacement merely because no new output arrived.
 
+### Transcript presentation
+
+The initiating Bash row owns the command, current state, and output. Its compact
+header shows the command, status, and elapsed time; expanded details contain the
+execution ID, working directory, output counts, routine exit facts, the full
+command, and bounded output. Output is collapsed by default, including while
+the command runs. Explicitly opened sections stay open through progress and
+settlement. Consequential sandbox warnings and truncation remain visible, and
+retained output remains accessible where available.
+
+Successful empty-input WriteStdin observations are still returned to the model,
+but do not create separate transcript rows, even when they collect new output
+or the terminal result. That output belongs to the initiating Bash row. Actual
+input and stop actions remain compact linked interactions; submitted input is
+available on disclosure rather than in the collapsed label. Their `Show result`
+link opens the original Bash row, including a ToolCall child, or shows retained
+read-only evidence (or an explicit absence) if the row is unavailable. Failed control
+operations, such as a permission denial or invalid execution handle, remain
+visible. A command's nonzero exit is recorded on the command, not presented as
+a failed polling operation. Retained tool records remain inspectable through
+the execution-history disclosure. These rules also apply within ToolCall.
+
+Only a command that actually yielded receives a completion breadcrumb. Whether
+completion was polled or delivered independently, the receiving transcript
+shows one linked line, such as `↳ Finished: ./run-tests  [Show result]` or
+`↳ Failed: ./run-tests · exit 1  [Show result]`. Foreground commands have no
+breadcrumb. The breadcrumb repeats neither output nor a metadata summary;
+`Show result` opens the original execution output, including from an older
+segment or an agent transcript. If the original row is unavailable, navigation
+uses retained read-only evidence or states that evidence is missing. Agent
+answers and execution completions remain separate. Hiding these redundant
+presentation rows does not remove the model-visible results or change polling,
+delivery, execution ownership, or process lifecycle.
+
 ## Eval process and state
 
 Live Eval runs in the host Emacs. Restoring the window configuration does not

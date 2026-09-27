@@ -13,6 +13,18 @@ anchors distinguish section roles and compound-child discriminators, retaining
 ordinals only among runs of the same section identity. Grouped rows reuse their
 standalone disclosure roles; neighboring separators cannot shift their anchors.
 
+Managed Bash output remains on its initiating source-backed row. Routine
+successful empty-input polling rows are suppressed in the view, without removing
+model-visible tool records. Durable execution presentation owns a single linked
+completion breadcrumb for work that actually yielded, independent of polling
+or mailbox delivery. The view resolves its link through the current transcript,
+older segments, agent transcripts, or retained evidence; missing evidence is
+reported rather than represented by a dead link. The breadcrumb has no duplicate
+output body. Explicit output expansion, reader position, selection, and composer
+draft survive progress, terminal settlement, and reconstruction. Nested ToolCall
+rows follow the same visibility rules. This is a source-backed projection, not
+a view-only completion registry or a change to process ownership.
+
 Streaming updates retain completed semantic units and reconcile the mutable
 tail. A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
@@ -285,6 +297,16 @@ calling the primitive or window-scroll hook. A redisplay observer installed
 only for suspended views sees both the pan away and its return, then defers
 one scheduler rearm outside redisplay; ordinary animation frames pay no hook
 cost.
+
+### Work-oriented execution results
+
+Showing the same completion as a terminal WriteStdin result, an independently
+delivered Bash mailbox card, and a changed original row made background work
+hard to scan. The original row now owns output; only commands that actually
+yielded add a durable, compact completion link. Polling and delivery still
+retain their authoritative model-visible records. This supersedes separate
+expandable completion-card presentation without changing the mailbox payload
+or agent settlement.
 
 ### September 2026: prompt-first deferred history
 

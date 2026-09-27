@@ -1037,6 +1037,7 @@ execution's progress cost."
                (mevedel-execution--record-execution-id record))
           :command
           (plist-get (mevedel-execution--origin-tool-args origin) :command)
+          :workdir (mevedel-execution--record-workdir record)
           :state (mevedel-execution--lifecycle-state record)
           :termination termination
           :exit-code exit-code

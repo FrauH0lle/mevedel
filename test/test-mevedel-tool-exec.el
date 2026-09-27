@@ -145,7 +145,13 @@
    (equal "running · 2.5s · 3 lines · 42 bytes · exec-1"
           (mevedel-tool-exec-format-execution-metadata
            '(:state running :wall-time-seconds 2.5
-                    :output-lines 3 :output-bytes 42 :execution-id "exec-1")))))
+                    :output-lines 3 :output-bytes 42 :execution-id "exec-1"))))
+  :doc "keeps the working directory in expanded details"
+  (should
+   (string-match-p
+    "cwd /tmp/project"
+    (mevedel-tool-exec-format-execution-metadata
+     '(:state completed :workdir "/tmp/project")))))
 
 (mevedel-deftest mevedel-tool-exec--observation-envelope ()
   ,test
@@ -178,6 +184,19 @@
     (should (eq 'error (plist-get envelope :status)))
     (should (string-prefix-p "Failed to start process"
                              (plist-get envelope :result))))
+  :doc "a collected command failure succeeds but a failed control does not"
+  (should
+   (eq 'success
+       (plist-get
+        (mevedel-tool-exec--observation-envelope
+         '(:facts (:state completed :outcome failure :exit-code 7)) nil t)
+        :status)))
+  (should
+   (eq 'error
+       (plist-get
+        (mevedel-tool-exec--observation-envelope
+         '(:error "invalid handle" :facts (:state failed)) nil t)
+        :status)))
 
   :doc "keeps trusted injection output clean while retaining hidden facts"
   (let ((envelope
@@ -305,7 +324,35 @@
                 (plist-get (plist-get result :render-data)
                            :execution-control)))
     (should (plist-get (plist-get result :render-data)
+                       :control-succeeded-p))
+    (should (plist-get (plist-get result :render-data)
                        :observation-output-p)))
+  :doc "retains model-visible failure while marking a successful observation"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "failed-command"))
+        result)
+    (let ((mevedel--session session)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-observe)
+                 (lambda (_session _owner _id callback &rest _)
+                   (funcall callback
+                            '(:output "failure text"
+                                      :facts (:execution-id "exec-1"
+                                            :state completed :outcome failure
+                                            :exit-code 7)))))
+                ((symbol-function 'mevedel-telemetry-record) #'ignore))
+        (mevedel-tool-exec--write-stdin
+         (lambda (value) (setq result value))
+         '(:execution_id "exec-1" :chars ""))))
+    (should (eq 'error (plist-get result :status)))
+    (should (string-prefix-p "failure text" (plist-get result :result)))
+    (should (plist-get (plist-get result :render-data)
+                       :control-succeeded-p))
+    (should (plist-get (mevedel-tool-exec--render-bash
+                        "WriteStdin" '(:chars "")
+                        (plist-get result :result)
+                        (plist-get result :render-data))
+                       :hidden-p)))
   :doc "side execution observations use the durable audit target"
   (let* ((parent (mevedel-session--create :authority-mode 'pid-lock :name "parent"))
          (session (mevedel-session--create
@@ -1350,7 +1397,7 @@ the execution boundary owns the session's single unavailable warning"
 (mevedel-deftest mevedel-tool-exec--render-bash ()
   ,test
   (test)
-  :doc "collapsed summaries skip output formatting while live output still expands"
+  :doc "collapsed summaries skip output formatting, even while running"
   (let* ((output (concat (make-string 100000 ?x)
                          "\n<bash-execution state=\"completed\"/>"))
          (args '(:command "printf output"))
@@ -1369,9 +1416,9 @@ the execution boundary owns the session's single unavailable warning"
     (let* ((mevedel-tool-render-summary-only t)
            (live (mevedel-tool-exec--render-bash
                   "Bash" args output (append '(:live-execution-p t) data))))
-      (should (equal (plist-get full :body) (plist-get live :body)))
-      (should (plist-get live :force-expanded-p))
-      (should-not (plist-get live :initially-collapsed-p))))
+      (should-not (plist-get live :body))
+      (should-not (plist-get live :force-expanded-p))
+      (should (plist-get live :initially-collapsed-p))))
   :doc "returns nil for non-string result"
   (should (null (mevedel-tool-exec--render-bash
                  "Bash" '(:command "ls") nil nil)))
@@ -1404,7 +1451,8 @@ the execution boundary owns the session's single unavailable warning"
           (concat "Hello, Ada\n\n"
                   "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>")
           '(:status success :state completed))))
-    (should (equal "Hello, Ada" (plist-get plist :body))))
+    (should (equal "Hello, Ada\n\nDetails: completed"
+                   (plist-get plist :body))))
 
   :doc "labels polls and input as background-process interactions"
   (let ((poll
@@ -1419,16 +1467,14 @@ the execution boundary owns the session's single unavailable warning"
           "<bash-execution execution_id=\"exec-1\" state=\"running\"/>"
           '(:status success :state running :execution-id "exec-1"
                     :execution-control input :observation-output-p nil))))
-    (should (equal "WriteStdin: polled background process (completed · exec-1)"
+    (should (equal "WriteStdin: observation finished"
                    (plist-get poll :header)))
-    (should (equal "WriteStdin:exec-1"
-                   (plist-get poll :coalesce-key)))
-    (should
-     (equal "WriteStdin: sent input to background process (running · exec-1)"
-            (plist-get input :header)))
+    (should (plist-get poll :hidden-p))
+    (should (equal "WriteStdin: sent input" (plist-get input :header)))
+    (should (string-match-p "yes" (plist-get input :body)))
     (should-not (plist-get input :coalesce-key)))
 
-  :doc "coalesces only successful output-free polls"
+  :doc "hides successful polls with or without output, not failed controls"
   (dolist (render-data
            '((:status success :state completed :execution-id "exec-1"
                       :execution-control poll :observation-output-p t)
@@ -1436,11 +1482,11 @@ the execution boundary owns the session's single unavailable warning"
                       :execution-control poll :observation-output-p nil)
              (:status success :state completed :execution-id "exec-1"
                       :execution-control input :observation-output-p nil)))
-    (should-not
-     (plist-get
-      (mevedel-tool-exec--render-bash
-       "WriteStdin" '(:execution_id "exec-1") "result" render-data)
-      :coalesce-key)))
+    (let ((row (mevedel-tool-exec--render-bash
+                "WriteStdin" '(:execution_id "exec-1") "result" render-data)))
+      (should (eq (and (plist-get row :hidden-p) t)
+                  (and (eq (plist-get render-data :status) 'success)
+                       (eq (plist-get render-data :execution-control) 'poll))))))
 
   :doc "hides only successful empty polls while execution remains running"
   (let ((hidden
@@ -1462,8 +1508,40 @@ the execution boundary owns the session's single unavailable warning"
           '(:status success :state running
                     :execution-control input :observation-output-p nil))))
     (should (eq t (plist-get hidden :hidden-p)))
-    (should-not (plist-get terminal :hidden-p))
-    (should-not (plist-get input :hidden-p))))
+    (should (plist-get terminal :hidden-p))
+    (should-not (plist-get input :hidden-p)))
+  :doc "distinguishes interrupted input and failed control labels"
+  (let ((interrupt
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" '(:chars "\C-c") "" '(:status success)))
+        (failed
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" '(:chars "") "invalid handle" '(:status error))))
+    (should (string-match-p "interrupted process"
+                            (plist-get interrupt :header)))
+    (should (equal "WriteStdin: observation failed"
+                   (plist-get failed :header)))
+    (should-not (plist-get failed :hidden-p)))
+  :doc "a collected command failure does not display as failed input"
+  (let ((row (mevedel-tool-exec--render-bash
+              "WriteStdin" '(:chars "yes\n") "failed command"
+              '(:status error :outcome failure :state completed
+                        :execution-control input :control-succeeded-p t))))
+    (should (equal "WriteStdin: sent input" (plist-get row :header))))
+  :doc "marks stopped and lost executions explicitly"
+  (should (string-match-p
+           "interrupted"
+           (plist-get
+            (mevedel-tool-exec--render-bash
+             "Bash" '(:command "sleep 10") ""
+             '(:state completed :termination stopped :outcome failure))
+            :header)))
+  (should (string-match-p
+           "lost execution"
+           (plist-get
+            (mevedel-tool-exec--render-bash
+             "Bash" '(:command "sleep 10") "" '(:state lost :status error))
+            :header))))
 
 (provide 'test-mevedel-tool-exec)
 
