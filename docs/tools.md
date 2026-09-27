@@ -83,6 +83,13 @@ pipeline sequences the standard cross-cutting steps; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
 
+Interactive pipelines yield between steps for pending input, their elapsed-time
+budget, or after eight nested runner frames. The stack bound also applies across
+nested tool pipelines, leaving room for result rendering and gptel transitions.
+A deferred step waits for the preceding pipeline stack to unwind, including when
+its timer becomes due inside a process wait. Cancellation still owns the pending
+step. Batch callers retain synchronous chaining unless transport requires deferral.
+
 The structured outcome boundary is not a second pipeline. It captures status,
 canonical result, raw result, render-data, media, tool-use identity, parent
 identity, and call source after common execution. Provider-only projection text

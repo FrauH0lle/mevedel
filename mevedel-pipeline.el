@@ -542,6 +542,9 @@ that bypass `mevedel-pipeline-run-tool'."
 (defvar mevedel-pipeline--slice-start nil
   "Start of the current synchronous pipeline chain, dynamically scoped.")
 
+(defvar mevedel-pipeline--chain-depth 0
+  "Number of pipeline runner frames on the current synchronous stack.")
+
 (defvar mevedel-pipeline--slice-seconds 0.02
   "Time budget before yielding between pipeline steps.
 An individual step may exceed this budget; it is never interrupted midway.")
@@ -574,8 +577,8 @@ delivered a result before signaling.  Routing through the per-step
 latch instead would deadlock here, since the latch correctly suppresses
 a second outcome on a step that already fired NEXT.
 
-Interactive chains yield between steps after their time budget, keeping
-cancellation and error handling active while a step is pending.  Batch
+Interactive chains yield between steps after their time or stack budget,
+keeping cancellation and error handling active while a step is pending.  Batch
 callers have no input loop to service and keep synchronous chaining.
 
 CONTEXT is the initial plist."
@@ -584,7 +587,8 @@ CONTEXT is the initial plist."
   ;; batched: the pipeline dominated a profiled session's allocation,
   ;; and each collection paid there blocks the whole UI.
   (let ((mevedel-pipeline--slice-start
-         (or mevedel-pipeline--slice-start (float-time))))
+         (or mevedel-pipeline--slice-start (float-time)))
+        (mevedel-pipeline--chain-depth (1+ mevedel-pipeline--chain-depth)))
     (mevedel--with-gc-batched
      (if (null steps)
          (progn
@@ -715,9 +719,13 @@ ignoring duplicate outcome"
            ;; can start or continue a tool call while another operation is
            ;; mid-command; a nested step's own target I/O is then refused as
            ;; busy, or TRAMP hands it a reply that belongs to the outer one.
+           ;; Fast interpreted steps can exhaust the evaluator before the time
+           ;; budget expires.  Leave stack room for the final consumer, which
+           ;; can synchronously render results and advance gptel's FSM.
            (if (and (not (mevedel-transport-nested-p))
                     (or noninteractive
-                        (and (not (input-pending-p))
+                        (and (<= mevedel-pipeline--chain-depth 8)
+                             (not (input-pending-p))
                              (< (- (float-time) mevedel-pipeline--slice-start)
                                 mevedel-pipeline--slice-seconds))))
                (funcall execute)
@@ -734,10 +742,12 @@ ignoring duplicate outcome"
                          (if (and (not settled)
                                   (or (not cancel-cell)
                                       (eq (car cancel-cell) cancel-cont))
-                                  (or (input-pending-p)
+                                  (or (> mevedel-pipeline--chain-depth 0)
+                                      (input-pending-p)
                                       (mevedel-transport-nested-p)))
                              (setq timer (mevedel-transport-run-at-time 0.01 resume))
-                           (let ((mevedel-pipeline--slice-start (float-time)))
+                           (let ((mevedel-pipeline--slice-start (float-time))
+                                 (mevedel-pipeline--chain-depth 1))
                              (funcall execute))))))
                (setq timer (mevedel-transport-run-at-time 0.001 resume))))))))))
 
