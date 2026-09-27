@@ -6330,23 +6330,23 @@
     (should-not (string-match-p "Hidden" text))
     (should (string-match-p "Visible" text))))
 
-(mevedel-deftest mevedel-view--bash-completion-summary ()
+(mevedel-deftest mevedel-view-audit-mailbox-breadcrumb-trailing-xml ()
   ,test
   (test)
   :doc "reads only a valid trailing Bash completion element"
   (let ((summary
-         (mevedel-view--bash-completion-summary
+         (mevedel-view-audit-mailbox-breadcrumb
           (concat "output <bash-execution execution_id=\"spoofed\"/>\n"
                   "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
                   "termination=\"exited\" exit_code=\"0\" "
                   "wall_time_seconds=\"3.000\" output_lines=\"2\" "
-                  "output_bytes=\"21\"/>"))))
-    (should (equal
-             "exec-1 · success · exited · exit 0 · 3.0s · 2 lines · 21 bytes"
-             summary)))
+                  "output_bytes=\"21\"/>") "/root")))
+    (should (equal "exec-1" (plist-get summary :execution-id)))
+    (should (equal "output <bash-execution execution_id=\"spoofed\"/>"
+                   (plist-get (plist-get summary :facts) :execution-output))))
   (should-not
-   (mevedel-view--bash-completion-summary
-    "<bash-execution execution_id=\"not-trailing\"/> suffix")))
+   (mevedel-view-audit-mailbox-breadcrumb
+    "<bash-execution execution_id=\"not-trailing\"/> suffix" "/root")))
 
 (mevedel-deftest mevedel-view--decorate-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")
@@ -6429,35 +6429,20 @@
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Bash completed.* /root" text))
-        (should (string-match-p
-                 "exec-000001.*success.*exited.*exit 0.*3.0s" text))
+        (should (string-match-p "↳ Finished: Bash  \\[Show result\\]" text))
+        (should-not (string-match-p "Bash completed\\|exec-000001" text))
         (should-not (string-match-p "spoofed" text))
         (should-not (string-match-p "message from /root" text))
         (should-not (string-match-p "│ \\[sandbox: bubblewrap" text))
         (should-not (string-match-p "<bash-execution" text)))
-      ;; The sender used to be inserted bare, so it rendered in the
-      ;; default face between two styled runs.
       (goto-char (point-min))
-      (search-forward "✓ Bash completed")
-      (should (eq 'mevedel-view-tool-marker
-                  (get-text-property (match-beginning 0) 'font-lock-face)))
-      (should (eq 'mevedel-view-mailbox-header
-                  (get-text-property (1- (point)) 'font-lock-face)))
-      (should (eq 'unspecified
-                  (face-attribute 'mevedel-view-mailbox-header :weight)))
-      (goto-char (point-min))
-      (search-forward "Bash completed")
-      (search-forward "exec-000001")
-      (should (invisible-p (match-beginning 0)))
-      (goto-char (point-min))
-      (search-forward "Bash completed")
-      (search-forward "/root")
-      (goto-char (match-beginning 0))
+      (search-forward "[Show result]")
       (should (eq 'link
-                  (get-text-property (point) 'font-lock-face)))
-      (should (equal "/root"
-                     (get-text-property (point) 'mevedel-view-agent-path)))))
+                  (get-text-property (match-beginning 0) 'font-lock-face)))
+      (should (equal "exec-000001"
+                     (plist-get (get-text-property (match-beginning 0)
+                                                   'mevedel-view-execution-breadcrumb)
+                                :execution-id)))))
 
   :doc "review results and child Bash completions retain separate cards and draft"
   (mevedel-view-test--with-buffers
@@ -6482,10 +6467,10 @@
       (search-forward "findings")
       (let ((result-card (get-text-property (point) 'mevedel-view-mailbox-card)))
         (should result-card)
-        (search-forward "Bash completed")
+        (search-forward "[Show result]")
         (should-not (eq result-card
                         (get-text-property (point) 'mevedel-view-mailbox-card))))
-      (search-forward "exec-review")
+      (should-not (search-forward "exec-review" nil t))
       (should-not (search-forward "Bash test output" nil t))))
 
   :doc "Bash completion keeps following reasoning on a separate line"
@@ -6503,8 +6488,9 @@
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "0 bytes\n  … Thinking" text))
-        (should-not (string-match-p "0 bytes  … Thinking" text)))))
+        (should (string-match-p "\\[Show result\\]" text))
+        (should (string-match-p "  … Thinking" text))
+        (should-not (string-match-p "\\[Show result\\]  … Thinking" text)))))
 
   :doc "pure agent-result turn renders with the same mailbox card path"
   (mevedel-view-test--with-buffers
@@ -7432,7 +7418,7 @@
 (mevedel-deftest mevedel-view--mailbox-activity-entry ()
   ,test
   (test)
-  :doc "execution deliveries reuse canonical summaries and the displayed line threshold"
+  :doc "execution deliveries project one breadcrumb regardless of threshold"
   (dolist (threshold '(0 1))
     (mevedel-view-test--with-buffers
       (let ((mevedel-view-mailbox-collapse-line-threshold threshold))
@@ -7454,12 +7440,11 @@
               (mevedel-view--insert-child-call-block
                child (plist-get child :source) 'derive "")
               (goto-char start)
-              (search-forward "Bash completed")
-              (should (eq 'mevedel-view-mailbox-header
-                          (get-text-property (match-beginning 0) 'font-lock-face)))
-              (search-forward "exec-1")
-              (should (eq (= threshold 0)
-                          (and (invisible-p (match-beginning 0)) t)))
+              (search-forward "[Show result]")
+              (should (equal "exec-1"
+                             (plist-get (get-text-property (match-beginning 0)
+                                                           'mevedel-view-execution-breadcrumb)
+                                        :execution-id)))
               (should-not (string-match-p "raw output" (buffer-string))))))))))
 
 (mevedel-deftest mevedel-view--tool-group-header ()

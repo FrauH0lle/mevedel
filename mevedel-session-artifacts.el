@@ -697,6 +697,86 @@ cannot be read."
          (user-error "Could not read segment %s: %s"
                      path (error-message-string err)))))))
 
+(defun mevedel-session-artifacts-transcript-segments (session live-buffer)
+  "Return readable history descriptors for LIVE-BUFFER's receiving transcript.
+Root transcripts use session segments; agent conversations use their own
+numbered compaction archives rather than the parent's session segments."
+  (let* ((save-path (mevedel-session-save-path session))
+         (path (and (buffer-live-p live-buffer)
+                    (buffer-local-value 'buffer-file-name live-buffer)))
+         (logical (and (stringp save-path) (stringp path)
+                       (string-prefix-p
+                        (file-name-as-directory (expand-file-name save-path))
+                        (expand-file-name path))
+                       (file-relative-name path save-path))))
+    (if (and (stringp logical)
+             (string-prefix-p "agents/" logical)
+             (string-suffix-p ".chat.org" logical))
+        (let* ((stem (string-remove-suffix ".chat.org" logical))
+               (folder (file-name-directory stem))
+               (pattern (format "\\`%s\\.compact-\\([0-9]+\\)\\.chat\\.org\\'"
+                                (regexp-quote stem)))
+               (portable (mevedel-session-codec-portable-authority-p session))
+               (names
+                (if portable
+                    (append
+                     (mapcar #'car
+                             (plist-get
+                              (or (mevedel-session-publication session)
+                                  (mevedel-session-publication-read save-path))
+                              :artifacts))
+                     (when (mevedel-session-durability-lease-owned-p session)
+                       (cl-loop for batch in
+                                (append
+                                 (mevedel-session-publication-uncommitted-batches
+                                  session)
+                                 (mevedel-session-publication-queue session))
+                                append (mapcar
+                                        (lambda (entry)
+                                          (plist-get entry :logical))
+                                        (plist-get batch :artifacts)))))
+                  (let ((directory (expand-file-name folder save-path)))
+                    (when (file-directory-p directory)
+                      (mapcar (lambda (name) (concat folder name))
+                              (directory-files directory nil nil t))))))
+               (numbers
+                (sort (delete-dups
+                       (delq nil
+                             (mapcar (lambda (name)
+                                       (when (and (stringp name)
+                                                  (string-match pattern name))
+                                         (let ((number
+                                                (string-to-number
+                                                 (match-string 1 name))))
+                                           (and (> number 0)
+                                                (equal name
+                                                       (format "%s.compact-%04d.chat.org"
+                                                               stem number))
+                                                number))))
+                                     names))) #'<))
+               archives)
+          (dolist (number numbers)
+            (let ((name (format "%s.compact-%04d.chat.org" stem number)))
+              (when (mevedel-session-artifacts-artifact-present-p session name)
+                (push (list :number number :logical name
+                            :status 'readable :current-p nil)
+                      archives))))
+          (append (nreverse archives)
+                  (list (list :status 'readable :current-p t))))
+      (mevedel-session-artifacts-segments session live-buffer))))
+
+(defun mevedel-session-artifacts-read-transcript-segment (session descriptor)
+  "Read DESCRIPTOR from SESSION into a disposable, read-only transcript buffer."
+  (if-let* ((logical (plist-get descriptor :logical)))
+      (let ((buffer (mevedel-session-artifacts-find-artifact-noselect
+                     session logical t)))
+        (with-current-buffer buffer
+          (mevedel-transcript-restore-properties)
+          (setq buffer-read-only t))
+        buffer)
+    (mevedel-session-artifacts-read-segment
+     session (plist-get descriptor :number))))
+
 (defun mevedel-session-artifacts-sidecar-path (save-path)
   "Return the absolute path to the session sidecar under SAVE-PATH."
   (file-name-concat save-path "session.meta.el"))

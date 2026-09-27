@@ -452,7 +452,7 @@
                                    (mevedel-view--sticky-prompt-line)))
             (should-not (string-search "First question"
                                        (mevedel-view--status-strip)))
-            (should (string-search "mevedel/"
+            (should (string-search "ask · idle"
                                    (mevedel-view--status-strip)))
             (set-window-start
              nil (save-excursion (goto-char second)

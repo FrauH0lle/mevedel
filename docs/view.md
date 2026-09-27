@@ -142,9 +142,14 @@ their own disclosures rather than becoming generic tool rows.
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
 
-Agent terminal results and captured Bash completions are separate mailbox cards.
-The result card contains the agent's final answer; each completion card uses the
-existing compact Bash facts display and links to the child that ran the command.
+Agent terminal results and Bash completions remain distinct. The result card
+contains the agent's final answer; a yielded execution produces one compact
+chronological completion breadcrumb in each receiving transcript, including a
+parent receiving a child's completion. The breadcrumb identifies the command
+and terminal outcome, attributes child work, and links to the original Bash
+output. It is not an expandable duplicate of the execution result. A command
+that finished before yielding has no breadcrumb. The model-facing mailbox
+payload and agent settlement remain unchanged.
 
 Directive requests render in the ordinary session view as first-class turns.
 The directive header carries id, action, turn, and an exclusion badge; the
@@ -482,11 +487,13 @@ order with its own collapse state, and collapsing the group takes its rows
 with it. Nested compound calls retain each descendant's row identity and
 nesting depth: toggling one removes its descendants with it while preserving
 sibling rows, so repeated expansion never accumulates copies.
-Delivered agent messages, agent results, and Bash completions inside
-an activity run join the same group as independently expandable cards;
-`received N messages` counts them separately from tools. Their sender links,
-execution summaries, and mailbox collapse threshold stay the same. A newly
-formed group stays open when one of its rows is already open, so grouping
+Delivered agent messages and agent results inside an activity run join the
+same group as independently expandable cards; `received N messages` counts
+them separately from tools. Yielded Bash completions use compact linked
+breadcrumbs instead of additional expandable mailbox cards, and do not
+repeat command output. Sender links and mailbox collapse thresholds for agent
+messages and answers stay the same. A newly formed group stays open when one
+of its rows is already open, so grouping
 does not hide text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
@@ -503,11 +510,25 @@ precedence over an accompanying sandbox warning. Explicit expansion survives
 redraws. A `note`-class sandbox disclosure stays with its nested row without
 marking the group. The same rules apply to native, wrapped/MCP, and generic
 tools. A valid empty search is successful; a search that failed to run shows
-an error instead of a zero-match count. Terminal Bash metadata includes its
-outcome, exit code when available, and abnormal termination rather than only
-the process lifecycle label `completed`.
-Expanding a group rebuilds its rows from the
-folded run alone: `mevedel-transcript-segments` expands its end bound to the
+an error instead of a zero-match count. Bash rows show command, status and
+elapsed time; execution IDs, output counts, working directory and routine exit
+facts belong in expanded details. Their output disclosure starts closed for
+running and completed commands. The original row owns all progress and output,
+including output returned by a hidden, successful empty-input WriteStdin poll.
+Input and stop interactions remain visible and link to the original execution;
+failed control operations do not
+disappear, and a command's failed exit is attributed to the command instead of
+to its successful poll. Source-backed disclosure choices and reader/composer
+positions survive progress and completion. A separate execution-history
+disclosure preserves inspectable polling and delivery records. The same rules
+apply to execution tools nested within ToolCall. Completion lookup follows the
+receiving transcript's own history: root session segments or numbered agent
+compaction archives. A missing earlier archive does not hide available later
+terminal evidence; when the source row itself is gone, the result link opens
+retained output read-only instead of navigating into the parent's segments.
+
+Expanding a group rebuilds its rows from the folded run alone:
+`mevedel-transcript-segments` expands its end bound to the
 containing property run, so the segment beginning where the run ended is
 dropped instead of being summarized as one more reasoning occurrence.
 

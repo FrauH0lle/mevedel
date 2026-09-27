@@ -13,9 +13,12 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-tool-exec)
 (require 'mevedel-tool-ptc)
+(require 'mevedel-transcript-restore)
 
 (mevedel-deftest mevedel-collaboration-tool-presentation
   ()
@@ -151,6 +154,398 @@
             (should-not (plist-get room :pending-tools))))
       (mevedel-collaboration--artifact-stat-invalidate)
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-collaboration--routine-poll-p
+  () ,test (test)
+  :doc "hide routine polls, including ones delivering output and terminal failure"
+  (should (mevedel-collaboration--routine-poll-p
+           "WriteStdin" '(:execution_id "exec-1" :chars "")
+           '(:state completed :outcome failure :status success) 'success))
+  (should (mevedel-collaboration--routine-poll-p
+           "WriteStdin" '(:execution_id "exec-1" :chars "")
+           '(:state completed :outcome failure :status error
+             :control-succeeded-p t) 'error))
+  (should (mevedel-collaboration--routine-poll-p
+           "WriteStdin" '(:execution_id "exec-1")
+           '(:state running :observation-output-p t) nil))
+  :doc "do not hide input, denied operations, or a failed control operation"
+  (should-not (mevedel-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "hello") nil nil))
+  (should-not (mevedel-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "") '(:status denied) nil))
+  (should-not (mevedel-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "")
+               '(:status success :control-succeeded-p nil) 'success))
+  (should-not (mevedel-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "") nil 'error)))
+
+(mevedel-deftest mevedel-collaboration--tool-record-execution
+  () ,test (test)
+  :doc "Bash whole output and terminal status replace stale initial result"
+  (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_ (mevedel-tool-register
+             (mevedel-tool--create :name "Bash" :category "mevedel"
+                                  :renderer #'mevedel-tool-exec--render-bash)))
+         (record (mevedel-collaboration--tool-record
+                  '(:name "Bash" :args (:command "echo hello")
+                    :result "initial output"
+                    :render-data (:kind execution :state completed
+                                  :outcome failure :status error
+                                  :execution-output "initial output\nfinal output"))
+                  "tool")))
+    (should (equal "failed" (plist-get record :status)))
+    (should (equal "initial output\nfinal output" (plist-get record :result)))
+    (should (equal "$ echo hello\n\ninitial output\nfinal output\n\nDetails: failure"
+                   (plist-get (plist-get record :presentation) :body))))
+  :doc "routine poll disappears; errors and real input remain inspectable"
+  (should-not (mevedel-collaboration--tool-record
+               '(:name "WriteStdin" :args (:execution_id "exec-1")
+                 :result "new output"
+                 :render-data (:execution-control poll :status error
+                               :control-succeeded-p t
+                               :state completed :outcome failure)) "poll"))
+  (should (equal "failed"
+                 (plist-get (mevedel-collaboration--tool-record
+                             '(:name "WriteStdin" :args (:chars "")
+                               :result "Error: invalid handle"
+                               :render-data (:status error)) "control")
+                            :status)))
+  (should (mevedel-collaboration--tool-record
+           '(:name "WriteStdin" :args (:chars "hi") :result "sent") "input")))
+
+(mevedel-deftest mevedel-collaboration--tool-segment-records-pending-terminal
+  (:doc "completion before original row insertion uses durable pending terminal facts")
+  (with-temp-buffer
+    (insert "tool")
+    (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+               (lambda (&rest _)
+                 '(:name "Bash" :tool-use-id "bash-1"
+                   :args (:command "exit 1") :result "yielded"
+                   :render-data (:state running :status success))))
+              ((symbol-function 'mevedel-execution-transcript-pending-render-data)
+               (lambda (_buffer id)
+                 (should (equal "bash-1" id))
+                 '(:state completed :outcome failure :status error
+                   :execution-output "failed after yield"))))
+      (let ((record (car (mevedel-collaboration--tool-segment-records
+                          (current-buffer) '(tool 1 5)))))
+        (should (equal "tool-bash-1" (plist-get record :id)))
+        (should (equal "failed" (plist-get record :status)))
+        (should (equal "failed after yield" (plist-get record :result)))))))
+
+(mevedel-deftest mevedel-collaboration-tool-presentation-poll
+  () ,test (test)
+  :doc "nested successful polls vanish without altering raw returned value"
+  (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_ (mevedel-tool-register
+             (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                  :renderer #'mevedel-tool-ptc--render)))
+         (_bash (mevedel-tool-register
+                 (mevedel-tool--create :name "Bash" :category "mevedel"
+                                      :renderer #'mevedel-tool-exec--render-bash)))
+         (parsed '(:name "ToolCall" :result "raw model value"
+                   :render-data
+                   (:kind ptc :outcome completed
+                    :calls ((:id "c/1" :tool "Bash" :args (:command "echo hi")
+                             :status success :result "first"
+                             :render-data (:execution-id "exec-1" :state completed
+                                           :outcome failure :status error
+                                           :execution-output "first\nlast"))
+                            (:id "c/2" :tool "WriteStdin"
+                             :args (:execution_id "exec-1" :chars "")
+                             :status error :result "last"
+                             :render-data (:execution-control poll :status error
+                                           :control-succeeded-p t))
+                            (:id "c/3" :tool "WriteStdin"
+                             :args (:execution_id "missing" :chars "")
+                             :status error :result "Error: invalid handle")))))
+         (record (mevedel-collaboration--tool-record parsed "raw"))
+         (children (plist-get (plist-get record :presentation) :children)))
+    (should (equal "raw model value" (plist-get record :result)))
+    (should (= 2 (length children)))
+    (should (equal "$ echo hi\n\nfirst\nlast\n\nDetails: failure · exec-1"
+                   (plist-get (aref children 0) :body)))
+    (should (equal "failed" (plist-get (aref children 0) :status)))
+    (should (equal "failed" (plist-get (aref children 1) :status)))
+    (should (equal "ToolCall" (plist-get record :name)))))
+
+(mevedel-deftest mevedel-collaboration--direct-tool-poll
+  () ,test (test)
+  :doc "single direct ToolCall poll disappears from guest projection without mutating model result"
+  (let* ((parsed '(:name "ToolCall" :result "raw model value"
+                   :render-data
+                   (:kind ptc :direct-tool "WriteStdin" :outcome completed
+                    :calls ((:id "c/1" :tool "WriteStdin" :status success
+                             :args (:execution_id "exec-1" :chars "")
+                             :result "polled output")))))
+         (original (copy-tree parsed)))
+    (should-not (mevedel-collaboration--tool-record parsed "tool"))
+    (should (equal original parsed)))
+  :doc "direct failed control operation remains visible with its error facts"
+  (let ((parsed '(:name "ToolCall" :result "Error: invalid handle"
+                  :render-data
+                  (:kind ptc :direct-tool "WriteStdin" :outcome tool-error
+                   :calls ((:tool "WriteStdin" :status success
+                            :args (:execution_id "missing" :chars "")
+                            :render-data (:status error)
+                            :result "Error: invalid handle"))))))
+    (should (mevedel-collaboration--tool-record parsed "control"))))
+
+(mevedel-deftest mevedel-collaboration--direct-facts
+  (:doc "terminal Bash facts override the copied child success of a direct ToolCall")
+  (let* ((facts '(:state completed :status error :outcome failure
+                  :execution-output "final output"))
+         (data (list :calls (list (list :tool "Bash" :status 'success
+                                  :render-data facts))))
+         (direct '(:tool "Bash" :status success
+                   :render-data (:state completed :status success))))
+    (should (equal facts
+                   (mevedel-collaboration--direct-facts data direct)))))
+
+(mevedel-deftest mevedel-collaboration--live-bash-data
+  (:doc "running execution tail belongs to original Bash projection, not poll row")
+  (let* ((mevedel--session 'fixture)
+         (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_ (mevedel-tool-register
+             (mevedel-tool--create :name "Bash" :category "mevedel"
+                                  :renderer #'mevedel-tool-exec--render-bash)))
+         (parsed '(:name "Bash" :result "yielded"
+                   :args (:command "sleep 10")
+                   :render-data (:execution-id "exec-1" :state running
+                                 :status success :execution-output "stale output")))
+         (original (copy-tree parsed)))
+    (cl-letf (((symbol-function 'mevedel-execution-list-user)
+               (lambda (_) '((:execution-id "exec-1" :state running
+                            :output-tail "fresh poll output")))))
+      (let ((live (mevedel-collaboration--live-bash-data parsed)))
+        (should (equal "fresh poll output"
+                       (mevedel-collaboration--execution-output
+                        (plist-get live :render-data))))
+        (should (eq 'running (plist-get (plist-get live :render-data) :status)))
+        (should (= 1 (cl-count :status (plist-get live :render-data))))
+        (let ((record (mevedel-collaboration--tool-record live "tool")))
+          (should (equal "running" (plist-get record :status)))
+          (should (equal "fresh poll output" (plist-get record :result)))
+          (should (equal "$ sleep 10\n\nfresh poll output\n\nDetails: running · exec-1"
+                         (plist-get (plist-get record :presentation) :body))))
+        (should (equal "yielded" (plist-get live :result)))
+        (should (equal original parsed))))))
+
+(mevedel-deftest mevedel-collaboration--suppressed-tool-landed-p
+  (:doc "settled direct poll clears only its matching pending ToolCall, not a later identical one")
+  (with-temp-buffer
+    (insert (make-string 40 ?x))
+    (let* ((buffer (current-buffer))
+           (parsed '(:name "ToolCall" :args (:expression "(WriteStdin :execution_id \"e\")")
+                     :result "raw"
+                     :render-data
+                     (:kind ptc :direct-tool "WriteStdin" :outcome completed
+                      :calls ((:tool "WriteStdin" :status success
+                               :args (:execution_id "e" :chars "")
+                               :result "observed")))))
+           (key (mevedel-collaboration--tool-call-key parsed)))
+      (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                 (lambda (&rest _) '((tool 3 8))))
+                ((symbol-function 'mevedel-view--tool-call-parse)
+                 (lambda (&rest _) parsed)))
+        (should (mevedel-collaboration--suppressed-tool-landed-p
+                 buffer (list :call-key key :baseline-buffer-end 3)))
+        (should-not (mevedel-collaboration--suppressed-tool-landed-p
+                     buffer (list :call-key key :baseline-buffer-end 9)))
+        (should-not (mevedel-collaboration--suppressed-tool-landed-p
+                     buffer (list :call-key "other" :baseline-buffer-end 3)))))))
+
+(mevedel-deftest mevedel-collaboration--reconcile-ptc-children
+  () ,test (test)
+  :doc "nested Bash terminal facts after a poll replace stale child display, not outer model result"
+  (with-temp-buffer
+    (insert "tool")
+    (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+           (_ (mevedel-tool-register
+               (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                    :renderer #'mevedel-tool-ptc--render)))
+           (_bash (mevedel-tool-register
+                   (mevedel-tool--create :name "Bash" :category "mevedel"
+                                        :renderer #'mevedel-tool-exec--render-bash)))
+           (parsed '(:name "ToolCall" :tool-use-id "outer"
+                     :args (:expression "(progn (Bash ...) (WriteStdin ...))")
+                     :result "raw model value"
+                     :render-data
+                     (:kind ptc :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "exit 1") :result "initial"
+                               :render-data (:execution-id "exec-1" :state running))
+                              (:id "outer/2" :tool "WriteStdin" :status error
+                               :args (:execution_id "exec-1" :chars "")
+                               :render-data (:control-succeeded-p t :status error)
+                               :result "poll output")))))
+           (original (copy-tree parsed)))
+      (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+                 (lambda (&rest _) parsed))
+                ((symbol-function 'mevedel-execution-transcript-pending-render-data)
+                 (lambda (_buffer id)
+                   (when (equal id "outer/1")
+                     '(:execution-id "exec-1" :state completed :status error
+                       :outcome failure :execution-output "initial\nfinal")))))
+        (let* ((record (car (mevedel-collaboration--tool-segment-records
+                             (current-buffer) '(tool 1 5))))
+               (children (plist-get (plist-get record :presentation) :children)))
+          (should (equal "raw model value" (plist-get record :result)))
+          (should (= 1 (length children)))
+          (should (equal "Bash" (plist-get (aref children 0) :name)))
+          (should (equal "failed" (plist-get (aref children 0) :status)))
+          (should (equal "$ exit 1\n\ninitial\nfinal\n\nDetails: failure · exec-1"
+                         (plist-get (aref children 0) :body)))
+          (should (equal original parsed))))))
+  :doc "direct Bash also projects pending terminal output and status without rewriting returned value"
+  (with-temp-buffer
+    (insert "tool")
+    (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+           (_ (mevedel-tool-register
+               (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                    :renderer #'mevedel-tool-ptc--render)))
+           (_bash (mevedel-tool-register
+                   (mevedel-tool--create :name "Bash" :category "mevedel"
+                                        :renderer #'mevedel-tool-exec--render-bash)))
+           (parsed '(:name "ToolCall" :tool-use-id "outer"
+                     :args (:expression "(Bash :command \"exit 1\")")
+                     :result "raw returned value"
+                     :render-data
+                     (:kind ptc :direct-tool "Bash" :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "exit 1") :result "initial"
+                               :render-data (:execution-id "exec-1" :state running))))))
+           (original (copy-tree parsed)))
+      (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+                 (lambda (&rest _) parsed))
+                ((symbol-function 'mevedel-execution-transcript-pending-render-data)
+                 (lambda (_buffer id)
+                   (when (equal id "outer/1")
+                     '(:execution-id "exec-1" :state completed :status error
+                       :outcome failure :execution-output "initial\nfinal")))))
+        (let* ((record (car (mevedel-collaboration--tool-segment-records
+                             (current-buffer) '(tool 1 5))))
+               (presentation (plist-get record :presentation)))
+          (should (equal "raw returned value" (plist-get record :result)))
+          (should (equal "Bash" (plist-get presentation :name)))
+          (should (equal "failed" (plist-get presentation :status)))
+          (should (equal "$ exit 1\n\ninitial\nfinal\n\nDetails: failure · exec-1"
+                         (plist-get presentation :body)))
+          (should (equal original parsed))))))
+  :doc "Bash terminal evidence survives another ToolCall layer"
+  (with-temp-buffer
+    (let* ((data (current-buffer))
+           (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+           (parsed '(:name "ToolCall" :tool-use-id "outer"
+                     :result "original returned value"
+                     :render-data
+                     (:kind ptc :outcome completed
+                      :calls ((:id "outer/1" :tool "ToolCall" :status success
+                               :result "old output"
+                               :render-data
+                               (:kind ptc :outcome completed :direct-tool "Bash"
+                                :calls ((:id "outer/1/1" :tool "Bash"
+                                         :status success :args (:command "exit 2")
+                                         :result "old output"
+                                         :render-data (:state running)))))))))
+           (original (copy-tree parsed)))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                             :renderer #'mevedel-tool-ptc--render))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "Bash" :category "mevedel"
+                             :renderer #'mevedel-tool-exec--render-bash))
+      (mevedel-execution-transcript-handle-event
+       (list :type 'terminal :data-buffer data :tool-use-id "outer/1/1"
+             :owner "/root" :whole-output "FINAL FAILURE"
+             :facts '(:execution-id "exec-deep" :command "exit 2"
+                      :state completed :outcome failure :exit-code 2)))
+      (let* ((projection (mevedel-collaboration-tool-presentation
+                          (mevedel-collaboration--reconcile-ptc-children
+                           data parsed)))
+             (child (aref (plist-get projection :children) 0)))
+        (should (equal "Bash" (plist-get child :name)))
+        (should (equal "failed" (plist-get child :status)))
+        (should (string-match-p "FINAL FAILURE" (plist-get child :body)))
+        (should-not (string-match-p "old output" (plist-get child :body)))
+        (should (equal original parsed)))))
+  :doc "unmatched terminal identities do not rewrite other nested executions"
+  (let* ((parsed '(:name "ToolCall" :render-data
+                   (:kind ptc :calls ((:id "outer/1" :tool "Bash" :status success
+                                      :render-data (:execution-id "exec-1"))))))
+         (original (copy-tree parsed)))
+    (cl-letf (((symbol-function 'mevedel-execution-transcript-pending-render-data)
+               (lambda (_buffer _id) nil)))
+      (should (eq parsed (mevedel-collaboration--reconcile-ptc-children
+                          (current-buffer) parsed)))
+      (should (equal original parsed))))
+  :doc "nested terminal output and failure survive closing and reopening the transcript"
+  (let* ((path (make-temp-file "mevedel-guest-ptc-reload-"))
+         (session (mevedel-session--create :authority-mode 'pid-lock
+                                           :name "guest-ptc-reload"))
+         (buffer (find-file-noselect path))
+         (mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (unwind-protect
+        (progn
+          (mevedel-tool-register
+           (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                :renderer #'mevedel-tool-ptc--render))
+          (mevedel-tool-register
+           (mevedel-tool--create :name "Bash" :category "mevedel"
+                                :renderer #'mevedel-tool-exec--render-bash))
+          (with-current-buffer buffer
+            (delay-mode-hooks (org-mode))
+            (mevedel-transcript-enable-gptel-mode)
+            (setq-local mevedel--session session)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (let ((start (point)))
+              (insert "(:name \"ToolCall\" :args (:expression \"(Bash :command \\\"exit 1\\\")\"))\nraw model value")
+              (put-text-property start (point) 'gptel '(tool . "outer")))
+            (insert (mevedel-tool-render-data-format
+                     '(:kind ptc :outcome completed
+                       :calls ((:id "outer/1" :tool "Bash" :status success
+                                :args (:command "exit 1") :result "initial"
+                                :render-data (:execution-id "exec-1" :state running))))
+                     "outer"))
+            (insert "\n")
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (should (org-entry-get (point-min) "GPTEL_BOUNDS"))
+            (write-region (point-min) (point-max) path nil 'silent)
+            (set-buffer-modified-p nil)
+            (set-visited-file-modtime)
+            (mevedel-execution-transcript-handle-event
+             (list :type 'terminal :data-buffer buffer :tool-use-id "outer/1"
+                   :owner "/root" :whole-output "initial\nfinal"
+                   :facts '(:execution-id "exec-1" :command "exit 1"
+                            :state completed :outcome failure :exit-code 1))))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (setq buffer nil)
+          (with-temp-buffer
+            (insert-file-contents path)
+            (delay-mode-hooks (org-mode))
+            (mevedel-transcript-restore-properties)
+            (should-not mevedel-execution-transcript--pending-terminals)
+            (goto-char (point-min))
+            (should (search-forward "(:name \"ToolCall\"" nil t))
+            (let ((tool-start (match-beginning 0)))
+              (should (search-forward mevedel-tool-render-data-close nil t))
+              (let* ((tool-end (point))
+                     (parsed (mevedel-view--tool-call-parse
+                              (current-buffer) tool-start tool-end))
+                     (record (car (mevedel-collaboration--tool-segment-records
+                                   (current-buffer) (list 'tool tool-start tool-end))))
+                     (child (aref (plist-get (plist-get record :presentation) :children)
+                                  0)))
+                (should (plist-get parsed :render-data))
+                (should (equal "raw model value" (plist-get record :result)))
+                (should (equal "failed" (plist-get child :status)))
+                (should (equal "$ exit 1\n\ninitial\nfinal\n\nDetails: failure · exit 1 · exec-1"
+                               (plist-get child :body)))))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-file path))))
 
 (provide 'test-mevedel-collaboration-tool-presentation)
 ;;; test-mevedel-collaboration-tool-presentation.el ends here
