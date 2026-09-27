@@ -19,6 +19,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-executions-list)
 (require 'mevedel-view)
+(require 'mevedel-view-segments)
 (require 'mevedel-view-stream)
 (require 'mevedel-menu)
 (require 'mevedel-transport)
@@ -27,6 +28,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-plan-mode)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-publication)
 (require 'mevedel-session-recovery)
 (require 'mevedel-permission-queue)
@@ -551,6 +553,108 @@
           (set-window-buffer window data-buf)
           (with-current-buffer data-buf
             (should-not (local-variable-p 'tab-line-format))))))))
+
+(mevedel-deftest mevedel-view--continuation-prompt ()
+  ,test
+  (test)
+  :doc "a compacted continuation pins its source prompt, but clear does not"
+  (let* ((directory (make-temp-file "mevedel-sticky-continuation-" t))
+         (path (mevedel-session-artifacts-segment-path directory 1))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock
+                   :name "continuation"
+                   :save-path (file-name-as-directory directory)
+                   :current-segment 2))
+         prompt-position indexed)
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (setq prompt-position (point))
+            (insert "*** Original prompt with a second line\nMore details\n")
+            (setq indexed (car (mevedel-session-artifacts-collect-prompts
+                                (current-buffer))))
+            (write-region (point-min) (point-max) path nil 'silent))
+          (setf (mevedel-session-prompt-index session)
+                (list (cons 1 (list (append indexed '(:cum-turn 1))))))
+          (save-window-excursion
+            (mevedel-view-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session)
+                (insert (mevedel-session-artifacts-summary-block "summary"))
+                (insert (propertize "Continuation answer\n" 'gptel 'response)))
+              (with-current-buffer view-buf
+                (switch-to-buffer view-buf)
+                (mevedel-view--full-rerender)
+                (should (string-search
+                         "Original prompt with a second line More details"
+                         (mevedel-view--sticky-prompt-line)))
+                (should (equal (list :segment 1 :pos prompt-position)
+                               (cl-subseq (mevedel-view--continuation-prompt) 0 4)))
+                (mevedel-view-segments-jump-to-prompt
+                 1 prompt-position (selected-window))
+                (should (= 1 (mevedel-view-segments-current-number)))
+                (should (looking-at-p "You"))
+                (should-not (mevedel-view--continuation-prompt))
+                (mevedel-view-return-to-latest-segment)
+                (should (string-search "Original prompt with a second line"
+                                       (mevedel-view--sticky-prompt-line)))
+                ;; A second compacted segment has no indexed prompt of its
+                ;; own, but still belongs to the original conversation.
+                (with-current-buffer data-buf
+                  (write-region
+                   (point-min) (point-max)
+                   (mevedel-session-artifacts-segment-path directory 2)
+                   nil 'silent)
+                  (setf (mevedel-session-current-segment session) 3)
+                  (let ((inhibit-read-only t))
+                    (erase-buffer)
+                    (insert (mevedel-session-artifacts-summary-block "again"))))
+                (mevedel-view--full-rerender)
+                (should (string-search "Original prompt with a second line"
+                                       (mevedel-view--sticky-prompt-line)))
+                (with-current-buffer data-buf
+                  (insert "*** New local prompt\n")
+                  (insert (propertize
+                           (apply #'concat (make-list 80 "answer line\n"))
+                           'gptel 'response)))
+                (mevedel-view--full-rerender)
+                (let ((header (save-excursion
+                                (goto-char (point-min))
+                                (search-forward "New local prompt")
+                                (search-backward "You\n")
+                                (point)))
+                      (answer (save-excursion
+                                (goto-char (point-min))
+                                (search-forward "answer line")
+                                (line-beginning-position))))
+                  (set-window-start nil header t)
+                  (should-not (mevedel-view--sticky-prompt-line))
+                  (set-window-start nil answer t)
+                  (should (string-search "New local prompt"
+                                         (mevedel-view--sticky-prompt-line))))
+                ;; An empty fresh segment is a /clear boundary, even if
+                ;; it is subsequently compacted into a new live segment.
+                (with-temp-buffer
+                  (write-region (point-min) (point-max)
+                                (mevedel-session-artifacts-segment-path
+                                 directory 2) nil 'silent))
+                (with-current-buffer data-buf
+                  (write-region
+                   (point-min) (point-max)
+                   (mevedel-session-artifacts-segment-path directory 3)
+                   nil 'silent)
+                  (setf (mevedel-session-current-segment session) 4))
+                (mevedel-view--full-rerender)
+                (should-not (mevedel-view--continuation-prompt))
+                (with-current-buffer data-buf
+                  (let ((inhibit-read-only t))
+                    (erase-buffer)
+                    (insert "*** Fresh after clear\n")))
+                (mevedel-view--full-rerender)
+                (should-not (mevedel-view--sticky-prompt-line))))))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-view--pinned-prompt-button ()
   ,test

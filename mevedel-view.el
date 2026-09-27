@@ -95,7 +95,20 @@
 (declare-function mevedel-session-publication-status
                   "mevedel-session-publication" (session))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-collect-prompts
+                  "mevedel-session-artifacts" (buffer))
+(declare-function mevedel-session-artifacts-read-segment
+                  "mevedel-session-artifacts" (session number))
+(declare-function mevedel-session-artifacts-segment-summary-bounds
+                  "mevedel-session-artifacts" ())
+(autoload 'mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-segment-summary-bounds
+  "mevedel-session-artifacts")
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
@@ -106,6 +119,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -223,6 +237,8 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view--non-history-view-position-p
                   "mevedel-view-render" (pos))
+(declare-function mevedel-view--prompt-preview
+                  "mevedel-view-render" (text shared-display))
 (declare-function mevedel-view--refresh-tool-row
                   "mevedel-view-render" (data-buffer tool-use-id))
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
@@ -236,10 +252,14 @@
 (declare-function mevedel-view-render-toggle-user-input
                   "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
+(declare-function mevedel-view--user-turn-text
+                  "mevedel-view-render" (segments data-buf))
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-historical-segment-p
                   "mevedel-view-segments" ())
+(declare-function mevedel-view-segments-jump-to-prompt
+                  "mevedel-view-segments" (segment source-pos &optional window))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--ensure-request-progress
@@ -555,6 +575,9 @@ preview overlays render against this marker.")
 
 (defvar-local mevedel-view--status-strip-cache-value nil
   "Cached header-line status strip for the current view buffer.")
+
+(defvar-local mevedel-view--continuation-prompt-cache nil
+  "Cached (SESSION SEGMENT SUMMARY-P PROMPT) for the live segment.")
 
 (defconst mevedel-view--status-task-collapse-key '(status tasks)
   "Stable fragment collapse key for the task status block.")
@@ -1002,6 +1025,96 @@ Kills the associated view buffer."
        `(space :align-to (- right (,(string-pixel-width rhs))))
      `(space :align-to (- right ,(string-width rhs))))))
 
+(defun mevedel-view--archived-prompt (session segment)
+  "Return the last source-backed prompt in SESSION's archived SEGMENT.
+An unreadable or stale segment cannot supply a clickable prompt."
+  (let ((archive (condition-case nil
+                     (mevedel-session-artifacts-read-segment session segment)
+                   (error nil)))
+        result)
+    (when archive
+      (unwind-protect
+          (with-current-buffer archive
+            (let ((recorded (cdr (assoc segment
+                                        (mevedel-session-prompt-index session))))
+                  (actual (mevedel-session-artifacts-collect-prompts archive)))
+              (dolist (entry recorded)
+                (when-let* ((position (plist-get entry :pos))
+                            ((integerp position))
+                            (source-prompt
+                             (cl-find position actual
+                                      :key (lambda (prompt)
+                                             (plist-get prompt :pos))))
+                            ((equal (plist-get entry :preview)
+                                    (plist-get source-prompt :preview))))
+                  (let* ((source (cl-find-if
+                                  (lambda (span)
+                                    (and (eq (car span) 'user)
+                                         (<= position (caddr span))))
+                                  (mevedel-transcript-segments
+                                   (point-min) (point-max))))
+                         (text (and source
+                                    (mevedel-view--user-turn-text
+                                     (list source) archive)))
+                         (preview (and text
+                                       (mevedel-view--prompt-preview text nil))))
+                    (when preview
+                      (setq result (list :segment segment :pos position
+                                         :preview preview))))))
+              (when result
+                result)))
+        (kill-buffer archive)))
+    result))
+
+(defun mevedel-view--refresh-continuation-prompt (data-buffer historical-p)
+  "Cache the prompt governing DATA-BUFFER's compacted live segment.
+Resolve archives only on source projection, never during header redisplay."
+  (unless historical-p
+    (let* ((session (and (buffer-live-p data-buffer)
+                         (buffer-local-value 'mevedel--session data-buffer)))
+           (segment (and session (mevedel-session-current-segment session)))
+           (summary-p (and session (with-current-buffer data-buffer
+                                     (mevedel-session-artifacts-segment-summary-bounds))))
+           (cached mevedel-view--continuation-prompt-cache))
+      (unless (and (eq session (nth 0 cached))
+                   (eql segment (nth 1 cached))
+                   (eq (and summary-p t) (nth 2 cached))
+                   cached)
+        (let ((prompt
+               (when (and summary-p (integerp segment) (> segment 1))
+                 (catch 'found
+                   (cl-loop for previous downfrom (1- segment) to 1 do
+                            (let ((indexed
+                                   (cdr (assoc previous
+                                               (mevedel-session-prompt-index
+                                                session)))))
+                              (when indexed
+                                ;; An indexed but invalid origin is not a
+                                ;; reason to jump past it to an older prompt.
+                                (throw 'found
+                                       (mevedel-view--archived-prompt
+                                        session previous))))
+                            ;; A fresh segment has no summary.  Do not cross
+                            ;; /clear even after later compactions.
+                            (let ((archive
+                                   (condition-case nil
+                                       (mevedel-session-artifacts-read-segment
+                                        session previous)
+                                     (error nil))))
+                              (unless archive (throw 'found nil))
+                              (unwind-protect
+                                  (unless (with-current-buffer archive
+                                            (mevedel-session-artifacts-segment-summary-bounds))
+                                    (throw 'found nil))
+                                (kill-buffer archive))))))))
+          (setq mevedel-view--continuation-prompt-cache
+                (list session segment (and summary-p t) prompt)))))))
+
+(defun mevedel-view--continuation-prompt ()
+  "Return this live view's resolved archived prompt, if any."
+  (unless (mevedel-view-historical-segment-p)
+    (nth 3 mevedel-view--continuation-prompt-cache)))
+
 (defun mevedel-view--pinned-prompt (window)
   "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
 Metadata lives on rendered prompt headers, not in the model transcript."
@@ -1053,15 +1166,19 @@ Metadata lives on rendered prompt headers, not in the model transcript."
           (goto-char position)
           (recenter 0))))))
 
-(defun mevedel-view--pinned-prompt-button (preview position width)
-  "Return a clickable PREVIEW at POSITION fitted to WIDTH columns."
+(defun mevedel-view--pinned-prompt-button (preview position width &optional archive)
+  "Return a clickable PREVIEW at POSITION fitted to WIDTH columns.
+When ARCHIVE is non-nil, POSITION is a source position in that segment."
   (if (<= width 0)
       ""
     (let ((map (make-sparse-keymap)))
       (define-key map [header-line mouse-1]
                   (lambda (event)
                     (interactive "e")
-                    (mevedel-view--jump-to-pinned-prompt position event)))
+                    (if archive
+                        (mevedel-view-segments-jump-to-prompt
+                         archive position (posn-window (event-start event)))
+                      (mevedel-view--jump-to-pinned-prompt position event))))
       (propertize
        (replace-regexp-in-string
         "%" "%%"
@@ -1072,12 +1189,23 @@ Metadata lives on rendered prompt headers, not in the model transcript."
 
 (defun mevedel-view--sticky-prompt-line ()
   "Return the current window's pinned prompt on its own header line."
-  (when-let* ((pinned (mevedel-view--pinned-prompt (selected-window))))
-    (let* ((width (max 0 (1- (window-body-width (selected-window)))))
-           (label (if (> width 8) "Prompt  " "")))
-      (concat (propertize label 'face 'shadow)
-              (mevedel-view--pinned-prompt-button
-               (cdr pinned) (car pinned) (- width (string-width label)))))))
+  (let* ((window (selected-window))
+         (local (mevedel-view--pinned-prompt window))
+         (archived (and (not local)
+                        (not (get-text-property
+                              (window-start window)
+                              'mevedel-view-prompt-preview))
+                        (mevedel-view--continuation-prompt)))
+         (pinned (or local archived)))
+    (when pinned
+      (let* ((width (max 0 (1- (window-body-width window))))
+             (label (if (> width 8) "Prompt  " "")))
+        (concat (propertize label 'face 'shadow)
+                (mevedel-view--pinned-prompt-button
+                 (if local (cdr pinned) (plist-get pinned :preview))
+                 (if local (car pinned) (plist-get pinned :pos))
+                 (- width (string-width label))
+                 (and archived (plist-get pinned :segment))))))))
 
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."

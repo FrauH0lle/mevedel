@@ -648,6 +648,12 @@ space from the operational controls. Clicking it reveals the original prompt,
 expanding a folded turn or input when necessary. It is view-only:
 synthetic/model-only context is excluded, and archived segments use only their
 own visible turns.
+In the live segment after compaction, the row can also show the originating
+prompt from an earlier segment when no retained prompt governs the window.
+Clicking that preview opens the archived segment read-only at the original
+prompt; `[Latest]` returns to the live transcript. Fresh segments started by
+`/clear` do not carry a prompt across the boundary. The archived prompt is
+view-only: it is not inserted into the compacted model context.
 The session name is shortened or omitted in tight layouts so a long name
 cannot hide the operational controls.
 The workspace root uses Emacs path abbreviation normally, truncates to
