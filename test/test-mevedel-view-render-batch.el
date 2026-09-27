@@ -25,13 +25,21 @@
        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
        ,@body)))
 
+(defun mevedel-batch-test--start-projection (view)
+  "Start a settled batch and advance VIEW through source preparation."
+  (mevedel-view-render-batched-full)
+  (cl-loop repeat 100 while (and mevedel-view-render--batch
+                                 (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
+           do (mevedel-view-render--batch-step view mevedel-view-render--batch))
+  (should (eq 'project (plist-get mevedel-view-render--batch :phase))))
+
 (mevedel-deftest mevedel-view-render-batched-full ()
   ,test
   (test)
   :doc "projects current history first and converges to synchronous output"
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (should mevedel-view-render--batch)
       (should (string-search "Response 5" (buffer-string)))
       (should (string-search "Loading conversation turn" (buffer-string)))
@@ -40,7 +48,7 @@
       (should (equal expected (buffer-substring-no-properties (point-min) (point-max))))))
   :doc "new draft edits and selection survive every callback"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (goto-char (point-max)) (insert "\nnew typing")
     (let ((offset (- (point) (mevedel-view--input-start))))
       (set-mark (- (point) 6)) (setq mark-active t)
@@ -58,7 +66,7 @@
       (set-mark (- (point) 11)) (setq mark-active t)
       (let ((start (line-beginning-position)))
         (set-window-start (selected-window) start t))
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (should (equal "target text" (buffer-substring-no-properties (region-beginning) (region-end))))
         (should (save-excursion (goto-char (window-start)) (looking-at "Response 2")))
@@ -73,7 +81,7 @@
       (set-window-start nil (line-beginning-position) t)
       (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
                                       (selected-window)))))
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (should mevedel-view-render--batch)
       (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
                                       (selected-window)))))
@@ -91,7 +99,7 @@
       (search-forward "Response 0 with target text")
       (set-window-start nil (line-beginning-position) t)
       (search-forward "Response 4 with target text")
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (should mevedel-view-render--batch)
       (goto-char (point-min))
       (search-forward "Response 4 with target text")
@@ -112,7 +120,7 @@
       (goto-char (point-min))
       (search-forward "Response 0 with target text")
       (set-window-start nil (line-beginning-position) t)
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (let ((entry (cl-find-if
                     (lambda (entry)
                       (and (eq 'assistant (plist-get (car entry) :role))
@@ -146,7 +154,7 @@
         (set-window-start left (line-beginning-position) t)
         (search-forward "Response 4 with target text")
         (set-window-start right (line-beginning-position) t)
-        (mevedel-view-render-batched-full)
+        (mevedel-batch-test--start-projection view-buf)
         (should (equal "Prompt 1" (cdr (mevedel-view--pinned-prompt left))))
         (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt right))))
         (should (string-search "Prompt 1"
@@ -171,7 +179,7 @@
   :doc "a synchronous full projection retires the old batch"
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (let ((old mevedel-view-render--batch))
         (mevedel-view--full-rerender)
         (should-not mevedel-view-render--batch)
@@ -179,7 +187,7 @@
         (should (equal expected (buffer-substring-no-properties (point-min) (point-max)))))))
   :doc "other writers see a complete projection and retain newer draft edits"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (goto-char (point-max)) (insert " new edit")
     (mevedel-view-render-mutate
      'test-reader
@@ -216,9 +224,131 @@
                                              (plist-get (car turns) :start)
                                              (plist-get (car turns) :end))))))))
 
+(mevedel-deftest mevedel-view--group-into-turns/slices ()
+  ,test
+  (test)
+  :doc "a slice boundary preserves lookahead and assistant grouping"
+  (mevedel-view-test--with-buffers
+    (dolist (entry '(("*** Prompt\n" . nil)
+                     ("First response\n" . response)
+                     ("\n" . nil)
+                     ("Second response\n" . response)
+                     ("*** Next prompt\n" . nil)
+                     ("Final response\n" . response)))
+      (mevedel-view-test--insert-data data-buf (car entry) (cdr entry)))
+    (let* ((segments (with-current-buffer data-buf
+                       (mevedel-transcript-segments (point-min) (point-max))))
+           (expected (mevedel-view--group-into-turns segments data-buf))
+           (state nil)
+           (rest segments))
+      (while (cdr rest)
+        (setq state (mevedel-view--group-into-turns
+                     (list (car rest)) data-buf state (cadr rest))
+              rest (cdr rest)))
+      (should (equal expected (mevedel-view--group-into-turns rest data-buf state))))))
+
+(mevedel-deftest mevedel-view-render-batched-full/preparation ()
+  ,test
+  (test)
+  :doc "a scheduled rebuild retains the old display until canonical preparation finishes"
+  (mevedel-batch-test--with-history
+    (let ((before (buffer-substring-no-properties (point-min) (point-max))))
+      (mevedel-view-render-batched-full)
+      (should mevedel-view-render--batch)
+      (should (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
+      (should (equal before (buffer-substring-no-properties (point-min) (point-max))))
+      (cl-loop repeat 100 while (and mevedel-view-render--batch
+                                     (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
+               do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should (eq 'project (plist-get mevedel-view-render--batch :phase)))
+      (cl-loop repeat 100 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should-not mevedel-view-render--batch)
+      (should (equal before (buffer-substring-no-properties (point-min) (point-max)))))))
+
+(mevedel-deftest mevedel-view-render-batched-full/fontify-preparation ()
+  ,test
+  (test)
+  :doc "whole-response Markdown work yields before publication and releases its job"
+  (mevedel-batch-test--with-history
+    (let ((before (buffer-substring-no-properties (point-min) (point-max)))
+          (started 0) (steps 0) (cancelled 0))
+      (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+                 (lambda () 'markdown-ts-mode))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-start)
+                 (lambda (text) (cl-incf started) (cons text 0)))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-step)
+                 (lambda (job _size)
+                   (cl-incf steps)
+                   (setcdr job (1+ (cdr job)))
+                   (>= (cdr job) 2)))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-result)
+                 (lambda (job)
+                   (propertize (car job) 'font-lock-face 'bold)))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-cancel)
+                 (lambda (_job) (cl-incf cancelled))))
+        (mevedel-view-render-batched-full)
+        (cl-loop repeat 100 while (and mevedel-view-render--batch
+                                       (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
+                 do (progn
+                      (should (equal before (buffer-substring-no-properties (point-min) (point-max)))))
+                      (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)))
+        (should (eq 'project (plist-get mevedel-view-render--batch :phase)))
+        (should (> started 0))
+        (should (>= steps (* 2 started)))
+        (should (= started cancelled))
+        (should (> (hash-table-count (plist-get mevedel-view-render--batch :fontified)) 0))
+        (cl-loop repeat 100 while mevedel-view-render--batch do
+          (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+        (should (equal before (buffer-substring-no-properties (point-min) (point-max))))))
+  :doc "a source edit cancels an unfinished private Markdown job"
+  (mevedel-batch-test--with-history
+    (let (cancelled)
+      (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+                 (lambda () 'markdown-ts-mode))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-start)
+                 (lambda (text) (list text)))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-step)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-view--markdown-fontify-job-cancel)
+                 (lambda (job) (setq cancelled job))))
+        (mevedel-view-render-batched-full)
+        (cl-loop repeat 100 until (plist-get mevedel-view-render--batch :fontify)
+                 do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+        (should (plist-get mevedel-view-render--batch :fontify))
+        (with-current-buffer data-buf
+          (goto-char (point-max)) (insert "edited"))
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
+        (should cancelled)
+        (should (eq 'prepare (plist-get mevedel-view-render--batch :phase)))))))
+
+(mevedel-deftest mevedel-view-render-batched-full/tool-preparation ()
+  ,test
+  (test)
+  :doc "scheduled projection prepares source-backed tool entries before rendering"
+  (mevedel-batch-test--with-history
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Unknown\" :args nil)\nTool result.\n" '(tool . "one"))
+    (mevedel-view--full-rerender)
+    (let ((before (buffer-substring-no-properties (point-min) (point-max)))
+          (calls 0)
+          (entry (symbol-function 'mevedel-view--tool-segment-entry)))
+      (cl-letf (((symbol-function 'mevedel-view--tool-segment-entry)
+                 (lambda (&rest args)
+                   (cl-incf calls)
+                   (apply entry args))))
+        (mevedel-batch-test--start-projection view-buf)
+        (should (> calls 0))
+        (should (> (hash-table-count
+                    (plist-get mevedel-view-render--batch :tool-cache)) 0))
+        (cl-loop repeat 100 while mevedel-view-render--batch do
+          (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+        (should (equal before (buffer-substring-no-properties
+                               (point-min) (point-max))))))))
+
 (mevedel-deftest mevedel-view-render--batch-turn ()
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let* ((job mevedel-view-render--batch)
            (entry (car (plist-get job :pending))))
       (mevedel-view-render--batch-turn job entry)
@@ -231,7 +361,7 @@
   (test)
   :doc "one callback consumes exactly one pending turn"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let* ((job mevedel-view-render--batch)
            (count (length (plist-get job :pending))))
       (mevedel-view-render--batch-step view-buf job)
@@ -239,9 +369,9 @@
       (should (= (length (plist-get job :pending)) (1- count)))))
   :doc "obsolete callbacks cannot consume a newer job"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let ((old mevedel-view-render--batch))
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (let ((current mevedel-view-render--batch)
             (before (buffer-string)))
         (mevedel-view-render--batch-step view-buf old)
@@ -249,7 +379,7 @@
         (should (equal before (buffer-string))))))
   :doc "source changes retire the plan and eventually project current text"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let ((old mevedel-view-render--batch))
       (with-current-buffer data-buf
         (goto-char (point-max)) (insert (propertize "Changed source.\n" 'gptel 'response)))
@@ -263,7 +393,7 @@
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max)))
           (render (symbol-function 'mevedel-view--render-turn)) failed)
-      (mevedel-view-render-batched-full)
+      (mevedel-batch-test--start-projection view-buf)
       (cl-letf (((symbol-function 'mevedel-view--render-turn)
                  (lambda (&rest args)
                    (if failed (apply render args)
@@ -279,7 +409,7 @@
   (test)
   :doc "cancellation releases timer and pending source markers"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let* ((job mevedel-view-render--batch)
            (timer (plist-get job :timer))
            (start (nth 1 (car (plist-get job :pending)))))
@@ -290,7 +420,7 @@
       (should-not (memq timer timer-list))))
   :doc "view death cancels pending callbacks"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let ((timer (plist-get mevedel-view-render--batch :timer)))
       (kill-buffer view-buf)
       (should-not (memq timer timer-list)))))
@@ -300,7 +430,7 @@
   (test)
   :doc "focus loss pauses callbacks; focus recovery arms exactly one timer"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let* ((job mevedel-view-render--batch)
            (pending (length (plist-get job :pending))))
       (cl-letf (((symbol-function 'mevedel-view--unattended-p) (lambda (&rest _) t)))
@@ -320,7 +450,7 @@
       (should (equal "> draft\nsecond line while paused" (mevedel-view--input-text)))))
   :doc "transport contention postpones a turn without consuming its source"
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let* ((job mevedel-view-render--batch)
            (pending (length (plist-get job :pending))))
       (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&rest _) t)))
@@ -366,7 +496,9 @@
                  (lambda (current _entry)
                    (setq job current)
                    (error "Injected initial failure"))))
-        (should-error (mevedel-view-render-batched-full)))
+        (mevedel-view-render-batched-full)
+        (cl-loop repeat 100 while mevedel-view-render--batch do
+          (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)))
       (should job)
       (should-not mevedel-view-render--batch)
       (dolist (entry (plist-get job :pending))
@@ -395,7 +527,7 @@
       (mevedel-view-toggle-section)
       (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
         (goto-char (point-max))
-        (mevedel-view-render-batched-full)
+        (mevedel-batch-test--start-projection view-buf)
         (cl-loop repeat 30 while mevedel-view-render--batch do
           (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
         (should-not mevedel-view-render--batch)
@@ -404,7 +536,7 @@
 (mevedel-deftest mevedel-view-render--batch-step/reentry
   (:doc "a timer queued inside a writer consumes its entry only after ownership transfers")
   (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
+    (mevedel-batch-test--start-projection view-buf)
     (let* ((job mevedel-view-render--batch)
            (count (length (plist-get job :pending))))
       (mevedel-view-render-mutate
@@ -428,6 +560,9 @@
             (should (> (length (mevedel-view-render--priority-turns turns))
                        (length (mevedel-view-render--priority-turns turns t)))))
           (mevedel-view-render-batched-full)))
+      (cl-loop repeat 100 while (and mevedel-view-render--batch
+                                     (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
+               do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should (string-search "Response 1" (buffer-string)))
       (should (string-search "Prompt 2" (buffer-string)))
       (let ((next (car (car (plist-get mevedel-view-render--batch :pending)))))

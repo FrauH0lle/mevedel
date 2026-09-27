@@ -96,8 +96,10 @@ execution or the parent view. If a refresh fails, the last good projection
 remains visible, mevedel emits a warning, and a later event or terminal
 settlement may retry.
 
-Opening a transcript performs the existing full render. Subsequent live
-events use the main incremental renderer, except that retained-agent metadata
+Opening a live transcript performs the synchronous full render needed to attach
+the stream tail. A settled retained or saved transcript opens with scheduled
+canonical projection, keeping the previous display until preparation completes.
+Subsequent live events use the main incremental renderer, except that retained-agent metadata
 replacements fully rerender because delete-and-insert invalidates their source
 endpoints. Missing or stale source anchors use the same full-rerender
 correctness path rather than introducing a second recovery strategy.
@@ -226,8 +228,15 @@ Progress spacing also reconciles when the preceding content changes. Managed
 zone boundaries advance past history inserted immediately before them, keeping
 status, interaction, and progress overlays outside the transcript.
 
-Scheduled full refreshes of settled history prepare the canonical source once,
-render the turns needed to restore point, selection, and window anchors and
+Scheduled full refreshes of settled history leave the current projection in
+place while callbacks restore properties, scan the full canonical source with
+retained parser context, group and annotate turns, and prepare response Markdown
+and tool entries. A complete plan is checked against the source's modification
+tick before publication; changing the source cancels and restarts the job.
+Markdown fontification sees each whole response but yields between line-aligned
+regions. Tool entries are prepared in small groups; the job owns and releases
+their private buffers and caches. Once ready, the refresh
+renders the turns needed to restore point, selection, and window anchors and
 all chat prompt turns immediately (so moving onto pending responses still has
 an accurate prompt and click target), then replace other visible turns and
 offscreen turn placeholders one per timer

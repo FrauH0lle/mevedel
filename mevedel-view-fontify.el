@@ -116,6 +116,21 @@ content is swapped.")
   "Dynamically bound buffers owned by active Markdown fontification calls.
 This spans mode setup as well as fontification, across all view buffers.")
 
+(defun mevedel-view--markdown-fontify-setup (buffer mode)
+  "Set up BUFFER to fontify Markdown using MODE."
+  (with-current-buffer buffer
+    (mevedel-view--with-quiet-mode-setup
+      ;; Table and code-block context modes only add commands and keys; a
+      ;; buffer nobody visits needs neither, and the latter clones regions.
+      (let ((markdown-ts-enable-table-mode nil)
+            (markdown-ts-enable-code-block-context-mode nil))
+        (funcall mode)))
+    (setq-local markdown-ts-hide-markup mevedel-view-hide-markdown-markup)
+    ;; Some modes install defaults after another mode has locked in stale ones.
+    (setq font-lock-set-defaults nil)
+    (setq-local jit-lock-stealth-time nil)
+    (buffer-disable-undo)))
+
 (defun mevedel-view--markdown-fontify-target ()
   "Return a Markdown fontification buffer, or nil when no mode is available.
 Ordinary calls reuse one buffer.  Nested calls receive a fresh buffer that
@@ -131,22 +146,7 @@ Ordinary calls reuse one buffer.  Nested calls receive a fresh buffer that
         (unwind-protect
             (let ((mevedel-view--markdown-fontify-active-buffers
                    (cons buffer mevedel-view--markdown-fontify-active-buffers)))
-              (with-current-buffer buffer
-                (mevedel-view--with-quiet-mode-setup
-                  ;; Table and code-block context modes only add commands and
-                  ;; keys; a buffer nobody visits needs neither, and the
-                  ;; latter clones regions into indirect buffers.
-                  (let ((markdown-ts-enable-table-mode nil)
-                        (markdown-ts-enable-code-block-context-mode nil))
-                    (funcall mode)))
-                ;; Font-lock reads this when hiding markup.
-                (setq-local markdown-ts-hide-markup
-                            mevedel-view-hide-markdown-markup)
-                ;; A mode may install defaults after outline mode locked in
-                ;; the parent's.  Let font-lock pick up the real defaults.
-                (setq font-lock-set-defaults nil)
-                (setq-local jit-lock-stealth-time nil)
-                (buffer-disable-undo))
+              (mevedel-view--markdown-fontify-setup buffer mode)
               (setq initialized t)
               buffer)
           (unless initialized
@@ -163,6 +163,118 @@ An active owner finishes reading it before killing it on return."
     (when (and (buffer-live-p buffer)
                (not (memq buffer mevedel-view--markdown-fontify-active-buffers)))
       (kill-buffer buffer))))
+
+
+;;
+;;; Incremental Markdown fontification
+
+(cl-defstruct (mevedel-view--markdown-fontify-job
+               (:constructor mevedel-view--markdown-fontify-job--create))
+  "A whole-response Markdown buffer fontified in bounded regions."
+  text buffer next output done cancelled)
+
+(defun mevedel-view--markdown-fontify-job-start (text)
+  "Start fontifying complete Markdown response TEXT in a private buffer.
+The text, including a final newline sentinel, is inserted once.  A private
+buffer keeps its syntax context intact between steps and cannot be overwritten
+by unrelated synchronous Markdown rendering.  If no mode is available or
+setup fails, the job completes with the original TEXT."
+  (let ((job (mevedel-view--markdown-fontify-job--create :text text))
+        buffer)
+    (condition-case nil
+        (if-let* ((mode (mevedel-view--markdown-fontify-mode)))
+            (progn
+              (setq buffer (generate-new-buffer " *mevedel-markdown-fontify-job*" t))
+              (let (prepared)
+                (unwind-protect
+                    (let ((mevedel-view--markdown-fontify-active-buffers
+                           (cons buffer mevedel-view--markdown-fontify-active-buffers)))
+                      (mevedel-view--markdown-fontify-setup buffer mode)
+                      (with-current-buffer buffer
+                        (insert text "\n"))
+                      (setf (mevedel-view--markdown-fontify-job-buffer job) buffer
+                            (mevedel-view--markdown-fontify-job-next job) 1)
+                      (setq prepared t))
+                  (unless prepared
+                    (when (buffer-live-p buffer) (kill-buffer buffer))))))
+          (setf (mevedel-view--markdown-fontify-job-output job) text
+                (mevedel-view--markdown-fontify-job-done job) t))
+      (error
+       (when (buffer-live-p buffer) (kill-buffer buffer))
+       (setf (mevedel-view--markdown-fontify-job-output job) text
+             (mevedel-view--markdown-fontify-job-done job) t)))
+    job))
+
+(defun mevedel-view--markdown-fontify-job-cancel (job)
+  "Cancel JOB and release its private fontification buffer.
+It is safe to cancel a completed or already cancelled job."
+  (when-let* ((buffer (mevedel-view--markdown-fontify-job-buffer job)))
+    (when (buffer-live-p buffer) (kill-buffer buffer)))
+  (setf (mevedel-view--markdown-fontify-job-buffer job) nil
+        (mevedel-view--markdown-fontify-job-text job) nil
+        (mevedel-view--markdown-fontify-job-output job) nil
+        (mevedel-view--markdown-fontify-job-cancelled job) t))
+
+(defun mevedel-view--markdown-fontify-job-step (job chunk-size)
+  "Fontify at most CHUNK-SIZE characters plus one line in JOB.
+Return non-nil when the complete response is ready.  A single long line
+remains indivisible.  Syntax parsing always sees the complete response;
+only the font-lock region is divided.  On font-lock failure return the
+original text, as `mevedel-view--fontify-as' does.  JOB must not be cancelled."
+  (when (mevedel-view--markdown-fontify-job-cancelled job)
+    (error "Markdown fontification job was cancelled"))
+  (unless (and (integerp chunk-size) (> chunk-size 0))
+    (error "Invalid Markdown fontification chunk size: %S" chunk-size))
+  (unless (mevedel-view--markdown-fontify-job-done job)
+    (let ((buffer (mevedel-view--markdown-fontify-job-buffer job))
+          returned)
+      (unwind-protect
+          (progn
+            (condition-case nil
+                (with-current-buffer buffer
+                  (let* ((start (mevedel-view--markdown-fontify-job-next job))
+                         ;; Align to the end of the line containing the target,
+                         ;; including its newline when present.
+                         (end (save-excursion
+                                (goto-char (min (point-max) (+ start chunk-size)))
+                                (min (point-max) (1+ (line-end-position))))))
+                    (font-lock-ensure start end)
+                    (setf (mevedel-view--markdown-fontify-job-next job) end)
+                    (when (= end (point-max))
+                      (setf (mevedel-view--markdown-fontify-job-done job) t))))
+              (error
+               (setf (mevedel-view--markdown-fontify-job-output job)
+                     (mevedel-view--markdown-fontify-job-text job)
+                     (mevedel-view--markdown-fontify-job-done job) t)))
+            (when (mevedel-view--markdown-fontify-job-output job)
+              (when (buffer-live-p buffer) (kill-buffer buffer))
+              (setf (mevedel-view--markdown-fontify-job-buffer job) nil
+                    (mevedel-view--markdown-fontify-job-text job) nil))
+            (setq returned t))
+        (unless returned
+          (mevedel-view--markdown-fontify-job-cancel job)))))
+  (mevedel-view--markdown-fontify-job-done job))
+
+(defun mevedel-view--markdown-fontify-job-result (job)
+  "Return JOB's complete propertized text, or nil if still pending.
+Copying the completed response is deferred until this call; it is not part of
+the bounded fontification step.  The result remains available until
+`mevedel-view--markdown-fontify-job-cancel'."
+  (when (mevedel-view--markdown-fontify-job-done job)
+    (when-let* ((buffer (mevedel-view--markdown-fontify-job-buffer job)))
+      (unwind-protect
+          (setf (mevedel-view--markdown-fontify-job-output job)
+                (condition-case nil
+                    (if (buffer-live-p buffer)
+                        (mevedel-view--promote-face-to-font-lock-face
+                         (with-current-buffer buffer
+                           (buffer-substring (point-min) (1- (point-max)))))
+                      (mevedel-view--markdown-fontify-job-text job))
+                  (error (mevedel-view--markdown-fontify-job-text job))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (setf (mevedel-view--markdown-fontify-job-buffer job) nil
+              (mevedel-view--markdown-fontify-job-text job) nil)))
+    (mevedel-view--markdown-fontify-job-output job)))
 
 
 ;;

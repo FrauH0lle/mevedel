@@ -28,6 +28,41 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
   (font-lock-set-defaults)
   (setq-local font-lock-defaults '((("late" . font-lock-keyword-face)))))
 
+(defun mevedel-view-test--context-match (limit)
+  "Match a fence, list or table continuation before LIMIT.
+The match depends on earlier lines in the same complete buffer."
+  (catch 'found
+    (while (re-search-forward "^\\(.+\\)$" limit t)
+      (let* ((start (match-beginning 0))
+             (line (match-string-no-properties 0))
+             (context
+              (save-match-data
+                (save-excursion
+                  (goto-char start)
+                  (forward-line -1)
+                  (buffer-substring-no-properties
+                   (line-beginning-position) (line-end-position))))))
+        (when (or (and (string= line "fenced body")
+                       (string-prefix-p "```" context))
+                  (and (string= line "  list continuation")
+                       (string-prefix-p "- item" context))
+                  (and (string= line "| table continuation |")
+                       (string-prefix-p "| ---" context)))
+          (throw 'found t))))))
+
+(define-derived-mode mevedel-view-test-context-mode fundamental-mode "ContextFL"
+  "Line fontifier that reads Markdown-like context across region boundaries."
+  (setq-local font-lock-defaults
+              '(((mevedel-view-test--context-match . font-lock-keyword-face)))))
+
+(defun mevedel-view-test--same-font-lock-faces (actual expected)
+  "Assert ACTUAL and EXPECTED have identical text and font-lock faces."
+  (should (equal (substring-no-properties actual)
+                 (substring-no-properties expected)))
+  (dotimes (index (length expected))
+    (should (equal (get-text-property index 'font-lock-face actual)
+                   (get-text-property index 'font-lock-face expected)))))
+
 
 ;;
 ;;; Generic fontification
@@ -138,6 +173,172 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
 
 ;;
 ;;; Markdown fontification
+
+(mevedel-deftest mevedel-view--markdown-fontify-job-step
+  (:before-each (mevedel-view--release-markdown-fontify-buffer)
+   :after-each (mevedel-view--release-markdown-fontify-buffer))
+  ,test
+  (test)
+
+  :doc "keeps full context and matches synchronous faces across chunk boundaries"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'mevedel-view-test-context-mode)))
+    (let* ((text (concat "introduction\n```elisp\nfenced body\n```\n"
+                         "- item\n  list continuation\n"
+                         "| a | b |\n| --- | --- |\n| table continuation |\n"
+                         "last line"))
+           (expected (mevedel-view--fontify-as text 'markdown-mode))
+           (job (mevedel-view--markdown-fontify-job-start text))
+           (ensure (symbol-function 'font-lock-ensure))
+           (steps nil))
+      (unwind-protect
+          (progn
+            (should-not (mevedel-view--markdown-fontify-job-result job))
+            (cl-letf (((symbol-function 'font-lock-ensure)
+                       (lambda (start end)
+                         (push (cons start end) steps)
+                         (funcall ensure start end))))
+              (while (not (mevedel-view--markdown-fontify-job-step job 8))
+                (should-not (mevedel-view--markdown-fontify-job-result job))))
+            (should (> (length steps) 3))
+            (should (cl-every (lambda (bounds)
+                                (<= (- (cdr bounds) (car bounds)) 32))
+                              steps))
+            (mevedel-view-test--same-font-lock-faces
+             (mevedel-view--markdown-fontify-job-result job) expected)
+            (dolist (fragment '("fenced body" "list continuation"
+                                "table continuation"))
+              (should (eq 'font-lock-keyword-face
+                          (get-text-property
+                           (string-match fragment expected)
+                           'font-lock-face expected))))
+            (should (mevedel-view--markdown-fontify-job-step job 8)))
+        (mevedel-view--markdown-fontify-job-cancel job))))
+
+  :doc "interleaved synchronous render cannot overwrite a pending job"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'mevedel-view-test-late-mode)))
+    (let* ((text (mapconcat #'identity (make-list 30 "late\n") ""))
+           (job (mevedel-view--markdown-fontify-job-start text)))
+      (unwind-protect
+          (progn
+            (should-not (mevedel-view--markdown-fontify-job-step job 5))
+            (should (eq 'font-lock-keyword-face
+                        (get-text-property
+                         0 'font-lock-face
+                         (mevedel-view--fontify-as "late" 'markdown-mode))))
+            (while (not (mevedel-view--markdown-fontify-job-step job 5)))
+            (mevedel-view-test--same-font-lock-faces
+             (mevedel-view--markdown-fontify-job-result job)
+             (mevedel-view--fontify-as text 'markdown-mode)))
+        (mevedel-view--markdown-fontify-job-cancel job))))
+
+  :doc "matches the real Markdown fontifier when both grammars are installed"
+  (when (mevedel-view--markdown-fontify-mode)
+    (let* ((text (concat "# Header\n\n```elisp\n(+ 1 2)\n```\n\n"
+                         "- list\n  - nested\n\n"
+                         "| One | Two |\n| --- | --- |\n| A | B |\n"
+                         "A **bold** ending"))
+           (expected (mevedel-view--fontify-as text 'markdown-mode))
+           (job (mevedel-view--markdown-fontify-job-start text)))
+      (unwind-protect
+          (progn
+            (while (not (mevedel-view--markdown-fontify-job-step job 9)))
+            (mevedel-view-test--same-font-lock-faces
+             (mevedel-view--markdown-fontify-job-result job) expected))
+        (mevedel-view--markdown-fontify-job-cancel job))))
+
+  :doc "falls back to unchanged text if fontification raises an error"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'mevedel-view-test-late-mode)))
+    (let* ((job (mevedel-view--markdown-fontify-job-start "late\nlate"))
+           (buffer (mevedel-view--markdown-fontify-job-buffer job)))
+      (cl-letf (((symbol-function 'font-lock-ensure)
+                 (lambda (&rest _) (error "Injected fontification failure"))))
+        (should (mevedel-view--markdown-fontify-job-step job 3)))
+      (should (equal "late\nlate" (mevedel-view--markdown-fontify-job-result job)))
+      (should-not (buffer-live-p buffer))
+      (mevedel-view--markdown-fontify-job-cancel job)))
+
+  :doc "a nonlocal fontification exit cancels the job and its buffer"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'mevedel-view-test-late-mode)))
+    (let* ((job (mevedel-view--markdown-fontify-job-start "late\nlate"))
+           (buffer (mevedel-view--markdown-fontify-job-buffer job)))
+      (cl-letf (((symbol-function 'font-lock-ensure)
+                 (lambda (&rest _) (throw 'stop-fontify t))))
+        (should (catch 'stop-fontify
+                  (mevedel-view--markdown-fontify-job-step job 3))))
+      (should-not (buffer-live-p buffer))
+      (should-not (mevedel-view--markdown-fontify-job-result job))
+      (should-error (mevedel-view--markdown-fontify-job-step job 3))))
+
+  :doc "a missing Markdown mode completes immediately with original text"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () nil)))
+    (let ((job (mevedel-view--markdown-fontify-job-start "**plain**")))
+      (should (mevedel-view--markdown-fontify-job-step job 16))
+      (should (equal "**plain**" (mevedel-view--markdown-fontify-job-result job)))
+      (should-not (mevedel-view--markdown-fontify-job-buffer job))
+      (mevedel-view--markdown-fontify-job-cancel job))))
+
+(mevedel-deftest mevedel-view--markdown-fontify-job-start ()
+  ,test
+  (test)
+
+  :doc "a failed mode setup falls back and releases the private buffer"
+  (let (created)
+    (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+               (lambda () 'mevedel-view-test-context-mode))
+              ((symbol-function 'mevedel-view-test-context-mode)
+               (lambda ()
+                 (setq created (current-buffer))
+                 (error "Injected mode setup failure"))))
+      (let ((job (mevedel-view--markdown-fontify-job-start "**plain**")))
+        (should (mevedel-view--markdown-fontify-job-step job 8))
+        (should (equal "**plain**" (mevedel-view--markdown-fontify-job-result job)))
+        (mevedel-view--markdown-fontify-job-cancel job)))
+    (should-not (buffer-live-p created)))
+
+  :doc "a nonlocal setup exit also kills its private buffer"
+  (let (created)
+    (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+               (lambda () 'mevedel-view-test-context-mode))
+              ((symbol-function 'mevedel-view-test-context-mode)
+               (lambda ()
+                 (setq created (current-buffer))
+                 (throw 'stop-fontify t))))
+      (should (catch 'stop-fontify
+                (mevedel-view--markdown-fontify-job-start "text"))))
+    (should-not (buffer-live-p created))))
+
+(mevedel-deftest mevedel-view--markdown-fontify-job-cancel ()
+  ,test
+  (test)
+
+  :doc "cancellation midway releases the buffer and never returns partial text"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'mevedel-view-test-late-mode)))
+    (let* ((job (mevedel-view--markdown-fontify-job-start
+                 (mapconcat #'identity (make-list 40 "late\n") "")))
+           (buffer (mevedel-view--markdown-fontify-job-buffer job)))
+      (should-not (mevedel-view--markdown-fontify-job-step job 5))
+      (mevedel-view--markdown-fontify-job-cancel job)
+      (mevedel-view--markdown-fontify-job-cancel job)
+      (should-not (buffer-live-p buffer))
+      (should-not (mevedel-view--markdown-fontify-job-result job))
+      (should-error (mevedel-view--markdown-fontify-job-step job 5))))
+
+  :doc "cancelling a completed job before extraction discards the result"
+  (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+             (lambda () 'mevedel-view-test-late-mode)))
+    (let* ((job (mevedel-view--markdown-fontify-job-start "late"))
+           (buffer (mevedel-view--markdown-fontify-job-buffer job)))
+      (should (mevedel-view--markdown-fontify-job-step job 100))
+      (should (buffer-live-p buffer))
+      (mevedel-view--markdown-fontify-job-cancel job)
+      (should-not (buffer-live-p buffer))
+      (should-not (mevedel-view--markdown-fontify-job-result job)))))
 
 (mevedel-deftest mevedel-view--markdown-fontify-mode ()
   ,test

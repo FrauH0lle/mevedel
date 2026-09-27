@@ -1,0 +1,1982 @@
+{
+  "commit": "51a2ffe4777a93272f4ee7d83437242ed8aac8c4",
+  "inputs": [
+    {
+      "label": "control",
+      "session": "2026-09-25T20-48-9f6729a8d04c",
+      "logical": "segment-0001.chat.org",
+      "physical": ".publications/generation-70de4353d65787bed911/000001.data",
+      "sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "bytes": 783101,
+      "chars": 782958,
+      "fixture": "/home/roland/Projekte/mevedel/.scratch/transcript-redraw-2026-09-27/fixtures/control.org",
+      "manifest": ".publications/generation-7f2b84d38840cf622a26/manifest.el",
+      "manifest_sha256": "94d555530ac0778b6eb003eb88587bb65ae8029a7a4a4f180b97947c83775854"
+    },
+    {
+      "label": "root",
+      "session": "2026-09-25T20-50-e6b129234a36",
+      "logical": "segment-0005.chat.org",
+      "physical": ".publications/generation-f66cf8e7d91a16effc45/000001.data",
+      "sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "bytes": 2449700,
+      "chars": 2449177,
+      "fixture": "/home/roland/Projekte/mevedel/.scratch/transcript-redraw-2026-09-27/fixtures/root.org",
+      "manifest": ".publications/generation-3fe4ada31ffc2ff17d18/manifest.el",
+      "manifest_sha256": "a089a2bb051948bf3d9f8d3537e47effd9f6a25b6542e57aef3e9902bd8ae5e1"
+    },
+    {
+      "label": "agent",
+      "session": "2026-09-25T20-50-e6b129234a36",
+      "logical": "agents/verifier--2026-09-26T08-46-02--d409da12.chat.org",
+      "physical": ".publications/generation-9d95d2d7df8d2f465079/000001.data",
+      "sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "bytes": 1841820,
+      "chars": 1841291,
+      "fixture": "/home/roland/Projekte/mevedel/.scratch/transcript-redraw-2026-09-27/fixtures/agent.org",
+      "manifest": ".publications/generation-3fe4ada31ffc2ff17d18/manifest.el",
+      "manifest_sha256": "a089a2bb051948bf3d9f8d3537e47effd9f6a25b6542e57aef3e9902bd8ae5e1"
+    }
+  ],
+  "groups": [
+    {
+      "label": "control",
+      "mode": "cold",
+      "completion_median_ms": 75.64902305603027,
+      "max_input_median_ms": 77.8493881225586,
+      "max_input_range_ms": [
+        76.57980918884277,
+        79.42914962768555
+      ],
+      "gc_median_ms": 0.0
+    },
+    {
+      "label": "control",
+      "mode": "warm",
+      "completion_median_ms": 193.46022605895996,
+      "max_input_median_ms": 13.363361358642578,
+      "max_input_range_ms": [
+        11.584043502807617,
+        14.422178268432617
+      ],
+      "gc_median_ms": 0.0
+    },
+    {
+      "label": "root",
+      "mode": "cold",
+      "completion_median_ms": 293.81775856018066,
+      "max_input_median_ms": 294.15154457092285,
+      "max_input_range_ms": [
+        268.632173538208,
+        295.2446937561035
+      ],
+      "gc_median_ms": 92.40609199999994
+    },
+    {
+      "label": "root",
+      "mode": "warm",
+      "completion_median_ms": 507.5986385345459,
+      "max_input_median_ms": 130.76424598693848,
+      "max_input_range_ms": [
+        116.12915992736816,
+        131.3188076019287
+      ],
+      "gc_median_ms": 100.04239799999992
+    },
+    {
+      "label": "agent",
+      "mode": "cold",
+      "completion_median_ms": 263.72671127319336,
+      "max_input_median_ms": 263.1723880767822,
+      "max_input_range_ms": [
+        255.87773323059082,
+        265.3765678405762
+      ],
+      "gc_median_ms": 43.02468599999998
+    },
+    {
+      "label": "agent",
+      "mode": "warm",
+      "completion_median_ms": 312.97826766967773,
+      "max_input_median_ms": 61.20610237121582,
+      "max_input_range_ms": [
+        60.40787696838379,
+        65.18197059631348
+      ],
+      "gc_median_ms": 39.33016899999997
+    }
+  ],
+  "runs": [
+    {
+      "label": "control",
+      "mode": "cold",
+      "completion_ms": 75.64902305603027,
+      "initial-return-ms": 75.62470436096191,
+      "restore-ms": 9.086847305297852,
+      "gcs": 0,
+      "gc-seconds": 0.0,
+      "input_all": {
+        "n": 142,
+        "p50": 0.13136863708496094,
+        "p95": 3.9064884185791016,
+        "maximum": 77.8493881225586,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 8,
+        "p50": 35.588741302490234,
+        "p95": 77.8493881225586,
+        "maximum": 77.8493881225586,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 8,
+        "p50": 35.588741302490234,
+        "p95": 77.8493881225586,
+        "maximum": 77.8493881225586,
+        "over50": 3,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 142,
+        "p50": 0.6098747253417969,
+        "p95": 0.9896755218505859,
+        "maximum": 1.0552406311035156,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 81,
+      "turns": 8,
+      "largest_turn_chars": 532127,
+      "history_chars": 12249,
+      "history_sha256": "672a32ca692640ab5588f88ed974d1c9447d1bf2ccfc3979e6cd4b26d1d520db",
+      "source_map_sha256": "e6e7931dfb40491bcb644aa82efc81186f8d5c73b5ac2d61e5d3bb4b9651a594",
+      "fixture_sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-cold-1/result.json",
+      "raw_sha256": "ce69cb10c23b29a71484cbf1469119333c9d0f6c9ffd73a55f9f8b7ecd3c71a9"
+    },
+    {
+      "label": "control",
+      "mode": "cold",
+      "completion_ms": 77.12793350219727,
+      "initial-return-ms": 77.12578773498535,
+      "restore-ms": 8.897542953491211,
+      "gcs": 0,
+      "gc-seconds": 0.0,
+      "input_all": {
+        "n": 142,
+        "p50": 0.15544891357421875,
+        "p95": 4.400968551635742,
+        "maximum": 79.42914962768555,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 8,
+        "p50": 36.519527435302734,
+        "p95": 79.42914962768555,
+        "maximum": 79.42914962768555,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 8,
+        "p50": 36.519527435302734,
+        "p95": 79.42914962768555,
+        "maximum": 79.42914962768555,
+        "over50": 3,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 142,
+        "p50": 0.6875991821289062,
+        "p95": 1.0004043579101562,
+        "maximum": 1.054525375366211,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 81,
+      "turns": 8,
+      "largest_turn_chars": 532127,
+      "history_chars": 12249,
+      "history_sha256": "672a32ca692640ab5588f88ed974d1c9447d1bf2ccfc3979e6cd4b26d1d520db",
+      "source_map_sha256": "e6e7931dfb40491bcb644aa82efc81186f8d5c73b5ac2d61e5d3bb4b9651a594",
+      "fixture_sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-cold-2/result.json",
+      "raw_sha256": "f1ad8320b8df29e32d7dc2da7ee8829f087d34f032c7705f91eb8bb15a15411b"
+    },
+    {
+      "label": "control",
+      "mode": "cold",
+      "completion_ms": 73.19450378417969,
+      "initial-return-ms": 73.19259643554688,
+      "restore-ms": 8.708000183105469,
+      "gcs": 0,
+      "gc-seconds": 0.0,
+      "input_all": {
+        "n": 144,
+        "p50": 0.10371208190917969,
+        "p95": 2.0999908447265625,
+        "maximum": 76.57980918884277,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 7,
+        "p50": 44.90828514099121,
+        "p95": 76.57980918884277,
+        "maximum": 76.57980918884277,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 7,
+        "p50": 44.90828514099121,
+        "p95": 76.57980918884277,
+        "maximum": 76.57980918884277,
+        "over50": 3,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 144,
+        "p50": 0.4889965057373047,
+        "p95": 0.7772445678710938,
+        "maximum": 0.9310245513916016,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 81,
+      "turns": 8,
+      "largest_turn_chars": 532127,
+      "history_chars": 12249,
+      "history_sha256": "672a32ca692640ab5588f88ed974d1c9447d1bf2ccfc3979e6cd4b26d1d520db",
+      "source_map_sha256": "e6e7931dfb40491bcb644aa82efc81186f8d5c73b5ac2d61e5d3bb4b9651a594",
+      "fixture_sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-cold-3/result.json",
+      "raw_sha256": "5150c37d8b7f853f5d2967cd366842c6bbb1f0c5aa15e9973cc9d0d2e4b6f63b"
+    },
+    {
+      "label": "control",
+      "mode": "warm",
+      "completion_ms": 193.33314895629883,
+      "initial-return-ms": 0.037670135498046875,
+      "restore-ms": 9.37962532043457,
+      "gcs": 0,
+      "gc-seconds": 0.0,
+      "input_all": {
+        "n": 142,
+        "p50": 0.14019012451171875,
+        "p95": 0.30803680419921875,
+        "maximum": 13.363361358642578,
+        "over50": 0,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 18,
+        "p50": 0.1404285430908203,
+        "p95": 13.363361358642578,
+        "maximum": 13.363361358642578,
+        "over50": 0,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 18,
+        "p50": 0.1404285430908203,
+        "p95": 13.363361358642578,
+        "maximum": 13.363361358642578,
+        "over50": 0,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 142,
+        "p50": 0.6594657897949219,
+        "p95": 0.9961128234863281,
+        "maximum": 1.0628700256347656,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 81,
+      "turns": 8,
+      "largest_turn_chars": 532127,
+      "history_chars": 12249,
+      "history_sha256": "672a32ca692640ab5588f88ed974d1c9447d1bf2ccfc3979e6cd4b26d1d520db",
+      "source_map_sha256": "e6e7931dfb40491bcb644aa82efc81186f8d5c73b5ac2d61e5d3bb4b9651a594",
+      "fixture_sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-warm-1/result.json",
+      "raw_sha256": "2dd7ce6a1270881b55a9b3df9c917b2502045b618b59e46b081f208ecc2b1666"
+    },
+    {
+      "label": "control",
+      "mode": "warm",
+      "completion_ms": 196.336030960083,
+      "initial-return-ms": 0.021696090698242188,
+      "restore-ms": 8.80575180053711,
+      "gcs": 0,
+      "gc-seconds": 0.0,
+      "input_all": {
+        "n": 141,
+        "p50": 0.1461505889892578,
+        "p95": 0.2808570861816406,
+        "maximum": 11.584043502807617,
+        "over50": 0,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 18,
+        "p50": 0.11920928955078125,
+        "p95": 11.584043502807617,
+        "maximum": 11.584043502807617,
+        "over50": 0,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 18,
+        "p50": 0.11920928955078125,
+        "p95": 11.584043502807617,
+        "maximum": 11.584043502807617,
+        "over50": 0,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 141,
+        "p50": 0.6737709045410156,
+        "p95": 0.9829998016357422,
+        "maximum": 1.0478496551513672,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 81,
+      "turns": 8,
+      "largest_turn_chars": 532127,
+      "history_chars": 12249,
+      "history_sha256": "672a32ca692640ab5588f88ed974d1c9447d1bf2ccfc3979e6cd4b26d1d520db",
+      "source_map_sha256": "e6e7931dfb40491bcb644aa82efc81186f8d5c73b5ac2d61e5d3bb4b9651a594",
+      "fixture_sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-warm-2/result.json",
+      "raw_sha256": "6d249c6a72fe7f2a47c8940b5ca73fc74d9f6703029eb73ac6370c198de67e56"
+    },
+    {
+      "label": "control",
+      "mode": "warm",
+      "completion_ms": 193.46022605895996,
+      "initial-return-ms": 0.025033950805664062,
+      "restore-ms": 9.193897247314453,
+      "gcs": 0,
+      "gc-seconds": 0.0,
+      "input_all": {
+        "n": 143,
+        "p50": 0.11110305786132812,
+        "p95": 0.1647472381591797,
+        "maximum": 14.422178268432617,
+        "over50": 0,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 18,
+        "p50": 0.11110305786132812,
+        "p95": 14.422178268432617,
+        "maximum": 14.422178268432617,
+        "over50": 0,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 18,
+        "p50": 0.11110305786132812,
+        "p95": 14.422178268432617,
+        "maximum": 14.422178268432617,
+        "over50": 0,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 143,
+        "p50": 0.5702972412109375,
+        "p95": 0.8180141448974609,
+        "maximum": 0.9620189666748047,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 81,
+      "turns": 8,
+      "largest_turn_chars": 532127,
+      "history_chars": 12249,
+      "history_sha256": "672a32ca692640ab5588f88ed974d1c9447d1bf2ccfc3979e6cd4b26d1d520db",
+      "source_map_sha256": "e6e7931dfb40491bcb644aa82efc81186f8d5c73b5ac2d61e5d3bb4b9651a594",
+      "fixture_sha256": "2ef5baf9f6cb350c7cb0d7dc616450263ffc3b555060f7518a31d82da85281c5",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-warm-3/result.json",
+      "raw_sha256": "3e4ef4bd21c23f66d05b600cd9c195c96a145feda0fcf9ba7de256101475d6eb"
+    },
+    {
+      "label": "root",
+      "mode": "cold",
+      "completion_ms": 293.81775856018066,
+      "initial-return-ms": 293.81489753723145,
+      "restore-ms": 39.41607475280762,
+      "gcs": 2,
+      "gc-seconds": 0.09257633300000001,
+      "input_all": {
+        "n": 142,
+        "p50": 0.16307830810546875,
+        "p95": 220.22247314453125,
+        "maximum": 294.15154457092285,
+        "over50": 24,
+        "over100": 19
+      },
+      "input_during_work": {
+        "n": 28,
+        "p50": 146.37136459350586,
+        "p95": 283.5214138031006,
+        "maximum": 294.15154457092285,
+        "over50": 24,
+        "over100": 19
+      },
+      "input_overlapping_work": {
+        "n": 28,
+        "p50": 146.37136459350586,
+        "p95": 283.5214138031006,
+        "maximum": 294.15154457092285,
+        "over50": 24,
+        "over100": 19
+      },
+      "sender_lateness": {
+        "n": 142,
+        "p50": 0.6237030029296875,
+        "p95": 0.9474754333496094,
+        "maximum": 1.0523796081542969,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 351,
+      "turns": 17,
+      "largest_turn_chars": 1756237,
+      "history_chars": 27876,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "fixture_sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-1/result.json",
+      "raw_sha256": "60a9b3150fcafda7eea8340b741c21f96fe4c1aef358888373b359241b9d9dea"
+    },
+    {
+      "label": "root",
+      "mode": "cold",
+      "completion_ms": 295.0401306152344,
+      "initial-return-ms": 295.03679275512695,
+      "restore-ms": 39.49713706970215,
+      "gcs": 2,
+      "gc-seconds": 0.09240609199999994,
+      "input_all": {
+        "n": 141,
+        "p50": 0.156402587890625,
+        "p95": 220.58892250061035,
+        "maximum": 295.2446937561035,
+        "over50": 24,
+        "over100": 19
+      },
+      "input_during_work": {
+        "n": 28,
+        "p50": 145.61915397644043,
+        "p95": 284.59644317626953,
+        "maximum": 295.2446937561035,
+        "over50": 24,
+        "over100": 19
+      },
+      "input_overlapping_work": {
+        "n": 28,
+        "p50": 145.61915397644043,
+        "p95": 284.59644317626953,
+        "maximum": 295.2446937561035,
+        "over50": 24,
+        "over100": 19
+      },
+      "sender_lateness": {
+        "n": 141,
+        "p50": 0.6582736968994141,
+        "p95": 0.949859619140625,
+        "maximum": 1.0688304901123047,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 351,
+      "turns": 17,
+      "largest_turn_chars": 1756237,
+      "history_chars": 27876,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "fixture_sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-2/result.json",
+      "raw_sha256": "f0e74eb150b3cbbd15f107d724ec333e5f5ea60af1fd19e7effe1789afe66cfb"
+    },
+    {
+      "label": "root",
+      "mode": "cold",
+      "completion_ms": 275.1903533935547,
+      "initial-return-ms": 275.188684463501,
+      "restore-ms": 37.973642349243164,
+      "gcs": 2,
+      "gc-seconds": 0.08004999499999998,
+      "input_all": {
+        "n": 143,
+        "p50": 0.11086463928222656,
+        "p95": 194.80347633361816,
+        "maximum": 268.632173538208,
+        "over50": 21,
+        "over100": 16
+      },
+      "input_during_work": {
+        "n": 26,
+        "p50": 131.47878646850586,
+        "p95": 258.1028938293457,
+        "maximum": 268.632173538208,
+        "over50": 21,
+        "over100": 16
+      },
+      "input_overlapping_work": {
+        "n": 26,
+        "p50": 131.47878646850586,
+        "p95": 258.1028938293457,
+        "maximum": 268.632173538208,
+        "over50": 21,
+        "over100": 16
+      },
+      "sender_lateness": {
+        "n": 143,
+        "p50": 0.5538463592529297,
+        "p95": 0.7197856903076172,
+        "maximum": 1.0578632354736328,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 351,
+      "turns": 17,
+      "largest_turn_chars": 1756237,
+      "history_chars": 27876,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "fixture_sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-3/result.json",
+      "raw_sha256": "8d04a6fc128855b863658274007bf35ce925b4cc46dbd13093cb476c2332404d"
+    },
+    {
+      "label": "root",
+      "mode": "warm",
+      "completion_ms": 508.3296298980713,
+      "initial-return-ms": 0.02384185791015625,
+      "restore-ms": 38.69318962097168,
+      "gcs": 2,
+      "gc-seconds": 0.10053999800000002,
+      "input_all": {
+        "n": 141,
+        "p50": 0.15282630920410156,
+        "p95": 57.54542350769043,
+        "maximum": 130.76424598693848,
+        "over50": 10,
+        "over100": 3
+      },
+      "input_during_work": {
+        "n": 48,
+        "p50": 14.557123184204102,
+        "p95": 109.6806526184082,
+        "maximum": 130.76424598693848,
+        "over50": 10,
+        "over100": 3
+      },
+      "input_overlapping_work": {
+        "n": 48,
+        "p50": 14.557123184204102,
+        "p95": 109.6806526184082,
+        "maximum": 130.76424598693848,
+        "over50": 10,
+        "over100": 3
+      },
+      "sender_lateness": {
+        "n": 141,
+        "p50": 0.6389617919921875,
+        "p95": 0.9591579437255859,
+        "maximum": 1.0538101196289062,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 351,
+      "turns": 17,
+      "largest_turn_chars": 1756237,
+      "history_chars": 27876,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "fixture_sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-warm-1/result.json",
+      "raw_sha256": "1db5d7dbaafadc7256b435815ad023a0737c292a43449c17f8d8ed973d40137a"
+    },
+    {
+      "label": "root",
+      "mode": "warm",
+      "completion_ms": 507.5986385345459,
+      "initial-return-ms": 0.07510185241699219,
+      "restore-ms": 39.014577865600586,
+      "gcs": 2,
+      "gc-seconds": 0.10004239799999992,
+      "input_all": {
+        "n": 141,
+        "p50": 0.15854835510253906,
+        "p95": 57.02543258666992,
+        "maximum": 131.3188076019287,
+        "over50": 11,
+        "over100": 3
+      },
+      "input_during_work": {
+        "n": 48,
+        "p50": 13.15617561340332,
+        "p95": 110.20326614379883,
+        "maximum": 131.3188076019287,
+        "over50": 11,
+        "over100": 3
+      },
+      "input_overlapping_work": {
+        "n": 48,
+        "p50": 13.15617561340332,
+        "p95": 110.20326614379883,
+        "maximum": 131.3188076019287,
+        "over50": 11,
+        "over100": 3
+      },
+      "sender_lateness": {
+        "n": 141,
+        "p50": 0.6885528564453125,
+        "p95": 0.9992122650146484,
+        "maximum": 1.0547637939453125,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 351,
+      "turns": 17,
+      "largest_turn_chars": 1756237,
+      "history_chars": 27876,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "fixture_sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-warm-2/result.json",
+      "raw_sha256": "c19967ebcb19b845121ebf9d418c9f602d73562b83145ee0fc1c8afcda5c4e21"
+    },
+    {
+      "label": "root",
+      "mode": "warm",
+      "completion_ms": 478.102445602417,
+      "initial-return-ms": 0.023365020751953125,
+      "restore-ms": 38.6350154876709,
+      "gcs": 2,
+      "gc-seconds": 0.08255561100000003,
+      "input_all": {
+        "n": 142,
+        "p50": 0.11944770812988281,
+        "p95": 54.061174392700195,
+        "maximum": 116.12915992736816,
+        "over50": 9,
+        "over100": 2
+      },
+      "input_during_work": {
+        "n": 45,
+        "p50": 15.090227127075195,
+        "p95": 94.93803977966309,
+        "maximum": 116.12915992736816,
+        "over50": 9,
+        "over100": 2
+      },
+      "input_overlapping_work": {
+        "n": 45,
+        "p50": 15.090227127075195,
+        "p95": 94.93803977966309,
+        "maximum": 116.12915992736816,
+        "over50": 9,
+        "over100": 2
+      },
+      "sender_lateness": {
+        "n": 142,
+        "p50": 0.6117820739746094,
+        "p95": 0.8985996246337891,
+        "maximum": 1.049041748046875,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 351,
+      "turns": 17,
+      "largest_turn_chars": 1756237,
+      "history_chars": 27876,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "fixture_sha256": "e725b89984b8ccc5584e3b1f5316b1ef9a896f722fd9d2bfc061d174ac9702fd",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-warm-3/result.json",
+      "raw_sha256": "caca8562791f354b5ebbbec34c9c5bd74ee3083f4c29d8ff1c417841cd2afa3c"
+    },
+    {
+      "label": "agent",
+      "mode": "cold",
+      "completion_ms": 263.72671127319336,
+      "initial-return-ms": 263.72218132019043,
+      "restore-ms": 21.45218849182129,
+      "gcs": 1,
+      "gc-seconds": 0.04302468599999998,
+      "input_all": {
+        "n": 140,
+        "p50": 0.15211105346679688,
+        "p95": 191.33663177490234,
+        "maximum": 265.3765678405762,
+        "over50": 21,
+        "over100": 16
+      },
+      "input_during_work": {
+        "n": 25,
+        "p50": 138.38744163513184,
+        "p95": 254.8224925994873,
+        "maximum": 265.3765678405762,
+        "over50": 21,
+        "over100": 16
+      },
+      "input_overlapping_work": {
+        "n": 25,
+        "p50": 138.38744163513184,
+        "p95": 254.8224925994873,
+        "maximum": 265.3765678405762,
+        "over50": 21,
+        "over100": 16
+      },
+      "sender_lateness": {
+        "n": 140,
+        "p50": 0.8683204650878906,
+        "p95": 1.0051727294921875,
+        "maximum": 1.055002212524414,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 194,
+      "turns": 6,
+      "largest_turn_chars": 820846,
+      "history_chars": 20553,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "fixture_sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-1/result.json",
+      "raw_sha256": "fb144cb9086ae2e65f14b155bfae17dcdea5c375eeaa332650e03560144fad20"
+    },
+    {
+      "label": "agent",
+      "mode": "cold",
+      "completion_ms": 266.998291015625,
+      "initial-return-ms": 266.99376106262207,
+      "restore-ms": 21.331787109375,
+      "gcs": 1,
+      "gc-seconds": 0.04701238699999999,
+      "input_all": {
+        "n": 140,
+        "p50": 0.15234947204589844,
+        "p95": 189.0242099761963,
+        "maximum": 263.1723880767822,
+        "over50": 21,
+        "over100": 16
+      },
+      "input_during_work": {
+        "n": 25,
+        "p50": 135.82658767700195,
+        "p95": 252.51317024230957,
+        "maximum": 263.1723880767822,
+        "over50": 21,
+        "over100": 16
+      },
+      "input_overlapping_work": {
+        "n": 25,
+        "p50": 135.82658767700195,
+        "p95": 252.51317024230957,
+        "maximum": 263.1723880767822,
+        "over50": 21,
+        "over100": 16
+      },
+      "sender_lateness": {
+        "n": 140,
+        "p50": 0.8459091186523438,
+        "p95": 1.0013580322265625,
+        "maximum": 1.065969467163086,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 194,
+      "turns": 6,
+      "largest_turn_chars": 820846,
+      "history_chars": 20553,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "fixture_sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-2/result.json",
+      "raw_sha256": "a606e05bb70c1fbea132931041b6e99a375f231177c912455cc1ab99150b85cd"
+    },
+    {
+      "label": "agent",
+      "mode": "cold",
+      "completion_ms": 253.66878509521484,
+      "initial-return-ms": 253.66497039794922,
+      "restore-ms": 20.852327346801758,
+      "gcs": 1,
+      "gc-seconds": 0.03887643299999999,
+      "input_all": {
+        "n": 139,
+        "p50": 0.10776519775390625,
+        "p95": 192.24071502685547,
+        "maximum": 255.87773323059082,
+        "over50": 20,
+        "over100": 15
+      },
+      "input_during_work": {
+        "n": 24,
+        "p50": 128.2970905303955,
+        "p95": 245.29647827148438,
+        "maximum": 255.87773323059082,
+        "over50": 20,
+        "over100": 15
+      },
+      "input_overlapping_work": {
+        "n": 24,
+        "p50": 128.2970905303955,
+        "p95": 245.29647827148438,
+        "maximum": 255.87773323059082,
+        "over50": 20,
+        "over100": 15
+      },
+      "sender_lateness": {
+        "n": 139,
+        "p50": 0.8327960968017578,
+        "p95": 0.9412765502929688,
+        "maximum": 1.0731220245361328,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 194,
+      "turns": 6,
+      "largest_turn_chars": 820846,
+      "history_chars": 20553,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "fixture_sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-3/result.json",
+      "raw_sha256": "719e8cf550ac2aa40390f4382ce1923f18e5b6048f45560d49a94ef5bf90b977"
+    },
+    {
+      "label": "agent",
+      "mode": "warm",
+      "completion_ms": 327.7156352996826,
+      "initial-return-ms": 0.031948089599609375,
+      "restore-ms": 21.384239196777344,
+      "gcs": 1,
+      "gc-seconds": 0.04762472299999998,
+      "input_all": {
+        "n": 139,
+        "p50": 0.13828277587890625,
+        "p95": 32.89484977722168,
+        "maximum": 65.18197059631348,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 30,
+        "p50": 1.0676383972167969,
+        "p95": 54.610490798950195,
+        "maximum": 65.18197059631348,
+        "over50": 3,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 30,
+        "p50": 1.0676383972167969,
+        "p95": 54.610490798950195,
+        "maximum": 65.18197059631348,
+        "over50": 3,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 139,
+        "p50": 0.8981227874755859,
+        "p95": 1.024007797241211,
+        "maximum": 1.0592937469482422,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 194,
+      "turns": 6,
+      "largest_turn_chars": 820846,
+      "history_chars": 20553,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "fixture_sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-warm-1/result.json",
+      "raw_sha256": "81f23bdccbf7528349d1d515fd3423f6905d7f573686d39f82ae892cce3457d3"
+    },
+    {
+      "label": "agent",
+      "mode": "warm",
+      "completion_ms": 312.97826766967773,
+      "initial-return-ms": 0.04100799560546875,
+      "restore-ms": 20.66516876220703,
+      "gcs": 1,
+      "gc-seconds": 0.03902533199999997,
+      "input_all": {
+        "n": 139,
+        "p50": 0.10371208190917969,
+        "p95": 27.38332748413086,
+        "maximum": 61.20610237121582,
+        "over50": 2,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 30,
+        "p50": 0.11920928955078125,
+        "p95": 50.63009262084961,
+        "maximum": 61.20610237121582,
+        "over50": 2,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 30,
+        "p50": 0.11920928955078125,
+        "p95": 50.63009262084961,
+        "maximum": 61.20610237121582,
+        "over50": 2,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 139,
+        "p50": 0.8208751678466797,
+        "p95": 0.9214878082275391,
+        "maximum": 1.0428428649902344,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 194,
+      "turns": 6,
+      "largest_turn_chars": 820846,
+      "history_chars": 20553,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "fixture_sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-warm-2/result.json",
+      "raw_sha256": "666a48fd248c406f011e94062d89a230a2f60385d17f2abbaad56af14f1c668b"
+    },
+    {
+      "label": "agent",
+      "mode": "warm",
+      "completion_ms": 312.20316886901855,
+      "initial-return-ms": 0.03719329833984375,
+      "restore-ms": 20.67089080810547,
+      "gcs": 1,
+      "gc-seconds": 0.03933016899999997,
+      "input_all": {
+        "n": 139,
+        "p50": 0.10991096496582031,
+        "p95": 27.178049087524414,
+        "maximum": 60.40787696838379,
+        "over50": 1,
+        "over100": 0
+      },
+      "input_during_work": {
+        "n": 29,
+        "p50": 0.5698204040527344,
+        "p95": 49.85761642456055,
+        "maximum": 60.40787696838379,
+        "over50": 1,
+        "over100": 0
+      },
+      "input_overlapping_work": {
+        "n": 29,
+        "p50": 0.5698204040527344,
+        "p95": 49.85761642456055,
+        "maximum": 60.40787696838379,
+        "over50": 1,
+        "over100": 0
+      },
+      "sender_lateness": {
+        "n": 139,
+        "p50": 0.8380413055419922,
+        "p95": 0.9477138519287109,
+        "maximum": 1.0445117950439453,
+        "over50": 0,
+        "over100": 0
+      },
+      "segments": 194,
+      "turns": 6,
+      "largest_turn_chars": 820846,
+      "history_chars": 20553,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "fixture_sha256": "d66d848f8e3ddc144ccc32e165e2b32a79bd31606a181cd0592db570707af95a",
+      "markdown": true,
+      "libraries": [
+        {
+          "symbol": "gptel-request",
+          "path": "/home/roland/Projekte/mevedel/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+          "sha256": "cdc3bc7e9d1149d51d875ececc5f9f9f9f5723ba6a39e4478c21627f95e7b127"
+        },
+        {
+          "symbol": "mevedel-view--full-rerender",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-render.el",
+          "sha256": "3990fa8a4754c0b5740b74396cb4fa23898c193b217070f8230fb66cb57a505e"
+        },
+        {
+          "symbol": "mevedel-transcript-segments",
+          "path": "/home/roland/Projekte/mevedel/mevedel-transcript.el",
+          "sha256": "4ea51851760399d0ba1b001f3f252048ad90e6be324ab689fbb1cdeda48f85fd"
+        },
+        {
+          "symbol": "mevedel-view-prepare-get",
+          "path": "/home/roland/Projekte/mevedel/mevedel-view-prepare.el",
+          "sha256": "8be1059694b24082a8f984c10228e72bac25d103f0288029c02dc48169a15675"
+        }
+      ],
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-warm-3/result.json",
+      "raw_sha256": "faf9a6472bc9146a4ef3d0f7db73a5f41e0aa694c4dc7d5fb5ea2ba1f3c4912e"
+    }
+  ],
+  "cold_scheduled": [
+    {
+      "label": "root",
+      "mode": "cold-scheduled",
+      "completion_ms": 518.2788372039795,
+      "input_all": {
+        "n": 144,
+        "p50": 0.11515617370605469,
+        "p95": 93.89710426330566,
+        "maximum": 167.75035858154297,
+        "over50": 14,
+        "over100": 7
+      },
+      "input_overlapping_work": {
+        "n": 49,
+        "p50": 19.892454147338867,
+        "p95": 146.6672420501709,
+        "maximum": 167.75035858154297,
+        "over50": 14,
+        "over100": 7
+      },
+      "gc-seconds": 0.07918790800000003,
+      "gcs": 2,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-scheduled-1/result.json",
+      "raw_sha256": "ecb2ef29e33f78105347f0bca05ce6262d8c1d9e21ea5254090b53b2038829dc"
+    },
+    {
+      "label": "root",
+      "mode": "cold-scheduled",
+      "completion_ms": 516.3052082061768,
+      "input_all": {
+        "n": 144,
+        "p50": 0.1049041748046875,
+        "p95": 93.91069412231445,
+        "maximum": 167.8938865661621,
+        "over50": 14,
+        "over100": 7
+      },
+      "input_overlapping_work": {
+        "n": 49,
+        "p50": 19.863605499267578,
+        "p95": 146.7897891998291,
+        "maximum": 167.8938865661621,
+        "over50": 14,
+        "over100": 7
+      },
+      "gc-seconds": 0.08040055700000004,
+      "gcs": 2,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-scheduled-2/result.json",
+      "raw_sha256": "04f73f949c2bc91f96cd640e3726560b2473aa18253baf66c1c95f865607721d"
+    },
+    {
+      "label": "root",
+      "mode": "cold-scheduled",
+      "completion_ms": 518.4071063995361,
+      "input_all": {
+        "n": 143,
+        "p50": 0.11849403381347656,
+        "p95": 90.3315544128418,
+        "maximum": 165.76361656188965,
+        "over50": 13,
+        "over100": 7
+      },
+      "input_overlapping_work": {
+        "n": 49,
+        "p50": 20.19476890563965,
+        "p95": 144.32525634765625,
+        "maximum": 165.76361656188965,
+        "over50": 13,
+        "over100": 7
+      },
+      "gc-seconds": 0.07975389199999999,
+      "gcs": 2,
+      "history_sha256": "f88811e2981d444c581d023afbaa70856fd76183c0622eb8e028d42cef35f020",
+      "source_map_sha256": "e2d20c9efa713441b48ee5e335d105e8617da378a9b32abe398a0d464d526e21",
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-scheduled-3/result.json",
+      "raw_sha256": "bd89cf165ad620455800934da91f050042f53ea9911be39783f5830f87d068d3"
+    },
+    {
+      "label": "agent",
+      "mode": "cold-scheduled",
+      "completion_ms": 446.0752010345459,
+      "input_all": {
+        "n": 140,
+        "p50": 0.10323524475097656,
+        "p95": 111.0374927520752,
+        "maximum": 184.86666679382324,
+        "over50": 13,
+        "over100": 9
+      },
+      "input_overlapping_work": {
+        "n": 42,
+        "p50": 11.401176452636719,
+        "p95": 163.88297080993652,
+        "maximum": 184.86666679382324,
+        "over50": 13,
+        "over100": 9
+      },
+      "gc-seconds": 0.03877315199999998,
+      "gcs": 1,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "trial": "1",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-scheduled-1/result.json",
+      "raw_sha256": "23e714c1bb025636ed7f77a0b7dd9e8b088c2991597e6be5c711878d3c9d513e"
+    },
+    {
+      "label": "agent",
+      "mode": "cold-scheduled",
+      "completion_ms": 443.8004493713379,
+      "input_all": {
+        "n": 140,
+        "p50": 0.10228157043457031,
+        "p95": 109.54523086547852,
+        "maximum": 183.78329277038574,
+        "over50": 13,
+        "over100": 8
+      },
+      "input_overlapping_work": {
+        "n": 42,
+        "p50": 10.7421875,
+        "p95": 162.58907318115234,
+        "maximum": 183.78329277038574,
+        "over50": 13,
+        "over100": 8
+      },
+      "gc-seconds": 0.039458585000000046,
+      "gcs": 1,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "trial": "2",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-scheduled-2/result.json",
+      "raw_sha256": "9c1f06354518040a842cb95d8c842b86e2fa37fc52fb8a7b03d79e6727950770"
+    },
+    {
+      "label": "agent",
+      "mode": "cold-scheduled",
+      "completion_ms": 439.82839584350586,
+      "input_all": {
+        "n": 140,
+        "p50": 0.10848045349121094,
+        "p95": 107.0561408996582,
+        "maximum": 181.01167678833008,
+        "over50": 13,
+        "over100": 8
+      },
+      "input_overlapping_work": {
+        "n": 42,
+        "p50": 11.38615608215332,
+        "p95": 159.99364852905273,
+        "maximum": 181.01167678833008,
+        "over50": 13,
+        "over100": 8
+      },
+      "gc-seconds": 0.03849366399999998,
+      "gcs": 1,
+      "history_sha256": "93cc0337363bee107da9b69e0741457f57be1efd9f93cc60a0ceba69628ff181",
+      "source_map_sha256": "4cc3a98234be23f0cb744b508d94e4ad4b8b3952017984798aca7124e8f5a905",
+      "trial": "3",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-scheduled-3/result.json",
+      "raw_sha256": "f09ff888679b0ead0d47ef534657eb24072073f0f4965d6971c2adcf2308b2a2"
+    }
+  ],
+  "profiles": [
+    {
+      "label": "control",
+      "mode": "cold",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-cold-profile1/result.json",
+      "raw_sha256": "6f35aade7c541a826536553bc1e78a24920ecc08f8a63e928bec9f8c96007129",
+      "completion_ms": 73.00090789794922,
+      "gc_ms": 0.0,
+      "phases": {
+        "mevedel-transcript-segments": {
+          "calls": 1,
+          "total_ms": 6.582736968994141,
+          "max_ms": 6.582736968994141,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--group-transcript-turns": {
+          "calls": 1,
+          "total_ms": 9.166717529296875,
+          "max_ms": 9.166717529296875,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--full-rerender-plan": {
+          "calls": 1,
+          "total_ms": 15.875577926635742,
+          "max_ms": 15.875577926635742,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--fontify-as": {
+          "calls": 11,
+          "total_ms": 15.477657318115234,
+          "max_ms": 5.511760711669922,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--render-turn": {
+          "calls": 8,
+          "total_ms": 56.40435218811035,
+          "max_ms": 25.835275650024414,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--tool-call-parse": {
+          "calls": 50,
+          "total_ms": 13.495445251464844,
+          "max_ms": 2.2513866424560547,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--prepare-tool-segment": {
+          "calls": 50,
+          "total_ms": 17.00901985168457,
+          "max_ms": 2.3353099822998047,
+          "inclusive_gc_ms": 0.0
+        }
+      }
+    },
+    {
+      "label": "control",
+      "mode": "warm",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/control-warm-profile1/result.json",
+      "raw_sha256": "c4f696ab07fe34a4a18f78e3f10ea8ce8c056c858166bf99e9eeac179caeb0cc",
+      "completion_ms": 192.6424503326416,
+      "gc_ms": 0.0,
+      "phases": {
+        "mevedel-view--fontify-as": {
+          "calls": 21,
+          "total_ms": 3.7016868591308594,
+          "max_ms": 0.5037784576416016,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-transcript-segments": {
+          "calls": 1,
+          "total_ms": 5.708217620849609,
+          "max_ms": 5.708217620849609,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--group-transcript-turns": {
+          "calls": 1,
+          "total_ms": 5.067586898803711,
+          "max_ms": 5.067586898803711,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--full-rerender-plan": {
+          "calls": 1,
+          "total_ms": 10.884284973144531,
+          "max_ms": 10.884284973144531,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--render-turn": {
+          "calls": 8,
+          "total_ms": 22.470712661743164,
+          "max_ms": 9.244203567504883,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view-disclosure-restore-state": {
+          "calls": 8,
+          "total_ms": 0.6530284881591797,
+          "max_ms": 0.14543533325195312,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view-render--start-batch": {
+          "calls": 1,
+          "total_ms": 16.901731491088867,
+          "max_ms": 16.901731491088867,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--tool-call-parse": {
+          "calls": 19,
+          "total_ms": 4.139184951782227,
+          "max_ms": 1.4197826385498047,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--prepare-tool-segment": {
+          "calls": 19,
+          "total_ms": 5.613803863525391,
+          "max_ms": 1.5730857849121094,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view-render--batch-step": {
+          "calls": 4,
+          "total_ms": 20.82228660583496,
+          "max_ms": 9.719610214233398,
+          "inclusive_gc_ms": 0.0
+        }
+      }
+    },
+    {
+      "label": "root",
+      "mode": "cold",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-cold-profile1/result.json",
+      "raw_sha256": "03414e39d96a55131df9d088f5aaefc2713cb8f8e009c7e12d124124adf2cf9f",
+      "completion_ms": 273.3268737792969,
+      "gc_ms": 80.51865799999996,
+      "phases": {
+        "mevedel-transcript-segments": {
+          "calls": 1,
+          "total_ms": 28.919696807861328,
+          "max_ms": 28.919696807861328,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--group-transcript-turns": {
+          "calls": 1,
+          "total_ms": 79.99014854431152,
+          "max_ms": 79.99014854431152,
+          "inclusive_gc_ms": 39.583845000000004
+        },
+        "mevedel-view--full-rerender-plan": {
+          "calls": 1,
+          "total_ms": 110.49151420593262,
+          "max_ms": 110.49151420593262,
+          "inclusive_gc_ms": 39.583845000000004
+        },
+        "mevedel-view--tool-call-parse": {
+          "calls": 151,
+          "total_ms": 70.31536102294922,
+          "max_ms": 41.4581298828125,
+          "inclusive_gc_ms": 40.934812999999956
+        },
+        "mevedel-view--prepare-tool-segment": {
+          "calls": 157,
+          "total_ms": 80.19280433654785,
+          "max_ms": 41.89181327819824,
+          "inclusive_gc_ms": 40.934812999999956
+        },
+        "mevedel-view--fontify-as": {
+          "calls": 22,
+          "total_ms": 3.020048141479492,
+          "max_ms": 0.36907196044921875,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--render-turn": {
+          "calls": 17,
+          "total_ms": 161.38529777526855,
+          "max_ms": 100.65674781799316,
+          "inclusive_gc_ms": 40.934812999999956
+        }
+      }
+    },
+    {
+      "label": "root",
+      "mode": "warm",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/root-warm-profile1/result.json",
+      "raw_sha256": "e7d40b00a828c49b1e6872c6808031afd7a96a7d6dcf2cf18f32d94710960ae5",
+      "completion_ms": 477.8571128845215,
+      "gc_ms": 82.67760800000006,
+      "phases": {
+        "mevedel-view--fontify-as": {
+          "calls": 34,
+          "total_ms": 3.9026737213134766,
+          "max_ms": 0.1785755157470703,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-transcript-segments": {
+          "calls": 1,
+          "total_ms": 27.972698211669922,
+          "max_ms": 27.972698211669922,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--group-transcript-turns": {
+          "calls": 1,
+          "total_ms": 22.855520248413086,
+          "max_ms": 22.855520248413086,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--full-rerender-plan": {
+          "calls": 1,
+          "total_ms": 51.042795181274414,
+          "max_ms": 51.042795181274414,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--render-turn": {
+          "calls": 18,
+          "total_ms": 155.41410446166992,
+          "max_ms": 55.730342864990234,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view-disclosure-restore-state": {
+          "calls": 18,
+          "total_ms": 2.5746822357177734,
+          "max_ms": 0.9169578552246094,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view-render--start-batch": {
+          "calls": 1,
+          "total_ms": 75.61564445495605,
+          "max_ms": 75.61564445495605,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--tool-call-parse": {
+          "calls": 224,
+          "total_ms": 31.816482543945312,
+          "max_ms": 3.4990310668945312,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--prepare-tool-segment": {
+          "calls": 224,
+          "total_ms": 100.62384605407715,
+          "max_ms": 59.23819541931152,
+          "inclusive_gc_ms": 40.943753000000086
+        },
+        "mevedel-view-render--batch-step": {
+          "calls": 9,
+          "total_ms": 90.38853645324707,
+          "max_ms": 56.2436580657959,
+          "inclusive_gc_ms": 0.0
+        }
+      }
+    },
+    {
+      "label": "agent",
+      "mode": "cold",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-cold-profile1/result.json",
+      "raw_sha256": "187393f9e5958f3fb3ddbeb243e982f3af0ac67f116ef562424c18459a730008",
+      "completion_ms": 249.29308891296387,
+      "gc_ms": 40.33487899999999,
+      "phases": {
+        "mevedel-transcript-segments": {
+          "calls": 1,
+          "total_ms": 15.951871871948242,
+          "max_ms": 15.951871871948242,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--group-transcript-turns": {
+          "calls": 1,
+          "total_ms": 25.39801597595215,
+          "max_ms": 25.39801597595215,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--full-rerender-plan": {
+          "calls": 1,
+          "total_ms": 41.49889945983887,
+          "max_ms": 41.49889945983887,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--render-turn": {
+          "calls": 6,
+          "total_ms": 206.3744068145752,
+          "max_ms": 152.77957916259766,
+          "inclusive_gc_ms": 40.33487899999999
+        },
+        "mevedel-view--tool-call-parse": {
+          "calls": 115,
+          "total_ms": 65.88864326477051,
+          "max_ms": 40.51995277404785,
+          "inclusive_gc_ms": 40.33487899999999
+        },
+        "mevedel-view--prepare-tool-segment": {
+          "calls": 115,
+          "total_ms": 73.35782051086426,
+          "max_ms": 40.59267044067383,
+          "inclusive_gc_ms": 40.33487899999999
+        },
+        "mevedel-view--fontify-as": {
+          "calls": 25,
+          "total_ms": 89.17880058288574,
+          "max_ms": 37.24384307861328,
+          "inclusive_gc_ms": 0.0
+        }
+      }
+    },
+    {
+      "label": "agent",
+      "mode": "warm",
+      "raw_result": ".scratch/transcript-redraw-2026-09-27/results/agent-warm-profile1/result.json",
+      "raw_sha256": "36b1738e9f4afe76a000930a0daea0172c24fb9f3fee13236669677a5e60d1d4",
+      "completion_ms": 311.5973472595215,
+      "gc_ms": 38.68148399999999,
+      "phases": {
+        "mevedel-transcript-segments": {
+          "calls": 1,
+          "total_ms": 16.01243019104004,
+          "max_ms": 16.01243019104004,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--group-transcript-turns": {
+          "calls": 1,
+          "total_ms": 14.014244079589844,
+          "max_ms": 14.014244079589844,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--full-rerender-plan": {
+          "calls": 1,
+          "total_ms": 30.142545700073242,
+          "max_ms": 30.142545700073242,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--fontify-as": {
+          "calls": 25,
+          "total_ms": 7.130861282348633,
+          "max_ms": 1.3823509216308594,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--render-turn": {
+          "calls": 7,
+          "total_ms": 105.87239265441895,
+          "max_ms": 61.9356632232666,
+          "inclusive_gc_ms": 38.68148399999999
+        },
+        "mevedel-view-disclosure-restore-state": {
+          "calls": 7,
+          "total_ms": 1.54876708984375,
+          "max_ms": 0.7529258728027344,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view--tool-call-parse": {
+          "calls": 71,
+          "total_ms": 53.68399620056152,
+          "max_ms": 39.432525634765625,
+          "inclusive_gc_ms": 38.68148399999999
+        },
+        "mevedel-view--prepare-tool-segment": {
+          "calls": 71,
+          "total_ms": 63.76004219055176,
+          "max_ms": 39.50762748718262,
+          "inclusive_gc_ms": 38.68148399999999
+        },
+        "mevedel-view-render--start-batch": {
+          "calls": 1,
+          "total_ms": 46.799421310424805,
+          "max_ms": 46.799421310424805,
+          "inclusive_gc_ms": 0.0
+        },
+        "mevedel-view-render--batch-step": {
+          "calls": 4,
+          "total_ms": 85.27636528015137,
+          "max_ms": 63.636064529418945,
+          "inclusive_gc_ms": 38.68148399999999
+        }
+      }
+    }
+  ],
+  "cross_mode_history_and_source_maps_equal": true
+}

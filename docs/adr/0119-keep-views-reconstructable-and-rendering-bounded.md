@@ -31,16 +31,23 @@ replacements refresh source-backed handles, with full projection as the fallback
 for unavailable source or generic rows without retained-agent metadata. Distinct
 agent paths share a per-view queue, drained one path per callback; duplicate paths
 coalesce and view teardown cancels the queue.
-Scheduled settled-history rebuilds render reader-visible turns and all chat
-prompt turns first, then fill the remaining response turns one per callback.
+Scheduled settled-history rebuilds retain the old projection while a job
+restores source properties, resumes full-context canonical scanning, groups and
+annotates turns, and prepares whole-response Markdown and tool entries across
+callbacks. The scanner and the synchronous correctness path use the same
+classification and repair rules; independent per-chunk classification is not
+trusted. Source identity and its full modification tick are checked before
+publishing the complete plan. On publication, reader-visible turns and all chat
+prompt turns render first, then remaining response turns fill one per callback.
 This gives a window moved onto a pending response the correct pinned prompt
 and a real prompt header to reveal on click, before its response is rendered.
-Each callback preserves fresh
-reader/composer state and validates its source generation. Losing focus pauses
-the job; source changes replace it. In-flight reconciliation, explicit immediate
-refreshes, and other writers' correctness fallbacks remain synchronous. A batch
-still cannot interrupt source segmentation or one large turn. Large collapsed
-tool parsing has a separate staged preparation lifecycle.
+Each callback preserves fresh reader/composer state and validates its source
+generation. Losing focus pauses the job; source changes replace it and release
+retained private preparation buffers. In-flight reconciliation, explicit immediate
+refreshes, and other writers' correctness fallbacks remain synchronous. A large
+individual line, final scanner repair, prompt-first publication, grouped tool
+insertion, and GC can still make a callback exceed its cooperative target. Large
+collapsed tool parsing also has its separate staged preparation lifecycle.
 Transcript writers also share per-view mutation ownership: nested projection,
 terminal, disclosure, and agent-refresh work coalesces rather than mutating
 captured view coordinates recursively. Source replacement retires obsolete
@@ -75,7 +82,9 @@ This allows hits to skip payload copying, hashing, structural parsing, and
 repeated request-failure decoding. Partial spans depending on surrounding source
 are not cached under their own range alone. A structural scan shares candidate control-line
 positions among its existing parsers. Activity classification and insertion
-reuse entries within that render, with independent coalescing counts.
+reuse entries within that render, with independent coalescing counts. Settled
+batch jobs additionally prepare source-backed entries a few at a time and
+reuse them during publication when the reader's disclosure state still matches.
 Structural overlays advance through ordered role segments and reuse unchanged
 suffixes, restarting at earlier source positions when precedence requires it.
 This preserves the existing overlay and tool-metadata containment rules without
@@ -113,6 +122,13 @@ target rather than building a second, partial prompt projector for pending
 placeholders. It makes initial batch work proportional to the number and size of
 chat prompts, even when their responses remain deferred; it does not guarantee
 bounded first-paint latency for prompt-heavy histories.
+
+The frozen September 2026 control/root/agent replay exposed long keyboard
+stalls before the previous batch's first yield, including while grouping and
+fontifying history. Resuming canonical preparation in the view-owned job keeps
+the complete parser context without introducing a second grammar, stored
+summaries, threads, or an external worker. Synchronous callers still receive
+complete source positions before returning.
 
 ## Consequences
 

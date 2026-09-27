@@ -152,6 +152,7 @@
 (defvar mevedel-view-render--terminal-p)
 (declare-function mevedel-view--debug-log "mevedel-view-render" (event &rest data))
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+(declare-function mevedel-view-render-batched-full "mevedel-view-render" ())
 (declare-function mevedel-view--insert-rendered-tool "mevedel-view-render" (rendering source))
 (declare-function mevedel-view--segment-rendering "mevedel-view-render" (data-buf seg-start seg-end &optional collapsed-only))
 (declare-function mevedel-view--tool-block-bounds
@@ -912,7 +913,12 @@ PARENT-VIEW is the session view that opened the transcript."
         (unless buffer-read-only
           (read-only-mode +1))))
     (with-current-buffer agent-view
-      (mevedel-view--full-rerender)
+      ;; A live gptel stream needs complete render positions before it can
+      ;; attach its tail.  Settled inspection needs only a display, so leave
+      ;; the old projection visible while canonical preparation is scheduled.
+      (if live-p
+          (mevedel-view--full-rerender)
+        (mevedel-view-render-batched-full))
       (when live-p
         (mevedel-view--agent-transcript-start-streaming))
       (setq buffer-read-only t))
