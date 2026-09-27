@@ -611,7 +611,7 @@ K receives a cons cell (PATH . MIME).  If ARGS contains `:max_width',
                           (plist-get args :max_tokens) "max_tokens"))
              (cmd (mevedel-tool-fs-read--imagemagick-command)))
         (unless cmd
-          (error "ImageMagick not installed; install `magick' or `convert' to use max_width, max_height, or max_tokens"))
+          (error "Cannot resize/compress this image because ImageMagick is unavailable. Install `magick' or `convert', or retry Read without max_width, max_height, and max_tokens to read the original image"))
         (let* ((output-ext (if max-tokens "jpg"
                              (downcase (or (file-name-extension path) "png"))))
                (output-mime (if max-tokens "image/jpeg" mime))
