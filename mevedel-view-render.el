@@ -356,7 +356,9 @@
                   "mevedel-view-stream" (entries))
 (declare-function mevedel-view--refresh-pending-tool-lines
                   "mevedel-view-stream" ())
-(declare-function mevedel-view--spinner-frame "mevedel-view-stream" ())
+(declare-function mevedel-view-animation-frame
+                  "mevedel-view-animation" (style label seconds face &optional frame))
+(defvar mevedel-view-animation-prefixes)
 (declare-function mevedel-view--spinner-region-p
                   "mevedel-view-stream" (start end))
 (declare-function mevedel-view-stream-in-flight-turn-start-position
@@ -367,7 +369,7 @@
 (defvar mevedel-view--execution-events)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--pending-tool-calls)
-(defvar mevedel-view-spinner-frames)
+(defvar mevedel-view-tool-spinner-style)
 
 ;; `mevedel-view-table'
 (defvar mevedel-view-table--streaming-p)
@@ -3373,15 +3375,18 @@ content without moving ahead of prior transcript turns."
         history-tail)))
 
 (defun mevedel-view--pending-tool-line-body (label)
-  "Return the propertized fragment body for pending tool LABEL."
-  (let ((frame (mevedel-view--spinner-frame)))
+  "Return the propertized fragment body for pending tool LABEL.
+Before insertion the display frame is unknown; use a portable first frame."
+  (let ((frame (mevedel-view-animation-frame
+                mevedel-view-tool-spinner-style "" 0 'mevedel-view-ephemeral
+                :multiple)))
     (concat
      (propertize frame
                  'font-lock-face 'mevedel-view-ephemeral
                  'mevedel-view-inline-spinner-frame t
                  'mevedel-view-pending-tool-live t
                  'display frame)
-     (propertize (format " %s\n" label)
+     (propertize (format "%s\n" label)
                  'font-lock-face 'mevedel-view-ephemeral
                  'mevedel-view-pending-tool-live t))))
 
@@ -7081,7 +7086,7 @@ ends at PREFIX-END."
                                                  (substring trimmed
                                                             (length frame)))
                                                 label)))
-                                mevedel-view-spinner-frames)))
+                                mevedel-view-animation-prefixes)))
                  pending-labels)
         (string-match-p "\\`[[:space:]]*[✓✗●!›…]?[[:space:]]*Agent:"
                         trimmed))))

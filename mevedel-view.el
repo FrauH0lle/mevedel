@@ -266,12 +266,16 @@
                   "mevedel-view-segments" (segment source-pos &optional window))
 
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--refresh-animation-options
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--stop-spinner-timer
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--render-stream-update
                   "mevedel-view-stream" (data-buf))
+(declare-function mevedel-view--start-spinner-timer
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view-stream--schedule-execution-row-recovery
                   "mevedel-view-stream" (data-buffer))
 
@@ -587,32 +591,61 @@ preview overlays render against this marker.")
   "Stable fragment collapse key for the task status block.")
 
 
+(defun mevedel-view--set-spinner-option (symbol value)
+  "Set spinner option SYMBOL to VALUE and refresh active views."
+  (pcase symbol
+    ('mevedel-view-spinner-framerate
+     (unless (and (integerp value) (<= 1 value 60))
+       (user-error "Spinner frame rate must be an integer from 1 to 60")))
+    ('mevedel-view-spinner-battery-framerate
+     (unless (and (integerp value) (<= 0 value 60))
+       (user-error "Battery frame rate must be an integer from 0 to 60"))))
+  (set-default symbol value)
+  (when (fboundp 'mevedel-view--refresh-animation-options)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (derived-mode-p 'mevedel-view-mode)
+          (mevedel-view--refresh-animation-options))))))
+
 (defcustom mevedel-view-spinner-animate t
-  "Non-nil means animate view buffer spinner glyphs."
+  "Non-nil means animate view buffer progress and pending-tool indicators."
   :type 'boolean
+  :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
-(defcustom mevedel-view-spinner-interval 0.12
-  "Seconds between view buffer spinner frame updates."
-  :type 'number
+(defcustom mevedel-view-spinner-style 'shimmer
+  "Animation style for the foreground request-progress label."
+  :type '(choice (const shimmer) (const breathe) (const bounce)
+                 (const dots) (const ellipsis) (const braille)
+                 (const ascii) (const static))
+  :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
-(defconst mevedel-view-spinner-braille-frames
-  '("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-  "Braille Pattern frames for animated view buffer spinners.")
+(defcustom mevedel-view-tool-spinner-style 'braille
+  "Compact animation style for pending-tool rows."
+  :type '(choice (const braille) (const ascii) (const dots) (const static))
+  :set #'mevedel-view--set-spinner-option
+  :group 'mevedel)
 
-(defconst mevedel-view-spinner-ascii-frames
-  '("-" "\\" "|" "/")
-  "ASCII fallback frames for animated view buffer spinners.")
+(defcustom mevedel-view-spinner-framerate 60
+  "Maximum graphical progress frames per second on external power."
+  :type '(integer 1 60)
+  :set #'mevedel-view--set-spinner-option
+  :group 'mevedel)
 
-(defcustom mevedel-view-spinner-frames
-  mevedel-view-spinner-braille-frames
-  "Frames used for animated view buffer spinners.
-The default frames are Braille Pattern Unicode code points U+280B,
-U+2819, U+2839, U+2838, U+283C, U+2834, U+2826, U+2827, U+2807,
-and U+280F.  If your font does not render these glyphs, set this to
-`mevedel-view-spinner-ascii-frames'."
-  :type '(repeat string)
+(defcustom mevedel-view-spinner-battery-framerate 30
+  "Maximum animation frames per second when saving power.
+Zero freezes decorative animation but leaves progress metadata current."
+  :type '(integer 0 60)
+  :set #'mevedel-view--set-spinner-option
+  :group 'mevedel)
+
+(defcustom mevedel-view-spinner-power-policy 'auto
+  "How animation responds to the Emacs host's power source.
+`auto' uses battery status, treating unknown as battery; `full' uses
+the normal frame rate; `save' always applies the battery ceiling."
+  :type '(choice (const auto) (const full) (const save))
+  :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
 
@@ -708,7 +741,9 @@ the editable composer body.
   ;; A render deferred while nobody watched runs once a window shows
   ;; the view again.  Buffer-local, so the hook dies with the buffer.
   (add-hook 'window-buffer-change-functions
-            #'mevedel-view--resume-on-window-change nil t))
+            #'mevedel-view--resume-on-window-change nil t)
+  (add-hook 'window-scroll-functions
+            #'mevedel-view--resume-on-window-scroll nil t))
 
 
 ;;
@@ -800,6 +835,8 @@ existing `mevedel--view-buffer' binding untouched.  A
     (mevedel-view-composer-initialize)
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
+    ;; A buffer repurposed in another mode must stop decorative wakeups too.
+    (add-hook 'change-major-mode-hook #'mevedel-view--stop-spinner-timer nil t)
     (unless mevedel-view--agent-transcript-p
       (add-hook 'kill-buffer-query-functions
                 #'mevedel-view--allow-session-close-p nil t))
@@ -1482,6 +1519,9 @@ redisplay hooks reschedule it once someone can see the result."
   (when (buffer-live-p view-buffer)
     (with-current-buffer view-buffer
       (when (and (derived-mode-p 'mevedel-view-mode)
+                 (fboundp 'mevedel-view--start-spinner-timer))
+        (mevedel-view--start-spinner-timer))
+      (when (and (derived-mode-p 'mevedel-view-mode)
                  (not (mevedel-view--unattended-p)))
         (if mevedel-view--pending-render-kind
             (when (and (buffer-live-p mevedel-view--pending-render-data-buffer)
@@ -1492,6 +1532,12 @@ redisplay hooks reschedule it once someone can see the result."
                mevedel-view-rerender-debounce))
           (mevedel-view-render-resume-batch))
         (mevedel-view-prepare-resume)))))
+
+(defun mevedel-view--resume-on-window-scroll (window _start)
+  "Update animation scheduling after scrolling WINDOW."
+  (when (and (eq (window-buffer window) (current-buffer))
+             (fboundp 'mevedel-view--start-spinner-timer))
+    (mevedel-view--start-spinner-timer)))
 
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.

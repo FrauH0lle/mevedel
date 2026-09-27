@@ -117,8 +117,10 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
   (mevedel-install))
 ```
 
-`mevedel-install` is an interactive command and should be run whenever you
-change one of the custom variables.
+`mevedel-install` is an interactive command and should be run when changing
+installation-dependent custom variables. Spinner options refresh active views
+when applied through Customize; they do not require reinstalling or restarting
+a request.
 
 Run `mevedel-uninstall` to deactivate `mevedel`.
 
@@ -359,9 +361,43 @@ the next send.
 | `mevedel-view-stream-render-delay`             | Debounce delay for incremental streaming view refreshes.           |
 | `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
 | `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
-| `mevedel-view-spinner-animate`                 | Whether the live spinner animates.                                 |
-| `mevedel-view-spinner-interval`                | Seconds between spinner animation frames.                          |
-| `mevedel-view-spinner-frames`                  | Strings used as spinner animation frames.                          |
+| `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and pending-tool indicators. |
+| `mevedel-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
+| `mevedel-view-tool-spinner-style`              | Compact pending-tool indicator: `braille` (default), `ascii`, `dots`, or `static`. |
+| `mevedel-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 60).          |
+| `mevedel-view-spinner-battery-framerate`       | Energy-saving ceiling, 0–60 frames/second (default 30); 0 freezes decorative motion. |
+| `mevedel-view-spinner-power-policy`            | `auto` (default), `full`, or `save`; see below.                      |
+
+`auto` uses the Emacs host's detected power source: external power uses the
+normal ceiling, while battery/backup power and unknown or stale readings use
+the energy-saving ceiling. `full` always uses the normal ceiling; `save` always
+uses the energy-saving ceiling, including on desktops without battery detection.
+The effective saving ceiling cannot exceed the normal ceiling. Frame-rate
+limits reduce scheduled animation work without changing the animation's cycle
+speed; they do not imply a proportional battery-life improvement. With `auto`,
+power changes arrive immediately if battery monitoring already supplies a
+notification; otherwise detection normally takes up to the shared fallback
+interval (60 seconds). Unsupported displays use a glyph fallback for color
+styles; `ascii` is available where Braille glyphs do not render well. Motion
+settings can be changed through Customize during an active request. Elapsed
+time and status updates continue even with `static`, a zero saving ceiling,
+or `mevedel-view-spinner-animate` set to nil. The former
+`mevedel-view-spinner-frames` and `mevedel-view-spinner-interval` settings
+were removed; choose a style and rendering ceiling instead.
+
+```emacs-lisp
+;; Automatic 60 fps on external power, 30 fps on battery or unknown power.
+(setopt mevedel-view-spinner-power-policy 'auto
+        mevedel-view-spinner-framerate 60
+        mevedel-view-spinner-battery-framerate 30)
+
+;; Always use the normal ceiling, regardless of power source.
+(setopt mevedel-view-spinner-power-policy 'full)
+
+;; Keep automatic detection, but stop decorative motion on battery/unknown.
+(setopt mevedel-view-spinner-power-policy 'auto
+        mevedel-view-spinner-battery-framerate 0)
+```
 
 A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 

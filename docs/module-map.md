@@ -108,6 +108,8 @@ Chat / view
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
   mevedel-view-input-files.el local file drops and clipboard-image input
+  mevedel-view-animation.el   prepared status frames, styles, and bounded color cache
+  mevedel-view-power.el       shared battery observations and effective FPS policy
   mevedel-pending-inputs.el   pending queue, steering, delivery, and cockpit
   mevedel-patch-review.el     staged ApplyPatch review UI
   mevedel-plan-mode.el        Plan conversations and proposal approval UI
@@ -117,7 +119,7 @@ Chat / view
   mevedel-view-prepare.el     deferred large-tool parsing, source validation, job lifecycle
   mevedel-view-render.el      transcript projection, source mapping, live navigation
   mevedel-view-segments.el    historical session segment projection and navigation
-  mevedel-view-stream.el      request progress and streaming redraw scheduling
+  mevedel-view-stream.el      request progress, view animation timer, streaming redraws
   mevedel-gptel-stream-bridge.el private gptel stream compatibility advice
   mevedel-view-audit.el       audit disclosure rendering
   mevedel-view-zone.el        managed view-zone lifecycle + fragments

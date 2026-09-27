@@ -56,6 +56,33 @@ hidden buffer for ordinary calls and isolates nested calls. Rendering never
 prompts to install missing grammars. The [view manual](../view.md) owns the
 detailed rendering and recovery contracts.
 
+Request progress animation is presentation only. The view stream schedules
+one timer for visible decorative frames and elapsed metadata, separate from
+transcript rendering; it updates registered fragment-owned display spans and
+never writes the authoritative transcript. Time-based frame selection skips
+missed samples and retains phase across power changes. The foreground label
+offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
+pending-tool rows use compact braille, ascii, dots, or static indicators.
+Color animations prepare bounded, theme-derived frame banks; glyphs have a
+natural, slower cadence; colorless displays use the glyph fallback cadence
+rather than waking at the color rate. A global reduced-motion switch disables
+decorative updates, not semantic progress or elapsed metadata. Hidden and
+offscreen views suspend animation wakeups without changing the broader
+attention gate for transcript rendering.
+
+The default `auto` power policy uses the Emacs UI host's battery information:
+external power permits the configured 60-fps normal ceiling, and battery,
+backup, unknown or stale power information uses the conservative 30-fps
+saving ceiling. `full` forces the normal ceiling; `save` forces the saving
+ceiling. The lower ceiling never speeds up a naturally slower animation or
+changes its cycle duration. A saving ceiling of zero freezes decorative
+motion while active elapsed time and status remain current. A shared battery
+observer consumes existing notifications and uses a deferred, at-most-minute
+fallback query while subscribed views exist; animation callbacks never query
+power. Neither the observer nor the spinner enables battery mode or changes
+request execution. Reduced wakeups are an overhead reduction, not a claim
+of proportional battery-life improvement.
+
 Projection ownership also inhibits redisplay through queued work. Disclosure
 expansion rolls back failed replacement. Reader preservation includes both
 selection endpoints, neighboring managed zones, and table cells across wrapping.
@@ -139,6 +166,22 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### September 2026: separate visible animation from status maintenance
+
+The original braille spinner used a repeating 120-ms timer to preserve and
+reconcile view state as well as repaint its glyph. Increasing that whole path
+to 60 Hz would multiply composer and zone work and keep unattended laptops
+waking for invisible frames. A temporary native animation preview established
+the desired text and glyph styles but was not package code or evidence of
+production performance. The replacement samples a fixed-time animation only
+for visible registered spans; slower glyphs keep their cadence, and metadata
+retains its independent update interval. Battery observations are shared,
+outside the frame callback, and conservative when unavailable. Settings for
+arbitrary frame lists and a fixed interval were removed in favor of styles,
+rendering ceilings, and explicit power policy. The view manual describes
+the current user-facing controls and fallback behavior. No battery-life
+percentage or guaranteed delivered display rate follows from timer ceilings.
 
 ### September 2026: prompt-first deferred history
 
