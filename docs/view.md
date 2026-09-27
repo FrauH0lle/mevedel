@@ -26,6 +26,11 @@ projection, source mapping, and live transcript navigation.
 ephemeral projection state.
 `mevedel-view-stream.el` owns request progress and streaming redraw scheduling;
 `mevedel-gptel-stream-bridge.el` owns private gptel stream compatibility.
+`mevedel-view-animation.el` prepares bounded time-based status frames;
+`mevedel-view-power.el` shares local battery observations and computes the
+effective animation ceiling. The stream owner decides when visible frames
+and semantic progress metadata need updating; neither module owns the
+authoritative transcript.
 `mevedel-side-conversation.el` owns transient
 `/btw` conversations. The data buffer remains the model-visible transcript;
 `C-c C-z` closes the ephemeral side and returns its resources to the parent.
@@ -224,8 +229,9 @@ buffer-local render scheduler.  Requests in the same pending window collapse
 into one refresh; a full request upgrades an incremental request instead of
 starting a second timer.  Status and interaction zones remain independent of
 transcript parsing.  Reconciliation leaves an unchanged managed fragment in
-place, and spinner animation changes its frame display property without
-rewriting the textual progress row until elapsed or agent metadata changes.
+place, and animation changes only a registered label or tool-indicator display
+property without rewriting the textual progress row. Elapsed text is refreshed
+at most once a second; status and agent changes use their existing event paths.
 Progress spacing also reconciles when the preceding content changes. Managed
 zone boundaries advance past history inserted immediately before them, keeping
 status, interaction, and progress overlays outside the transcript.
@@ -277,10 +283,10 @@ composer text and point, source-backed reader anchors, and adjacent disclosures.
 Agent transcript inspection uses the same projection ownership rather than a
 second renderer.
 
-Spinner ticks, scheduled transcript flushes and history batches, and live tool-row refreshes
-are attention-gated (`mevedel-view--unattended-p`).  When every window
+Scheduled transcript flushes and history batches, and live tool-row refreshes
+are attention-gated (`mevedel-view--unattended-p`). When every window
 showing the view sits on an invisible or iconified frame, or on an unfocused
-graphical frame, the tick and the row refresh do nothing and a scheduled
+graphical frame, the row refresh does nothing and a scheduled
 render keeps its pending kind without running. Skipped tool-row refreshes
 retain each changed tool-use ID once; focus return reads the latest progress
 or terminal state and refreshes those rows. An incremental render also drains
@@ -293,6 +299,55 @@ with no window, or one on a terminal frame, is always attended, which keeps
 batch behavior unchanged. Child frames use their top-level ancestor's focus
 state. The rendering measurements are recorded in
 [ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history).
+
+Animation adds a stricter visibility gate without changing that rendering
+contract: a windowless or offscreen indicator has no animation wakeups. The
+per-view timer runs only while a progress label or pending-tool indicator is
+visible in an attended window, and updates registered spans instead of scanning
+the transcript each frame. Focus, window and scroll changes rearm it; callbacks
+skip frames missed during stalls instead of replaying them. Static or frozen
+indicators require no decorative timer, although a visible active request can
+still update elapsed text once a second. Waiting for input freezes active
+elapsed time while allowing motion under the selected policy. Progress/status
+ownership, the stream-render delay, and the authoritative data buffer do not
+change with animation settings.
+
+The foreground request label supports `shimmer`, `breathe`, `bounce`, `dots`,
+`ellipsis`, `braille`, `ascii`, and `static` (`shimmer` by default). Pending-tool
+rows use compact `braille`, `ascii`, `dots`, or `static` indicators (`braille` by
+default), independently of the request label. Color styles use 64 theme-derived
+shades and a 3.6-second cycle; the prepared frames are cached with a bounded
+animated prefix so long labels remain readable. If colors cannot be resolved
+on a display, color styles fall back to a glyph indicator; when Braille is
+unavailable on its target display, the indicator uses ASCII. An undisplayed
+status or a new pending-tool row starts with a portable frame until its
+display is known. If the same indicator is visible in multiple display
+frames, color styles use a portable glyph rather than a palette prepared for
+only one frame; configured glyph styles remain unchanged. Glyph animations
+keep their natural cadence (roughly 120 ms for braille/ascii, slower for
+dots/ellipsis); raising the frame-rate ceiling does not accelerate them.
+A color style falling back to a glyph also uses that glyph cadence, not
+a needless color-rate timer.
+Changes to styles, colors, and labels invalidate affected prepared frames;
+theme changes clear the color cache. Applying settings through Customize
+refreshes live views without restarting a request.
+
+The normal `mevedel-view-spinner-framerate` ceiling defaults to 60 fps.
+`mevedel-view-spinner-power-policy` defaults to `auto`: external power uses
+that ceiling; battery/backup power or unknown/stale readings use the lower of
+it and `mevedel-view-spinner-battery-framerate` (default 30). `full` always
+uses the normal ceiling; `save` always uses the battery ceiling. Battery 0
+freezes decorative motion for both indicator types, while the global
+`mevedel-view-spinner-animate` switch disables all motion without suppressing
+semantic status or elapsed updates. The policy reads the Emacs UI host, not a
+remote workspace. One shared `battery.el` observer consumes existing battery
+notifications without enabling battery mode; when subscribed automatic views
+are visible it queries at most once per 60 seconds. Automatic power
+transitions follow a notification immediately, or are normally detected
+within that fallback interval. Backend failures and unsupported/unknown
+readings use the conservative saving ceiling. Explicit `full` is useful on
+desktops whose power source cannot be determined. Lower frame rates reduce
+scheduled animation work, not necessarily battery drain proportionally.
 
 Before rendering a restored transcript, `mevedel-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same
@@ -434,7 +489,8 @@ Terminology:
   interaction zones. Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
   ApplyPatch review decision, or direct request input. During those waits it
-  reads `Waiting for input` while its spinner frame keeps animating. Queued
+  reads `Waiting for input`; decorative motion continues only if enabled by
+  style, animation switch and power policy. Queued
   Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.

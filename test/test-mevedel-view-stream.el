@@ -10,6 +10,8 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-animation)
+(require 'mevedel-view-power)
 (require 'mevedel-view-stream)
 (require 'mevedel-agent-control)
 (require 'mevedel-execution-transcript)
@@ -103,6 +105,14 @@
       (cl-incf count)
       (setq start (+ position (length needle))))
     count))
+
+(defmacro mevedel-view-stream-test--with-visible-view (&rest body)
+  "Display the fixture view while evaluating BODY."
+  (declare (indent 0) (debug t))
+  `(save-window-excursion
+     (switch-to-buffer view-buf)
+     (redisplay t)
+     (with-current-buffer view-buf ,@body)))
 
 (mevedel-deftest mevedel-view-stream-begin-turn ()
   ,test
@@ -641,28 +651,94 @@
         (mevedel-view-stream-test--insert-composer-draft draft 3)
         (let* ((before (buffer-string))
                (point-before (point))
-               (index mevedel-view--spinner-frame-index))
+               (frame-pos (text-property-any
+                           (point-min) (point-max)
+                           'mevedel-view-spinner-frame t))
+               (frame (get-text-property frame-pos 'display)))
           (cl-letf (((symbol-function 'mevedel-view--unattended-p)
-                     (lambda (&rest _) t)))
+                     (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.24)))
             (mevedel-view--spinner-tick))
           (should (equal-including-properties before (buffer-string)))
           (should (= point-before (point)))
-          (should (= index mevedel-view--spinner-frame-index))
+          (should (equal frame (get-text-property frame-pos 'display)))
           (should (equal draft
                          (buffer-substring-no-properties
                           (mevedel-view--input-start) (point-max)))))
         (mevedel-view--stop-spinner))))
 
-  :doc "an attended tick advances the frame"
+  :doc "a visible attended tick samples elapsed time instead of an index"
   (mevedel-view-stream-test--with-buffers
-    (with-current-buffer view-buf
-      (mevedel-view--start-spinner "Working...")
-      (let ((index mevedel-view--spinner-frame-index))
-        (cl-letf (((symbol-function 'mevedel-view--unattended-p)
-                   (lambda (&rest _) nil)))
-          (mevedel-view--spinner-tick))
-        (should-not (= index mevedel-view--spinner-frame-index)))
-      (mevedel-view--stop-spinner))))
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full))
+        (mevedel-view--start-spinner "Working...")
+        (let* ((pos (text-property-any (point-min) (point-max)
+                                       'mevedel-view-spinner-frame t))
+               (initial (get-text-property pos 'display)))
+          (should (equal "- Working..." initial))
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.12)))
+            (mevedel-view--spinner-tick))
+          (should (equal "\\ Working..." (get-text-property pos 'display))))
+        (mevedel-view--stop-spinner))))
+
+  :doc "visible high-frequency frames touch only registered display spans"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-tool-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read..."))))
+        (mevedel-view--start-spinner "Working...")
+        (mevedel-view--refresh-pending-tool-lines)
+        (mevedel-view-stream-test--insert-composer-draft
+         "> quoted\nsecond line" 3)
+        (let* ((main (text-property-any (point-min) (point-max)
+                                        'mevedel-view-spinner-frame t))
+               (tool (text-property-any (point-min) (point-max)
+                                        'mevedel-view-inline-spinner-frame t))
+               (before (buffer-substring-no-properties
+                        (point-min) (point-max)))
+               (point-before (point))
+               (undo-before buffer-undo-list)
+               (modified-before (buffer-modified-p))
+               (mevedel-view--spinner-last-second (floor (float-time)))
+               (original-framerate
+                (symbol-function 'mevedel-view-power-framerate))
+               (rates 0))
+          (should main)
+          (should tool)
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.12))
+                    ((symbol-function 'mevedel-view-power-framerate)
+                     (lambda (&rest args)
+                       (cl-incf rates)
+                       (apply original-framerate args)))
+                    ((symbol-function 'mevedel-view-zone-reconcile)
+                     (lambda (&rest _) (ert-fail "tick reconciled a zone")))
+                    ((symbol-function 'mevedel-view--spinner-display-status)
+                     (lambda (&rest _) (ert-fail "tick rebuilt metadata")))
+                    ((symbol-function 'mevedel-view--pending-tool-fragments)
+                     (lambda (&rest _) (ert-fail "tick rebuilt tool rows")))
+                    ((symbol-function 'mevedel-view-animation--colors)
+                     (lambda (&rest _) (ert-fail "tick resolved colors")))
+                    ((symbol-function 'mevedel-view-power--current-state)
+                     (lambda (&rest _) (ert-fail "tick queried power")))
+                    ((symbol-function 'mevedel-view--input-text)
+                     (lambda (&rest _) (ert-fail "tick copied the draft"))))
+            (mevedel-view--spinner-tick))
+          (should (> rates 0))
+          (should (equal "\\ Working..." (get-text-property main 'display)))
+          (should (equal "\\ " (get-text-property tool 'display)))
+          (should (equal before (buffer-substring-no-properties
+                                 (point-min) (point-max))))
+          (should (= point-before (point)))
+          (should (eq undo-before buffer-undo-list))
+          (should (eq modified-before (buffer-modified-p)))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))))
 
 (mevedel-deftest mevedel-view-stream-ensure-progress-for-fsm ()
   ,test
@@ -2043,8 +2119,7 @@
     (save-window-excursion
       (switch-to-buffer view-buf)
       (delete-other-windows)
-      (let ((mevedel-view-spinner-frames '("-" "+"))
-            (mevedel-view--spinner-frame-index 0))
+      (let ((mevedel-view-spinner-style 'ascii))
         (with-current-buffer view-buf
           (setq mevedel-view--in-flight-turn-start
                 (copy-marker mevedel-view--input-marker nil))
@@ -2157,7 +2232,8 @@
              :session session
              :started-at
              (time-subtract (current-time) (seconds-to-time 12))))
-           (mevedel-view-spinner-frames '("-" "+")))
+           (mevedel-view-spinner-style 'ascii)
+           (mevedel-view-spinner-power-policy 'full))
       (setf (mevedel-session-agent-registry session)
             (list (cons "/root/spin"
                         (mevedel-agent-record--create
@@ -2166,7 +2242,7 @@
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request request))
-      (with-current-buffer view-buf
+      (mevedel-view-stream-test--with-visible-view
         (mevedel-view--start-spinner "Thinking...")
         (mevedel-view--interaction-register
          '(:kind ask :id ask :origin "/root" :body "ask"))
@@ -2191,9 +2267,13 @@
                    request
                    (time-add pause-started (seconds-to-time 5)))))
               0.001))
-          (mevedel-view--spinner-tick)
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.12)))
+            (mevedel-view--spinner-tick))
           (should-not
-           (equal frame (get-text-property frame-position 'display))))
+           (equal frame (get-text-property frame-position 'display)))
+          (should (equal text (buffer-substring-no-properties
+                               (overlay-start region) (overlay-end region)))))
         (mevedel-view--interaction-unregister 'ask)
         (let ((text (buffer-substring-no-properties
                      (overlay-start (mevedel-view-zone-region 'progress))
@@ -2241,8 +2321,7 @@
   :doc "spinner tick suppresses modification hooks"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
-      (let ((mevedel-view-spinner-frames '("-" "+"))
-            (mevedel-view--spinner-frame-index 0)
+      (let ((mevedel-view-spinner-style 'ascii)
             (mevedel-view--pending-tool-calls
              '(("call-1" . "Calling Read...")))
             (changes 0))
@@ -2269,7 +2348,7 @@
                      (cl-incf reconciles))
                    (funcall original-reconcile zone start end fragments))))
         (with-current-buffer view-buf
-          (let ((mevedel-view-spinner-frames '("-" "+")))
+          (let ((mevedel-view-spinner-style 'ascii))
             (mevedel-view--start-spinner "Working...")
             (setq reconciles 0)
             (dotimes (_ 10)
@@ -2281,7 +2360,8 @@
                      (overlay-start region) (overlay-end region)
                      'mevedel-view-spinner-frame t)))
               (should frame-pos)
-              (should (equal (get-text-property frame-pos 'display) "-")))
+              (should (equal (get-text-property frame-pos 'display)
+                             "- Working...")))
             (mevedel-view--stop-spinner))))))
 
   :doc "decorated spinner status is normalized to its base label"
@@ -2354,62 +2434,62 @@
   :doc "ASCII fallback frames can be selected"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
-      (let ((mevedel-view-spinner-animate nil)
-            (mevedel-view-spinner-frames mevedel-view-spinner-ascii-frames)
-            (mevedel-view--spinner-frame-index 0))
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full))
         (mevedel-view--start-spinner "Working...")
-        (let ((text (buffer-substring-no-properties
-                     (overlay-start
-                      (mevedel-view-zone-region 'progress))
-                     (overlay-end
-                      (mevedel-view-zone-region 'progress)))))
-          (should (string-match-p "- Working" text)))
+        (let* ((region (mevedel-view-zone-region 'progress))
+               (pos (text-property-any
+                     (overlay-start region) (overlay-end region)
+                     'mevedel-view-spinner-frame t)))
+          (should (string-match-p "Working"
+                                  (buffer-substring-no-properties
+                                   (overlay-start region) (overlay-end region))))
+          (should (equal "- Working..." (get-text-property pos 'display))))
         (mevedel-view--stop-spinner))))
 
   :doc "spinner tick updates pending tool frame spans"
   (mevedel-view-stream-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((mevedel-view-spinner-frames '("-" "+"))
-            (mevedel-view--spinner-frame-index 0)
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-tool-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
              '(("call-1" . "Calling Read..."))))
-        (mevedel-view--insert-pending-tool-lines
-         mevedel-view--pending-tool-calls)
-        (should (string-match-p "- Calling Read"
-                                (buffer-substring-no-properties
-                                 (point-min) (point-max))))
-        (mevedel-view--spinner-tick)
+        (mevedel-view--refresh-pending-tool-lines)
         (let ((frame-pos (text-property-any
                           (point-min) (point-max)
                           'mevedel-view-inline-spinner-frame t)))
           (should frame-pos)
-          (should (equal (get-text-property frame-pos 'display) "+"))))))
+          (should (equal (get-text-property frame-pos 'display) "- "))
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.12)))
+            (mevedel-view--spinner-tick))
+          (should (equal (get-text-property frame-pos 'display) "\\ "))))))
 
   :doc "spinner tick does not move point on pending tool frame"
   (mevedel-view-stream-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((mevedel-view-spinner-frames '("-" "+"))
-            (mevedel-view--spinner-frame-index 0)
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-tool-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
              '(("call-1" . "Calling Read..."))))
-        (mevedel-view--insert-pending-tool-lines
-         mevedel-view--pending-tool-calls)
+        (mevedel-view--refresh-pending-tool-lines)
         (goto-char (text-property-any
                     (point-min) (point-max)
                     'mevedel-view-inline-spinner-frame t))
         (let ((point-before (point)))
-          (mevedel-view--spinner-tick)
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.12)))
+            (mevedel-view--spinner-tick))
           (should (= (point) point-before))))))
 
   :doc "spinner tick updates only history-live and preserves the composer"
   (mevedel-view-stream-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((mevedel-view-spinner-frames '("-" "+"))
-            (mevedel-view--spinner-frame-index 0)
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-tool-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
              '(("call-1" . "Calling Read..."))))
-        (mevedel-view--insert-pending-tool-lines
-         mevedel-view--pending-tool-calls)
+        (mevedel-view--refresh-pending-tool-lines)
         (let ((real-pos
                (text-property-any
                 (point-min) (point-max)
@@ -2424,8 +2504,10 @@
            "> quoted\nsecond line" 4)
           (let ((point-before (point))
                 (draft-before (mevedel-view--input-text)))
-            (mevedel-view--spinner-tick)
-            (should (equal "+" (get-text-property real-pos 'display)))
+            (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                       (lambda () 0.12)))
+              (mevedel-view--spinner-tick))
+            (should (equal "\\ " (get-text-property real-pos 'display)))
             (should (equal "decoy"
                            (get-text-property decoy-pos 'display)))
             (should (= point-before (point)))
@@ -2484,8 +2566,7 @@
 
   :doc "pre-tool render keeps request progress and adds pending line"
   (mevedel-view-stream-test--with-buffers
-    (let ((mevedel-view-spinner-frames '("-" "+"))
-          (mevedel-view--spinner-frame-index 0))
+    (let ((mevedel-view-spinner-style 'ascii))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker))
@@ -2516,6 +2597,97 @@
                                 count t
                                 do (setq start (match-end 0)))))))))
 
+  :doc "disabled motion keeps a visible one-second metadata timer and live status"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-tool-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view-spinner-animate nil)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read..."))))
+        (mevedel-view--start-spinner "Working...")
+        (mevedel-view--refresh-pending-tool-lines)
+        (let* ((main (text-property-any (point-min) (point-max)
+                                        'mevedel-view-spinner-frame t))
+               (tool (text-property-any (point-min) (point-max)
+                                        'mevedel-view-inline-spinner-frame t))
+               (main-frame (get-text-property main 'display))
+               (tool-frame (get-text-property tool 'display)))
+          (should (timerp mevedel-view--spinner-timer))
+          (should (= 1.0 mevedel-view--spinner-timer-period))
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () 0.12)))
+            (mevedel-view--spinner-tick))
+          (should (equal main-frame (get-text-property main 'display)))
+          (should (equal tool-frame (get-text-property tool 'display)))
+          (mevedel-view--update-spinner "Checking completed work...")
+          (should (string-match-p "Checking completed work"
+                                  (buffer-string)))
+          (should (= 1.0 mevedel-view--spinner-timer-period))))))
+
+  :doc "real pending calls preserve current request status without a window timer"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-spinner-style 'ascii)
+          (mevedel-view-tool-spinner-style 'ascii)
+          (mevedel-view-spinner-power-policy 'full)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (should-not (get-buffer-window view-buf t))
+        (mevedel-view-stream-begin-turn
+         mevedel-view--input-marker
+         (with-current-buffer data-buf (copy-marker (point-max))))
+        (mevedel-view--update-spinner "Checking completed work...")
+        (mevedel-view-stream-test--insert-composer-draft
+         "> quoted\nsecond line" 3))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (mevedel-view-stream-pre-tool
+               '(:name "Read" :args (:file_path "a")))
+              (mevedel-view-stream-pre-tool
+               '(:name "Grep" :args (:pattern "x"))))
+            (with-current-buffer view-buf
+              (should (equal "Checking completed work..."
+                             mevedel-view--spinner-status))
+              (should (mevedel-view--request-progress-visible-p))
+              (should (= 2 (length mevedel-view--spinner-tool-targets)))
+              (should-not (timerp mevedel-view--spinner-timer))
+              (should-not mevedel-view--spinner-timer-period)
+              (let ((text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+                (should (string-match-p "Checking completed work" text))
+                (should (string-match-p "Calling Read: a" text))
+                (should (string-match-p "Calling Grep: x" text))
+                (should (< (string-match-p "Calling Grep: x" text)
+                           (string-match-p "Checking completed work" text)))))
+            (mevedel-view-stream-test--with-visible-view
+              (mevedel-view--start-spinner-timer)
+              (should (timerp mevedel-view--spinner-timer))
+              (should (= 0.12 mevedel-view--spinner-timer-period))
+              (should (equal "> quoted\nsecond line"
+                             (mevedel-view--input-text))))
+            (with-current-buffer view-buf
+              (mevedel-view--start-spinner-timer)
+              (should-not (timerp mevedel-view--spinner-timer))
+              (should-not mevedel-view--spinner-timer-period))
+            (with-current-buffer data-buf
+              (mevedel-view-stream-post-tool
+               '(:name "Read" :args (:file_path "a"))))
+            (with-current-buffer view-buf
+              (should (equal "Checking completed work..."
+                             mevedel-view--spinner-status))
+              (should (equal "Calling Grep: x..."
+                             (cdar mevedel-view--pending-tool-calls)))
+              (should (= 1 (length mevedel-view--spinner-tool-targets)))
+              (should-not (string-match-p "Calling Read: a"
+                                          (buffer-string)))
+              (should (equal "> quoted\nsecond line"
+                             (mevedel-view--input-text)))
+              (should (= 3 (- (point) (mevedel-view--input-start))))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-scheduled-render)))))
+
   :doc "spinner hook does not duplicate pending tool status in flight"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
@@ -2535,8 +2707,7 @@
 
   :doc "Agent pre-tool keeps request progress without duplicate pending line"
   (mevedel-view-stream-test--with-buffers
-    (let ((mevedel-view-spinner-frames '("-" "+"))
-          (mevedel-view--spinner-frame-index 0))
+    (let ((mevedel-view-spinner-style 'ascii))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker))
@@ -3792,7 +3963,7 @@
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer data-buf
       (insert "*** ask\n\nreply\n"))
-    (with-current-buffer view-buf
+    (mevedel-view-stream-test--with-visible-view
       (mevedel-view-stream-begin-turn
        (point-min)
        (with-current-buffer data-buf (copy-marker (point-min) nil)))
@@ -3823,7 +3994,7 @@
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer data-buf
       (insert "*** ask\n\nreply\n"))
-    (with-current-buffer view-buf
+    (mevedel-view-stream-test--with-visible-view
       (mevedel-view-stream-begin-turn
        (point-min)
        (with-current-buffer data-buf (copy-marker (point-min) nil)))
@@ -3842,6 +4013,230 @@
       (should-not (timerp mevedel-view--spinner-timer))
       (should-not mevedel-view--in-flight-turn-start)
       (should-not mevedel-view--data-turn-start))))
+
+(mevedel-deftest mevedel-view-animation-resume-lifecycle
+  (:doc "Scroll/focus only rearm frames; mode change releases power and timers.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'auto)
+            (reconciles 0))
+        (mevedel-view--start-spinner "Working...")
+        (should (timerp mevedel-view--spinner-timer))
+        (should (gethash view-buf mevedel-view-power--watchers))
+        (let ((timer mevedel-view--spinner-timer))
+          (cl-letf (((symbol-function 'mevedel-view--render-request-progress)
+                     (lambda (&rest _) (cl-incf reconciles)))
+                    ((symbol-function 'mevedel-view--refresh-pending-tool-lines)
+                     (lambda (&rest _) (cl-incf reconciles))))
+            (mevedel-view--resume-on-window-scroll (selected-window) (point-min))
+            (mevedel-view--resume-render-if-attended view-buf)
+            (should (= 0 reconciles)))
+          (fundamental-mode)
+          (should-not (mevedel--timer-pending-p timer))
+          (should-not (gethash view-buf mevedel-view-power--watchers)))))))
+
+(mevedel-deftest mevedel-view-animation-power-cadence
+  (:doc "The actual view timer changes cadence without restarting the phase.")
+  (let ((mevedel-view-animation--cache nil))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (_face _frame) '("#ff0000" . "#ffffff"))))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-spinner-framerate 60)
+                (mevedel-view-spinner-battery-framerate 30)
+                (mevedel-view-spinner-power-policy 'full))
+            (mevedel-view--start-spinner "Working...")
+            (should (< (abs (- mevedel-view--spinner-timer-period (/ 1.0 60)))
+                       1e-7))
+            (let ((phase mevedel-view--spinner-phase-start)
+                  (full-timer mevedel-view--spinner-timer))
+              (setq mevedel-view-spinner-power-policy 'save)
+              (mevedel-view--start-spinner-timer)
+              (should (< (abs (- mevedel-view--spinner-timer-period (/ 1.0 30)))
+                         1e-7))
+              (should-not (mevedel--timer-pending-p full-timer))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (setq mevedel-view-spinner-battery-framerate 0)
+              (mevedel-view--start-spinner-timer)
+              (should (= 1.0 mevedel-view--spinner-timer-period))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (setq mevedel-view-spinner-style 'static)
+              (mevedel-view--start-spinner-timer)
+              (should (= 1.0 mevedel-view--spinner-timer-period)))))))))
+
+(mevedel-deftest mevedel-view-animation-auto-transition
+  (:doc "Battery notifications rearm the view, preserving phase and color bank.")
+  (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+             (lambda (_face _frame) '("#ff0000" . "#ffffff"))))
+    (let ((mevedel-view-power--state 'unknown)
+          (mevedel-view-power--sample-time nil)
+          (mevedel-view-animation--cache nil))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-spinner-power-policy 'auto)
+                (mevedel-view-spinner-framerate 60)
+                (mevedel-view-spinner-battery-framerate 30))
+            (mevedel-view--start-spinner "Working...")
+            (should (gethash view-buf mevedel-view-power--watchers))
+            (should (< (abs (- mevedel-view--spinner-timer-period (/ 1.0 30)))
+                       1e-7))
+            (let ((phase mevedel-view--spinner-phase-start)
+                  (bank mevedel-view-animation--cache))
+              (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
+              (should (< (abs (- mevedel-view--spinner-timer-period (/ 1.0 60)))
+                         1e-7))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (should (eq bank mevedel-view-animation--cache))
+              (mevedel-view-power--sample '((?L . "BAT") (?B . "low")))
+              (should (< (abs (- mevedel-view--spinner-timer-period (/ 1.0 30)))
+                         1e-7))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (should (eq bank mevedel-view-animation--cache)))))))))
+
+(mevedel-deftest mevedel-view-animation-expired-external
+  (:doc "An expired AC reading with a failed backend drops the actual timer rate.")
+  (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+             (lambda (_face _frame) '("#ff0000" . "#ffffff"))))
+    (let ((mevedel-view-animation--cache nil)
+          (now 1000.0)
+          (mevedel-view-power--state 'unknown)
+          (mevedel-view-power--sample-time nil)
+          (mevedel-view-power--last-query nil)
+          (battery-status-function (lambda () (error "Battery backend unavailable"))))
+      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-spinner-style 'shimmer)
+                  (mevedel-view-spinner-power-policy 'auto)
+                  (mevedel-view-spinner-framerate 60)
+                  (mevedel-view-spinner-battery-framerate 0))
+              (mevedel-view--start-spinner "Working...")
+              (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
+              (should (< (abs (- mevedel-view--spinner-timer-period
+                                 (/ 1.0 60))) 1e-7))
+              (let ((fast mevedel-view--spinner-timer))
+                (setq now 1060.0)
+                (when mevedel-view-power--timer
+                  (cancel-timer mevedel-view-power--timer))
+                (mevedel-view-power--poll)
+                (should-not (mevedel--timer-pending-p fast))
+                (should (= 1.0 mevedel-view--spinner-timer-period))))))))))
+
+(mevedel-deftest mevedel-view-animation-tool-display-frame
+  (:doc "Tool frames use portable initial glyphs and their own target frame.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-tool-spinner-style 'braille)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read...")))
+            (original (symbol-function 'mevedel-view-animation-frame))
+            frames)
+        (cl-letf (((symbol-function 'char-displayable-p)
+                   (lambda (_character) t))
+                  ((symbol-function 'mevedel-view-animation-frame)
+                   (lambda (style label seconds face &optional frame)
+                     (when (eq face 'mevedel-view-ephemeral)
+                       (push frame frames))
+                     (funcall original style label seconds face frame))))
+          (mevedel-view--refresh-pending-tool-lines)
+          (should (eq (car frames) :multiple))
+          (let ((pos (text-property-any
+                      (point-min) (point-max)
+                      'mevedel-view-inline-spinner-frame t)))
+            (should (equal "- " (get-text-property pos 'display)))
+            (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                       (lambda () 0.12)))
+              (mevedel-view--spinner-tick))
+            (should (eq (car frames) (selected-frame)))
+            (should (equal "⠙ " (get-text-property pos 'display)))))))))
+
+(mevedel-deftest mevedel-view-animation-main-initial-frame
+  (:doc "An undisplayed status uses a portable frame, not the selected frame.")
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-style 'braille))
+        (cl-letf (((symbol-function 'char-displayable-p)
+                   (lambda (_character) t)))
+          (let ((line (mevedel-view--format-spinner-line "Working...")))
+            (should (equal "- Working..."
+                           (get-text-property 0 'display line)))))))))
+
+(mevedel-deftest mevedel-view-animation-multiple-frame-glyph-style
+  (:doc "A multi-frame status retains dots, ellipsis, and ASCII styles.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (dolist (style '(dots ellipsis ascii))
+        (let ((mevedel-view-spinner-style style)
+              (mevedel-view-tool-spinner-style 'static)
+              (mevedel-view-spinner-power-policy 'full))
+          (mevedel-view--start-spinner "Working...")
+          (let* ((target mevedel-view--spinner-label-target)
+                 (pos (marker-position (car target)))
+                 (initial (get-text-property pos 'display)))
+            (setq mevedel-view--spinner-last-second (floor (float-time)))
+            (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
+                       (lambda (_target) :multiple))
+                      ((symbol-function 'mevedel-view--animation-seconds)
+                       (lambda () 0.48)))
+              (mevedel-view--spinner-tick))
+            (should (equal
+                     (mevedel-view-animation-frame
+                      style "Working..." 0.48 'mevedel-view-spinner :multiple)
+                     (get-text-property pos 'display)))
+            (should (= (string-width initial)
+                       (string-width (get-text-property pos 'display)))))
+          (mevedel-view--stop-spinner))))))
+
+(mevedel-deftest mevedel-view-animation-colorless-glyph-cadence
+  (:doc "Colorless views use the glyph timer cadence without frame-time queries.")
+  (let ((mevedel-view-animation--cache nil)
+        (color-queries 0))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (_face _frame)
+                 (cl-incf color-queries)
+                 nil)))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-tool-spinner-style 'static)
+                (mevedel-view-spinner-power-policy 'full))
+            (mevedel-view--start-spinner "Working...")
+            (should (= 0.12 mevedel-view--spinner-timer-period))
+            (let ((queries color-queries))
+              (setq mevedel-view--spinner-last-second (floor (float-time)))
+              (mevedel-view--spinner-tick)
+              (should (= queries color-queries))
+              (should (= 0.12 mevedel-view--spinner-timer-period)))))))))
+
+(mevedel-deftest mevedel-view-animation-theme-prepares-off-frame-path
+  (:doc "Theme invalidation defers color preparation to semantic maintenance.")
+  (let ((mevedel-view-animation--cache nil)
+        (color-queries 0))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (_face _frame)
+                 (cl-incf color-queries)
+                 '("#ff0000" . "#ffffff"))))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-tool-spinner-style 'static)
+                (mevedel-view-spinner-power-policy 'full))
+            (mevedel-view--start-spinner "Working...")
+            (should (> color-queries 0))
+            (mevedel-view-animation-invalidate)
+            (let ((queries color-queries))
+              (setq mevedel-view--spinner-last-second (floor (float-time)))
+              (mevedel-view--spinner-tick)
+              (should (= queries color-queries))
+              (should-not mevedel-view-animation--cache)
+              (setq mevedel-view--spinner-last-second nil)
+              (mevedel-view--spinner-tick)
+              (should (> color-queries queries))
+              (should mevedel-view-animation--cache))))))))
 
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here
