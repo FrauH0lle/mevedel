@@ -4480,8 +4480,10 @@
           (buffer-substring-no-properties
            (point-min) (mevedel-view--input-start))))))))
 
-(mevedel-deftest mevedel-view-render--refresh-tool-row-now
-  (:doc "progress refresh retains unrelated completed tool renderings")
+(mevedel-deftest mevedel-view-render--refresh-tool-row-now ()
+  ,test
+  (test)
+  :doc "progress refresh retains unrelated completed tool renderings"
   (mevedel-view-test--with-buffers
     (let ((stable-position nil)
           (stable-computations 0)
@@ -4506,7 +4508,37 @@
           (mevedel-view--full-rerender)
           (should (= 0 stable-computations)))
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start))))))))
+        (should (= 4 (- (point) (mevedel-view--input-start)))))))
+  :doc "expanding a refreshed row follows metadata growth before its source"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (dolist (id '("earlier" "following"))
+        (insert "#+begin_tool Custom\n")
+        (let ((start (point)))
+          (insert (format "(:name \"Custom\" :args (:value %S))\n\n%s-result\n" id id)
+                  (mevedel-tool-render-data-format '(:status success) id))
+          (put-text-property start (point) 'gptel (cons 'tool id)))
+        (insert "\n#+end_tool\n")
+        (when (equal id "earlier")
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'provider-tool-batch :id id
+                         :messages (make-string 5000 ?x)))))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (should (mevedel-view--refresh-tool-row data-buf "following"))
+      (should (mevedel-tool-render-data-update
+               data-buf "earlier"
+               (list :execution-output (make-string 2300 ?y))))
+      (let ((region (mevedel-view--tool-row-region data-buf "following")))
+        (goto-char (car region))
+        (mevedel-view-toggle-section)
+        (should (string-search "following-result" (buffer-string)))
+        (should-not (string-search "eHh4eHh4eHh4" (buffer-string)))
+        (let ((source (get-text-property (point) 'mevedel-view-source)))
+          (should (markerp (car source)))
+          (should (markerp (cdr source)))))
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
 
 (mevedel-deftest mevedel-view-render-summary-expansion
   (:doc "a collapsed Bash row defers its body until the user's expansion")
