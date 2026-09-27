@@ -231,6 +231,8 @@
 (declare-function mevedel-view--header-string
                   "mevedel-view" (data-buf))
 (declare-function mevedel-view--pinned-prompt "mevedel-view" (window))
+(declare-function mevedel-view--refresh-continuation-prompt
+                  "mevedel-view" (data-buffer historical-p))
 (declare-function mevedel-view--render-status
                   "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
@@ -7165,6 +7167,8 @@ SOURCE is the source range of the skipped summary in the data buffer."
   "Reset the current view before projecting DATA-BUF.
 SESSION-DATA-BUF supplies the live header.  HISTORICAL-P inserts the
 historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
+  (unless agent-transcript-p
+    (mevedel-view--refresh-continuation-prompt data-buf historical-p))
   (mevedel-view-render-invalidate-live-tail)
   (if agent-transcript-p
       (progn
