@@ -4014,6 +4014,169 @@
       (should-not mevedel-view--in-flight-turn-start)
       (should-not mevedel-view--data-turn-start))))
 
+(mevedel-deftest mevedel-view-animation-frozen-metadata
+  (:doc "Elapsed metadata redraws never move disabled or zero-fps glyphs.")
+  (dolist (setting '(disabled zero-fps))
+    (mevedel-view-stream-test--with-buffers
+      (mevedel-view-stream-test--with-visible-view
+        (let ((mevedel-view-spinner-style 'ascii)
+              (mevedel-view-tool-spinner-style 'ascii)
+              (mevedel-view-spinner-animate (eq setting 'zero-fps))
+              (mevedel-view-spinner-power-policy
+               (if (eq setting 'zero-fps) 'save 'full))
+              (mevedel-view-spinner-battery-framerate 0)
+              (seconds 0))
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () seconds)))
+            (mevedel-view--start-spinner "Working...")
+            (let* ((target mevedel-view--spinner-label-target)
+                   (initial (get-text-property
+                             (marker-position (car target)) 'display)))
+              (should (= mevedel-view--spinner-timer-period 1.0))
+              (dolist (elapsed '(3 6))
+                (setq seconds elapsed
+                      mevedel-view--spinner-start-time
+                      (time-subtract (current-time) (seconds-to-time elapsed))
+                      mevedel-view--spinner-last-second nil)
+                (mevedel-view--spinner-tick)
+                (should (equal initial
+                               (get-text-property
+                                (marker-position
+                                 (car mevedel-view--spinner-label-target))
+                                'display)))
+                (should (string-match-p
+                         (format " · %ds" elapsed) (buffer-string)))))))))))
+
+(mevedel-deftest mevedel-view-animation-freeze-resume-phase
+  (:doc "Zero fps holds the last displayed sample, not the next clock phase.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view-spinner-battery-framerate 0)
+            (seconds 0.119))
+        (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                   (lambda () seconds)))
+          (mevedel-view--start-spinner "Working...")
+          (let ((phase mevedel-view--spinner-phase-start)
+                (frame (get-text-property
+                        (marker-position (car mevedel-view--spinner-label-target))
+                        'display)))
+            (setq seconds 0.121)
+            ;; A focus/scroll rearm at the new clock phase does not render a
+            ;; new sample and must not overwrite the last displayed one.
+            (mevedel-view--start-spinner-timer)
+            (should (equal frame
+                           (get-text-property
+                            (marker-position
+                             (car mevedel-view--spinner-label-target))
+                            'display)))
+            (setq mevedel-view-spinner-power-policy 'save)
+            (mevedel-view--refresh-animation-options)
+            (should (equal frame
+                           (get-text-property
+                            (marker-position
+                             (car mevedel-view--spinner-label-target))
+                            'display)))
+            (setq seconds 3.48
+                  mevedel-view--spinner-start-time
+                  (time-subtract (current-time) (seconds-to-time 3))
+                  mevedel-view--spinner-last-second nil)
+            (mevedel-view--spinner-tick)
+            (should (equal frame
+                           (get-text-property
+                            (marker-position
+                             (car mevedel-view--spinner-label-target))
+                            'display)))
+            (setq mevedel-view-spinner-power-policy 'full)
+            (mevedel-view--refresh-animation-options)
+            (should (equal (mevedel-view-animation-frame
+                            'ascii "Working..." seconds 'mevedel-view-spinner
+                            (selected-frame))
+                           (get-text-property
+                            (marker-position
+                             (car mevedel-view--spinner-label-target))
+                            'display)))
+            ;; A real rendered frame supersedes the old frozen sample before
+            ;; the next transition, without a metadata/second redraw.
+            (mevedel-view--spinner-tick)
+            (let ((resumed (get-text-property
+                            (marker-position
+                             (car mevedel-view--spinner-label-target))
+                            'display)))
+              (setq mevedel-view-spinner-power-policy 'save
+                    seconds 3.601)
+              (mevedel-view--start-spinner-timer)
+              (setq mevedel-view--spinner-last-second nil)
+              (mevedel-view--spinner-tick)
+              (should (equal resumed (get-text-property
+                                      (marker-position
+                                       (car mevedel-view--spinner-label-target))
+                                      'display))))
+            (should (= phase mevedel-view--spinner-phase-start))))))))
+
+(mevedel-deftest mevedel-view-animation-freeze-tool-row
+  (:doc "Power changes keep the last displayed tool glyph, not its initial frame.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-tool-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view-spinner-battery-framerate 0)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read...")))
+            (seconds 0.36))
+        (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                   (lambda () seconds)))
+          (mevedel-view--start-spinner "Working...")
+          (mevedel-view--refresh-pending-tool-lines)
+          (mevedel-view--spinner-tick)
+          (let* ((target (car mevedel-view--spinner-tool-targets))
+                 (display (get-text-property
+                           (marker-position (car target)) 'display)))
+            (should (equal display "/ "))
+            (setq seconds 0.481
+                  mevedel-view-spinner-power-policy 'save)
+            (mevedel-view--refresh-animation-options)
+            (should (equal display (get-text-property
+                                    (marker-position (car target)) 'display)))
+            (setq seconds 3.6
+                  mevedel-view--spinner-start-time
+                  (time-subtract (current-time) (seconds-to-time 3))
+                  mevedel-view--spinner-last-second nil)
+            (mevedel-view--spinner-tick)
+            (should (equal display (get-text-property
+                                    (marker-position (car target)) 'display)))
+            (setq mevedel-view--pending-tool-calls
+                  '(("call-1" . "Calling Read...")
+                    ("call-2" . "Calling Grep...")))
+            (mevedel-view--refresh-pending-tool-lines)
+            (should (equal display
+                           (get-text-property
+                            (marker-position
+                             (caar mevedel-view--spinner-tool-targets))
+                            'display)))
+            (let ((second-display
+                   (get-text-property
+                    (marker-position
+                     (car (cadr mevedel-view--spinner-tool-targets)))
+                    'display)))
+              (setq mevedel-view--pending-tool-calls
+                    '(("call-2" . "Calling Grep...")))
+              (mevedel-view--refresh-pending-tool-lines)
+              (should (equal second-display
+                             (get-text-property
+                              (marker-position
+                               (caar mevedel-view--spinner-tool-targets))
+                              'display))))
+            (setq mevedel-view-tool-spinner-style 'dots)
+            (mevedel-view--refresh-animation-options)
+            (should (equal "*... "
+                           (get-text-property
+                            (marker-position
+                             (caar mevedel-view--spinner-tool-targets))
+                            'display)))))))))
+
 (mevedel-deftest mevedel-view-animation-resume-lifecycle
   (:doc "Scroll/focus only rearm frames; mode change releases power and timers.")
   (mevedel-view-stream-test--with-buffers
@@ -4132,6 +4295,31 @@
                              (mevedel-view-animation-frame
                               'ascii "Working..." (- now phase)
                               'mevedel-view-spinner (selected-frame)))))))))))
+
+(mevedel-deftest mevedel-view-animation-overdue-timer
+  (:doc "An overdue one-shot does not replay missed callbacks or allocate timers.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (ticks 0))
+        (mevedel-view--start-spinner "Working...")
+        (let ((timer mevedel-view--spinner-timer)
+              (phase mevedel-view--spinner-phase-start))
+          (should-not (timer--repeat-delay timer))
+          ;; Deliver one deadline after a simulated long stall.  Emacs's
+          ;; repeating timer would requeue overdue callbacks in a burst.
+          (timer-set-time timer
+                          (time-subtract (current-time) (seconds-to-time 3)))
+          (cl-letf (((symbol-function 'mevedel-view--spinner-tick)
+                     (lambda () (cl-incf ticks))))
+            (timer-event-handler timer)
+            (should (= ticks 1))
+            (should (eq timer mevedel-view--spinner-timer))
+            (should (= phase mevedel-view--spinner-phase-start))
+            (should (mevedel--timer-pending-p timer))
+            (should (< (timer-until timer nil) -0.06))
+            (should-not (timer--repeat-delay timer))))))))
 
 (mevedel-deftest mevedel-view-animation-auto-transition
   (:doc "Battery notifications rearm the view, preserving phase and color bank.")

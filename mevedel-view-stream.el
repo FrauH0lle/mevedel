@@ -147,6 +147,9 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-phase-start nil
   "Wall-clock time used to derive animation phase across timer stalls.")
 
+(defvar-local mevedel-view--spinner-frozen-seconds nil
+  "Animation phase held while decorative motion is disabled.")
+
 (defvar-local mevedel-view--spinner-timer-period nil
   "Current visual timer cadence, or nil when no timer is running.")
 
@@ -162,8 +165,11 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-last-second nil
   "Elapsed label last rendered on a timer tick.")
 
-(defvar-local mevedel-view--spinner-last-visual-frame nil
-  "Visual frame last displayed on the request label.")
+(defvar-local mevedel-view--spinner-last-sample-seconds nil
+  "Phase of the most recently sampled request-label display frame.")
+
+(defvar-local mevedel-view--spinner-rendered-tool-style nil
+  "Style of the current pending-tool indicator fragments.")
 
 (defvar-local mevedel-view--spinner-rendered-state nil
   "Last (STATUS PREFIX) rendered in the request-progress fragment.")
@@ -235,6 +241,23 @@ immediately, then use this delay for the heavier transcript render."
   "Return continuous seconds since the current progress animation started."
   (max 0.0 (- (float-time) (or mevedel-view--spinner-phase-start
                                 (float-time)))))
+
+(defun mevedel-view--animation-display-seconds ()
+  "Return the phase for a newly rendered progress label.
+Semantic redraws must not advance the glyph when motion is disabled.
+The underlying phase continues to advance and resumes without restarting."
+  (if (zerop (mevedel-view-power-framerate
+             mevedel-view-spinner-framerate
+             mevedel-view-spinner-battery-framerate
+             mevedel-view-spinner-power-policy
+             mevedel-view-spinner-animate))
+      (or mevedel-view--spinner-frozen-seconds
+          (setq mevedel-view--spinner-frozen-seconds
+                (or mevedel-view--spinner-last-sample-seconds
+                    (mevedel-view--animation-seconds))))
+    (setq mevedel-view--spinner-frozen-seconds nil)
+    (setq mevedel-view--spinner-last-sample-seconds
+          (mevedel-view--animation-seconds))))
 
 (defun mevedel-view--duration-label (seconds)
   "Return a compact elapsed-time label for SECONDS."
@@ -424,7 +447,7 @@ FACE defaults to `mevedel-view-spinner'."
                             'mevedel-view-spinner-frame t
                             'display (mevedel-view-animation-frame
                                       mevedel-view-spinner-style base
-                                      (mevedel-view--animation-seconds) face
+                                      (mevedel-view--animation-display-seconds) face
                                       (mevedel-view--animation-buffer-frame))
                             'read-only t
                             'keymap mevedel-view--display-map
@@ -599,6 +622,15 @@ MAIN means use the actual color/glyph rendering of the request label."
   (when (and (mevedel-view--spinner-active-p)
              (not mevedel-view--spinner-phase-start))
     (setq mevedel-view--spinner-phase-start (float-time)))
+  ;; Latch on a zero-fps transition even when the next redraw is delayed.
+  ;; An ordinary rearm must not record the clock phase as a displayed sample.
+  (if (zerop (mevedel-view-power-framerate
+             mevedel-view-spinner-framerate
+             mevedel-view-spinner-battery-framerate
+             mevedel-view-spinner-power-policy
+             mevedel-view-spinner-animate))
+      (mevedel-view--animation-display-seconds)
+    (setq mevedel-view--spinner-frozen-seconds nil))
   (let* ((visible (mevedel-view--animation-visible-p))
          (main-visible (and visible
                             (mevedel-view--animation-target-visible-p
@@ -650,7 +682,7 @@ MAIN means use the actual color/glyph rendering of the request label."
         (let ((buffer (current-buffer)) timer)
           (setq timer
                 (run-at-time
-                 period period
+                 period nil
                  (lambda ()
                    (if (not (buffer-live-p buffer))
                        (cancel-timer timer)
@@ -660,7 +692,17 @@ MAIN means use the actual color/glyph rendering of the request label."
                                     mevedel-view--pending-tool-calls)
                                 (mevedel-view--animation-visible-p))
                            (condition-case nil
-                               (mevedel-view--spinner-tick)
+                               (progn
+                                 (mevedel-view--spinner-tick)
+                                 ;; A one-shot timer cannot replay deadlines
+                                 ;; missed during a stall.  Reuse its object
+                                 ;; after each delivered tick to avoid a new
+                                 ;; allocation at the visual frame rate.
+                                 (when (eq timer mevedel-view--spinner-timer)
+                                   (timer-set-time
+                                    timer (time-add (current-time)
+                                                    (seconds-to-time period)))
+                                   (timer-activate timer)))
                              (error (mevedel-view--stop-spinner-timer)))
                          (cancel-timer timer)
                          (when (eq timer mevedel-view--spinner-timer)
@@ -670,10 +712,15 @@ MAIN means use the actual color/glyph rendering of the request label."
 (defun mevedel-view--refresh-animation-options ()
   "Apply changed animation settings to a live view without restarting work."
   (when (derived-mode-p 'mevedel-view-mode)
+    (mevedel-view--animation-display-seconds)
     (setq mevedel-view--spinner-rendered-state nil)
     (when (mevedel-view--spinner-active-p)
       (mevedel-view--render-request-progress)
-      (mevedel-view--refresh-pending-tool-lines)
+      ;; A policy/rate change does not change an existing tool row's shape.
+      ;; Keep its last displayed glyph, including target-frame fallbacks.
+      (unless (eq mevedel-view--spinner-rendered-tool-style
+                  mevedel-view-tool-spinner-style)
+        (mevedel-view--refresh-pending-tool-lines))
       (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-tick ()
@@ -716,6 +763,7 @@ MAIN means use the actual color/glyph rendering of the request label."
                 (let ((frame (mevedel-view-animation-frame
                               style label seconds 'mevedel-view-spinner
                               display-frame)))
+                  (setq mevedel-view--spinner-last-sample-seconds seconds)
                   (unless (equal-including-properties
                            frame (get-text-property start 'display))
                     (put-text-property start end 'display frame))))))
@@ -848,7 +896,9 @@ Return non-nil when the status was restored."
      (cl-incf mevedel-view--spinner-generation)
      (setq mevedel-view--spinner-status nil
            mevedel-view--spinner-owner nil
-           mevedel-view--spinner-phase-start nil)
+           mevedel-view--spinner-phase-start nil
+           mevedel-view--spinner-frozen-seconds nil
+           mevedel-view--spinner-last-sample-seconds nil)
      (unless mevedel-view--pending-tool-calls
         (unless (and (boundp 'mevedel--data-buffer)
                      mevedel--data-buffer
@@ -897,16 +947,46 @@ POSITION may be an integer or marker."
 
 (defun mevedel-view--refresh-pending-tool-lines ()
   "Refresh lightweight pending-tool live-tail lines."
-  (mevedel-view--delete-pending-tool-live-lines)
-  (when mevedel-view--pending-tool-calls
-    (let* ((cap mevedel-view-pending-tools-visible-max)
-           (visible (cl-subseq mevedel-view--pending-tool-calls
-                               0
-                               (min cap
-                                    (length
-                                     mevedel-view--pending-tool-calls)))))
-      (mevedel-view--insert-pending-tool-lines visible)))
-  (mevedel-view--capture-tool-animation-targets)
+  (let ((previous
+         (when (eq mevedel-view--spinner-rendered-tool-style
+                   mevedel-view-tool-spinner-style)
+           (delq nil
+                 (mapcar (lambda (target)
+                           (when-let* ((pos (marker-position (car target)))
+                                       ((eq (marker-buffer (car target))
+                                            (current-buffer)))
+                                       (id (get-text-property
+                                            pos 'mevedel-view-zone-id)))
+                             (cons id (get-text-property pos 'display))))
+                         mevedel-view--spinner-tool-targets)))))
+    (mevedel-view--delete-pending-tool-live-lines)
+    (when mevedel-view--pending-tool-calls
+      (let* ((cap mevedel-view-pending-tools-visible-max)
+             (visible (cl-subseq mevedel-view--pending-tool-calls
+                                 0
+                                 (min cap
+                                      (length
+                                       mevedel-view--pending-tool-calls)))))
+        (mevedel-view--insert-pending-tool-lines visible)))
+    (mevedel-view--capture-tool-animation-targets)
+    ;; Reconciliation replaces the whole live-tail zone.  Rows for a still
+    ;; pending call retain their displayed sample, even while motion is off.
+    (let ((modified (buffer-modified-p))
+          (inhibit-read-only t)
+          (inhibit-modification-hooks t)
+          (buffer-undo-list t))
+      (unwind-protect
+          (dolist (target mevedel-view--spinner-tool-targets)
+            (let* ((start (marker-position (car target)))
+                   (old (assoc (get-text-property start 'mevedel-view-zone-id)
+                               previous)))
+              (when (and old (not (equal-including-properties
+                                  (cdr old) (get-text-property start 'display))))
+                (put-text-property start (marker-position (cdr target))
+                                   'display (cdr old)))))
+        (set-buffer-modified-p modified))))
+  (setq mevedel-view--spinner-rendered-tool-style
+        mevedel-view-tool-spinner-style)
   (mevedel-view--start-spinner-timer))
 
 (defun mevedel-view-stream--execution-view-buffer (data-buffer)
@@ -1267,7 +1347,9 @@ NO-PROGRESS suppresses active-turn presentation."
   (setq mevedel-view--pending-tool-calls nil
         mevedel-view--request-progress-suppressed t
         mevedel-view--spinner-start-time nil
-        mevedel-view--spinner-phase-start nil)
+        mevedel-view--spinner-phase-start nil
+        mevedel-view--spinner-frozen-seconds nil
+        mevedel-view--spinner-last-sample-seconds nil)
   ;; Retire obsolete streamed work, but keep a full recovery requested
   ;; by the terminal render's error handler before this mandatory release.
   (when (eq mevedel-view--pending-render-kind 'incremental)

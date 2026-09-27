@@ -91,3 +91,36 @@ review, and full-suite runner):
   (`.scratch/spinner-suite-failures-focused.log`); these cases passed in the
   same focused roster on clean `bc31bb12`, before the concurrent plan-handoff
   working-tree edits (`.scratch/spinner-current-baseline-focused.log`).
+
+Final animation completion follow-up, 2026-09-27 (source: scoped working-tree
+changes after `378963ae`, independent read-only reviews and fresh Eask runs):
+
+- A verifier reproduced a frozen ASCII label changing on an elapsed redraw
+  after a non-rendering scroll rearm, and repeating timer callbacks catching
+  up in a burst after a stall. The implementation now records only actually
+  displayed main samples, clears the frozen latch on resumption, and rearms
+  one owned non-repeating timer from the present. Pending-tool rebuilds
+  restore surviving calls' glyphs by stable zone ID. New tests cover freeze
+  boundaries, repeated freeze/resume, structural tool rows, and overdue timer
+  delivery. Both independent follow-up reviewers returned PASS; the runtime
+  verifier exercised real-view AC/BAT notifications and 12 pending-tool
+  permutations (`artifact://executions/execution-PdULZ9.log`,
+  `artifact://executions/execution-daSNIx.log`).
+- After Eask cleanup the named view roster plus power tests passed **910/911
+  expected, zero unexpected, one optional Markdown-mode skip**
+  (`.scratch/spinner-stall-final-focused.log`). Compilation completed all 210
+  files without warnings (`.scratch/spinner-stall-final-compile.log`). The
+  full Eask runner discovered 8725 tests and ended with **8 unexpected, 30
+  skipped** (`.scratch/spinner-stall-final-full-suite/`,
+  `.scratch/spinner-stall-final-full-run.log`); its unexpected test names match
+  the earlier eight recorded above, so the full suite remains not green. The
+  unrelated plan-handoff working-tree changes still belong to another task.
+- Fresh graphical Emacs production-view smoke runs after the one-shot timer
+  change measured median delivered/rendered intervals near 17.3 ms under
+  `full` and 34.0 ms under `save` (30 fps), with five visible tool rows;
+  callback medians were 0.376/0.387 ms respectively. Saving at zero fps
+  delivered only two elapsed-metadata callbacks and no changed frames over
+  ~3.3 seconds; a hidden view delivered no callbacks. These are short-run
+  overhead and cadence checks, not battery-life measurements or a guarantee
+  of 60 displayed frames per second (`.scratch/spinner-final-one-shot-*.stats`,
+  `artifact://executions/execution-GU1igq.log`).
