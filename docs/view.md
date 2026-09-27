@@ -304,10 +304,15 @@ Animation adds a stricter visibility gate without changing that rendering
 contract: a windowless or offscreen indicator has no animation wakeups. The
 per-view timer runs only while a progress label or pending-tool indicator is
 visible in an attended window, and updates registered spans instead of scanning
-the transcript each frame. Focus, window and scroll changes rearm it; callbacks
-skip frames missed during stalls instead of replaying them. Static or frozen
-indicators require no decorative timer, although a visible active request can
-still update elapsed text once a second. Waiting for input freezes active
+the transcript each frame. Focus, window and scroll changes rearm it; each
+one-shot callback rearms from the present rather than queuing overdue repeats
+after a stall. Static or frozen indicators require no decorative timer,
+although a visible active request can still update elapsed text once a second
+without advancing a frozen indicator. Freezing keeps the last displayed
+sample, including an existing tool row's glyph across option changes and
+pending-tool row rebuilds; a scheduling-only rearm does not sample the next
+clock phase. A subsequent resume clears the old freeze latch without
+restarting the underlying phase. Waiting for input freezes active
 elapsed time while allowing motion under the selected policy. Progress/status
 ownership, the stream-render delay, and the authoritative data buffer do not
 change with animation settings.

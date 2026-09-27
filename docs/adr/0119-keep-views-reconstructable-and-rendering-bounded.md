@@ -59,8 +59,10 @@ detailed rendering and recovery contracts.
 Request progress animation is presentation only. The view stream schedules
 one timer for visible decorative frames and elapsed metadata, separate from
 transcript rendering; it updates registered fragment-owned display spans and
-never writes the authoritative transcript. Time-based frame selection skips
-missed samples and retains phase across power changes. The foreground label
+never writes the authoritative transcript. Each one-shot callback rearms its
+timer from the present, so a stall neither replays overdue callbacks nor
+allocates a new timer at frame rate. Time-based frame selection skips missed
+samples and retains phase across power changes. The foreground label
 offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
 pending-tool rows use compact braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; glyphs have a
@@ -70,7 +72,9 @@ substitutes at the same cadence on displays missing their glyphs. Dots check
 only frames showing their target span and cache glyph support until the next
 semantic tick (or theme invalidation), not at every decorative frame. A global
 reduced-motion switch disables decorative updates, not semantic progress or
-elapsed metadata. Hidden and offscreen views suspend animation wakeups
+elapsed metadata; semantic redraws retain the last displayed sample, and
+unchanged tool rows are not rebuilt at their initial frame. Hidden
+and offscreen views suspend animation wakeups
 without changing the broader attention gate for transcript rendering.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
