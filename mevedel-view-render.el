@@ -2809,7 +2809,9 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
               (mevedel-view--tool-row-region data-buffer tool-use-id)))
     (let* ((start (nth 0 region))
            (end (nth 1 region))
-           (source (nth 2 region))
+           (bounds (nth 2 region))
+           (source (mevedel-view-disclosure-source-range
+                    data-buffer (car bounds) (cdr bounds)))
            (collapsed (get-text-property start 'mevedel-view-collapsed))
            (previously-forced-p
             (get-text-property start 'mevedel-view-force-expanded))
