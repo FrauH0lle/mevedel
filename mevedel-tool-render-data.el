@@ -509,9 +509,13 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
         (widen)
         (when-let* ((segment
                      (mevedel-tool-render-data-segment-bounds tool-use-id))
+                    (search-end
+                     (or (mevedel-tool-render-data--next-segment-start
+                          (cdr segment) tool-use-id)
+                         (point-max)))
                     (block
                      (mevedel-tool-render-data--block-bounds
-                      (car segment) (cdr segment) tool-use-id)))
+                      (car segment) search-end tool-use-id)))
           (cdr
            (mevedel-tool-render-data-extract
             (buffer-substring-no-properties (car block) (cdr block))

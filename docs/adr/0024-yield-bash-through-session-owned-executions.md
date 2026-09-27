@@ -17,6 +17,19 @@ progress, settlement, and recovery. The `mevedel-execution.el` facade exposes
 operations and immutable facts while `mevedel-execution-process.el` owns child
 processes and spools. Callers do not inspect process records or timers.
 
+The initiating Bash row owns output and execution status. Successful empty-input
+polls do not add visible rows; actual input, stops, and failed control operations
+remain visible, and all tool results remain model-visible and inspectable in
+execution history. An execution that actually yielded gets one durable,
+chronological completion breadcrumb per receiving transcript, independent of
+whether completion was collected by polling or delivered through a mailbox.
+The breadcrumb links to the original row or retained evidence and does not
+duplicate output. Its identity is scoped to session, owner, and execution, not
+command text. Foreground completion never produces a breadcrumb. Execution
+presentation records in `mevedel-execution-transcript.el` keep these facts
+reconstructable across redraw, reload, and compaction; they do not create a
+second process registry or alter delivery to the model or agent.
+
 ## Rationale and consequences
 
 One owner absorbs process groups, output bounds, cancellation, and cleanup for
@@ -40,3 +53,9 @@ its captured owner without starting a model request. User controls can inspect
 all session owners, while model controls remain owner-scoped. Deterministic
 UTF-8, terminal, color, pager, and `MEVEDEL_EXECUTION=1` defaults make child output
 consistent without changing user-authorized command semantics.
+
+Keeping output on the original row avoids mistaking a successful collection of
+a failed process for a failed control operation. A single yield-based breadcrumb
+replaces duplicate completion cards and terminal poll summaries without relying
+on elapsed time or on whether a view happened to be open. Distinct executions
+of the same command remain independently navigable.

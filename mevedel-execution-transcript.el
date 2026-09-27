@@ -29,12 +29,18 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
+(declare-function mevedel-session-artifacts-read-transcript-segment
+                  "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
 (autoload 'mevedel-session-artifacts-publish-transcript-state
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
   "mevedel-session-artifacts")
 
@@ -119,9 +125,136 @@
         (plist-put render-data :sandbox-summary summary)
       render-data)))
 
+(defun mevedel-execution-transcript--breadcrumb-present-p (record)
+  "Return non-nil when this receiving transcript already contains RECORD.
+Completion retries after compaction must not create a second breadcrumb in
+the new segment of the same transcript."
+  (cl-labels ((present (buffer)
+                (with-current-buffer buffer
+                  (save-restriction
+                    (widen)
+                    (cl-some
+                     (lambda (existing)
+                       (and (equal (plist-get existing :execution-id)
+                                   (plist-get record :execution-id))
+                            (equal (plist-get existing :owner)
+                                   (plist-get record :owner))))
+                     (mevedel-transcript-audit-records
+                      (buffer-substring (point-min) (point-max))
+                      'execution-breadcrumb))))))
+    (or (present (current-buffer))
+        (when mevedel--session
+          (catch 'found
+            (dolist (descriptor (mevedel-session-artifacts-transcript-segments
+                                 mevedel--session (current-buffer)))
+              (when (and (eq (plist-get descriptor :status) 'readable)
+                         (not (plist-get descriptor :current-p)))
+                (when-let* ((older (condition-case nil
+                                      (mevedel-session-artifacts-read-transcript-segment
+                                       mevedel--session descriptor)
+                                    (error nil))))
+                  (unwind-protect
+                      (when (present older) (throw 'found t))
+                    (kill-buffer older))))))))))
+
+(defun mevedel-execution-transcript--persist-terminal-record
+    (record &optional terminal-data)
+  "Persist RECORD beside the current transcript without saving unsent edits.
+The visited buffer remains authoritative in memory.  Update only its last
+published file with the hidden record and, when TERMINAL-DATA is provided,
+the matching original Bash row; do not publish an unsent in-memory draft."
+  (when-let* ((path buffer-file-name)
+              ((file-exists-p path)))
+    (let* ((session (or mevedel--session
+                        (error "Transcript has no session")))
+           (portable (mevedel-session-codec-portable-authority-p session))
+           (root-buffer
+            (and portable
+                 (if (bound-and-true-p mevedel--agent-invocation)
+                     (mevedel-agent-invocation-parent-data-buffer
+                      mevedel--agent-invocation)
+                   (current-buffer))))
+           (coding (or buffer-file-coding-system 'utf-8-unix)))
+      (with-temp-buffer
+        (if portable
+            (progn
+              (setq buffer-file-coding-system coding)
+              (insert
+               (decode-coding-string
+                (mevedel-session-artifacts-read-artifact
+                 session
+                 (file-relative-name
+                  path (mevedel-session-save-path session)))
+                coding)))
+          (insert-file-contents path))
+        (let ((org-agenda-file-menu-enabled nil)) (org-mode))
+        (mevedel-transcript-restore-properties)
+        (when terminal-data
+          (mevedel-tool-render-data-update
+           (current-buffer) (plist-get record :tool-use-id) terminal-data))
+        (unless (if (eq (plist-get record :type) 'execution-breadcrumb)
+                    (mevedel-execution-transcript--breadcrumb-present-p record)
+                  (mevedel-execution-transcript--completion-record-p
+                   (plist-get record :tool-use-id) record))
+          (goto-char (point-max))
+          (insert (mevedel--format-hook-audit-record record))
+          (mevedel-session-artifacts-stabilize-gptel-bounds)
+          (if portable
+              (mevedel-session-artifacts-publish-transcript-state
+               session root-buffer path
+               (buffer-substring-no-properties (point-min) (point-max))
+               coding)
+            (mevedel-session-persistence-write-current-buffer-atomically
+             path))))
+      (set-visited-file-modtime)
+      t)))
+
+(defun mevedel-execution-transcript--record-breadcrumb (event)
+  "Record one chronological completion for terminal yielded EVENT.
+The event's execution identity is absent for foreground commands.  This
+record carries no output copy: the tool row and retained artifact own it."
+  (when-let* ((data-buffer (plist-get event :data-buffer))
+              ((buffer-live-p data-buffer))
+              (facts (plist-get event :facts))
+              (execution-id (plist-get facts :execution-id))
+              (tool-use-id (plist-get event :tool-use-id)))
+    (with-current-buffer data-buffer
+      (save-restriction
+        (widen)
+        (let* ((inhibit-read-only t)
+               (modified-p (buffer-modified-p))
+               (persisted-p nil)
+               (record (list :type 'execution-breadcrumb
+                             :execution-id execution-id
+                             :tool-use-id tool-use-id
+                             :owner (plist-get event :owner)
+                             :command (plist-get facts :command)
+                             :facts (copy-tree facts)
+                             :source-target buffer-file-name
+                             :emitted-at (plist-get event :emitted-at))))
+          (unless (mevedel-execution-transcript--breadcrumb-present-p record)
+            (setq persisted-p
+                  (condition-case err
+                      (mevedel-execution-transcript--persist-terminal-record
+                       record
+                       (mevedel-execution-transcript-terminal-render-data event))
+                    (error
+                     (display-warning
+                      'mevedel
+                      (format "Could not publish execution completion %s: %s"
+                              execution-id (error-message-string err))
+                      :warning)
+                     nil)))
+            (save-excursion
+              (goto-char (point-max))
+              (insert (mevedel--format-hook-audit-record record)))
+            (set-buffer-modified-p (or modified-p (not persisted-p)))))))))
+
 (defun mevedel-execution-transcript--replace-archived-record
     (tool-use-id replacement)
-  "Replace current buffer's archived TOOL-USE-ID with REPLACEMENT."
+  "Replace current buffer's archived TOOL-USE-ID with REPLACEMENT.
+When an earlier failed live publication already retained REPLACEMENT, remove
+only the stale archive so a later retry does not leave two completions."
   (when-let* ((span
                (cl-find-if
                 (lambda (candidate)
@@ -134,8 +267,10 @@
     (let ((begin (+ (point-min) (plist-get span :start)))
           (end (+ (point-min) (plist-get span :end))))
       (delete-region begin end)
-      (goto-char begin)
-      (insert (mevedel--format-hook-audit-record replacement))
+      (unless (mevedel-execution-transcript--completion-record-p
+               tool-use-id replacement)
+        (goto-char begin)
+        (insert (mevedel--format-hook-audit-record replacement)))
       t)))
 
 (defun mevedel-execution-transcript--completion-record-p
@@ -149,6 +284,47 @@ When EXPECTED is non-nil, require the durable record to equal it."
    (mevedel-transcript-audit-records
     (buffer-substring (point-min) (point-max))
     'execution-completion)))
+
+(defun mevedel-execution-transcript--nested-tool-use-id-p (tool-use-id)
+  "Return non-nil for a ToolCall child TOOL-USE-ID.
+The PTC driver assigns child ids by appending a slash and call number to
+the parent's tool-use id; unlike the parent, these have no gptel segment."
+  (and (stringp tool-use-id)
+       (string-match-p "/[0-9]+\\'" tool-use-id)))
+
+(defun mevedel-execution-transcript--record-nested-terminal
+    (data-buffer event render-data)
+  "Keep nested EVENT's terminal RENDER-DATA durable without a child tool row.
+The enclosing ToolCall row holds the child's initial output; the hidden
+completion holds its updated bounded output when it settles after the call."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (save-restriction
+        (widen)
+        (let* ((inhibit-read-only t)
+               (modified-p (buffer-modified-p))
+               (tool-use-id (plist-get event :tool-use-id))
+               (record (list :type 'execution-completion
+                             :tool-use-id tool-use-id
+                             :owner (plist-get event :owner)
+                             :render-data render-data)))
+          (unless (mevedel-execution-transcript--completion-record-p
+                   tool-use-id record)
+            (let ((persisted-p
+                   (condition-case err
+                       (mevedel-execution-transcript--persist-terminal-record
+                        record)
+                     (error
+                      (display-warning
+                       'mevedel
+                       (format "Could not publish nested execution %s: %s"
+                               tool-use-id (error-message-string err))
+                       :warning)
+                      nil))))
+              (save-excursion
+                (goto-char (point-max))
+                (insert (mevedel--format-hook-audit-record record)))
+              (set-buffer-modified-p (or modified-p (not persisted-p))))))))))
 
 (defun mevedel-execution-transcript--record-archived-terminal
     (data-buffer event render-data)
@@ -245,11 +421,14 @@ Inspect archived records once per call, only when a live row is missing."
                                (widen)
                                (dolist (record
                                         (mevedel-transcript-audit-records
-                                         (buffer-substring (point-min) (point-max))
-                                         'execution-archive))
-                                 (let ((id (plist-get record :tool-use-id)))
-                                   (unless (gethash id archived)
-                                     (puthash id record archived)))))))
+                                         (buffer-substring (point-min) (point-max))))
+                                 (when (memq (plist-get record :type)
+                                             '(execution-archive execution-completion))
+                                   (let ((id (plist-get record :tool-use-id)))
+                                     (when (or (eq (plist-get record :type)
+                                                   'execution-completion)
+                                               (not (gethash id archived)))
+                                       (puthash id record archived))))))))
                          (copy-tree
                           (plist-get (gethash tool-use-id archived)
                                      :render-data)))))
@@ -313,15 +492,27 @@ Inspect archived records once per call, only when a live row is missing."
 
 (defun mevedel-execution-transcript-pending-render-data
     (data-buffer tool-use-id)
-  "Return pending render data for TOOL-USE-ID in DATA-BUFFER."
+  "Return unsettled or retained completion data for TOOL-USE-ID in DATA-BUFFER."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
-      (and (hash-table-p mevedel-execution-transcript--pending-terminals)
-           (copy-tree
-            (plist-get
-             (gethash tool-use-id
-                      mevedel-execution-transcript--pending-terminals)
-             :render-data))))))
+      (or (and (hash-table-p mevedel-execution-transcript--pending-terminals)
+               (copy-tree
+                (plist-get
+                 (gethash tool-use-id
+                          mevedel-execution-transcript--pending-terminals)
+                 :render-data)))
+          (save-restriction
+            (widen)
+            (copy-tree
+             (plist-get
+              (cl-find-if
+               (lambda (record)
+                 (equal tool-use-id (plist-get record :tool-use-id)))
+               (reverse
+                (mevedel-transcript-audit-records
+                 (buffer-substring (point-min) (point-max))
+                 'execution-completion)))
+              :render-data)))))))
 
 (defun mevedel-execution-transcript-store-pending-terminal
     (data-buffer event render-data)
@@ -367,6 +558,12 @@ Inspect archived records once per call, only when a live row is missing."
                            data-buffer tool-use-id))
                      (mevedel-execution-transcript--record-archived-terminal
                       data-buffer event render-data)
+                     (push tool-use-id settled))
+                    ((and (eq (plist-get event :type) 'terminal)
+                          (mevedel-execution-transcript--nested-tool-use-id-p
+                           tool-use-id))
+                     (mevedel-execution-transcript--record-nested-terminal
+                      data-buffer event render-data)
                      (push tool-use-id settled)))
                  (error
                   (display-warning
@@ -406,6 +603,29 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
               (mevedel-execution-transcript--record-archived-terminal
                data-buffer event render-data)
             (error
+             ;; If publication fails, a later ordinary transcript save still
+             ;; carries the terminal truth, even without another event or a
+             ;; pending-table retry.  Keep the retry for prompt disk recovery.
+             (when (buffer-live-p data-buffer)
+               (with-current-buffer data-buffer
+                 (save-restriction
+                   (widen)
+                   (let ((inhibit-read-only t)
+                         (replacement
+                          (list :type 'execution-completion
+                                :tool-use-id tool-use-id
+                                :owner (plist-get event :owner)
+                                :render-data render-data)))
+                     (unless (or (condition-case nil
+                                     (mevedel-execution-transcript--replace-archived-record
+                                      tool-use-id replacement)
+                                   (error nil))
+                                 (mevedel-execution-transcript--completion-record-p
+                                  tool-use-id replacement))
+                       (save-excursion
+                         (goto-char (point-max))
+                         (insert (mevedel--format-hook-audit-record replacement))))
+                     (set-buffer-modified-p t)))))
              (mevedel-execution-transcript-store-pending-terminal
               data-buffer event render-data)
              (display-warning
@@ -413,9 +633,29 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
               (format "Could not persist archived execution %s: %s"
                       tool-use-id (error-message-string err))
               :warning))))
+         ((mevedel-execution-transcript--nested-tool-use-id-p tool-use-id)
+          (condition-case err
+              (mevedel-execution-transcript--record-nested-terminal
+               data-buffer event render-data)
+            (error
+             (mevedel-execution-transcript-store-pending-terminal
+              data-buffer event render-data)
+             (display-warning
+              'mevedel
+              (format "Could not retain nested execution %s: %s"
+                      tool-use-id (error-message-string err))
+              :warning))))
          (t
           (mevedel-execution-transcript-store-pending-terminal
-           data-buffer event render-data))))))
+           data-buffer event render-data)))
+        (condition-case err
+            (mevedel-execution-transcript--record-breadcrumb event)
+          (error
+           (display-warning
+            'mevedel
+            (format "Could not persist execution completion %s: %s"
+                    tool-use-id (error-message-string err))
+            :warning))))))
   nil)
 
 (provide 'mevedel-execution-transcript)

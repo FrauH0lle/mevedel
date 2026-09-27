@@ -18,6 +18,7 @@
 (require 'mevedel-plugin-registry)
 (require 'mevedel-structs)
 (require 'mevedel-tool-exec)
+(require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
@@ -325,9 +326,12 @@
                     (mevedel-view--render-tool-call
                      (mevedel-view--tool-call-parse data-buf (car bounds) (cdr bounds))
                      data-buf)))
-              (should (equal "$ printf run\n\nline 3\nline 4\nline 5\nline 6\nline 7"
-                             (plist-get rendering :body)))
-              (should (plist-get rendering :force-expanded-p)))
+              (should (string-prefix-p
+                       "$ printf run\n\nline 3\nline 4\nline 5\nline 6\nline 7"
+                       (plist-get rendering :body)))
+              (should (string-search "Details: running · 2.5s"
+                                     (plist-get rendering :body)))
+              (should-not (plist-get rendering :force-expanded-p)))
             (let ((cached (gethash "call-live"
                                    mevedel-view--execution-events)))
               (should (equal "line 3\nline 4\nline 5\nline 6\nline 7"
@@ -336,16 +340,16 @@
               (should-not (plist-member cached :observation)))
             (with-current-buffer data-buf
               (should (equal data-before (buffer-string))))
-            (should (string-match-p
-                     "line 7"
-                     (buffer-substring-no-properties
-                      (point-min) (mevedel-view--input-start))))
+            (should-not (string-match-p
+                         "line 7"
+                         (buffer-substring-no-properties
+                          (point-min) (mevedel-view--input-start))))
             (should-not (string-match-p
                          "line 1"
                          (buffer-substring-no-properties
                           (point-min) (mevedel-view--input-start))))
             (should (string-match-p
-                     "exec-000001"
+                     "Bash: printf run · running · 2.5s"
                      (buffer-substring-no-properties
                       (point-min) (mevedel-view--input-start))))
             (should-not
@@ -389,7 +393,8 @@
               (should (string-match-p
                        "Sandbox:.*additional filesystem write access"
                        visible))
-              (should (string-match-p "success · exit 0" visible)))
+              (should (string-match-p "Bash: printf run · finished · 3.0s"
+                                      visible)))
             (save-excursion
               (goto-char (point-min))
               (search-forward "Bash: printf run")
@@ -399,7 +404,8 @@
               (let ((visible (buffer-substring-no-properties
                               (point-min) (mevedel-view--input-start))))
                 (should (string-match-p "whole head" visible))
-                (should (string-match-p "whole tail" visible))))
+                (should (string-match-p "whole tail" visible))
+                (should (string-match-p "success · exit 0" visible))))
             (should-not
              (mevedel-view-stream-handle-execution-event
               (list :type 'progress :session session :data-buffer data-buf
@@ -416,15 +422,22 @@
                             (point-min) (mevedel-view--input-start))))
               (should (string-match-p "whole head" visible))
               (should (string-match-p "whole tail" visible))
-              (should (string-match-p "new live tail" visible)))
+              (should (string-match-p "Bash: printf new · running · 2.1s"
+                                      visible))
+              (should-not (string-match-p "new live tail" visible)))
             (should (equal draft (mevedel-view--input-text)))
             (should (= point-offset
                        (- (point) (mevedel-view--input-start)))))))
       (with-current-buffer data-buf
-        (should (equal (mevedel-tool-render-data-strip
-                        data-before "call-live")
-                       (mevedel-tool-render-data-strip
-                        (buffer-string) "call-live"))))))
+        (should (= 1 (length (mevedel-transcript-audit-records
+                              (buffer-string) 'execution-breadcrumb))))
+        (should (equal (substring-no-properties
+                        (mevedel-tool-render-data-strip
+                         data-before "call-live"))
+                       (substring-no-properties
+                        (mevedel--strip-hook-audit-blocks
+                         (mevedel-tool-render-data-strip
+                          (buffer-string) "call-live"))))))))
   :doc "retains a terminal event until its parallel tool row is inserted"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer data-buf
@@ -633,6 +646,61 @@
               (should (= 3 (- (point) (mevedel-view--input-start))))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render))))))
+
+(mevedel-deftest mevedel-view-stream-nested-bash-progress ()
+  ,test (test)
+  :doc "a nested Bash event refreshes its source-owning row and preserves an open draft"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+          (draft "> quoted\nsecond line"))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                             :renderer #'mevedel-tool-ptc--render))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "Bash" :category "mevedel"
+                             :renderer #'mevedel-tool-exec--render-bash))
+      (mevedel-view-stream-test--insert-data
+       data-buf
+       (concat
+        "(:name \"ToolCall\" :args (:expression \"(Bash :command \\\"sleep 10\\\")\"))\n\nOLD OUTPUT"
+        (mevedel-tool-render-data-format
+         '(:kind ptc :outcome completed :direct-tool "Bash"
+           :calls ((:id "outer/1" :tool "Bash" :status success
+                    :args (:command "sleep 10") :result "OLD OUTPUT"
+                    :render-data (:execution-id "exec-1" :state running))))
+         "outer") "\n")
+       '(tool . "outer"))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (source (cons 1 (with-current-buffer data-buf (point-max)))))
+          (goto-char (point-min))
+          (mevedel-view--insert-rendered-tool
+           (mevedel-view--render-tool-call
+            (mevedel-view--tool-call-parse
+             data-buf (car source) (cdr source)) data-buf)
+           source))
+        (goto-char (point-min))
+        (should (search-forward "Bash: sleep 10" nil t))
+        (mevedel-view-toggle-section)
+        (should (string-match-p "OLD OUTPUT" (buffer-string)))
+        (mevedel-view-stream-test--insert-composer-draft draft 3))
+      (mevedel-view-stream-handle-tool-progress
+       (list :type 'progress :data-buffer data-buf :tool-use-id "outer/1"
+             :facts '(:execution-id "exec-1" :command "sleep 10"
+                      :state running :wall-time-seconds 7)
+             :output-tail "NEW OUTPUT"))
+      (with-current-buffer view-buf
+        (should (string-match-p "Bash: sleep 10 · running · 7.0s"
+                                (buffer-string)))
+        (should (string-match-p "NEW OUTPUT" (buffer-string)))
+        (should-not (string-match-p "OLD OUTPUT" (buffer-string)))
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= 3 (- (point) (mevedel-view--input-start))))
+        (cl-letf (((symbol-function 'mevedel-view-audit--evidence)
+                   (lambda (&rest _) (ert-fail "Source-backed Bash row missing"))))
+          (mevedel-view-audit-show-control-result "exec-1")
+          (should (looking-at-p ".*Bash: sleep 10"))
+          (should (equal draft (mevedel-view--input-text))))))))
 
 (mevedel-deftest mevedel-view--spinner-tick ()
   ,test

@@ -407,6 +407,25 @@
              :result ""))
           (should invalidated))))))
 
+(mevedel-deftest mevedel-collaboration--pre-tool-poll
+  (:doc "does not publish a transient pending card for an empty-input poll")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)
+                       :pending-tools nil :records nil))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (publishes 0))
+      (cl-letf (((symbol-function 'mevedel-collaboration--publish)
+                 (lambda (_) (cl-incf publishes))))
+        (should-not (mevedel-collaboration--pre-tool
+                     '(:name "WriteStdin" :args (:execution_id "exec-1" :chars ""))))
+        (should (= 0 publishes))
+        (should-not (plist-get room :pending-tools))
+        (should-not (plist-get room :records))
+        (should-not (mevedel-collaboration--post-tool
+                     '(:name "WriteStdin" :args (:execution_id "exec-1" :chars "")
+                       :result "new output")))
+        (should (= 1 publishes))))))
+
 (mevedel-deftest mevedel-collaboration--project-records
   (:doc "merges a pending tool with its landed canonical record even when the settlement info missed it")
   (let* ((canonical
@@ -438,6 +457,23 @@
         (let ((records (mevedel-collaboration--project-records room)))
           (should (= 1 (length records)))
           (should (equal "running" (plist-get (car records) :status))))))))
+
+(mevedel-deftest mevedel-collaboration--project-records-hidden-poll
+  (:doc "a settled direct poll removes its pending card only after its hidden canonical row lands")
+  (let* ((landed nil)
+         (room (list :data-buffer (current-buffer)
+                     :pending-tools
+                     (list (list :id "poll" :kind "tool" :name "ToolCall"
+                                 :status "completed" :pending t
+                                 :baseline-tool-count 0 :baseline-record-count 0)))))
+    (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
+               (lambda (_) nil))
+              ((symbol-function 'mevedel-collaboration--suppressed-tool-landed-p)
+               (lambda (_data _entry) landed)))
+      (should (= 1 (length (mevedel-collaboration--project-records room))))
+      (setq landed t)
+      (should-not (mevedel-collaboration--project-records room))
+      (should-not (plist-get room :pending-tools)))))
 
 (mevedel-deftest mevedel-collaboration--clean-response
   (:doc "fails closed when canonical response projection is unavailable")

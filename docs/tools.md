@@ -928,13 +928,16 @@ Every observation returns only the newly unread output. `ListExecutions`
 exposes only the caller's yielded handles, and `StopExecution` terminates only
 a handle owned by that caller. Input and stop inherit that execution authority
 without another prompt, while explicit deny rules and permission hooks still
-apply. A successful empty `WriteStdin` poll while the execution remains
-running is model-visible but omitted as a separate view row; progress continues
-to update the original Bash row. Polls with output, input writes, terminal
-observations, and failures remain visible. Adjacent successful output-free
-poll rows for one execution coalesce into the final `WriteStdin: polled
-background process` row; input writes render `WriteStdin: sent input to
-background process`.
+apply. Successful empty-input `WriteStdin` polls remain model-visible but do
+not create separate view rows, whether they return no output, new output, or
+terminal facts: the initiating Bash row owns that output and status. Actual input,
+Ctrl-C, and stop actions remain compact linked interactions with their
+submitted input available on disclosure; failed control operations, including
+denials and invalid handles, remain visible. A successfully collected nonzero
+command exit is not a failed polling operation. The model still receives each
+observation, and retained polling and delivery records remain inspectable in
+execution history. Direct and ToolCall-nested execution tools follow the same
+presentation rules.
 Each `WriteStdin` attempt records
 its requested `yield_time_ms` and the
 effective wait, making omitted or stale tool arguments visible without storing
@@ -946,14 +949,17 @@ observation advances one private unread cursor and returns canonical execution
 facts separately from the raw output. Unread ranges beyond 2000 characters use
 the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
-The initiating Bash disclosure remains force-expanded with a five-line tail
-while live and returns to its normal collapsed state when it settles. Its
-collapsed header truncates the first command line to 60 columns; expanding the
-disclosure shows the exact full command above its output.
+The initiating Bash row shows the first command line (truncated to 60 columns),
+explicit running, failure, interruption or lost state, and elapsed time. Its
+output disclosure starts collapsed while live and stays collapsed on settlement
+unless the reader explicitly opened it; expansion shows the exact full command
+above the bounded output. Execution ID, working directory, output counts, and
+routine exit facts belong in expanded details, while consequential sandbox
+disclosures and truncation remain visible.
 
 Managed executions publish transient progress after two seconds, at most four
-times per second. The existing Bash row shows the last five output lines, elapsed
-time, line and byte counts, and the execution ID once the command has yielded.
+times per second. The existing Bash row receives the bounded live output tail
+and updates its status and elapsed time without creating another output owner.
 These progress updates live only in bounded view state and never create
 transcript turns. Events carry the originating data buffer and durable tool-use
 ID, so the matching main or agent view is selected directly. A progress or
@@ -987,9 +993,19 @@ unchanged agent `RESULT`. This starts no model request. Passive progress/view
 subscribers cannot acknowledge delivery, and finished records never appear in
 live execution listings.
 
-The transcript view renders execution-only mailbox deliveries as compact Bash
-completion cards while retaining their full model-facing disclosure in the
-authoritative data buffer.
+Only commands that actually yielded produce a completion breadcrumb in each
+receiving transcript. The compact line names the command and terminal outcome
+and links to the original Bash result; it has no expandable output copy or
+second metadata summary. Foreground completions produce none. The durable
+presentation identity is the session, owning agent, and execution ID, not
+command text, so repeated polls, event retries, and later mailbox delivery do
+not create a second breadcrumb, while concurrent identical commands remain
+distinct. The mailbox payload and model-facing delivery remain unchanged.
+`Show result` reveals the source row in the current, archived, or agent
+transcript as appropriate, expanding enclosing groups; when that row is
+unavailable, a read-only retained-evidence view reports what is available or
+explicitly identifies missing evidence. Parent transcripts keep their own
+child-attributed completion breadcrumb alongside the agent answer.
 
 Users have a separate session-wide control surface. `/ps`, the view's live
 execution status row, and the session cockpit's `Executions` row open a
