@@ -650,6 +650,10 @@ synthetic/model-only context is excluded, and archived segments use only their
 own visible turns.
 In the live segment after compaction, the row can also show the originating
 prompt from an earlier segment when no retained prompt governs the window.
+When compaction copies multiple prompts into the live tail, content before
+their first header uses the preceding archived prompt, not the last copied
+prompt. A local header anywhere in the visible window suppresses the archived
+preview; once it scrolls above the window, its own local preview takes over.
 Clicking that preview opens the archived segment read-only at the original
 prompt; `[Latest]` returns to the live transcript. Fresh segments started by
 `/clear` do not carry a prompt across the boundary. The archived prompt is
