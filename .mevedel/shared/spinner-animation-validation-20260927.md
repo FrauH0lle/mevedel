@@ -24,9 +24,24 @@ or a claim about later checkouts.
 - With two production views on the real host, `auto` made one shared
   `battery-upower` query, classified external, and switched both view timers
   to 16.67 ms (`.scratch/spinner-auto-power.stats`). At the time, AC/online
-  was `1` and BAT0 was `Full`; no controlled physical on-battery measurement
-  was possible without unplugging the laptop. Keep that validation pending;
-  don't extrapolate battery life from timer counts or short GUI runs.
+  was `1` and BAT0 was `Full`.
+- After the user unplugged the laptop on 2026-09-27, five sequential fresh
+  graphical runs used the same shimmer view with five visible tools and fixed
+  backlight brightness 39321/65535. `/sys/class/power_supply/AC/online` stayed
+  `0` and BAT0 reported `Discharging` throughout the runs. Automatic policy
+  queried `battery-upower` once per run, classified `battery`, and selected
+  a 33.33-ms actual view timer. It delivered about 50–51 rendered frame
+  changes and 60 callbacks per 3.5–3.6-second run, versus 93 changes and
+  120 callbacks in a forced-full 16.67-ms run. With `save` at zero battery
+  fps, decorative callbacks stopped; the two callbacks 1 second apart were
+  semantic maintenance. The reference backlight, 0.2-second BAT0 power and
+  energy samples, GUI logs, and renderer statistics are in
+  `.scratch/spinner-physical-battery-20260927/`; raw execution is
+  `artifact://executions/execution-hP6BbA.log`. Median whole-system power
+  readings during the successive runs ranged from 28.145 to 28.343 W,
+  varying across repeated auto runs; their coarse update rate and short run
+  length do not support attribution or any battery-life estimate. The user
+  was told they can reconnect AC after this sampling.
 - The running host Emacs had loaded an older `mevedel-view` (the new spinner
   style symbol was absent), whereas GUI tests loaded the committed sources
   into a fresh Emacs. Avoid hot-reloading the user's active request solely for
