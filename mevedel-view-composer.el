@@ -754,8 +754,10 @@ calls this again to place the overlay on the new text."
       (when start
         (setq mevedel-view--armed-session-fork-overlay
               (make-overlay start end))
+        ;; Header rules are `:extend' overlines; the dim must extend too,
+        ;; or the rule past the header text keeps its color.
         (overlay-put mevedel-view--armed-session-fork-overlay
-                     'face 'shadow)))))
+                     'face '(:inherit shadow :extend t))))))
 
 (defun mevedel-view-cancel-composer-state ()
   "Cancel the active composer mode, including directive scope."
