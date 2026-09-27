@@ -4066,6 +4066,73 @@
               (mevedel-view--start-spinner-timer)
               (should (= 1.0 mevedel-view--spinner-timer-period)))))))))
 
+(mevedel-deftest mevedel-view-animation-customize-live
+  (:doc "Customize replaces the active timer and display without resetting a turn.")
+  (let ((mevedel-view-animation--cache nil)
+        (original-style (default-value 'mevedel-view-spinner-style))
+        (original-policy (default-value 'mevedel-view-spinner-power-policy))
+        (original-rate (default-value 'mevedel-view-spinner-framerate)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                   (lambda (_face _frame) '("#ff0000" . "#ffffff"))))
+          (customize-set-variable 'mevedel-view-spinner-power-policy 'full)
+          (customize-set-variable 'mevedel-view-spinner-style 'ascii)
+          (customize-set-variable 'mevedel-view-spinner-framerate 60)
+          (mevedel-view-stream-test--with-buffers
+            (mevedel-view-stream-test--with-visible-view
+              (mevedel-view--start-spinner "Working...")
+              (should (= 0.12 mevedel-view--spinner-timer-period))
+              (let ((phase mevedel-view--spinner-phase-start)
+                    (old-timer mevedel-view--spinner-timer))
+                (customize-set-variable 'mevedel-view-spinner-style 'shimmer)
+                (should (< (abs (- mevedel-view--spinner-timer-period
+                                   (/ 1.0 60))) 1e-7))
+                (should-not (mevedel--timer-pending-p old-timer))
+                (should (= phase mevedel-view--spinner-phase-start))
+                (let* ((target mevedel-view--spinner-label-target)
+                       (sample (get-text-property
+                                (marker-position (car target)) 'display)))
+                  (should (get-text-property 0 'face sample)))
+                (customize-set-variable 'mevedel-view-spinner-framerate 30)
+                (should (< (abs (- mevedel-view--spinner-timer-period
+                                   (/ 1.0 30))) 1e-7))
+                (should (= phase mevedel-view--spinner-phase-start))
+                (customize-set-variable 'mevedel-view-spinner-style 'static)
+                (should (= 1.0 mevedel-view--spinner-timer-period))
+                (should (= phase mevedel-view--spinner-phase-start))))))
+      (set-default 'mevedel-view-spinner-style original-style)
+      (set-default 'mevedel-view-spinner-power-policy original-policy)
+      (set-default 'mevedel-view-spinner-framerate original-rate))))
+
+(mevedel-deftest mevedel-view-animation-timer-suspension
+  (:doc "Suspended timers rearm from their old phase without replaying missed frames.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (now 1000.0))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional _) now)))
+          (mevedel-view--start-spinner "Working...")
+          (should (= 0.12 mevedel-view--spinner-timer-period))
+          (let ((old-timer mevedel-view--spinner-timer)
+                (phase mevedel-view--spinner-phase-start))
+            ;; TRAMP can remove timers from timer-list while their buffer-local
+            ;; references still point to timer objects.  A focus event rearms.
+            (cancel-timer old-timer)
+            (setq now 1234.37)
+            (mevedel-view--resume-render-if-attended view-buf)
+            (should (timerp mevedel-view--spinner-timer))
+            (should-not (eq old-timer mevedel-view--spinner-timer))
+            (should (= phase mevedel-view--spinner-phase-start))
+            (mevedel-view--spinner-tick)
+            (let* ((target mevedel-view--spinner-label-target)
+                   (position (marker-position (car target))))
+              (should (equal (get-text-property position 'display)
+                             (mevedel-view-animation-frame
+                              'ascii "Working..." (- now phase)
+                              'mevedel-view-spinner (selected-frame)))))))))))
+
 (mevedel-deftest mevedel-view-animation-auto-transition
   (:doc "Battery notifications rearm the view, preserving phase and color bank.")
   (cl-letf (((symbol-function 'mevedel-view-animation--colors)
@@ -4179,7 +4246,7 @@
                  (initial (get-text-property pos 'display)))
             (setq mevedel-view--spinner-last-second (floor (float-time)))
             (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
-                       (lambda (_target) :multiple))
+                       (lambda (_target &optional _all) :multiple))
                       ((symbol-function 'mevedel-view--animation-seconds)
                        (lambda () 0.48)))
               (mevedel-view--spinner-tick))
@@ -4190,6 +4257,41 @@
             (should (= (string-width initial)
                        (string-width (get-text-property pos 'display)))))
           (mevedel-view--stop-spinner))))))
+
+(mevedel-deftest mevedel-view-animation-dots-visible-target-frames
+  (:doc "Dots ignore other windows not actually displaying the indicator.")
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (insert "Working...")
+      (let* ((target (cons (copy-marker (point-min))
+                           (copy-marker (point-max))))
+             (visible-frame (selected-frame))
+             (hidden-frame 'hidden)
+             (scrolled-frame 'scrolled)
+             (mevedel-view-animation--dots-cache nil))
+        (cl-letf (((symbol-function 'get-buffer-window-list)
+                   (lambda (&rest _) '(visible hidden scrolled)))
+                  ((symbol-function 'window-frame)
+                   (lambda (window)
+                     (pcase window
+                       ('visible visible-frame)
+                       ('hidden hidden-frame)
+                       (_ scrolled-frame))))
+                  ((symbol-function 'frame-visible-p)
+                   (lambda (frame) (not (eq frame hidden-frame))))
+                  ((symbol-function 'window-start)
+                   (lambda (window) (if (eq window 'scrolled) (point-max)
+                                      (point-min))))
+                  ((symbol-function 'window-end)
+                   (lambda (_window) (point-max)))
+                  ((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
+                   (lambda (frame) (eq frame visible-frame))))
+          (let ((frames (mevedel-view--animation-target-frame target t)))
+            (should (equal frames (list visible-frame)))
+            (should (equal
+                     (mevedel-view-animation-frame
+                      'dots "Working" 0 'default frames)
+                     "●··· Working"))))))))
 
 (mevedel-deftest mevedel-view-animation-colorless-glyph-cadence
   (:doc "Colorless views use the glyph timer cadence without frame-time queries.")

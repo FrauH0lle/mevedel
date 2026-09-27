@@ -69,3 +69,25 @@ or a claim about later checkouts.
   not evidence that they typed or scrolled, nor a live request in their older
   already-loaded host Emacs. The separate graphical smoke run above covered
   synthetic typing and scrolling without changing the host Emacs.
+
+Follow-up validation, 2026-09-27 after the dots fallback and live-setting/
+timer-recovery regressions (source: this task's focused Eask run, independent
+review, and full-suite runner):
+
+- After `eask clean elc`, the complete view roster plus power tests passed
+  906 of 907 results, zero unexpected, one optional Markdown-mode skip
+  (`.scratch/spinner-last-focused.log`). Eask compiled all 210 files without
+  warnings (`.scratch/spinner-last-compile.log`). The follow-up review found
+  no remaining bug in the dots target-frame filtering and one-second cache.
+- The complete Eask script discovered 8721 tests, finished with **8 unexpected
+  and 30 skipped**, and is **not green** (`.scratch/spinner-final-full-suite/`,
+  `.scratch/spinner-final-full-run.log`). The four previously reproduced
+  baseline failures remain: gptel bridge install, preset transitions@2,
+  message inject@2, steering inject@9. The skills-ui `/clear` layout@8
+  missing-segment failure also reproduces in a separate unchanged-`bc31bb12`
+  worktree (`.scratch/spinner-current-baseline-focused.log`). Three additional
+  plan-handoff dispatch cases (@3, @8, @10) fail in both the full run and a
+  focused rerun on the concurrent plan-handoff working tree
+  (`.scratch/spinner-suite-failures-focused.log`); these cases passed in the
+  same focused roster on clean `bc31bb12`, before the concurrent plan-handoff
+  working-tree edits (`.scratch/spinner-current-baseline-focused.log`).

@@ -31,7 +31,8 @@
   (append (mapcar (lambda (char) (concat (string char) " "))
                   (string-to-list "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏-\\|/"))
           (mapcar (lambda (dots) (concat dots " "))
-                  '("●···" "·●··" "··●·" "···●")))
+                  '("●···" "·●··" "··●·" "···●"
+                    "*..." ".*.." "..*." "...*")))
   "Visible compact indicator prefixes, for identifying live tool rows.
 Static mode has no prefix and is deliberately absent: an empty prefix
 would match every row.")
@@ -39,16 +40,23 @@ would match every row.")
 (defvar mevedel-view-animation--cache nil
   "Recent banks or fallback markers (KEY . DATA), newest first.")
 
+(defvar mevedel-view-animation--dots-cache nil
+  "Recent dots glyph support readings (FRAME . SUPPORTED).")
+
 (defun mevedel-view-animation-invalidate (&rest _ignored)
   "Discard color banks after theme or face changes.
 Call this after changing a face outside of the theme system.  The view
 may redisplay its active indicators immediately after invalidation."
-  (setq mevedel-view-animation--cache nil))
+  (setq mevedel-view-animation--cache nil
+        mevedel-view-animation--dots-cache nil))
 
 (defun mevedel-view-animation-check-colors ()
   "Discard prepared banks if their resolved display colors changed.
 Call from semantic maintenance, never on each animation frame.  This
 also retries a fallback bank when a frame gains color support."
+  ;; A changed display font need not change resolved face colors.  Retry dots
+  ;; support at semantic cadence rather than probing on every visual sample.
+  (setq mevedel-view-animation--dots-cache nil)
   (when (cl-some
          (lambda (entry)
            (let ((key (car entry)) (bank (cdr entry)))
@@ -193,6 +201,31 @@ before returning."
            (with-selected-frame frame (char-displayable-p ?⠋))
          (char-displayable-p ?⠋))))
 
+(defun mevedel-view-animation--dots-frame-supported-p (frame)
+  "Return non-nil when both dots glyphs render on FRAME."
+  (if (and (framep frame) (not (eq frame (selected-frame))))
+      (with-selected-frame frame
+        (and (char-displayable-p ?●) (char-displayable-p ?·)))
+    (and (char-displayable-p ?●) (char-displayable-p ?·))))
+
+(defun mevedel-view-animation--dots-supported-p (frame)
+  "Return non-nil when dots glyphs render on every target FRAME.
+FRAME may be a list of frames actually displaying the indicator.  The
+undisplayed or ambiguous `:multiple' case uses portable ASCII dots."
+  (unless (eq frame :multiple)
+    (cl-every
+     (lambda (target)
+       (let ((entry (assq target mevedel-view-animation--dots-cache)))
+         (unless entry
+           (setq entry (cons target
+                             (mevedel-view-animation--dots-frame-supported-p
+                              target)))
+           (push entry mevedel-view-animation--dots-cache)
+           (when (> (length mevedel-view-animation--dots-cache) 12)
+             (setcdr (nthcdr 11 mevedel-view-animation--dots-cache) nil)))
+         (cdr entry)))
+     (if (consp frame) frame (list (or frame (selected-frame)))))))
+
 (defun mevedel-view-animation-frame (style label seconds face &optional frame)
   "Return a fixed-width display sample for STYLE and LABEL at SECONDS.
 FACE supplies the foreground of color styles on optional display FRAME.
@@ -218,7 +251,9 @@ glyph fallback.  SECONDS is elapsed animation time, not a frame counter."
       ('ascii
        (concat (string (aref "-\\|/" (mod tick 4))) " " label))
       ('dots
-       (concat (aref ["●···" "·●··" "··●·" "···●"]
+       (concat (aref (if (mevedel-view-animation--dots-supported-p frame)
+                         ["●···" "·●··" "··●·" "···●"]
+                       ["*..." ".*.." "..*." "...*"])
                      (mod (/ tick 2) 4)) " " label))
       ('ellipsis
        (let ((n (mod (/ tick 4) 4)))

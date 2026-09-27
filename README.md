@@ -378,7 +378,8 @@ speed; they do not imply a proportional battery-life improvement. With `auto`,
 power changes arrive immediately if battery monitoring already supplies a
 notification; otherwise detection normally takes up to the shared fallback
 interval (60 seconds). Unsupported displays use a glyph fallback for color
-styles; `ascii` is available where Braille glyphs do not render well. Motion
+styles; Braille and dots indicators use same-speed ASCII substitutes when
+their glyphs cannot be rendered. Motion
 settings can be changed through Customize during an active request. Elapsed
 time and status updates continue even with `static`, a zero saving ceiling,
 or `mevedel-view-spinner-animate` set to nil. The former
