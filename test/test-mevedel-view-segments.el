@@ -408,6 +408,37 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (should-not (mevedel-view-segments-current-number))
       (should (equal before (buffer-string)))))
 
+  :doc "a read failure leaves the live projection and request markers untouched"
+  (mevedel-view-segments-test--with-view
+    (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+    (let ((before (buffer-string))
+          (request-start (with-current-buffer data-buf
+                           (copy-marker (point-min))))
+          (read (symbol-function 'mevedel-session-artifacts-read-segment)))
+      (unwind-protect
+          (progn
+            (setq mevedel-view--data-turn-start request-start)
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-read-segment)
+                       (lambda (&rest _) (user-error "Archive read failed"))))
+              (should-error (mevedel-view-segments-jump-to-prompt 1 44)
+                            :type 'user-error))
+            (should-not (mevedel-view-segments-current-number))
+            (should (equal before (buffer-string)))
+            (should (eq mevedel-view--data-turn-start request-start))
+            (let ((archive (funcall read session 1)))
+              (unwind-protect
+                  (mevedel-view-segments-jump-to-prompt
+                   1 (plist-get (car (mevedel-session-artifacts-collect-prompts
+                                      archive)) :pos))
+                (kill-buffer archive)))
+            (should (= 1 (mevedel-view-segments-current-number)))
+            (should (eq mevedel-view--data-turn-start request-start))
+            (should buffer-read-only)
+            (mevedel-view-return-to-latest-segment)
+            (should (eq mevedel-view--data-turn-start request-start))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+        (set-marker request-start nil))))
+
   :doc "materializes a pending target and ignores obsolete batch callbacks"
   (mevedel-view-segments-test--with-view
     (let ((pos (car (mevedel-view-segments-test--write-repeated

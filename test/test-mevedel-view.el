@@ -557,6 +557,73 @@
 (mevedel-deftest mevedel-view--continuation-prompt ()
   ,test
   (test)
+  :doc "a copied two-prompt tail cannot pin its later prompt over earlier content"
+  (let* ((directory (make-temp-file "mevedel-sticky-tail-" t))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "tail"
+                   :save-path (file-name-as-directory directory)
+                   :current-segment 2))
+         (path (mevedel-session-artifacts-segment-path directory 1)))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (insert "*** Before tail\n")
+            (insert (propertize "Answer before tail\n" 'gptel 'response))
+            (insert "*** First copied prompt\n")
+            (insert (propertize "Answer in tail\n" 'gptel 'response))
+            (insert "*** Second copied prompt\n")
+            (dotimes (_ 8)
+              (let (bounds)
+                (goto-char (point-min))
+                (dolist (answer '("Answer before tail" "Answer in tail"))
+                  (search-forward answer)
+                  (push (list 'response
+                              (list (match-beginning 0) (match-end 0)))
+                        bounds))
+                (org-entry-put (point-min) "GPTEL_BOUNDS"
+                               (prin1-to-string (nreverse bounds)))))
+            (setf (mevedel-session-prompt-index session)
+                  (list (cons 1 (mevedel-session-artifacts-collect-prompts
+                                 (current-buffer)))))
+            (write-region (point-min) (point-max) path nil 'silent))
+          (save-window-excursion
+            (mevedel-view-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session)
+                (insert ":PROPERTIES:\n:MEVEDEL_SEGMENT_TAIL_PROMPTS: 2\n:END:\n\n")
+                (insert (mevedel-session-artifacts-summary-block "summary"))
+                (insert (propertize
+                         (apply #'concat (make-list 80 "Continuation answer\n"))
+                         'gptel 'response))
+                (insert "*** First copied prompt\n")
+                (insert (propertize "Answer in tail\n" 'gptel 'response))
+                (insert "*** Second copied prompt\n")
+                (insert (propertize
+                         (apply #'concat (make-list 80 "More answer\n"))
+                         'gptel 'response)))
+              (with-current-buffer view-buf
+                (switch-to-buffer view-buf)
+                (mevedel-view--full-rerender)
+                (set-window-point nil (point-min))
+                (set-window-start nil (point-min) t)
+                (should (string-search "Before tail"
+                                       (mevedel-view--sticky-prompt-line)))
+                (should-not (string-search "Second copied prompt"
+                                           (mevedel-view--sticky-prompt-line)))
+                (goto-char (point-min))
+                (search-forward "First copied prompt")
+                (search-backward "You\n")
+                (set-window-start nil (point) t)
+                (should-not (mevedel-view--sticky-prompt-line))
+                (goto-char (point-min))
+                (search-forward "More answer")
+                (set-window-start nil (line-beginning-position) t)
+                (should (string-search "Second copied prompt"
+                                       (mevedel-view--sticky-prompt-line)))))))
+      (delete-directory directory t)))
+
   :doc "a compacted continuation pins its source prompt, but clear does not"
   (let* ((directory (make-temp-file "mevedel-sticky-continuation-" t))
          (path (mevedel-session-artifacts-segment-path directory 1))
@@ -629,6 +696,18 @@
                                 (goto-char (point-min))
                                 (search-forward "answer line")
                                 (line-beginning-position))))
+                  (set-window-point nil header)
+                  (set-window-start
+                   nil (save-excursion (goto-char header)
+                                       (forward-line -1) (point)) t)
+                  (should (< (window-start) header))
+                  (should (< header
+                             (save-excursion
+                               (goto-char (window-start))
+                               (vertical-motion (window-body-height))
+                               (point))))
+                  (should-not (invisible-p header))
+                  (should-not (mevedel-view--sticky-prompt-line))
                   (set-window-start nil header t)
                   (should-not (mevedel-view--sticky-prompt-line))
                   (set-window-start nil answer t)

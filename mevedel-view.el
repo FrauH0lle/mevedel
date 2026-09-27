@@ -91,21 +91,25 @@
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
-;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-status
-                  "mevedel-session-publication" (session))
-
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts--segment-tail-prompt-count
+                  "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-collect-prompts
                   "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-read-segment
                   "mevedel-session-artifacts" (session number))
 (declare-function mevedel-session-artifacts-segment-summary-bounds
                   "mevedel-session-artifacts" ())
+(autoload 'mevedel-session-artifacts--segment-tail-prompt-count
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segment-summary-bounds
   "mevedel-session-artifacts")
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-status
+                  "mevedel-session-publication" (session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
@@ -1025,8 +1029,8 @@ Kills the associated view buffer."
        `(space :align-to (- right (,(string-pixel-width rhs))))
      `(space :align-to (- right ,(string-width rhs))))))
 
-(defun mevedel-view--archived-prompt (session segment)
-  "Return the last source-backed prompt in SESSION's archived SEGMENT.
+(defun mevedel-view--archived-prompt (session segment entry)
+  "Return the source-backed ENTRY in SESSION's archived SEGMENT.
 An unreadable or stale segment cannot supply a clickable prompt."
   (let ((archive (condition-case nil
                      (mevedel-session-artifacts-read-segment session segment)
@@ -1035,34 +1039,30 @@ An unreadable or stale segment cannot supply a clickable prompt."
     (when archive
       (unwind-protect
           (with-current-buffer archive
-            (let ((recorded (cdr (assoc segment
-                                        (mevedel-session-prompt-index session))))
-                  (actual (mevedel-session-artifacts-collect-prompts archive)))
-              (dolist (entry recorded)
-                (when-let* ((position (plist-get entry :pos))
-                            ((integerp position))
-                            (source-prompt
-                             (cl-find position actual
-                                      :key (lambda (prompt)
-                                             (plist-get prompt :pos))))
-                            ((equal (plist-get entry :preview)
-                                    (plist-get source-prompt :preview))))
-                  (let* ((source (cl-find-if
-                                  (lambda (span)
-                                    (and (eq (car span) 'user)
-                                         (<= position (caddr span))))
-                                  (mevedel-transcript-segments
-                                   (point-min) (point-max))))
-                         (text (and source
-                                    (mevedel-view--user-turn-text
-                                     (list source) archive)))
-                         (preview (and text
-                                       (mevedel-view--prompt-preview text nil))))
-                    (when preview
-                      (setq result (list :segment segment :pos position
-                                         :preview preview))))))
-              (when result
-                result)))
+            (when-let* ((position (plist-get entry :pos))
+                        ((integerp position))
+                        (source-prompt
+                         (cl-find position
+                                  (mevedel-session-artifacts-collect-prompts
+                                   archive)
+                                  :key (lambda (prompt)
+                                         (plist-get prompt :pos))))
+                        ((equal (plist-get entry :preview)
+                                (plist-get source-prompt :preview))))
+              (let* ((source (cl-find-if
+                              (lambda (span)
+                                (and (eq (car span) 'user)
+                                     (<= position (caddr span))))
+                              (mevedel-transcript-segments
+                               (point-min) (point-max))))
+                     (text (and source
+                                (mevedel-view--user-turn-text
+                                 (list source) archive)))
+                     (preview (and text
+                                   (mevedel-view--prompt-preview text nil))))
+                (when preview
+                  (setq result (list :segment segment :pos position
+                                     :preview preview))))))
         (kill-buffer archive)))
     result))
 
@@ -1075,25 +1075,36 @@ Resolve archives only on source projection, never during header redisplay."
            (segment (and session (mevedel-session-current-segment session)))
            (summary-p (and session (with-current-buffer data-buffer
                                      (mevedel-session-artifacts-segment-summary-bounds))))
+           (tail-count (and session (with-current-buffer data-buffer
+                                      (mevedel-session-artifacts--segment-tail-prompt-count))))
            (cached mevedel-view--continuation-prompt-cache))
       (unless (and (eq session (nth 0 cached))
                    (eql segment (nth 1 cached))
                    (eq (and summary-p t) (nth 2 cached))
+                   (eql tail-count (nth 3 cached))
                    cached)
         (let ((prompt
                (when (and summary-p (integerp segment) (> segment 1))
-                 (catch 'found
-                   (cl-loop for previous downfrom (1- segment) to 1 do
+                 ;; Copied tail prompts are indexed in earlier segments.  The
+                 ;; summary precedes them, so its governing prompt is the
+                 ;; indexed entry immediately before that copied suffix.
+                 (let ((skip tail-count))
+                   (catch 'found
+                     (cl-loop for previous downfrom (1- segment) to 1 do
                             (let ((indexed
                                    (cdr (assoc previous
                                                (mevedel-session-prompt-index
                                                 session)))))
                               (when indexed
-                                ;; An indexed but invalid origin is not a
-                                ;; reason to jump past it to an older prompt.
-                                (throw 'found
-                                       (mevedel-view--archived-prompt
-                                        session previous))))
+                                (if (>= skip (length indexed))
+                                    (setq skip (- skip (length indexed)))
+                                  ;; An indexed but invalid origin is not a
+                                  ;; reason to jump past it to an older prompt.
+                                  (throw 'found
+                                         (mevedel-view--archived-prompt
+                                          session previous
+                                          (nth (- (length indexed) skip 1)
+                                               indexed))))))
                             ;; A fresh segment has no summary.  Do not cross
                             ;; /clear even after later compactions.
                             (let ((archive
@@ -1106,14 +1117,14 @@ Resolve archives only on source projection, never during header redisplay."
                                   (unless (with-current-buffer archive
                                             (mevedel-session-artifacts-segment-summary-bounds))
                                     (throw 'found nil))
-                                (kill-buffer archive))))))))
+                                (kill-buffer archive)))))))))
           (setq mevedel-view--continuation-prompt-cache
-                (list session segment (and summary-p t) prompt)))))))
+                (list session segment (and summary-p t) tail-count prompt)))))))
 
 (defun mevedel-view--continuation-prompt ()
   "Return this live view's resolved archived prompt, if any."
   (unless (mevedel-view-historical-segment-p)
-    (nth 3 mevedel-view--continuation-prompt-cache)))
+    (nth 4 mevedel-view--continuation-prompt-cache)))
 
 (defun mevedel-view--pinned-prompt (window)
   "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
@@ -1195,6 +1206,20 @@ When ARCHIVE is non-nil, POSITION is a source position in that segment."
                         (not (get-text-property
                               (window-start window)
                               'mevedel-view-prompt-preview))
+                        (let ((next (next-single-property-change
+                                     (window-start window)
+                                     'mevedel-view-prompt-preview nil
+                                     (mevedel-view--input-marker-position))))
+                          (not (and next
+                                    (get-text-property
+                                     next 'mevedel-view-prompt-preview)
+                                    (< next
+                                       (save-excursion
+                                         (goto-char (window-start window))
+                                         (vertical-motion
+                                          (window-body-height window) window)
+                                         (point)))
+                                    (not (invisible-p next)))))
                         (mevedel-view--continuation-prompt)))
          (pinned (or local archived)))
     (when pinned
