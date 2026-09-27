@@ -316,6 +316,32 @@ An error result is signalled, as a Read that failed before waiting does."
     (should (equal 900 (plist-get normalized :max_height)))
     (should (equal 2000 (plist-get normalized :max_tokens)))))
 
+(mevedel-deftest mevedel-tool-fs-read--maybe-transform-media ()
+  ,test
+  (test)
+  :doc "missing ImageMagick explains recovery and permits an original-image retry"
+  (let ((path (make-temp-file "mevedel-image-retry-" nil ".png")))
+    (unwind-protect
+        (progn
+          (test-mevedel-tool-fs-read--write-bytes
+           path test-mevedel-tool-fs-read--png-bytes)
+          (let ((exec-path nil)
+                (text-quoting-style 'straight))
+            (dolist (args '((:max_width 64) (:max_height 64) (:max_tokens 100)))
+              (let* ((called nil)
+                     (err (should-error
+                           (mevedel-tool-fs-read--maybe-transform-media
+                            path args (lambda (_) (setq called t)))
+                           :type 'error)))
+                (should-not called)
+                (should
+                 (equal (error-message-string err)
+                        "Cannot resize/compress this image because ImageMagick is unavailable. Install 'magick' or 'convert', or retry Read without max_width, max_height, and max_tokens to read the original image"))))
+            (should (equal (mevedel-tool-fs-read--maybe-transform-media
+                            path nil #'identity)
+                           (cons path "image/png")))))
+      (delete-file path))))
+
 (mevedel-deftest mevedel-tool-fs-read--media-file ()
   ,test
   (test)
