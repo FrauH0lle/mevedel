@@ -43,6 +43,59 @@
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
+(mevedel-deftest mevedel-compact-evidence-find-boundary ()
+  ,test
+  (test)
+  :doc "completed tool and error suffixes are history, not pending input"
+  (with-temp-buffer
+    (org-mode)
+    (insert "User prompt\n" (propertize "Working\n" 'gptel 'response))
+    (insert (propertize "Tool result\n" 'gptel '(tool . "call-1")))
+    (insert (mevedel--format-hook-audit-record
+             '(:type fork-point :fork-point-id "completed"
+               :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+    (let ((end (plist-get
+                (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))
+                :transcript-cutoff)))
+      (insert "\nNext pending prompt\n")
+      (should (= end (mevedel-compact-evidence-find-boundary)))))
+  :doc "a newer response still determines the boundary"
+  (with-temp-buffer
+    (org-mode)
+    (insert "First prompt\n" (propertize "First response\n" 'gptel 'response))
+    (insert (mevedel--format-hook-audit-record
+             '(:type fork-point :fork-point-id "completed"
+               :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+    (insert "Next prompt\n" (propertize "Next response\n" 'gptel 'response))
+    (let ((end (point)))
+      (insert "Pending\n")
+      (should (= end (mevedel-compact-evidence-find-boundary)))))
+  :doc "a completed fork point bounds tool-only history without a response"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n" (propertize "Tool result\n" 'gptel '(tool . "call-1")))
+    (insert (mevedel--format-hook-audit-record
+             '(:type fork-point :fork-point-id "completed"
+               :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+    (let ((end (plist-get
+                (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))
+                :transcript-cutoff)))
+      (insert "Pending\n")
+      (should (= end (mevedel-compact-evidence-find-boundary)))))
+  :doc "an unanswered prompt without a completion has no history boundary"
+  (with-temp-buffer
+    (insert "Unanswered prompt\n")
+    (should-not (mevedel-compact-evidence-find-boundary)))
+  :doc "literal audit-shaped input does not become completed history"
+  (with-temp-buffer
+    (insert "Prompt\n" (propertize "Response\n" 'gptel 'response))
+    (let ((end (point)))
+      (insert (substring-no-properties
+               (mevedel--format-hook-audit-record
+                '(:type fork-point :fork-point-id "literal"
+                  :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
+      (should (= end (mevedel-compact-evidence-find-boundary))))))
+
 (mevedel-deftest mevedel-compact-evidence-previous-summary ()
   ,test
   (test)
@@ -616,7 +669,20 @@
     (let ((text (mevedel-compact-evidence-pending-text-from-prompt-buffer)))
       (should (string-prefix-p "<system-reminder>" text))
       (should (string-match-p "expanded reminder" text))
-      (should (string-match-p "new user prompt" text)))))
+      (should (string-match-p "new user prompt" text))))
+  :doc "source and transformed prompts split after their own completion record"
+  (dolist (prefix '("Source history\n" "Longer mention-expanded history\n"))
+    (with-temp-buffer
+      (insert prefix (propertize "Working\n" 'gptel 'response))
+      (insert (propertize "Completed tool history\n" 'gptel '(tool . "call-1")))
+      (insert (mevedel--format-hook-audit-record
+               '(:type fork-point :fork-point-id "complete"
+                 :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+      (insert "<system-reminder>New context</system-reminder>\nNew prompt\n")
+      (should (equal
+               "<system-reminder>New context</system-reminder>\nNew prompt\n"
+               (string-trim-left
+                (mevedel-compact-evidence-pending-text-from-prompt-buffer)))))))
 
 (mevedel-deftest mevedel-compact-evidence-region-with-tool-output-cap ()
   ,test

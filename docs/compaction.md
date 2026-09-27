@@ -180,6 +180,14 @@ staging. Reminders are delivered when the provider request is realized. This ord
   the transformed pending text, including expanded mentions, for
   the actual request.
 
+The pre-send history boundary is the later of the last assistant response
+and the last structurally parsed completed fork-point record. Tool/error
+history through that record remains in the predecessor even when no later
+assistant prose was emitted. The source and transformed prompt buffers each
+compute this boundary from their own text. Explicit continuation boundaries
+still protect the current tool batch; this is not a general classification
+of all trailing incomplete history as unsent input.
+
 The pre-send estimate starts from the source chat buffer's API-corrected
 baseline when present, then adds the chars/4 delta introduced by prompt
 transforms. Without a baseline it falls back to the transformed prompt
@@ -489,8 +497,9 @@ Persisted sessions use split-on-compact:
 3. Publish according to the session's authority profile. Portable project sessions
    commit the finalized predecessor, successor, instruction artifacts, and sidecar
    together through one immutable publication head. File-workspace sessions
-   publish the successor through a same-directory atomic rename,
-   then write the sidecar and instructions and finalize the predecessor.
+   publish the successor through a same-directory atomic rename, write the
+   finalized predecessor, then commit the matching sidecar before saving
+   instructions. Both profiles index the exact finalized predecessor text.
 4. The publication helpers repoint the data buffer's complete visited-file
    identity. Restore the pending prompt only in the live buffer, outside the
    persisted contents.

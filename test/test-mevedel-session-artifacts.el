@@ -12,6 +12,8 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
+(require 'mevedel-journal-evidence)
+
 (mevedel-deftest mevedel-session-artifacts--obsolete-snapshot-artifacts ()
   ,test
   (test)
@@ -126,7 +128,69 @@
         (mevedel-transcript-restore-properties)
         (should (org-entry-get (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"))
         (should (equal before (mevedel-agent-conversation-project-history
-                              (current-buffer))))))))
+                              (current-buffer)))))))
+  :doc "rebases existing continuations even when later prompts occupy the segment"
+  (let* ((prompt (list :turn 1 :file-turn 1 :cum-turn 1 :pos 1
+                       :preview "Earlier request"))
+         (session (mevedel-session--create
+                   :current-segment 2 :turn-count 2
+                   :prompt-index (list (list 1 prompt))))
+         (id (make-string 32 ?a))
+         text old-index before)
+    (with-temp-buffer
+      (org-mode)
+      (insert (mevedel-session-artifacts-summary-block "Earlier work"))
+      (insert (propertize "Finished continued work\n" 'gptel 'response))
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'fork-point :fork-point-id id :segment 2
+                     :turn 1 :file-turn 1 :cum-turn 1 :captured-file-turn 1)))
+      (insert "\nLater request\n")
+      (insert (propertize "Later response\n" 'gptel 'response))
+      (mevedel-session-artifacts-stabilize-gptel-bounds)
+      (let ((span (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))))
+        (plist-put prompt :continuation
+                   (list :segment 2
+                         :start (mevedel-session-artifacts--continuation-start (current-buffer))
+                         :fork-point-id id
+                         :transcript-cutoff (plist-get span :transcript-cutoff))))
+      (mevedel-session-artifacts-update-prompt-index session (current-buffer))
+      (setq old-index (mevedel-session-prompt-index session)
+            before (copy-tree old-index)
+            text (mevedel-session-artifacts-finalized-segment-text
+                  (buffer-string) 'utf-8-unix session 2)))
+    (should (equal before old-index))
+    (should (= 2 (mevedel-session-current-segment session)))
+    (with-temp-buffer
+      (insert (substring-no-properties text))
+      (org-mode)
+      (mevedel-transcript-restore-properties)
+      (let* ((index (mevedel-session-prompt-index session))
+             (continued (plist-get (cadr (assoc 1 index)) :continuation))
+             (later (cadr (assoc 2 index)))
+             (span (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))))
+        (should (equal id (plist-get continued :fork-point-id)))
+        (should (= (plist-get continued :start)
+                   (mevedel-session-artifacts--continuation-start (current-buffer))))
+        (should (= (plist-get continued :transcript-cutoff)
+                   (plist-get span :transcript-cutoff)))
+        (should (= 2 (plist-get later :cum-turn)))
+        (should (= (plist-get later :pos)
+                   (plist-get (car (mevedel-session-artifacts-collect-prompts
+                                    (current-buffer))) :pos))))))
+  :doc "missing direct or continued completion fails without changing the index"
+  (dolist (continued '(nil t))
+    (let* ((source (list :fork-point-id (make-string 32 ?a) :transcript-cutoff 50))
+           (prompt (append (list :turn 1 :file-turn 1 :cum-turn 1 :pos 1)
+                           (if continued
+                               (list :continuation (append (list :segment 2 :start 1) source))
+                             source)))
+           (index (list (list 1 prompt)))
+           (session (mevedel-session--create :current-segment (if continued 2 1)
+                                             :prompt-index index)))
+      (should-error
+       (mevedel-session-artifacts-finalized-segment-text
+        "Prompt\n" 'utf-8-unix session))
+      (should (eq index (mevedel-session-prompt-index session))))))
 
 (mevedel-deftest mevedel-session-artifacts-replace-transcript-contents ()
   ,test
@@ -2849,7 +2913,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
              (mevedel-session-save-path session) 2))))
       (test-mevedel-session-persistence--cleanup tempdir)))
 
-  :doc "restores sidecar when failure happens after sidecar publish"
+  :doc "retains committed rotation when instructions fail after sidecar publish"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -2864,15 +2928,17 @@ rotation never saves through a rebound temporary visited filename or prompts"
              (mevedel-session-artifacts-rotate-segment
               session buf "Summary that will not commit.")))
           (let ((plist (mevedel-session-codec-read sidecar)))
-            (should (= 1 (mevedel-session-current-segment session)))
-            (should (= 1 (plist-get plist :current-segment))))
+            (should (= 2 (mevedel-session-current-segment session)))
+            (should (= 2 (plist-get plist :current-segment)))
+            (should (equal (mevedel-session-prompt-index session)
+                           (plist-get plist :prompt-index))))
           (with-current-buffer buf
             (should
              (file-equal-p
               (mevedel-session-artifacts-segment-path
-               (mevedel-session-save-path session) 1)
+               (mevedel-session-save-path session) 2)
               buffer-file-name)))
-          (should-not
+          (should
            (file-exists-p
             (mevedel-session-artifacts-segment-path
              (mevedel-session-save-path session) 2))))
@@ -2902,6 +2968,136 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should (string-match-p "Pending prompt" (buffer-string)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
+
+(mevedel-deftest mevedel-session-artifacts-finalized-index-rollback ()
+  ,test
+  (test)
+  :doc "failed rotation and fresh transitions restore index and predecessor bytes"
+  (dolist (portable '(nil t))
+    (dolist (fresh '(nil t))
+     (dolist (interruption '(error quit))
+      (let* ((root (make-temp-file "mevedel-index-rollback-" t))
+             (workspace (if portable
+                            (test-mevedel-session-persistence--make-workspace root)
+                          (test-mevedel-session-persistence--make-file-workspace root)))
+             (session (mevedel-session-create "main" workspace))
+             (buffer (generate-new-buffer " *index-rollback*")))
+        (unwind-protect
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "Request\n" (propertize "Completed response\n" 'gptel 'response))
+              (setf (mevedel-session-turn-count session) 1)
+              (mevedel-session-artifacts-save session buffer t)
+              (let ((index (copy-tree (mevedel-session-prompt-index session)))
+                    (bytes (mevedel-session-artifacts-read-artifact
+                            session "segment-0001.chat.org" t))
+                    (head (plist-get (mevedel-session-publication session) :head))
+                    (failure (if portable
+                                 'mevedel-session-artifacts--instruction-artifacts
+                               'mevedel-session-codec-write)))
+                ;; Both failures occur after the finalized index was prepared;
+                ;; the file failure also rolls back finalized predecessor bytes.
+                (cl-letf (((symbol-function failure)
+                           (lambda (&rest _) (signal interruption nil))))
+                  (should
+                   (eq interruption
+                       (condition-case nil
+                           (progn
+                             (if fresh
+                                 (mevedel-session-artifacts-start-fresh-segment session buffer)
+                               (mevedel-session-artifacts-rotate-segment session buffer "Summary"))
+                             'returned)
+                         (error 'error)
+                         (quit 'quit)))))
+                (should (= 1 (mevedel-session-current-segment session)))
+                (should (equal index (mevedel-session-prompt-index session)))
+                (should (equal bytes (mevedel-session-artifacts-read-artifact
+                                      session "segment-0001.chat.org" t)))
+                (should (equal head (plist-get (mevedel-session-publication session) :head)))
+                (let ((sidecar (mevedel-session-codec-read
+                                (mevedel-session-artifacts-sidecar-path
+                                 (mevedel-session-save-path session)))))
+                  (should (= 1 (plist-get sidecar :current-segment)))
+                  (should (equal index (plist-get sidecar :prompt-index))))))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (delete-directory root t)
+          (mevedel-workspace-clear-registry)))))))
+
+(mevedel-deftest mevedel-session-artifacts-rotate-segment-quit (:quiet t)
+  ,test
+  (test)
+  :doc "quit retains committed file or portable transitions and pending portable publication"
+  (dolist (phase '(file-committed portable-committed portable-pending))
+    (let* ((portable (not (eq phase 'file-committed)))
+           (root (make-temp-file "mevedel-rotation-quit-" t))
+           (workspace (if portable
+                          (test-mevedel-session-persistence--make-workspace root)
+                        (test-mevedel-session-persistence--make-file-workspace root)))
+           (session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *rotation-quit*")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "Request\n" (propertize "Completed response\n" 'gptel 'response))
+            (setf (mevedel-session-turn-count session) 1)
+            (mevedel-session-artifacts-save session buffer t)
+            (goto-char (point-max))
+            (insert "\nPending request\n")
+            (let* ((head (plist-get (mevedel-session-publication session) :head))
+                   (transition (symbol-function
+                                'mevedel-session-artifacts--publish-remote-segment-transition))
+                   (seam (if portable
+                             'mevedel-session-artifacts--publish-remote-segment-transition
+                           'mevedel-session-artifacts-save-instructions)))
+              (cl-letf (((symbol-function seam)
+                         (lambda (&rest args)
+                           (should inhibit-quit)
+                           (when portable
+                             (if (eq phase 'portable-pending)
+                                 (cl-letf (((symbol-function
+                                             'mevedel-session-publication--commit-marker-publication)
+                                            (lambda (&rest _) (error "Injected publication failure"))))
+                                   (condition-case nil (apply transition args) (error nil)))
+                               (apply transition args)))
+                           (signal 'quit nil))))
+                (should (eq 'quit
+                            (condition-case nil
+                                (progn
+                                  (mevedel-session-artifacts-rotate-segment
+                                   session buffer "Summary" :pending-text "\nPending request\n")
+                                  'returned)
+                              (quit 'quit)))))
+              (should (= 2 (mevedel-session-current-segment session)))
+              (should (equal buffer-file-name
+                             (mevedel-session-artifacts-segment-path
+                              (mevedel-session-save-path session) 2)))
+              (should (= 2 (length (split-string (buffer-string) "Pending request"))))
+              (if (eq phase 'portable-pending)
+                  (progn
+                    (should (mevedel-session-pending-publication session))
+                    (should (equal head (plist-get (mevedel-session-publication session) :head)))
+                    (mevedel-session-publication-retry session))
+                (should-not (mevedel-session-pending-publication session)))
+              (let* ((index (mevedel-session-prompt-index session))
+                     (sidecar (mevedel-session-codec-read
+                               (mevedel-session-artifacts-sidecar-path
+                                (mevedel-session-save-path session))))
+                     (prompt (cadr (assoc 1 index)))
+                     (evidence (mevedel-journal-evidence-turns
+                                session
+                                (list (list :number 1 :segment 1
+                                            :fork-point (plist-get prompt :fork-point-id)
+                                            :start (plist-get prompt :pos)
+                                            :end (plist-get prompt :transcript-cutoff))))))
+                (should (= 2 (plist-get sidecar :current-segment)))
+                (should (equal index (plist-get sidecar :prompt-index)))
+                (should (string-search "Completed response" (plist-get evidence :text)))
+                (should-not (string-search "Pending request" (plist-get evidence :text))))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry)))))
 
 (mevedel-deftest mevedel-session-artifacts-segment-summary-bounds ()
   ,test
@@ -3019,6 +3215,78 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (test-mevedel-session-persistence--cleanup tempdir))))
 
 
+(mevedel-deftest mevedel-session-artifacts-rotate-segment-completed-evidence ()
+  ,test
+  (test)
+  :doc "rotation and fresh segments index completed evidence at finalized positions"
+  (dolist (portable '(nil t))
+    (dolist (fresh '(nil t))
+      (let* ((tempdir (make-temp-file "mevedel-rotation-evidence-" t))
+             (workspace (if portable
+                            (test-mevedel-session-persistence--make-workspace tempdir)
+                          (test-mevedel-session-persistence--make-file-workspace tempdir)))
+             (session (mevedel-session-create "main" workspace))
+             (buf (generate-new-buffer " *rotation-evidence*")))
+        (unwind-protect
+            (with-current-buffer buf
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "Initial prompt\n")
+              (insert (propertize "Working\n" 'gptel 'response))
+              (insert "#+begin_tool (Read :file_path \"big.txt\")\n")
+              (let ((tool-start (point)))
+                (insert "(:name \"Read\" :args (:file_path \"big.txt\"))\n\n")
+                (insert (make-string 20000 ?x) "\n#+end_tool\n")
+                (put-text-property tool-start (point) 'gptel '(tool . "call-1")))
+              (setf (mevedel-session-turn-count session) 1)
+              (mevedel-session-artifacts-save session buf t)
+              (let* ((before (cadr (assoc 1 (mevedel-session-prompt-index session))))
+                     (id (plist-get before :fork-point-id)))
+                (should id)
+                (if fresh
+                    (mevedel-session-artifacts-start-fresh-segment
+                     session buf :initial-text "Pending prompt\n")
+                  (goto-char (point-max))
+                  (insert "\nPending prompt\n")
+                  (mevedel-session-artifacts-rotate-segment
+                   session buf "Summary."
+                   :pending-text (buffer-substring
+                                  (mevedel-compact-evidence-find-boundary) (point-max))))
+                (let ((indexed (cadr (assoc 1 (mevedel-session-prompt-index session))))
+                      (sidecar (mevedel-session-codec-read
+                                (mevedel-session-artifacts-sidecar-path
+                                 (mevedel-session-save-path session)))))
+                  (should (equal (mevedel-session-prompt-index session)
+                                 (plist-get sidecar :prompt-index)))
+                  (let ((evidence
+                         (mevedel-journal-evidence-turns
+                          session
+                          (list (list :number 1 :segment 1 :fork-point id
+                                      :start (plist-get indexed :pos)
+                                      :end (plist-get indexed :transcript-cutoff))))))
+                    (should (string-search "Working" (plist-get evidence :text)))
+                    (should (string-search (make-string 80 ?x) (plist-get evidence :text)))
+                    (should-not (string-search "Pending prompt" (plist-get evidence :text))))
+                  (with-temp-buffer
+                    (insert (decode-coding-string
+                             (mevedel-session-artifacts-read-artifact
+                              session "segment-0001.chat.org" t)
+                             'utf-8-unix))
+                    (org-mode)
+                    (mevedel-transcript-restore-properties)
+                    (let ((actual (car (mevedel-session-artifacts-fork-point-spans
+                                        (current-buffer)))))
+                      (should (equal id (plist-get actual :fork-point-id)))
+                      (should (= (plist-get indexed :transcript-cutoff)
+                                 (plist-get actual :transcript-cutoff)))
+                      (should (= (plist-get indexed :pos)
+                                 (plist-get (car (mevedel-session-artifacts-collect-prompts
+                                                  (current-buffer))) :pos))))
+                    (should-not (string-search "Pending prompt" (buffer-string)))))))
+          (test-mevedel-session-persistence--release-and-kill buf session)
+          (delete-directory tempdir t)
+          (mevedel-workspace-clear-registry))))))
+
 (mevedel-deftest mevedel-session-artifacts-rotate-segment-tail-index ()
   ,test
   (test)
@@ -3034,15 +3302,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 "Tail prompt 2\n"
                 (propertize "Tail response 2\n" 'gptel 'response))))
           (setf (mevedel-session-turn-count session) 10)
-          (setf (mevedel-session-prompt-index session)
-                (list
-                 (cons 1
-                       (cl-loop for turn from 1 to 10
-                                collect
-                                (list :turn turn
-                                      :cum-turn turn
-                                      :pos turn
-                                      :preview (format "Prompt %d" turn))))))
+          (with-current-buffer buf
+            (erase-buffer)
+            (dotimes (turn 10)
+              (insert (format "Prompt %d\n" (1+ turn)))
+              (insert (propertize "Response\n" 'gptel 'response)))
+            (mevedel-session-artifacts-update-prompt-index session buf))
           (mevedel-session-artifacts-rotate-segment
            session buf "Summary."
            :tail-text tail-text
@@ -4167,7 +4432,17 @@ rotation never saves through a rebound temporary visited filename or prompts"
                          'project "id" "/" "x")))
               (seg1 (file-name-concat tempdir "segment-0001.chat.org")))
           (setf (mevedel-session-current-segment session) 1)
-          (write-region "* Chat\n" nil seg1 nil 'silent)
+          (with-temp-buffer
+            (org-mode)
+            (insert "Completed request\n"
+                    (propertize "Completed response\n" 'gptel 'response))
+            (insert (mevedel--format-hook-audit-record
+                     (list :type 'fork-point :fork-point-id (make-string 32 ?a)
+                           :segment 1 :turn 1 :file-turn 1 :cum-turn 1
+                           :captured-file-turn 1)))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (mevedel-session-artifacts-update-prompt-index session (current-buffer))
+            (write-region (point-min) (point-max) seg1 nil 'silent))
           (write-region "* Chat\n" nil
                         (file-name-concat tempdir "segment-0002.chat.org")
                         nil 'silent)
@@ -4177,11 +4452,86 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (should (= 2 (mevedel-session-current-segment session)))
           (with-temp-buffer
             (insert-file-contents seg1)
+            (org-mode)
+            (mevedel-transcript-restore-properties)
+            (let ((prompt (cadr (assoc 1 (mevedel-session-prompt-index session))))
+                  (span (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))))
+              (should (= (plist-get prompt :transcript-cutoff)
+                         (plist-get span :transcript-cutoff))))
             (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
                                     (buffer-string)))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+
+(mevedel-deftest mevedel-session-artifacts-self-heal-crash-restore ()
+  ,test
+  (test)
+  :doc "restore repairs and persists predecessor coordinates across file transition crash windows"
+  (let* ((root (make-temp-file "mevedel-rotation-crash-" t))
+         (workspace (test-mevedel-session-persistence--make-file-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *rotation-crash*"))
+         (mevedel-journal-enabled nil)
+         restored restored-session)
+    (unwind-protect
+        (let (directory predecessor)
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "Request\n" (propertize "Completed response\n" 'gptel 'response))
+            (setf (mevedel-session-turn-count session) 1)
+            (mevedel-session-artifacts-save session buffer t)
+            (setq directory (mevedel-session-save-path session)
+                  predecessor buffer-file-name)
+            ;; A nonlocal exit bypasses caught-error rollback, leaving
+            ;; the same files a process crash at this write would leave.
+            (should
+             (eq 'crashed
+                 (catch 'crash
+                   (cl-letf (((symbol-function 'mevedel-session-codec-write)
+                              (lambda (&rest _) (throw 'crash 'crashed))))
+                     (mevedel-session-artifacts-rotate-segment session buffer "Summary")))))
+            (let ((state (mevedel-session-codec-read
+                          (mevedel-session-artifacts-sidecar-path directory))))
+              (should (= 1 (plist-get state :current-segment))))
+            (should (file-exists-p (mevedel-session-artifacts-segment-path directory 2))))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (setq buffer nil)
+          (mevedel-test--with-captured-diagnostics nil
+            (setq restored (mevedel-session-persistence-restore directory nil nil workspace)))
+          (setq restored-session (buffer-local-value 'mevedel--session restored))
+          (should (= 2 (mevedel-session-current-segment restored-session)))
+          (let* ((index (mevedel-session-prompt-index restored-session))
+                 (state (mevedel-session-codec-read
+                         (mevedel-session-artifacts-sidecar-path directory)))
+                 (prompt (cadr (assoc 1 index))))
+            (should (equal index (plist-get state :prompt-index)))
+            (should (= 2 (plist-get state :current-segment)))
+            (with-temp-buffer
+              (insert-file-contents predecessor)
+              (org-mode)
+              (mevedel-transcript-restore-properties)
+              (should (org-entry-get (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"))
+              (let ((span (car (mevedel-session-artifacts-fork-point-spans (current-buffer)))))
+                (should (= (plist-get prompt :transcript-cutoff)
+                           (plist-get span :transcript-cutoff)))))
+            (let ((evidence (mevedel-journal-evidence-turns
+                             restored-session
+                             (list (list :number 1 :segment 1
+                                         :fork-point (plist-get prompt :fork-point-id)
+                                         :start (plist-get prompt :pos)
+                                         :end (plist-get prompt :transcript-cutoff))))))
+              (should (string-search "Completed response" (plist-get evidence :text))))
+            ;; Recovery is complete: an ordinary second inspection must not
+            ;; rewrite the already-finalized predecessor or its index.
+            (should-not (mevedel-session-artifacts-self-heal-segment-counter
+                         restored-session directory))
+            (should (equal index (mevedel-session-prompt-index restored-session)))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (test-mevedel-session-persistence--release-and-kill restored restored-session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-session-artifacts/file-history-roundtrip ()
   ,test
