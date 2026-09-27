@@ -110,8 +110,12 @@
 (autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system max-bytes))
+(declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content &optional coding-system))
+(autoload 'mevedel-session-control-fs-physical-path "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-write-file "mevedel-session-control-fs")
 
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer-observe "mevedel-session-control-transfer" (session))
@@ -2572,18 +2576,32 @@ user\\='s view, by contrast, sees a foldable block."
           summary
           (propertize "\n#+end_summary\n" 'gptel 'ignore)))
 
-(defun mevedel-session-artifacts--finalize-segment-file (file)
-  "Mark segment FILE finalized on disk."
+(defun mevedel-session-artifacts--finalize-segment-file
+    (file &optional session segment prepared-text)
+  "Mark segment FILE finalized on disk and refresh SESSION's SEGMENT index.
+PREPARED-TEXT, when non-nil, is already finalized and indexed; write it
+unchanged.  Otherwise prepare the text and index before the atomic write."
   (when (and file (file-exists-p file))
     (with-temp-buffer
       (insert-file-contents file)
-      (write-region
-       (mevedel-session-artifacts-finalized-segment-text
-        (buffer-string) buffer-file-coding-system)
-       nil file nil 'silent))))
+      (let* ((candidate (and session (copy-sequence session)))
+             (text (or prepared-text
+                       (mevedel-session-artifacts-finalized-segment-text
+                        (buffer-string) buffer-file-coding-system
+                        candidate segment))))
+        (mevedel-session-control-fs-write-file
+         (mevedel-session-control-fs-physical-path file)
+         (substring-no-properties text) buffer-file-coding-system)
+        (when candidate
+          (setf (mevedel-session-prompt-index session)
+                (mevedel-session-prompt-index candidate)))))))
 
-(defun mevedel-session-artifacts-finalized-segment-text (text coding)
-  "Return segment TEXT with finalized metadata, using buffer coding CODING."
+(defun mevedel-session-artifacts-finalized-segment-text
+    (text coding &optional session segment)
+  "Return segment TEXT with finalized metadata, using buffer coding CODING.
+When SESSION is non-nil, refresh its SEGMENT index against the exact returned
+text.  SEGMENT defaults to SESSION's current segment.  Index preparation uses
+a private copy, so a failed preparation leaves SESSION unchanged."
   (with-temp-buffer
     (setq buffer-file-coding-system coding)
     (insert text)
@@ -2593,13 +2611,69 @@ user\\='s view, by contrast, sees a foldable block."
     (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
                    (format-time-string "%FT%H-%M-%S"))
     (mevedel-session-artifacts-stabilize-gptel-bounds)
+    (when session
+      (let* ((segment (or segment (mevedel-session-current-segment session)))
+             (candidate (copy-sequence session))
+             (index (copy-tree (mevedel-session-prompt-index session)))
+             (fork-points
+              (mevedel-session-artifacts-fork-point-spans (current-buffer))))
+        ;; A refresh must never silently erase a previously indexed completion.
+        ;; Continuations can live on an earlier prompt even when this segment
+        ;; now contains later prompts of its own.
+        (dolist (entry index)
+          (dolist (prompt (cdr entry))
+            (let* ((continuation (plist-get prompt :continuation))
+                   (source (cond
+                            ((eql (plist-get continuation :segment) segment)
+                             continuation)
+                            ((eql (car entry) segment) prompt)))
+                   (id (plist-get source :fork-point-id)))
+              (when id
+                (let ((span (cl-find id fork-points
+                                     :key (lambda (record)
+                                            (plist-get record :fork-point-id))
+                                     :test #'equal)))
+                  (unless span
+                    (error "Completed turn is missing from finalized segment"))
+                  (when (eq source continuation)
+                    (plist-put continuation :start
+                               (mevedel-session-artifacts--continuation-start
+                                (current-buffer)))
+                    (plist-put continuation :transcript-cutoff
+                               (plist-get span :transcript-cutoff))))))))
+        (setf (mevedel-session-current-segment candidate) segment
+              (mevedel-session-prompt-index candidate) index)
+        (mevedel-session-artifacts-update-prompt-index candidate (current-buffer))
+        (let ((refreshed (cdr (assoc segment
+                                    (mevedel-session-prompt-index candidate)))))
+          (dolist (prompt (cdr (assoc segment
+                                     (mevedel-session-prompt-index session))))
+            (when-let* ((id (plist-get prompt :fork-point-id)))
+              (unless (cl-find id refreshed
+                               :key (lambda (entry) (plist-get entry :fork-point-id))
+                               :test #'equal)
+                (error "Completed turn is no longer indexed in finalized segment")))
+            ;; Recovery can finalize a predecessor whose turn has already
+            ;; completed in a successor.  Reindexing its prompt must retain
+            ;; that separate segment's completion coordinates unchanged.
+            (when-let* ((continuation (plist-get prompt :continuation))
+                        ((not (eql segment (plist-get continuation :segment)))))
+              (let ((replacement
+                     (cl-find (plist-get prompt :file-turn) refreshed
+                              :key (lambda (entry) (plist-get entry :file-turn)))))
+                (unless replacement
+                  (error "Continued turn is no longer indexed in finalized segment"))
+                (plist-put replacement :continuation (copy-tree continuation))))))
+        (setf (mevedel-session-prompt-index session)
+              (mevedel-session-prompt-index candidate))))
     (buffer-string)))
 
 (defun mevedel-session-artifacts--publish-remote-segment-transition
     (session buffer old-segment old-text new-segment new-text &optional require-commit)
   "Publish one portable project SESSION segment transition derived from BUFFER.
 
-OLD-SEGMENT receives finalized OLD-TEXT.  NEW-SEGMENT receives NEW-TEXT.
+OLD-SEGMENT receives already finalized and indexed OLD-TEXT.
+NEW-SEGMENT receives NEW-TEXT.
 Instruction snapshots and the sidecar join the same batch, with the sidecar
 last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
   (with-current-buffer buffer
@@ -2615,11 +2689,7 @@ last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
        session
        (append
         (list
-         (list :path old-segment
-               :content
-               (mevedel-session-artifacts-finalized-segment-text
-                old-text coding)
-               :coding coding)
+         (list :path old-segment :content old-text :coding coding)
          (list :path new-segment :content new-text :coding coding))
         (mevedel-session-artifacts--instruction-artifacts session buffer)
         (list (mevedel-session-artifacts--sidecar-artifact session buffer)))
@@ -2644,8 +2714,8 @@ last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
 Advance SESSION's segment number and build the successor in a temporary
 buffer.  Portable project sessions publish the finalized predecessor,
 successor, instructions, and sidecar in one immutable head.  File-workspace
-sessions save the predecessor, atomically publish the successor, write the
-sidecar and instructions, then finalize the predecessor.  Publication
+sessions save the predecessor, atomically publish the successor, finalize
+the predecessor, commit the sidecar, then save instructions.  Publication
 repoints BUFFER's visited-file state; PENDING-TEXT is restored only in the
 live buffer afterward.
 
@@ -2672,6 +2742,10 @@ nil if SESSION is not yet materialized."
             (old-modified-p (buffer-modified-p))
             (tail-prompt-count
              (mevedel-session-artifacts--prompt-count-in-text tail-text))
+            (old-prompt-index (copy-tree (mevedel-session-prompt-index session)))
+            (old-head (plist-get (mevedel-session-publication session) :head))
+            committed
+            old-file-bytes
             old-publish-text
             new-segment
             new-text
@@ -2696,15 +2770,20 @@ nil if SESSION is not yet materialized."
                             (point-min) (point-max))))
                  (buffer-substring-no-properties
                   (point-min) (- (point-max) (length pending-text)))))
+              (unless portable-p
+                (setq old-file-bytes
+                      (mevedel-session-artifacts-read-file-raw old-segment)))
               (when pending-text
                 (let ((inhibit-read-only t))
                   (mevedel-session-artifacts--delete-trailing-text
                    pending-text)))
-              (if portable-p
-                  (setq old-publish-text
-                        (buffer-substring (point-min) (point-max)))
+              (unless portable-p
                 (when (buffer-modified-p)
                   (mevedel-session-artifacts-save-buffer-silently)))
+              (setq old-publish-text
+                    (mevedel-session-artifacts-finalized-segment-text
+                     (buffer-substring (point-min) (point-max))
+                     buffer-file-coding-system session old-current-segment))
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'old-saved
@@ -2754,20 +2833,26 @@ nil if SESSION is not yet materialized."
                  :new-segment (mevedel-session-current-segment session)))
               (setf (mevedel-session-updated-at session)
                     (format-time-string "%FT%H-%M-%S"))
-              (if portable-p
-                  (mevedel-session-artifacts--publish-remote-segment-transition
-                   session buffer old-segment old-publish-text
+              ;; Do not let an ordinary keyboard quit separate the durable
+              ;; commit from its in-memory marker.  Explicit quit signals from
+              ;; a failed operation still enter the cleanup below.
+              (let ((inhibit-quit t))
+                (if portable-p
+                    (mevedel-session-artifacts--publish-remote-segment-transition
+                     session buffer old-segment old-publish-text
+                     new-segment new-text)
+                  (mevedel-session-artifacts--publish-segment-text
                    new-segment new-text)
-                (mevedel-session-artifacts--publish-segment-text
-                 new-segment new-text)
-                ;; 6. Rewrite the sidecar with the bumped current-segment.
-                (mevedel-session-codec-write
-                 (mevedel-session-artifacts-sidecar-path
-                  (mevedel-session-save-path session))
-                 (mevedel-session-artifacts-build-sidecar session buffer))
-                (mevedel-session-artifacts-save-instructions session buffer)
-                (mevedel-session-artifacts--finalize-segment-file
-                 old-segment))
+                  (mevedel-session-artifacts--finalize-segment-file
+                   old-segment nil nil old-publish-text)
+                  ;; 6. Rewrite the sidecar with the bumped current-segment.
+                  (mevedel-session-codec-write
+                   (mevedel-session-artifacts-sidecar-path
+                    (mevedel-session-save-path session))
+                   (mevedel-session-artifacts-build-sidecar session buffer))
+                  (setq committed t)
+                  (mevedel-session-artifacts-save-instructions session buffer))
+                (setq committed t))
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-published
@@ -2778,6 +2863,7 @@ nil if SESSION is not yet materialized."
               (when pending-position
                 (goto-char pending-position)
                 (insert pending-text)
+                (setq pending-position nil)
                 ;; The pending prompt belongs to the in-flight request.
                 ;; The DONE autosave will commit it together with the
                 ;; assistant response; failure/abort paths must not.
@@ -2785,34 +2871,46 @@ nil if SESSION is not yet materialized."
               (when (fboundp 'mevedel-collaboration-notify-history-changed)
                 (mevedel-collaboration-notify-history-changed buffer))
               new-segment)
-          (error
-           (when telemetry-span
-             (mevedel-telemetry-finish
-              telemetry-span :outcome 'error :error-class (car-safe err)))
-           (if (and portable-p
-                    (mevedel-session-pending-publication session))
-               (progn
-                 (when pending-position
-                   (goto-char pending-position)
-                   (insert pending-text))
-                 (set-buffer-modified-p nil))
-             (setf (mevedel-session-current-segment session)
-                   old-current-segment)
-             (setf (mevedel-session-updated-at session) old-updated-at)
-             (let ((inhibit-read-only t))
-               (erase-buffer)
-               (insert old-text))
-             (mevedel-session-artifacts--set-visited-segment-file
-              old-segment)
-             (goto-char (min old-point (point-max)))
-             (set-buffer-modified-p old-modified-p)
-             (ignore-errors
-               (mevedel-session-codec-write
-                (mevedel-session-artifacts-sidecar-path
-                 (mevedel-session-save-path session))
-                (mevedel-session-artifacts-build-sidecar session buffer)))
-             (when (and new-segment (file-exists-p new-segment))
-               (delete-file new-segment)))
+          ((error quit)
+           (let ((inhibit-quit t))
+             (when telemetry-span
+               (mevedel-telemetry-finish
+                telemetry-span :outcome 'error :error-class (car-safe err)))
+             (if (or committed
+                     (and portable-p
+                          (or (mevedel-session-pending-publication session)
+                              (not (equal old-head
+                                          (plist-get (mevedel-session-publication session)
+                                                     :head))))))
+                 (progn
+                   (when pending-position
+                     (goto-char pending-position)
+                     (insert pending-text))
+                   (set-buffer-modified-p nil))
+               (setf (mevedel-session-current-segment session)
+                     old-current-segment)
+               (setf (mevedel-session-updated-at session) old-updated-at
+                     (mevedel-session-prompt-index session) old-prompt-index)
+               (when old-file-bytes
+                 (mevedel-session-control-fs-write-file
+                  (mevedel-session-control-fs-physical-path old-segment)
+                  old-file-bytes 'no-conversion))
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert old-text))
+               (mevedel-session-artifacts--set-visited-segment-file
+                old-segment)
+               (goto-char (min old-point (point-max)))
+               (set-buffer-modified-p old-modified-p)
+               (if portable-p
+                   (mevedel-session-publication-discard-rolled-back session)
+                 (ignore-errors
+                   (mevedel-session-codec-write
+                    (mevedel-session-artifacts-sidecar-path
+                     (mevedel-session-save-path session))
+                    (mevedel-session-artifacts-build-sidecar session buffer)))
+                 (when (and new-segment (file-exists-p new-segment))
+                   (delete-file new-segment)))))
            (signal (car err) (cdr err)))))))))
 
 (cl-defun mevedel-session-artifacts-start-fresh-segment
@@ -2842,6 +2940,7 @@ absolute path on success, nil if SESSION is not yet materialized."
             (old-prompt-index (copy-tree (mevedel-session-prompt-index session)))
             (old-head (plist-get (mevedel-session-publication session) :head))
             capture committed
+            old-file-bytes
             old-publish-text
             new-segment
             new-text
@@ -2860,13 +2959,15 @@ absolute path on success, nil if SESSION is not yet materialized."
             (condition-case err
                 (progn
                   (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
-                  (if portable-p
-                      (setq old-publish-text
-                            (buffer-substring (point-min) (point-max)))
+                  (unless portable-p
+                    (setq old-file-bytes
+                          (mevedel-session-artifacts-read-file-raw old-segment))
                     (when (buffer-modified-p)
                       (mevedel-session-artifacts-save-buffer-silently)))
-                  (mevedel-session-artifacts-update-prompt-index
-                   session buffer)
+                  (setq old-publish-text
+                        (mevedel-session-artifacts-finalized-segment-text
+                         (buffer-substring (point-min) (point-max))
+                         buffer-file-coding-system session old-current-segment))
                   (when (and clear
                              (not (eq (mevedel-session-naming-state session) 'explicit)))
                     (setf (mevedel-session-naming-state session) 'pending))
@@ -2892,21 +2993,21 @@ absolute path on success, nil if SESSION is not yet materialized."
                         (format-time-string "%FT%H-%M-%S"))
                   ;; Defer keyboard quit through publication and its bookkeeping:
                   ;; the durable commit must not outrun its in-memory marker.
-                  (let ((inhibit-quit (or clear inhibit-quit)))
+                  (let ((inhibit-quit t))
                     (if portable-p
                         (mevedel-session-artifacts--publish-remote-segment-transition
                          session buffer old-segment old-publish-text
                          new-segment new-text clear)
                       (mevedel-session-artifacts--publish-segment-text
                        new-segment new-text)
+                      (mevedel-session-artifacts--finalize-segment-file
+                       old-segment nil nil old-publish-text)
                       (mevedel-session-codec-write
                        (mevedel-session-artifacts-sidecar-path
                         (mevedel-session-save-path session))
                        (mevedel-session-artifacts-build-sidecar session buffer))
                       (setq committed t)
-                      (mevedel-session-artifacts-save-instructions session buffer)
-                      (mevedel-session-artifacts--finalize-segment-file
-                       old-segment))
+                      (mevedel-session-artifacts-save-instructions session buffer))
                     (setq committed t))
                   (when initial-position
                     (goto-char initial-position)
@@ -2940,6 +3041,10 @@ absolute path on success, nil if SESSION is not yet materialized."
                    (setf (mevedel-session-updated-at session) old-updated-at
                          (mevedel-session-naming-state session) old-naming-state
                          (mevedel-session-prompt-index session) old-prompt-index)
+                   (when old-file-bytes
+                     (mevedel-session-control-fs-write-file
+                      (mevedel-session-control-fs-physical-path old-segment)
+                      old-file-bytes 'no-conversion))
                    (let ((inhibit-read-only t))
                      (erase-buffer)
                      (insert old-text))
@@ -3036,12 +3141,16 @@ A no-op when the saved root is missing or matches current."
 
 If the highest-numbered segment file on disk differs from the sidecar's
 recorded `:current-segment', trust the filesystem (the sidecar may be
-stale from a crash mid-rotation).  Logs a warning.  When healing upward
-after a crash that published a new segment before finalizing its
-predecessor, mark the predecessor finalized now and return its path."
+stale from a crash mid-rotation) and log a warning.  When recovering a newer
+segment, finalize its predecessor and refresh that segment's index.
+Persist the repaired counter and index in the existing sidecar, and return
+the predecessor path when it was finalized.  Requires mutation ownership."
   (let* ((sidecar-n    (or (mevedel-session-current-segment session) 1))
          (filesystem-n (mevedel-session-artifacts-detect-highest-segment
                         save-path))
+         (candidate (and (> filesystem-n 1)
+                         (mevedel-session-artifacts-segment-path
+                          save-path (1- filesystem-n))))
          predecessor)
     (when (and (> filesystem-n 0)
                (not (= sidecar-n filesystem-n)))
@@ -3050,12 +3159,23 @@ predecessor, mark the predecessor finalized now and return its path."
        (format "Sidecar :current-segment %d differs from filesystem (%d); using %d"
                sidecar-n filesystem-n filesystem-n)
        :warning)
-      (when (> filesystem-n sidecar-n)
-        (setq predecessor
-              (mevedel-session-artifacts-segment-path
-               save-path (1- filesystem-n)))
-        (mevedel-session-artifacts--finalize-segment-file predecessor))
       (setf (mevedel-session-current-segment session) filesystem-n))
+    (when (and candidate (file-exists-p candidate)
+               (> filesystem-n sidecar-n))
+      (setq predecessor candidate)
+      (mevedel-session-artifacts--finalize-segment-file
+       predecessor session (1- filesystem-n)))
+    ;; Persist coordinates with the counter so the next restore sees the same
+    ;; finalized predecessor, rather than skipping its index refresh.
+    (when (or predecessor
+              (/= sidecar-n (mevedel-session-current-segment session)))
+      (let ((sidecar (mevedel-session-artifacts-sidecar-path save-path)))
+        (when (file-exists-p sidecar)
+          (let ((state (mevedel-session-codec-read sidecar)))
+            (plist-put state :current-segment
+                       (mevedel-session-current-segment session))
+            (plist-put state :prompt-index (mevedel-session-prompt-index session))
+            (mevedel-session-codec-write sidecar state)))))
     predecessor))
 
 

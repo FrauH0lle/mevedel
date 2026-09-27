@@ -375,12 +375,16 @@ is historical evidence, not an activation or assertion of current applicability.
 
 (defun mevedel-compact-evidence-find-boundary ()
   "Find the compaction boundary in the current buffer.
-Return the position just after the last response, or nil if no response
-exists."
+Return the later of the last response end and completed fork-point end,
+or nil when neither exists.  Tool/error history through a completed
+fork point belongs to the predecessor, not to the pending request."
   (let (boundary)
     (dolist (seg (mevedel-transcript-segments (point-min) (point-max)))
       (when (eq (car seg) 'response)
         (setq boundary (caddr seg))))
+    (dolist (span (mevedel-transcript-audit-buffer-spans
+                  'fork-point (point-min) (point-max)))
+      (setq boundary (max (or boundary (point-min)) (plist-get span :end))))
     boundary))
 
 (defun mevedel-compact-evidence-turn-starts-before (limit &optional body-start)

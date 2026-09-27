@@ -1181,6 +1181,8 @@ with no successor becomes `lost`.
 
 After acquiring a PID lock, resume reconciles the sidecar segment counter with
 the files on disk and finalizes the predecessor when recovering a newer segment.
+Recovery persists the repaired counter and prompt index in the sidecar, so a
+second resume reads the same predecessor coordinates.
 Portable sessions instead restore the committed publication head; unpublished
 segment files never advance their counter. Read-only inspection repairs neither.
 
@@ -1253,6 +1255,17 @@ finalization timestamp, then stabilizes the saved absolute `GPTEL_BOUNDS` agains
 the updated drawer. This applies both to local segment files and portable
 publication strings. Restoring the archive therefore preserves speaker roles
 and ignored internal notes even though the metadata has moved the body.
+The predecessor's prompt positions and completion cutoffs are refreshed against
+that exact finalized text before the transition sidecar is prepared. Existing
+continuation entries pointing into the predecessor are refreshed by fork-point
+identity, including when later prompts share the segment. A missing indexed
+completion fails preparation rather than silently removing completed evidence.
+Portable publication commits text and index together. File-workspace transitions
+publish the successor and frozen finalized predecessor before committing the
+sidecar; instruction saving follows that commit. An error or quit before commit
+restores the predecessor's original bytes and index. After commit, or while a
+portable publication remains pending, cleanup retains the new text/index pair.
+Keyboard quit is deferred through publication bookkeeping and rollback.
 
 Live work may continue while an archived segment is displayed. Status,
 interaction, and request-progress chrome stays live, while streaming transcript
