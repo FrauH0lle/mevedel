@@ -4502,6 +4502,33 @@
               (should (= queries color-queries))
               (should (= 0.12 mevedel-view--spinner-timer-period)))))))))
 
+(mevedel-deftest mevedel-view-animation-low-color-terminal-cadence
+  (:doc "A resolved 8-color terminal never schedules color-rate callbacks.")
+  (let ((mevedel-view-animation--cache nil))
+    (cl-letf (((symbol-function 'display-color-p) (lambda (&optional _frame) t))
+              ((symbol-function 'display-graphic-p) (lambda (&optional _frame) nil))
+              ((symbol-function 'display-color-cells)
+               (lambda (&optional _frame) 8))
+              ((symbol-function 'face-foreground)
+               (lambda (&rest _) "#ffffff"))
+              ((symbol-function 'face-background)
+               (lambda (&rest _) "#000000")))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (dolist (style '(shimmer breathe bounce))
+            (let ((mevedel-view-spinner-style style)
+                  (mevedel-view-tool-spinner-style 'static)
+                  (mevedel-view-spinner-power-policy 'full))
+              (mevedel-view--start-spinner "Working...")
+              (should-not mevedel-view--spinner-main-color-p)
+              (should (= 0.12 mevedel-view--spinner-timer-period))
+              (should-not (get-text-property
+                           0 'face
+                           (get-text-property
+                            (marker-position
+                             (car mevedel-view--spinner-label-target))
+                            'display))))))))))
+
 (mevedel-deftest mevedel-view-animation-theme-prepares-off-frame-path
   (:doc "Theme invalidation defers color preparation to semantic maintenance.")
   (let ((mevedel-view-animation--cache nil)

@@ -124,3 +124,28 @@ changes after `378963ae`, independent read-only reviews and fresh Eask runs):
   overhead and cadence checks, not battery-life measurements or a guarantee
   of 60 displayed frames per second (`.scratch/spinner-final-one-shot-*.stats`,
   `artifact://executions/execution-GU1igq.log`).
+
+Low-color terminal completion follow-up, 2026-09-28 (source: Goal verifier,
+fresh real-terminal probe, independent review, and Eask runs):
+
+- The Goal verifier reproduced color-capable eight-color terminals where all
+  216 prepared color samples displayed identically, despite a 60-Hz timer.
+  The color-bank entry now rejects terminal palettes below 256 colors and
+  selects the existing glyph fallback and slower timer cadence. A read-only
+  independent `TERM=linux`, `emacs -Q -nw` production-view probe observed all
+  three color styles moving glyphs at 120 ms with no color bank; a 256-color
+  terminal retained the color bank and 60-Hz ceiling
+  (`artifact://executions/execution-whlZ49.log`). This threshold is a
+  conservative heuristic for useful shade animation, not a claim that every
+  256-color terminal has 64 distinguishable shades.
+- After Eask cleanup, the named view roster plus power tests passed **912/913
+  expected, zero unexpected, one optional Markdown-mode skip**
+  (`.scratch/spinner-terminal-final-focused.log`). All 210 files compiled
+  without warning matches (`.scratch/spinner-terminal-final-compile.log`).
+  An eight-worker full run overlapping another task's full runner ended with
+  one unfinished worker and missing inventory, so it did not yield a valid
+  summary (`.scratch/spinner-terminal-full-run.log`). A complete four-worker
+  retry discovered 8727 tests and ended with **8 unexpected, 30 skipped**;
+  its eight names match the earlier unrelated failures recorded above
+  (`.scratch/spinner-terminal-full-suite-4/`,
+  `.scratch/spinner-terminal-full-run-4.log`). The full suite is not green.

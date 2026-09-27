@@ -82,9 +82,13 @@ time-based animation phase."
 
 (defun mevedel-view-animation--colors (face frame)
   "Return (FOREGROUND . BACKGROUND) for FACE on FRAME, or nil.
-Only called when preparing a color bank, never to sample a cached bank."
+Only called when preparing a color bank, never to sample a cached bank.
+Small terminal palettes cannot resolve the 64 shades into a useful color
+animation; use the glyph fallback instead of scheduling invisible frames."
   (condition-case nil
-      (when (display-color-p frame)
+      (when (and (display-color-p frame)
+                 (or (display-graphic-p frame)
+                     (>= (or (display-color-cells frame) 0) 256)))
         (let* ((foreground (face-foreground face frame t))
                (background (face-background 'default frame t)))
           (when (and (stringp foreground) (stringp background)

@@ -154,6 +154,32 @@
       (should (= resolutions 3))))
   (should-not (mevedel-view-animation--colors 'nonexistent-face nil))))
 
+(mevedel-deftest mevedel-view-animation-low-color-terminal
+  (:doc "Low-color terminals use glyphs even when faces resolve to valid colors.")
+  (let ((mevedel-view-animation--cache nil)
+        (cells 8))
+    (cl-letf (((symbol-function 'display-color-p) (lambda (&optional _frame) t))
+              ((symbol-function 'display-graphic-p) (lambda (&optional _frame) nil))
+              ((symbol-function 'display-color-cells)
+               (lambda (&optional _frame) cells))
+              ((symbol-function 'face-foreground)
+               (lambda (&rest _) "#ffffff"))
+              ((symbol-function 'face-background)
+               (lambda (&rest _) "#000000")))
+      (dolist (style '(shimmer breathe bounce))
+        (should-not (mevedel-view-animation--colors 'default nil))
+        (let ((sample (mevedel-view-animation-frame
+                       style "Working" 0 'default)))
+          (should (string-match-p "Working" sample))
+          (should-not (get-text-property 0 'face sample))
+          (should-not (mevedel-view-animation-color-available-p
+                       style "Working" 'default nil))))
+      (setq cells 16)
+      (should-not (mevedel-view-animation--colors 'default nil))
+      (setq cells 256)
+      (should (equal (mevedel-view-animation--colors 'default nil)
+                     '("#ffffff" . "#000000"))))))
+
 (mevedel-deftest mevedel-view-animation-missing-braille
   (:doc "Colorless and explicit Braille styles fall back to ASCII on unsupported displays.")
   (progn

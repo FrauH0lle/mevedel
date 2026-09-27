@@ -66,9 +66,12 @@ samples and retains phase across power changes. The foreground label
 offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
 pending-tool rows use compact braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; glyphs have a
-natural, slower cadence; colorless displays use the glyph fallback cadence
-rather than waking at the color rate. Braille and dots use same-width ASCII
-substitutes at the same cadence on displays missing their glyphs. Dots check
+natural, slower cadence; colorless and low-color terminals use the glyph
+fallback cadence rather than waking at the color rate. Even resolvable face
+colors cannot distinguish the prepared shades on an eight-color terminal;
+terminal palettes below 256 colors therefore fall back to glyphs. Braille and
+dots use same-width ASCII substitutes at the same cadence on displays missing
+their glyphs. Dots check
 only frames showing their target span and cache glyph support until the next
 semantic tick (or theme invalidation), not at every decorative frame. A global
 reduced-motion switch disables decorative updates, not semantic progress or

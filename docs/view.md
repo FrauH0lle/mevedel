@@ -324,7 +324,10 @@ default), independently of the request label. Color styles use 64 theme-derived
 shades and a 3.6-second cycle; the prepared frames are cached with a bounded
 animated prefix so long labels remain readable. If colors cannot be resolved
 on a display, color styles fall back to a glyph indicator; when Braille is
-unavailable on its target display, the indicator uses ASCII. When either dots
+unavailable on its target display, the indicator uses ASCII. Terminal palettes
+with fewer than 256 colors use the glyph fallback even when their face colors
+resolve: their coarse shade mapping cannot support a smooth color animation,
+so the view also uses glyph rather than color-rate timer wakeups. When either dots
 glyph is unavailable, `dots` uses a same-width ASCII pattern at the same speed.
 An undisplayed status or a new pending-tool row starts with a portable frame
 until its display is known. If the same indicator is visible in multiple display
