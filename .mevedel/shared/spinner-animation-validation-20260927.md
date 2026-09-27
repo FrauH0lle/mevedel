@@ -45,5 +45,17 @@ or a claim about later checkouts.
 - The running host Emacs had loaded an older `mevedel-view` (the new spinner
   style symbol was absent), whereas GUI tests loaded the committed sources
   into a fresh Emacs. Avoid hot-reloading the user's active request solely for
-  visual verification. Direct human inspection of production smoothness while
-  streaming remains pending until a safe reload/new session is available.
+  visual verification. A fresh graphical Emacs subsequently exercised the
+  production view and `mevedel-view-stream-schedule` with five real
+  gptel-property response chunks, plus a typed composer draft, scrolling, a
+  full-to-save power-policy switch, and a theme change. Rendered screenshots
+  show the response progressively arriving without losing the draft; event
+  records show offscreen animation suspended and an onscreen 33.33-ms timer
+  afterward (`.scratch/spinner-live-stream-graphical-check.el`,
+  `.scratch/spinner-live-stream-graphical-events.log`, and
+  `.scratch/spinner-live-stream-{early,middle,theme-save}.png`;
+  `artifact://executions/execution-aMPguH.log`). The concurrent full Eask
+  runner makes this smoke run unsuitable for isolated callback-cost claims.
+  A sequence of static screenshots and timer statistics cannot establish a
+  person's perception of smoothness during a live request in the host Emacs;
+  that subjective check still needs a safe fresh session or user observation.
