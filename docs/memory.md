@@ -191,7 +191,10 @@ Journal storage is separate from curated memory. The internal
 completed-review and proposal-decision records, and
 `mevedel-journal-claim` provides bounded work ownership and recoverable
 outcomes. Completed-turn capture and sealing are connected to session
-lifecycle. Background generation and accepted-result recovery run from
+lifecycle. Capture reads each turn from its committed segment; a turn whose
+indexed bounds lie outside those bytes appears in the evidence as unavailable
+and is covered with the rest, instead of failing the checkpoint. A session
+damaged by an earlier rotation bug otherwise failed every later capture. Background generation and accepted-result recovery run from
 lifecycle opportunities; completed, saved root turns recover abandoned checkpoints.
 Public entries live in `.mevedel/journal/`; private bookkeeping and recovery
 evidence live in `.mevedel/state/journal/`.
