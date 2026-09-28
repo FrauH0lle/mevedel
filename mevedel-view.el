@@ -1539,6 +1539,15 @@ redisplay hooks reschedule it once someone can see the result."
              (fboundp 'mevedel-view--start-spinner-timer))
     (mevedel-view--start-spinner-timer)))
 
+(defun mevedel-view--resume-on-horizontal-scroll (window _columns)
+  "Update animation scheduling when WINDOW's horizontal scroll changes."
+  (let ((window (or window (selected-window))))
+    (when (window-live-p window)
+      (with-current-buffer (window-buffer window)
+        (when (and (derived-mode-p 'mevedel-view-mode)
+                   (fboundp 'mevedel-view--start-spinner-timer))
+          (mevedel-view--start-spinner-timer))))))
+
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.
 Runs after every frame focus change; the predicate filters focus-out."

@@ -4472,6 +4472,8 @@
                                       (point-min))))
                   ((symbol-function 'window-end)
                    (lambda (_window) (point-max)))
+                  ((symbol-function 'window-hscroll)
+                   (lambda (_window) 0))
                   ((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
                    (lambda (frame) (eq frame visible-frame))))
           (let ((frames (mevedel-view--animation-target-frame target t)))
@@ -4501,6 +4503,157 @@
               (mevedel-view--spinner-tick)
               (should (= queries color-queries))
               (should (= 0.12 mevedel-view--spinner-timer-period)))))))))
+
+(mevedel-deftest mevedel-view-animation-horizontal-offscreen
+  (:doc "A horizontally scrolled-away label stops writes and resumes at its phase.")
+  (let ((mevedel-view-animation--cache nil)
+        (installed (advice-member-p
+                    #'mevedel-view--resume-on-horizontal-scroll
+                    'set-window-hscroll)))
+    (unless installed
+      (advice-add 'set-window-hscroll :after
+                  #'mevedel-view--resume-on-horizontal-scroll))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                   (lambda (_face _frame) '("#ffffff" . "#000000"))))
+          (mevedel-view-stream-test--with-buffers
+            (mevedel-view-stream-test--with-visible-view
+              (let ((mevedel-view-spinner-style 'breathe)
+                    (mevedel-view-tool-spinner-style 'static)
+                    (mevedel-view-spinner-power-policy 'full)
+                    (window (selected-window))
+                    (auto-hscroll-mode nil))
+                (setq-local truncate-lines t)
+                (mevedel-view--start-spinner "Working...")
+                (redisplay t)
+                (let* ((target mevedel-view--spinner-label-target)
+                       (pos (marker-position (car target)))
+                       (phase mevedel-view--spinner-phase-start)
+                       (initial (get-text-property pos 'display)))
+                  (should (mevedel-view--animation-visible-p))
+                  (set-window-hscroll window 50)
+                  (redisplay t)
+                  (should-not (posn-at-point pos window))
+                  ;; A pending callback observes the scroll and must retire.
+                  ;; No decoration is written even on that last callback.
+                  (mevedel-view--spinner-tick)
+                  (should-not (mevedel-view--animation-visible-p))
+                  (should-not mevedel-view--spinner-timer-period)
+                  (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                             (lambda () 1.0)))
+                    (setq mevedel-view--spinner-last-second (floor (float-time)))
+                    (mevedel-view--spinner-tick)
+                    (should (equal-including-properties
+                             initial (get-text-property pos 'display)))
+                    ;; Scroll commands also pass nil for the selected window.
+                    (set-window-hscroll nil 0)
+                    (redisplay t)
+                    ;; Horizontal scrolling does not invoke `window-scroll-functions'.
+                    ;; Rearming must happen from the real scroll path, not a manual hook.
+                    (should (mevedel-view--animation-visible-p))
+                    (should (= (/ 1.0 60) mevedel-view--spinner-timer-period))
+                    (mevedel-view--spinner-tick)
+                    (should-not (equal-including-properties
+                                 initial (get-text-property pos 'display)))
+                    (should (= phase mevedel-view--spinner-phase-start)))))))))
+    (unless installed
+      (advice-remove 'set-window-hscroll
+                     #'mevedel-view--resume-on-horizontal-scroll))))
+
+(mevedel-deftest mevedel-view-animation-horizontal-tool-windows
+  (:doc "A tool target suspends only when no displayed window shows its glyph.")
+  (let ((installed (advice-member-p
+                    #'mevedel-view--resume-on-horizontal-scroll
+                    'set-window-hscroll)))
+    (unless installed
+      (advice-add 'set-window-hscroll :after
+                  #'mevedel-view--resume-on-horizontal-scroll))
+    (unwind-protect
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-tool-spinner-style 'ascii)
+                  (mevedel-view-spinner-power-policy 'full)
+                  (mevedel-view--pending-tool-calls
+                   '(("call-1" . "Calling Read...")))
+                  (auto-hscroll-mode nil))
+              (setq-local truncate-lines t)
+              (mevedel-view--refresh-pending-tool-lines)
+              (let ((first (selected-window))
+                    (second (split-window-right)))
+                (set-window-buffer first view-buf)
+                (set-window-buffer second view-buf)
+                (redisplay t)
+                (let ((target (car mevedel-view--spinner-tool-targets)))
+                  (should target)
+                  (should (mevedel-view--animation-visible-p))
+                  (set-window-hscroll first 50)
+                  (redisplay t)
+                  (should (mevedel-view--animation-visible-p))
+                  (set-window-hscroll second 50)
+                  (redisplay t)
+                  (mevedel-view--spinner-tick)
+                  (should-not (mevedel-view--animation-visible-p))
+                  (should-not mevedel-view--spinner-timer-period)
+                  ;; A different window with the same buffer but no target
+                  ;; in its visible rows must not schedule a resume probe.
+                  (let ((original (symbol-function 'window-start)))
+                    (cl-letf (((symbol-function 'window-start)
+                               (lambda (candidate)
+                                 (if (eq candidate second)
+                                     (marker-position (cdr target))
+                                   (funcall original candidate)))))
+                      (set-window-hscroll second 0)
+                      (mevedel-view--resume-on-horizontal-redisplay second)
+                      (should-not mevedel-view--spinner-timer)
+                      (should (memq
+                               #'mevedel-view--resume-on-horizontal-redisplay
+                               pre-redisplay-functions))))
+                  (set-window-hscroll second 50)
+                  (set-window-hscroll second 0)
+                  (redisplay t)
+                  (should (mevedel-view--animation-visible-p))
+                  (should (= 0.12 mevedel-view--spinner-timer-period)))))))
+      (unless installed
+        (advice-remove 'set-window-hscroll
+                       #'mevedel-view--resume-on-horizontal-scroll)))))
+
+(mevedel-deftest mevedel-view-animation-redisplay-horizontal-resume
+  (:doc "The suspended redisplay hook schedules only one resume probe.")
+  (let ((installed (advice-member-p
+                    #'mevedel-view--resume-on-horizontal-scroll
+                    'set-window-hscroll)))
+    (when installed
+      (advice-remove 'set-window-hscroll
+                     #'mevedel-view--resume-on-horizontal-scroll))
+    (unwind-protect
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-spinner-style 'ascii)
+                  (mevedel-view-spinner-power-policy 'full)
+                  (window (selected-window)))
+              (setq-local truncate-lines t)
+              (mevedel-view--start-spinner "Working...")
+              (redisplay t)
+              (set-window-hscroll window 50)
+              (redisplay t)
+              (mevedel-view--start-spinner-timer)
+              (should-not mevedel-view--spinner-timer-period)
+              (should (memq #'mevedel-view--resume-on-horizontal-redisplay
+                            pre-redisplay-functions))
+              (set-window-hscroll window 0)
+              (run-hook-with-args 'pre-redisplay-functions window)
+              (let ((probe mevedel-view--spinner-timer))
+                (should (mevedel--timer-pending-p probe))
+                (run-hook-with-args 'pre-redisplay-functions window)
+                (should (eq probe mevedel-view--spinner-timer)))
+              (redisplay t)
+              (sit-for 0.02)
+              (should (= 0.12 mevedel-view--spinner-timer-period))
+              (should-not (memq #'mevedel-view--resume-on-horizontal-redisplay
+                                pre-redisplay-functions)))))
+      (when installed
+        (advice-add 'set-window-hscroll :after
+                    #'mevedel-view--resume-on-horizontal-scroll)))))
 
 (mevedel-deftest mevedel-view-animation-low-color-terminal-cadence
   (:doc "A resolved 8-color terminal never schedules color-rate callbacks.")
