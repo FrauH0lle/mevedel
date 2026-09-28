@@ -115,6 +115,8 @@
            facts
            (list :status (mevedel-execution-transcript--status facts)
                  :live-execution-p nil
+                 :output-preview-truncated-p
+                 (plist-get event :whole-output-truncated-p)
                  :sandbox-facts
                  (copy-tree
                   (plist-get (plist-get event :observation) :sandbox-facts))
