@@ -125,11 +125,16 @@ Missing roots contribute nothing."
 (defun mevedel-journal-evidence-turns (session turns)
   "Freeze completed TURNS from SESSION's committed segment artifacts.
 Each turn has :number, :segment, :start, :end, and :fork-point fields.
-Return :text and :sources (logical paths with hashes).  Hidden transcript
-audits stay out of the neutral projection.  Inherited summaries are labelled
-as prior context.  The frozen projection is capped at 1 MiB; request-time
-admission must also apply the selected model's smaller input budget."
-  (let ((text "") sources)
+Return :text, :sources (logical paths with hashes), and :unavailable, the
+numbers of turns whose indexed bounds lie outside their committed segment.
+Such a turn is named in the text as unavailable rather than failing the
+capture: its bytes are gone from the artifact, and one damaged historical
+turn otherwise blocked every later capture of the session.  Hidden
+transcript audits stay out of the neutral projection.  Inherited summaries
+are labelled as prior context.  The frozen projection is capped at 1 MiB;
+request-time admission must also apply the selected model's smaller input
+budget."
+  (let ((text "") sources unavailable)
     (catch 'full
       (dolist (group (seq-group-by (lambda (turn) (plist-get turn :segment)) turns))
         (let* ((logical (format "segment-%04d.chat.org" (car group)))
@@ -144,20 +149,25 @@ admission must also apply the selected model's smaller input budget."
                                  summary "\n")))
             (dolist (turn (cdr group))
               (let ((start (plist-get turn :start)) (end (plist-get turn :end)))
-                (unless (and (integerp start) (integerp end)
-                             (<= (point-min) start) (< start end) (<= end (point-max)))
-                  (error "Completed journal turn is outside its durable segment"))
-                (setq text
-                      (concat text
-                              (format "\nCompleted turn %d; source: %s; fork-point: %s\n"
-                                      (plist-get turn :number) logical (plist-get turn :fork-point))
-                              (mevedel-transcript-project-evidence (list (cons start end))) "\n"))
+                (if (not (and (integerp start) (integerp end)
+                              (<= (point-min) start) (< start end) (<= end (point-max))))
+                    (progn
+                      (push (plist-get turn :number) unavailable)
+                      (setq text
+                            (concat text
+                                    (format "\nCompleted turn %d; source: %s: evidence unavailable, its indexed bounds lie outside the committed segment\n"
+                                            (plist-get turn :number) logical))))
+                  (setq text
+                        (concat text
+                                (format "\nCompleted turn %d; source: %s; fork-point: %s\n"
+                                        (plist-get turn :number) logical (plist-get turn :fork-point))
+                                (mevedel-transcript-project-evidence (list (cons start end))) "\n")))
                 (when (> (string-bytes text) (* 1024 1024))
                   (setq text (mevedel--truncate-bytes
                               text (* 1024 1024)
                               "\n[remaining transcript evidence omitted: capture byte limit]\n"))
                   (throw 'full nil))))))))
-    (list :text text :sources (nreverse sources))))
+    (list :text text :sources (nreverse sources) :unavailable (nreverse unavailable))))
 
 (provide 'mevedel-journal-evidence)
 ;;; mevedel-journal-evidence.el ends here
