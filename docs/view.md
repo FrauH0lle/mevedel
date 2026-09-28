@@ -348,7 +348,9 @@ dots/ellipsis); raising the frame-rate ceiling does not accelerate them.
 A color style falling back to a glyph also uses that glyph cadence, not
 a needless color-rate timer.
 Changes to styles, colors, and labels invalidate affected prepared frames;
-theme changes clear the color cache. Applying settings through Customize
+theme changes clear the color cache and repaint visible labels at their
+current or frozen phase without a periodic timer. Hidden labels repaint when
+they become visible again. Applying settings through Customize
 refreshes live views without restarting a request.
 
 The normal `mevedel-view-spinner-framerate` ceiling defaults to 60 fps.

@@ -77,9 +77,12 @@ semantic tick (or theme invalidation), not at every decorative frame. A global
 reduced-motion switch disables decorative updates, not semantic progress or
 elapsed metadata; semantic redraws retain the last displayed sample, and
 unchanged tool rows are not rebuilt at their initial frame. Hidden
-and vertically or horizontally offscreen indicators suspend animation wakeups;
-horizontal visibility checks the bounded animated span only in hscrolled
-windows, leaving ordinary callbacks on the cheap window-boundary path. Since
+and vertically or horizontally offscreen indicators suspend animation wakeups.
+A theme change repaints visible color labels at their displayed or frozen
+phase, even when paused metadata and zero fps remove timers; hidden labels
+wait until visible again to repaint. Horizontal visibility checks the
+bounded animated span only in hscrolled windows, leaving ordinary callbacks
+on the cheap window-boundary path. Since
 `window-scroll-functions` does not run for horizontal scrolling, a scoped
 `set-window-hscroll` observer rearms explicitly scrolled views; an internal
 automatic pan does not call that primitive, so a buffer-local redisplay hook

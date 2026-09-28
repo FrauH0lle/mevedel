@@ -4786,5 +4786,75 @@
               (should (> color-queries queries))
               (should mevedel-view-animation--cache))))))))
 
+(mevedel-deftest mevedel-view-animation-theme-refreshes-frozen-status
+  (:doc "Theme changes repaint a paused zero-fps color sample without a timer.")
+  (let ((mevedel-view-animation--cache nil)
+        (foreground "#ff0000"))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (_face _frame) (cons foreground "#000000"))))
+      (mevedel-view-stream-test--with-buffers
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :started-at (current-time)))
+          (mevedel-request-set-active-work-paused
+           mevedel--current-request t))
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-spinner-power-policy 'save)
+                (mevedel-view-spinner-battery-framerate 0))
+            (mevedel-view--start-spinner "Working...")
+            (let* ((target mevedel-view--spinner-label-target)
+                   (start (marker-position (car target)))
+                   (before (get-text-property start 'display))
+                   (phase mevedel-view--spinner-phase-start)
+                   (frozen mevedel-view--spinner-frozen-seconds)
+                   (render-state mevedel-view--spinner-rendered-state)
+                   (was-modified (buffer-modified-p))
+                   (undo buffer-undo-list)
+                   (here (point)))
+              (should (get-text-property 0 'face before))
+              (should-not mevedel-view--spinner-timer)
+              (dolist (hook '(enable-theme-functions disable-theme-functions))
+                (setq foreground (if (eq hook 'enable-theme-functions)
+                                     "#00ff00" "#0000ff"))
+                (run-hook-with-args hook 'mevedel-test-theme)
+                (should-not (equal-including-properties
+                             before (get-text-property start 'display)))
+                (should (equal-including-properties
+                         (mevedel-view-animation-frame
+                          'shimmer "Waiting for input" frozen
+                          'mevedel-view-spinner (selected-frame))
+                         (get-text-property start 'display)))
+                (should-not mevedel-view--spinner-timer)
+                (should (= phase mevedel-view--spinner-phase-start))
+                (should (= frozen mevedel-view--spinner-frozen-seconds))
+                (should (equal render-state mevedel-view--spinner-rendered-state))
+                (should (eq was-modified (buffer-modified-p)))
+                (should (eq undo buffer-undo-list))
+                (should (= here (point)))
+                (setq before (get-text-property start 'display)))
+              (mevedel-view--spinner-tick)
+              (should (equal-including-properties
+                       before (get-text-property start 'display)))
+              ;; The same event must not paint an undisplayed buffer for an
+              ;; unrelated frame; its frozen phase repaints on visibility.
+              (set-window-buffer (selected-window) data-buf)
+              (setq foreground "#ffff00")
+              (run-hook-with-args 'enable-theme-functions 'mevedel-test-theme)
+              (should mevedel-view--spinner-theme-stale-p)
+              (should (equal-including-properties
+                       before (get-text-property start 'display)))
+              (should-not mevedel-view--spinner-timer)
+              (set-window-buffer (selected-window) view-buf)
+              (mevedel-view--resume-on-window-change (selected-window))
+              (should-not mevedel-view--spinner-theme-stale-p)
+              (should (equal-including-properties
+                       (mevedel-view-animation-frame
+                        'shimmer "Waiting for input" frozen
+                        'mevedel-view-spinner (selected-frame))
+                       (get-text-property start 'display)))
+              (should (= frozen mevedel-view--spinner-frozen-seconds))
+              (should-not mevedel-view--spinner-timer))))))))
+
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here

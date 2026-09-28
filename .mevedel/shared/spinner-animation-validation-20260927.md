@@ -213,3 +213,25 @@ independent nonbatch re-review, clean Eask runs):
   `.scratch/spinner-delete-final-full-run.log`). The full suite is **not green**;
   the eight failing names match earlier runs and do not include a view or
   power test. `git diff --check` passed.
+
+Theme repaint of frozen color labels, 2026-09-28 (source: completion verifier,
+independent production-view review, clean Eask runs):
+
+- A verifier showed that a paused, zero-fps shimmer label held explicit
+  foreground colors from the old theme indefinitely: cache invalidation
+  alone could not trigger a frame or metadata redraw. Theme enable/disable
+  hooks now repaint registered visible color spans after invalidation at their
+  displayed or frozen phase, without rebuilding the status row or starting
+  a decorative timer. Hidden views retain one pending refresh and repaint
+  on visibility rearming. Source-loaded nonbatch Emacs 31.1 review reproduced
+  visible and hidden behavior, phase/modification/undo preservation, and
+  zero-timer operation; review returned PASS. That probe simulated theme
+  colors and ran the real theme hooks; it did not enable a graphical theme.
+- After `eask clean elc`, the view roster plus power and chat tests passed
+  **974/975 expected, zero unexpected, one optional Markdown-mode skip**
+  (`.scratch/spinner-theme-final-focused.log`); all 210 files compiled
+  without warnings (`.scratch/spinner-theme-final-compile.log`). The isolated
+  four-worker full suite discovered **8734 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-theme-final-full-suite/`,
+  `.scratch/spinner-theme-final-full-run.log`). The full suite is **not green**;
+  all eight failing names match the previously recorded non-view failures.
