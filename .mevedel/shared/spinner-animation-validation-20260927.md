@@ -453,3 +453,35 @@ review `/root/ui_timer_review` and verifier `/root/ui_timer_verifier`):
   `.scratch/spinner-ui-timer-full-run.log`). All new timer tests passed; the
   eight failures exactly match the earlier non-view cases listed above. The
   full suite is **not green**.
+
+Expiry-boundary power notification follow-up, 2026-09-28 (source: Goal
+completion verifier, current Eask runs, and independent `/root/power_expiry_review`):
+
+- The Goal verifier returned `VERDICT: FAIL` for a narrow notification path:
+  when an external-power sample had just expired, a new unknown reading
+  compared equal to the already-stale effective `unknown` state, so no watcher
+  callback ran. A production ASCII view retained its old 120-ms timer rather
+  than adopting the 1-s saving ceiling until later metadata maintenance
+  (`artifact://executions/execution-MYQjEc.log`).
+- Notification handling now also checks the previously *stored* external
+  state when the new state is unknown. It immediately notifies watchers even
+  if the old effective state is already stale; a second unknown notification
+  does not repeat the rearm. A deterministic power test checks exactly the
+  expiry boundary and zero backend queries. A production-view regression
+  checks the actual timer object and cadence, stale-timer removal, preserved
+  phase, and zero synchronous queries. Docs and ADR 0119 state this behavior.
+  Independent source-loaded Emacs 31.1 review passed 18 boundary/policy/order
+  combinations and found no actionable issues; its production-view assertions
+  were inspected, not independently executed. The user's running Emacs was
+  not hot-reloaded.
+- After Eask bytecode cleanup, power/stream tests passed **162/162**
+  (`.scratch/spinner-notification-focused.log`). The plan's eight-file view
+  roster plus power tests passed **927/928 expected, zero unexpected, one
+  optional skip** (`.scratch/spinner-notification-roster.log`). All **210
+  files** compiled without warning matches
+  (`.scratch/spinner-notification-compile.log`); `git diff --check` passed.
+  The isolated four-worker full suite ran **8747 tests, 8 unexpected, 30
+  skipped** (`.scratch/spinner-notification-full-suite/summary.json`,
+  `.scratch/spinner-notification-full-run.log`). Both new regression cases
+  passed; the eight failures match previously observed non-view cases listed
+  above, so the full suite is **not green**.

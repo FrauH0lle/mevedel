@@ -138,6 +138,38 @@
         (when (buffer-live-p one) (kill-buffer one))
         (when (buffer-live-p two) (kill-buffer two))))))
 
+(mevedel-deftest mevedel-view-power--sample
+  (:doc "An unknown notification rearms stale external-power watchers immediately")
+  (mevedel-view-power-test--isolated
+    (let* ((now 1000.5) (calls 0) (queries 0)
+           (view (generate-new-buffer " *power-expired-notification*"))
+           (battery-status-function (lambda () (cl-incf queries) nil)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
+            (mevedel-view-power-watch view (lambda () (cl-incf calls)))
+            (run-hook-with-args 'battery-update-functions
+                                '((?L . "AC") (?B . "high")))
+            (should (= 1 calls))
+            (should (= 60 (mevedel-view-power-framerate 60 1 'auto t)))
+            (setq now 1060.5)
+            (should (= 1 (mevedel-view-power-framerate 60 1 'auto t)))
+            (run-hook-with-args 'battery-update-functions
+                                '((?L . "N/A") (?B . "N/A") (?p . "N/A")))
+            (should (= 2 calls))
+            (should (= 1 (mevedel-view-power-framerate 60 1 'auto t)))
+            (should (= 0 queries))
+            (should (mevedel--ui-timer-pending-p mevedel-view-power--timer))
+            ;; Repeated unknown notifications do not unnecessarily rearm.
+            (run-hook-with-args 'battery-update-functions
+                                '((?L . "N/A") (?B . "N/A")))
+            (should (= 2 calls))
+            (run-hook-with-args 'battery-update-functions
+                                '((?L . "AC") (?B . "high")))
+            (should (= 3 calls))
+            (should (= 60 (mevedel-view-power-framerate 60 1 'auto t)))
+            (should (= 0 queries)))
+        (kill-buffer view)))))
+
 (mevedel-deftest mevedel-view-power--schedule
   (:doc "A fallback scheduled during TRAMP suspension survives restoration")
   (mevedel-view-power-test--isolated

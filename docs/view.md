@@ -385,8 +385,11 @@ the binding is restored. A stale timer callback cannot replace its successor.
 No frame update queries power. Automatic power
 transitions follow a notification immediately, or are normally detected
 within that fallback interval. Backend failures and unsupported/unknown
-readings use the conservative saving ceiling. Explicit `full` is useful on
-desktops whose power source cannot be determined. Lower frame rates reduce
+readings use the conservative saving ceiling. An unknown notification after
+the previous external-power sample expires also rearms the actual view timer
+immediately, rather than waiting for elapsed-metadata maintenance. Explicit
+`full` is useful on desktops whose power source cannot be determined. Lower
+frame rates reduce
 scheduled animation work, not necessarily battery drain proportionally.
 
 Before rendering a restored transcript, `mevedel-transcript-restore.el`
