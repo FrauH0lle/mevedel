@@ -819,7 +819,56 @@
                    (lambda (&rest _) (ert-fail "Source-backed Bash row missing"))))
           (mevedel-view-audit-show-control-result "exec-1")
           (should (looking-at-p ".*Bash: sleep 10"))
-          (should (equal draft (mevedel-view--input-text))))))))
+          (should (equal draft (mevedel-view--input-text))))))
+  :doc "compound ToolCall refresh replaces its expanded child instead of duplicating it"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+          (draft "> quoted\nsecond line"))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                             :renderer #'mevedel-tool-ptc--render))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "Bash" :category "mevedel"
+                             :renderer #'mevedel-tool-exec--render-bash))
+      (mevedel-view-stream-test--insert-data
+       data-buf
+       (concat
+        "(:name \"ToolCall\" :args (:expression \"(list (Bash :command \\\"sleep 10\\\"))\"))\n\nreturned"
+        (mevedel-tool-render-data-format
+         '(:kind ptc :outcome completed
+           :calls ((:id "outer/1" :tool "Bash" :status success
+                    :args (:command "sleep 10") :result "OLD OUTPUT"
+                    :render-data (:execution-id "exec-1" :state running))))
+         "outer") "\n")
+       '(tool . "outer"))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (source (cons 1 (with-current-buffer data-buf (point-max)))))
+          (goto-char (point-min))
+          (mevedel-view--insert-rendered-tool
+           (mevedel-view--render-tool-call
+            (mevedel-view--tool-call-parse
+             data-buf (car source) (cdr source)) data-buf)
+           source))
+        (goto-char (point-min))
+        (mevedel-view-toggle-section)
+        (goto-char (text-property-any (point-min) (point-max)
+                                      'mevedel-view-type 'tool-child))
+        (mevedel-view-render-toggle-child-call)
+        (should (= 1 (how-many "Bash: sleep 10" (point-min) (point-max))))
+        (mevedel-view-stream-test--insert-composer-draft draft 3))
+      (dolist (output '("NEW OUTPUT" "LATEST OUTPUT"))
+        (mevedel-view-stream-handle-tool-progress
+         (list :type 'progress :data-buffer data-buf :tool-use-id "outer/1"
+               :facts '(:execution-id "exec-1" :state running
+                        :wall-time-seconds 7)
+               :output-tail output)))
+      (with-current-buffer view-buf
+        (should (= 1 (how-many "Bash: sleep 10" (point-min) (point-max))))
+        (should (= 1 (how-many "LATEST OUTPUT" (point-min) (point-max))))
+        (should-not (string-match-p "OLD OUTPUT\\|NEW OUTPUT" (buffer-string)))
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= 3 (- (point) (mevedel-view--input-start)))))))))
 
 (mevedel-deftest mevedel-view--spinner-tick ()
   ,test

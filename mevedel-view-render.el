@@ -2980,7 +2980,12 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
                      (equal
                       (get-text-property pos 'mevedel-view-tool-use-id)
                       tool-use-id))
-            (setq found (list pos next bounds)))
+            ;; Expanded compound tools append child rows with their own IDs.
+            ;; Replace the whole parent section, not just its text up to the
+            ;; first child, or every progress refresh duplicates the children.
+            (setq found (list pos (mevedel-view-render-child-calls-end
+                                   next limit)
+                              bounds)))
           (setq pos next)))
       found)))
 
