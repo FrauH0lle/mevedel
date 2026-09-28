@@ -645,6 +645,27 @@ is visible.  Do not scan window rows in decorative frame callbacks."
                    thereis (shown y))
           (and (> height 0) (shown (1- height)))))))
 
+(defun mevedel-view--animation-text-row-visible-p (start end window)
+  "Return non-nil if WINDOW shows ordinary text from START..END.
+The ends of a long suffix can both be outside a narrow window even when
+its middle is visible.  Only probe screen-row edges when both cheaper
+source-position checks miss; do not enumerate the suffix characters."
+  (let ((height (window-body-height window t))
+        (width (window-body-width window t))
+        (step (max 1 (frame-char-height (window-frame window)))))
+    (cl-labels ((shown (y)
+                  (cl-some
+                   (lambda (x)
+                     (when-let* ((position (posn-at-x-y x y window))
+                                 ((null (posn-area position)))
+                                 (point (posn-point position)))
+                       (and (integerp point) (<= start point) (< point end))))
+                   (list 0 (1- width)))))
+      (and (> height 0) (> width 0)
+           (or (cl-loop for y from 0 below height by step
+                        thereis (shown y))
+               (shown (1- height)))))))
+
 (defun mevedel-view--animation-span-in-window-p (start end window &optional paint)
   "Return non-nil if the animated span START..END appears in WINDOW.
 Replacement display strings map every character back to their source span,
@@ -653,23 +674,26 @@ horizontal scrolling.  Leading glyphs use a cheap unscrolled boundary path
 unless the window is vertically pixel-scrolled.  When PAINT is non-nil,
 check the entire displayed label instead, for event-driven theme repaints."
   (and (< start end)
-       (<= (window-start window) start)
        (< start (or (window-end window) (point-min)))
        (let ((display (get-text-property start 'display)))
          (if (not (stringp display))
              ;; The elapsed suffix is ordinary buffer text, even at hscroll 0.
-             (cl-some
-              (lambda (position)
-                (when-let* ((sample (posn-at-point position window))
-                            (xy (posn-x-y sample)))
-                  (and (null (posn-area sample))
-                       (<= 0 (car xy))
-                       (< (car xy) (window-body-width window t)))))
-              (list start (1- end)))
-           ;; Even at hscroll zero, vertical pixel scrolling can conceal a
-           ;; replacement string's leading animated prefix.  Ellipsis at the
-           ;; end can instead extend beyond the unscrolled right edge.
-           (or (and (zerop (window-hscroll window))
+             (and (> end (window-start window))
+                  (or (cl-some
+                       (lambda (position)
+                         (when-let* ((sample (posn-at-point position window))
+                                     (xy (posn-x-y sample)))
+                           (and (null (posn-area sample))
+                                (<= 0 (car xy))
+                                (< (car xy) (window-body-width window t)))))
+                       (list start (1- end)))
+                      (mevedel-view--animation-text-row-visible-p
+                       start end window)))
+           (and (<= (window-start window) start)
+                ;; Even at hscroll zero, vertical pixel scrolling can conceal a
+                ;; replacement string's leading animated prefix.  Ellipsis at
+                ;; the end can instead extend beyond the unscrolled right edge.
+                (or (and (zerop (window-hscroll window))
                     (zerop (window-vscroll window t))
                     (or paint
                         (not (eql (get-text-property
@@ -720,7 +744,9 @@ check the entire displayed label instead, for event-driven theme repaints."
                            0))
                         (animated-end
                          (cond (paint (length display))
-                               (tool (length display))
+                               ;; Compact indicators end in an invariant
+                               ;; separating space, not an animated glyph.
+                               (tool (max 0 (1- (length display))))
                                ((memq style '(shimmer breathe bounce))
                                 (if (get-text-property 0 'face display)
                                     (or (get-text-property
@@ -735,9 +761,9 @@ check the entire displayed label instead, for event-driven theme repaints."
                                                             (1- limit) 'face display)))
                                             (setq limit (1- limit)))
                                           limit))
-                                  2))
-                               ((eq style 'dots) 5)
-                               ((memq style '(braille ascii)) 2)
+                                  1))
+                               ((eq style 'dots) 4)
+                               ((memq style '(braille ascii)) 1)
                                ((eq style 'ellipsis) (length display))
                                (t 0))))
                    (and (< index animated-end)
@@ -754,7 +780,7 @@ check the entire displayed label instead, for event-driven theme repaints."
                                        (>= (cdr right-string)
                                            animated-start))))))))
                (and paint (mevedel-view--animation-paint-row-visible-p
-                           start end window display)))))))
+                           start end window display))))))))
 
 (defun mevedel-view--animation-window-attended-p (window)
   "Return non-nil when WINDOW can show animation to an attentive reader.
