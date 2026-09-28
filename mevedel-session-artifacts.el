@@ -2727,6 +2727,24 @@ last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
     (delete-region (- (point-max) (length text)) (point-max))
     t))
 
+(defun mevedel-session-artifacts--segment-file-snapshot (path)
+  "Return PATH's raw bytes for a rotation rollback, or `absent'.
+A materialized session's live segment has no file until its first save."
+  (if (file-exists-p path)
+      (mevedel-session-artifacts-read-file-raw path)
+    'absent))
+
+(defun mevedel-session-artifacts--restore-segment-file (path snapshot)
+  "Put PATH back to rotation rollback SNAPSHOT.
+SNAPSHOT comes from `mevedel-session-artifacts--segment-file-snapshot'."
+  (cond
+   ((eq snapshot 'absent)
+    (when (file-exists-p path) (delete-file path)))
+   (snapshot
+    (mevedel-session-control-fs-write-file
+     (mevedel-session-control-fs-physical-path path)
+     snapshot 'no-conversion))))
+
 (cl-defun mevedel-session-artifacts-rotate-segment
     (session buffer summary &key tail-text pending-text archive-text
              truncated-tail-p)
@@ -2793,7 +2811,7 @@ nil if SESSION is not yet materialized."
                   (point-min) (- (point-max) (length pending-text)))))
               (unless portable-p
                 (setq old-file-bytes
-                      (mevedel-session-artifacts-read-file-raw old-segment)))
+                      (mevedel-session-artifacts--segment-file-snapshot old-segment)))
               (when pending-text
                 (let ((inhibit-read-only t))
                   (mevedel-session-artifacts--delete-trailing-text
@@ -2912,10 +2930,8 @@ nil if SESSION is not yet materialized."
                      old-current-segment)
                (setf (mevedel-session-updated-at session) old-updated-at
                      (mevedel-session-prompt-index session) old-prompt-index)
-               (when old-file-bytes
-                 (mevedel-session-control-fs-write-file
-                  (mevedel-session-control-fs-physical-path old-segment)
-                  old-file-bytes 'no-conversion))
+               (mevedel-session-artifacts--restore-segment-file
+                old-segment old-file-bytes)
                (let ((inhibit-read-only t))
                  (erase-buffer)
                  (insert old-text))
@@ -2982,7 +2998,7 @@ absolute path on success, nil if SESSION is not yet materialized."
                   (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
                   (unless portable-p
                     (setq old-file-bytes
-                          (mevedel-session-artifacts-read-file-raw old-segment))
+                          (mevedel-session-artifacts--segment-file-snapshot old-segment))
                     (when (buffer-modified-p)
                       (mevedel-session-artifacts-save-buffer-silently)))
                   (setq old-publish-text
@@ -3062,10 +3078,8 @@ absolute path on success, nil if SESSION is not yet materialized."
                    (setf (mevedel-session-updated-at session) old-updated-at
                          (mevedel-session-naming-state session) old-naming-state
                          (mevedel-session-prompt-index session) old-prompt-index)
-                   (when old-file-bytes
-                     (mevedel-session-control-fs-write-file
-                      (mevedel-session-control-fs-physical-path old-segment)
-                      old-file-bytes 'no-conversion))
+                   (mevedel-session-artifacts--restore-segment-file
+                    old-segment old-file-bytes)
                    (let ((inhibit-read-only t))
                      (erase-buffer)
                      (insert old-text))
