@@ -140,8 +140,13 @@ cancellation releases the fence and leaves the machine retryable.
   since journal, collection and publication work follows settlement. The
   event carries the delay, whether input was pending, whether the request
   had settled, the running command's name, and the name and duration of
-  the slowest timer callback since the previous heartbeat. A closure is
-  named `anonymous`. Each settled request adds an `event-loop-lag-summary`
+  the slowest timer callback since the previous heartbeat. `:gc-count` and
+  `:gc-ms` report garbage collection anywhere since the previous heartbeat;
+  `:timer-gc-count` and `:timer-gc-ms` the part inside that slowest callback,
+  so a pause can be split into collection and callback work. A closure is
+  labelled `closure:` plus the function it calls, preferring a `mevedel-`
+  one: that names what it does, not where it was created. One that calls
+  only primitives is named `anonymous`. Each settled request adds an `event-loop-lag-summary`
   with the counts above 200, 500 and 1000 ms, the maximum, and how many had
   input pending. Wait time the CPU profiler cannot see, such as a blocking
   remote command, shows up here;
