@@ -291,6 +291,7 @@
             (should (= 600 (plist-get (car lags) :timer-ms)))
             (should (<= 700 (plist-get (car lags) :delay-ms) 800))
             ;; Collection since the previous heartbeat, and inside the timer.
+            (should (natnump (plist-get (car lags) :cpu-ms)))
             (should (= 3 (plist-get (car lags) :gc-count)))
             (should (= 250 (plist-get (car lags) :gc-ms)))
             (should (= 2 (plist-get (car lags) :timer-gc-count)))
