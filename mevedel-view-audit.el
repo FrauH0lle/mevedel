@@ -104,6 +104,9 @@
                   (source vtype &optional previous-key))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view--sandbox-summary-line
+                  "mevedel-view-render" (summary))
+(autoload 'mevedel-view--sandbox-summary-line "mevedel-view-render")
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 (autoload 'mevedel-view-render-add-display-properties "mevedel-view-render")
@@ -418,7 +421,8 @@ EXPANDED means insert the disclosure body expanded."
          (outcome (plist-get facts :outcome))
          (termination (plist-get facts :termination))
          (failed (not (memq outcome '(success no-match different false))))
-         (status (cond ((memq termination '(stopped interrupted signaled cancelled
+         (status (cond ((eq termination 'signaled) "Signaled")
+                       ((memq termination '(stopped interrupted cancelled
                                            owner-stopped))
                         "Stopped")
                        (failed "Failed")
@@ -433,7 +437,13 @@ EXPANDED means insert the disclosure body expanded."
                       (replace-regexp-in-string "[\n\r\t]+" " " owner))))
     (format "  ↳ %s: %s%s%s  " status
             (truncate-string-to-width command 64 nil nil "…")
-            (if (and failed (integerp code)) (format " · exit %d" code) "")
+            (if (and failed (integerp code)
+                     (memq termination '(nil exited signaled interrupted)))
+                (format " · %s %d"
+                        (if (memq termination '(signaled interrupted))
+                            "signal" "exit")
+                        code)
+              "")
             (if sender
                 (format " · %s" (truncate-string-to-width sender 48 nil nil "…"))
               ""))))
@@ -748,6 +758,18 @@ The completion's source target may be a later segment after compaction."
          (output (or (plist-get data :execution-output)
                      (plist-get facts :execution-output)))
          (execution-error (plist-get data :execution-error))
+         (sandbox (or (plist-get data :sandbox-summary)
+                      (plist-get facts :sandbox-summary)))
+         (preview-truncated
+          (or (plist-get data :output-preview-truncated-p)
+              (plist-get facts :output-preview-truncated-p)
+              (> (or (plist-get data :omitted-output-bytes)
+                     (plist-get facts :omitted-output-bytes) 0) 0)))
+         (output-limited
+          (or (eq (plist-get data :termination) 'output-limit)
+              (eq (plist-get facts :termination) 'output-limit)
+              (plist-get data :output-limit-p)
+              (plist-get facts :output-limit-p)))
          (path (plist-get facts :output-path))
          (session (and (buffer-live-p mevedel--data-buffer)
                        (buffer-local-value 'mevedel--session mevedel--data-buffer)))
@@ -759,12 +781,34 @@ The completion's source target may be a later segment after compaction."
                           (error nil))))
          (physical (and artifact (not (plist-get artifact :unavailable-p))
                         (plist-get artifact :physical-path)))
+         (artifact-size
+          (and (stringp physical)
+               (condition-case nil
+                   (and (file-regular-p physical) (file-readable-p physical)
+                        (file-attribute-size (file-attributes physical)))
+                 (file-error nil))))
+         (output-bytes (or (plist-get data :output-bytes)
+                           (plist-get facts :output-bytes)))
+         (stale-artifact (and (integerp artifact-size)
+                              (integerp output-bytes)
+                              (< artifact-size output-bytes)))
          (buffer (get-buffer-create "*mevedel execution result*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (or (plist-get record :command) (plist-get facts :command) "Bash")
                 "\n\n")
+        (when-let* ((disclosure (mevedel-view--sandbox-summary-line sandbox)))
+          (insert disclosure "\n"))
+        (cond
+         (output-limited
+          (insert "Output truncated: execution output limit reached; retained output may omit content.\n"))
+         (stale-artifact
+          (insert "Output truncated: retained artifact may omit later output.\n"))
+         ((and preview-truncated
+               (not (and (integerp artifact-size)
+                         (integerp output-bytes))))
+          (insert "Output truncated: retained preview may omit content.\n")))
         (when execution-error
           (insert (format "%s: %s\n"
                           (if (eq (plist-get data :termination) 'spawn-failed)
@@ -772,15 +816,16 @@ The completion's source target may be a later segment after compaction."
                             "Execution error")
                           execution-error)))
         (cond
-         ((and (stringp physical) (file-regular-p physical)
-               (file-readable-p physical))
+         ((integerp artifact-size)
           (when (and (zerop (cadr (insert-file-contents physical)))
                      (not execution-error))
             (insert "Execution produced no output.\n")))
          ((stringp output)
           (unless (and execution-error (string-empty-p output))
             (insert (if (string-empty-p output)
-                        "Execution produced no output.\n"
+                        (if preview-truncated
+                            "Retained preview contains no output.\n"
+                          "Execution produced no output.\n")
                       output))))
          (t
           (insert "Original execution row and retained output are unavailable.\n"
@@ -962,6 +1007,8 @@ terminal facts and retained bounded payload without a second output card."
           (let* ((attributes (cadr (car (xml-parse-region (point-min) (point-max)))))
                  (id (alist-get 'execution_id attributes))
                  (code (alist-get 'exit_code attributes))
+                 (output-bytes (alist-get 'output_bytes attributes))
+                 (omitted (alist-get 'omitted_output_bytes attributes))
                  (termination (alist-get 'termination attributes))
                  (outcome (alist-get 'outcome attributes))
                  (command (alist-get 'command attributes))
@@ -972,6 +1019,10 @@ terminal facts and retained bounded payload without a second output card."
                     :facts (list :outcome (and outcome (intern outcome))
                                  :termination (and termination (intern termination))
                                  :exit-code (and code (string-to-number code))
+                                 :output-bytes (and output-bytes
+                                                    (string-to-number output-bytes))
+                                 :omitted-output-bytes (and omitted
+                                                            (string-to-number omitted))
                                  :output-path path
                                  :execution-output output))))))
       (error nil))))

@@ -91,6 +91,24 @@ Launch failures retain their diagnostic separately from stdout: expanding the
 original Bash row (including a ToolCall child) or its read-only fallback shows
 the failure cause even when the command produced no output. Errors after launch
 remain visible without being mislabeled as startup failures.
+When the original row is gone, read-only evidence retains material sandbox
+disclosures and marks a truncated preview unless a readable retained output
+artifact accounts for the execution's reported output bytes. A readable older
+snapshot warns that later output may be missing; if the byte count is unknown,
+a truncated preview remains marked as such. Forwarded completion facts retain
+the omitted-byte count for mailbox-only result links. An unsolicited process
+signal is labeled
+`signaled`, and its number is a signal, not an exit code. It is not presented
+as a requested interruption; an INT requested through managed input or user
+control is `interrupted` only when the process actually terminates from SIGINT.
+Its signal number is likewise not an exit code. A requested stop may settle
+after TERM or after an ordinary exit, so its ambiguous numeric status is not
+presented as either a signal or an exit code.
+An ignored interrupt followed by normal exit or another signal keeps its
+observed terminal classification. Requested stops remain distinct.
+An execution stopped by the output limit retains a truncation warning even
+when its bounded spool is readable; that artifact does not contain output
+beyond the limit.
 
 Successful empty-input WriteStdin observations are still returned to the model,
 but do not create separate transcript rows, even when they collect new output

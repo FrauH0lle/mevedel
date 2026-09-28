@@ -135,6 +135,7 @@
   group-marker
   group-marker-buffer
   group-start-time
+  interrupt-requested-p
   launch-attempted-p
   output-function
   output-limit-p
@@ -725,7 +726,10 @@ deferred work, so that case deletes immediately rather than leak."
                (not (mevedel-execution-process--child-termination child))
                (eq status 'signal))
           (setf (mevedel-execution-process--child-termination child)
-                'signaled))
+                (if (and (mevedel-execution-process--child-interrupt-requested-p child)
+                         (= (process-exit-status process) 2))
+                    'interrupted
+                  'signaled)))
         (cond
          ((mevedel--timer-pending-p
            (mevedel-execution-process--child-settle-timer child)))
@@ -841,6 +845,7 @@ deferred work, so that case deletes immediately rather than leak."
 (defun mevedel-execution-process-interrupt (child)
   "Interrupt CHILD through its supported process-group boundary."
   (unless (mevedel-execution-process--child-finished-p child)
+    (setf (mevedel-execution-process--child-interrupt-requested-p child) t)
     (mevedel-execution-process--signal child 'INT)
     t))
 

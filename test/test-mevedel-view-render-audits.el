@@ -39,6 +39,21 @@
   (should (string-match-p "Stopped:"
                           (mevedel-view-audit--breadcrumb-label
                            '(:command "sleep" :facts (:termination owner-stopped)))))
+  (let ((label (mevedel-view-audit--breadcrumb-label
+                '(:command "sleep" :facts (:termination stopped
+                                          :exit-code 15 :outcome failure)))))
+    (should-not (string-match-p "exit 15" label))
+    (should-not (string-match-p "signal 15" label)))
+  (let ((label (mevedel-view-audit--breadcrumb-label
+                '(:command "sleep" :facts (:termination signaled
+                                          :exit-code 13 :outcome failure)))))
+    (should (string-match-p "Signaled:.*signal 13" label))
+    (should-not (string-match-p "exit 13" label)))
+  (let ((label (mevedel-view-audit--breadcrumb-label
+                '(:command "sleep" :facts (:termination interrupted
+                                          :exit-code 2 :outcome failure)))))
+    (should (string-match-p "Stopped:.*signal 2" label))
+    (should-not (string-match-p "exit 2" label)))
   (should-not (string-match-p "\n"
                               (mevedel-view-audit--breadcrumb-label
                                '(:command "printf first\nsecond"
@@ -64,7 +79,8 @@
                   (concat "output <bash-execution execution_id=\"fake\"/>\n"
                           "<bash-execution execution_id=\"real\" "
                           "command=\"make test\" output_path=\"artifact://result\" "
-                          "outcome=\"error\" exit_code=\"1\"/>")
+                          "outcome=\"error\" exit_code=\"1\" "
+                          "output_bytes=\"128\" omitted_output_bytes=\"64\"/>")
                   "/root/worker")))
     (should (equal "real" (plist-get record :execution-id)))
     (should (equal "make test" (plist-get record :command)))
@@ -72,8 +88,25 @@
                                                     :output-path)))
     (should (equal "/root/worker" (plist-get record :owner)))
     (should (equal 1 (plist-get (plist-get record :facts) :exit-code)))
+    (should (equal 128 (plist-get (plist-get record :facts) :output-bytes)))
+    (should (equal 64 (plist-get (plist-get record :facts) :omitted-output-bytes)))
     (should (string-match-p "output" (plist-get (plist-get record :facts)
-                                                 :execution-output)))))
+                                                 :execution-output))))
+  :doc "mailbox-only omitted bytes warn when the artifact is unavailable"
+  (let ((record (mevedel-view-audit-mailbox-breadcrumb
+                 (concat "bounded output\n<bash-execution execution_id=\"mailbox\" "
+                         "output_path=\"artifact://missing\" "
+                         "omitted_output_bytes=\"20\"/>")
+                 "/root/worker")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+          (let ((result (mevedel-view-audit--evidence record)))
+            (with-current-buffer result
+              (should (string-match-p "Output truncated:.*retained preview"
+                                      (buffer-string)))
+              (should (string-match-p "bounded output" (buffer-string))))))
+      (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+        (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel-view-audit--insert-breadcrumb ()
   ,test
@@ -1282,6 +1315,81 @@
                 (should (string-match-p "archived output" (buffer-string))))))
         (when-let* ((buffer (get-buffer "*mevedel execution result*")))
           (kill-buffer buffer))))))
+
+(mevedel-deftest mevedel-view-audit-retained-disclosures ()
+  ,test
+  (test)
+  :doc "read-only preview warns about missing bytes and preserves sandbox boundary"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "bounded-call"
+               :render-data (:execution-output "partial output"
+                             :output-preview-truncated-p t
+                             :omitted-output-bytes 123
+                             :sandbox-summary (:attempt-count 1 :started-count 1
+                                               :sandbox off :filesystem unrestricted
+                                               :network unrestricted)))))
+    (let ((mevedel--data-buffer (current-buffer)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+            (let ((result (mevedel-view-audit--evidence
+                           '(:tool-use-id "bounded-call" :command "echo many"))))
+              (with-current-buffer result
+                (should (derived-mode-p 'special-mode))
+                (should (string-match-p "Sandbox:.*ran without confinement"
+                                        (buffer-string)))
+                (should (string-match-p "Output truncated:.*retained preview"
+                                        (buffer-string)))
+                (should (string-match-p "partial output" (buffer-string))))))
+        (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+          (kill-buffer buffer)))))
+  :doc "a readable artifact hides preview warnings, but not spool limit warnings"
+  (let ((physical (make-temp-file "mevedel-complete-output-"))
+        (data (generate-new-buffer " *complete execution source*")))
+    (unwind-protect
+        (progn
+          (with-temp-file physical (insert "complete output"))
+          (with-current-buffer data
+            (setq-local mevedel--session (mevedel-session--create :name "complete")))
+          (with-temp-buffer
+            (let ((mevedel--data-buffer data))
+              (cl-letf (((symbol-function 'mevedel-resource-prepare)
+                         (lambda (&rest _) (list :physical-path physical)))
+                        ((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+                (let ((result (mevedel-view-audit--evidence
+                               '(:command "cat complete"
+                                 :facts (:output-path "artifact://executions/complete"
+                                         :output-bytes 15
+                                         :output-preview-truncated-p t
+                                         :execution-output "partial")))))
+                  (with-current-buffer result
+                    (should (string-match-p "complete output" (buffer-string)))
+                    (should-not (string-match-p "Output truncated"
+                                                (buffer-string)))))
+                (let ((result (mevedel-view-audit--evidence
+                               '(:command "cat stale"
+                                 :facts (:output-path "artifact://executions/stale"
+                                         :output-bytes 30
+                                         :output-preview-truncated-p t
+                                         :execution-output "newer partial")))))
+                  (with-current-buffer result
+                    (should (string-match-p "Output truncated:.*retained artifact"
+                                            (buffer-string)))
+                    (should (string-match-p "complete output" (buffer-string)))))
+                (let ((result (mevedel-view-audit--evidence
+                               '(:command "cat capped"
+                                 :facts (:output-path "artifact://executions/capped"
+                                         :termination output-limit
+                                         :execution-output "partial")))))
+                  (with-current-buffer result
+                    (should (string-match-p "Output truncated:.*output limit"
+                                            (buffer-string)))
+                    (should (string-match-p "complete output"
+                                            (buffer-string)))))))))
+      (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+        (kill-buffer buffer))
+      (kill-buffer data)
+      (delete-file physical))))
 
 (mevedel-deftest mevedel-view-audit-retained-empty-evidence ()
   ,test
