@@ -374,7 +374,11 @@ freezes decorative motion for both indicator types, while the global
 semantic status or elapsed updates. The policy reads the Emacs UI host, not a
 remote workspace. One shared `battery.el` observer consumes existing battery
 notifications without enabling battery mode; when subscribed automatic views
-are visible it queries at most once per 60 seconds. Automatic power
+are visible it queries at most once per 60 seconds. The shared fallback timer
+is installed on the UI host's top-level timer list even when TRAMP temporarily
+binds that list away, and final unsubscription removes it from that list before
+the binding is restored. A stale timer callback cannot replace its successor.
+No frame update queries power. Automatic power
 transitions follow a notification immediately, or are normally detected
 within that fallback interval. Backend failures and unsupported/unknown
 readings use the conservative saving ceiling. Explicit `full` is useful on
