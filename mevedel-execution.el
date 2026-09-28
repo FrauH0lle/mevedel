@@ -257,6 +257,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
 (cl-defstruct (mevedel-execution--state
                (:constructor mevedel-execution--state-create))
   "Opaque per-session execution state."
+  id-prefix
   next-id
   owed-settlement
   records
@@ -363,6 +364,7 @@ separate from passive event hooks; the context is never published to them.")
 (defun mevedel-execution--new-state ()
   "Return an empty opaque execution state."
   (mevedel-execution--state-create
+   :id-prefix (make-temp-name (make-temp-name "exec-"))
    :next-id 0
    :records (make-hash-table :test #'equal)
    :scheduler (mevedel-execution-scheduler-create)))
@@ -880,10 +882,12 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
    (mevedel-execution--record-telemetry-context record) event props t))
 
 (defun mevedel-execution--next-id (state)
-  "Return the next opaque execution id in STATE."
+  "Return the next opaque execution id in STATE.
+The prefix distinguishes fresh states after a session reload from IDs
+retained in the transcript and output artifacts."
   (let ((next (1+ (mevedel-execution--state-next-id state))))
     (setf (mevedel-execution--state-next-id state) next)
-    (format "exec-%06d" next)))
+    (format "%s-%06d" (mevedel-execution--state-id-prefix state) next)))
 
 (defun mevedel-execution--retain-output (record text)
   "Retain bounded whole and unread preview TEXT in RECORD."
