@@ -1127,7 +1127,9 @@ Batching moves a collection to just after its section; it does not make
 collections rarer. While any root or agent request runs,
 `mevedel-gc-cons-threshold-while-busy` (64 MB by default, nil to disable)
 therefore keeps `gc-cons-threshold` at least that high, re-applied every
-second and released with the last request. gcmh lowers the threshold after
+second and released 30 seconds after the last request ends: settlement's
+journal publication and collection allocate as much as the turn did, and one
+catch-up capture collected nine times in 1.6 s at the low threshold. gcmh lowers the threshold after
 its idle collection and raises it only before the next command, so a
 measured unattended request on a 107 MB heap collected 94 times in ten
 minutes at about 160 ms each. Each hold carries a liveness check, so an

@@ -689,6 +689,35 @@
       (should (eq 'idle
                   (mevedel-session-agent-root-activity session)))))
 
+  :doc "holds the busy collection threshold through the settlement tail"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (gc-cons-threshold 800000)
+           (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+           (noninteractive nil)
+           (mevedel--gc-holds (make-hash-table :test #'eq))
+           (mevedel--gc-restore nil)
+           (mevedel--gc-timer nil))
+      (unwind-protect
+          (progn
+            (mevedel-request-begin session)
+            (should (= (* 64 1024 1024) gc-cons-threshold))
+            (mevedel-request-end)
+            ;; Settlement work still runs at the busy threshold ...
+            (should (= (* 64 1024 1024) gc-cons-threshold))
+            ;; ... until its grace period has passed.
+            (let ((mevedel--gc-settlement-grace -1))
+              (mevedel-request-begin session)
+              (mevedel-request-end))
+            (maphash (lambda (key _) (puthash key #'ignore mevedel--gc-holds))
+                     mevedel--gc-holds)
+            (mevedel--gc-maintain)
+            (should (= 800000 gc-cons-threshold))
+            (should-not mevedel--gc-timer))
+        (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer)))))
+
   :doc "drains every registered canceller on end"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
