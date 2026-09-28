@@ -2431,7 +2431,12 @@ folding a run into a group does not lose the boundary it ran with."
       (when (and (not latest) (memq child-status '(warning running cancelled))
                  (not (eq (mevedel-view--rendering-status rendering) 'error)))
         (setq rendering (plist-put rendering :status child-status)))
-      (when-let* ((summary (plist-get render-data :sandbox-summary)))
+      (when-let* ((summary
+                   (or (plist-get render-data :sandbox-summary)
+                       (plist-get (plist-get direct :render-data)
+                                  :sandbox-summary)
+                       (plist-get (plist-get child :render-data)
+                                  :sandbox-summary))))
         (setq rendering
               (plist-put rendering :sandbox-summary (copy-tree summary))))
       (when-let* ((media (plist-get child :media)))
@@ -2844,6 +2849,7 @@ finish before this function invokes registered renderers or reads live events."
       (when-let* ((summary (or (plist-get direct-latest :sandbox-summary)
                                (plist-get (plist-get direct-child :render-data)
                                           :sandbox-summary)
+                               (plist-get call-render-data :sandbox-summary)
                                (plist-get render-data :sandbox-summary))))
         (setq rendering
               (plist-put rendering :sandbox-summary (copy-tree summary))))
