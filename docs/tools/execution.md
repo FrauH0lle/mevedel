@@ -85,6 +85,10 @@ settlement. Consequential sandbox warnings and truncation remain visible, and
 retained output remains accessible where available. A collapsed row marks a
 truncated whole-execution preview even when each individual poll returned its
 entire unread chunk; observation omission counts remain unchanged.
+Launch failures retain their diagnostic separately from stdout: expanding the
+original Bash row (including a ToolCall child) or its read-only fallback shows
+the failure cause even when the command produced no output. Errors after launch
+remain visible without being mislabeled as startup failures.
 
 Successful empty-input WriteStdin observations are still returned to the model,
 but do not create separate transcript rows, even when they collect new output

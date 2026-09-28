@@ -747,6 +747,7 @@ The completion's source target may be a later segment after compaction."
          (facts (plist-get record :facts))
          (output (or (plist-get data :execution-output)
                      (plist-get facts :execution-output)))
+         (execution-error (plist-get data :execution-error))
          (path (plist-get facts :output-path))
          (session (and (buffer-live-p mevedel--data-buffer)
                        (buffer-local-value 'mevedel--session mevedel--data-buffer)))
@@ -764,15 +765,23 @@ The completion's source target may be a later segment after compaction."
         (erase-buffer)
         (insert (or (plist-get record :command) (plist-get facts :command) "Bash")
                 "\n\n")
+        (when execution-error
+          (insert (format "%s: %s\n"
+                          (if (eq (plist-get data :termination) 'spawn-failed)
+                              "Failed to start process"
+                            "Execution error")
+                          execution-error)))
         (cond
          ((and (stringp physical) (file-regular-p physical)
                (file-readable-p physical))
-          (when (zerop (cadr (insert-file-contents physical)))
+          (when (and (zerop (cadr (insert-file-contents physical)))
+                     (not execution-error))
             (insert "Execution produced no output.\n")))
          ((stringp output)
-          (insert (if (string-empty-p output)
-                      "Execution produced no output.\n"
-                    output)))
+          (unless (and execution-error (string-empty-p output))
+            (insert (if (string-empty-p output)
+                        "Execution produced no output.\n"
+                      output))))
          (t
           (insert "Original execution row and retained output are unavailable.\n"
                   (if (stringp path)

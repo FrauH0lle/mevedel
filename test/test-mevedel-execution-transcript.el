@@ -115,7 +115,17 @@
                      mevedel-execution-inline-output-limit)))))
       (should (plist-get render-data :output-preview-truncated-p))
       (should (string-match-p "omitted 1000 chars"
-                              (plist-get render-data :execution-output))))))
+                              (plist-get render-data :execution-output)))))
+  :doc "keeps a launch failure diagnostic separate from canonical stdout"
+  (let ((render-data
+         (mevedel-execution-transcript-terminal-render-data
+          '(:facts (:state completed :outcome failure :termination spawn-failed)
+            :whole-output "actual output"
+            :observation (:error "spawning child process: no such file: bash")))))
+    (should (equal "actual output" (plist-get render-data :execution-output)))
+    (should (equal "spawning child process: no such file: bash"
+                   (plist-get render-data :execution-error)))
+    (should (eq 'error (plist-get render-data :status)))))
 (mevedel-deftest mevedel-execution-transcript-handle-event ()
   ,test
   (test)
