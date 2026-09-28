@@ -85,8 +85,11 @@ elapsed metadata; semantic redraws retain the last displayed sample, and
 unchanged tool rows are not rebuilt at their initial frame. Hidden
 and vertically or horizontally offscreen indicators suspend decorative wakeups;
 a still-visible elapsed suffix independently retains its one-second semantic
-refresh even when horizontal scrolling hides its label. Window focus and
-target visibility are checked together: a visible target in an unfocused frame
+refresh even when horizontal scrolling hides its label. When both source-span
+endpoints fall outside a narrow viewport, a bounded display-row edge probe
+checks for visible ordinary text in the middle; a wrapped window may start
+inside the suffix. Window focus and target visibility are checked together: a
+visible target in an unfocused frame
 cannot borrow attention from another frame where the target is offscreen.
 The transcript's separate buffer-wide attention gate remains unchanged.
 A theme change repaints visible color labels at their displayed or frozen
@@ -115,8 +118,10 @@ compares that index with the *changing* color bound recorded once while
 preparing the bank, not merely the face-bearing prefix: shimmer and bounce
 leave some colored characters unchanged throughout the cycle. An event-driven
 theme or display-frame repaint instead considers any visible part of the
-colored label; it does not schedule motion for a constant-colored tail. Since
-`window-scroll-functions` does not run for horizontal scrolling, a scoped
+colored label; it does not schedule motion for a constant-colored tail. Glyph
+indicators similarly exclude their invariant trailing separator from motion
+visibility. Since `window-scroll-functions` does not run for horizontal
+scrolling, a scoped
 `set-window-hscroll` observer rearms explicitly scrolled views; an internal
 automatic pan does not call that primitive. Explicit pixel scrolling has a
 `set-window-vscroll` observer, while a buffer-local redisplay hook is installed

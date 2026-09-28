@@ -308,21 +308,23 @@ characters, not merely source positions. A long color label's static tail
 does not keep a high-frequency timer alive after the *changing* part of its
 bounded colored prefix scrolls away. Preparation records that bound from the
 actual frame colors: shimmer and bounce can leave some colored characters
-constant across the cycle. The trailing ellipsis is checked against the last
+constant across the cycle. Glyph indicators also exclude their invariant
+separating space: showing only that space does not justify a decorative timer.
+The trailing ellipsis is checked against the last
 visible glyph even without horizontal scrolling: truncation can hide it beyond
 the right edge, while a wrapped final row may still show it. Vertical pixel
 scrolling can likewise hide a wrapped color prefix without advancing the source
 position; visibility then uses the displayed index and rearming observes pixel
 scrolls. Event-driven theme or display-frame changes still repaint a visible
 constant-colored tail without restarting decorative callbacks.
-If horizontal scrolling
-hides the label but leaves its elapsed suffix visible in the text area, a
-separate visibility check keeps the
-once-per-second metadata refresh; a suffix beyond the right edge or in a fringe
-does not, even when the window has not scrolled. The per-view timer animates
-only a progress label or pending-tool indicator visible in an attended window,
-and updates registered
-spans instead of scanning the transcript each frame. Attention and target
+If horizontal scrolling hides the label but leaves any part of its elapsed
+suffix visible in the text area, a separate visibility check keeps the
+once-per-second metadata refresh. This includes a narrow viewport showing only
+the middle of the suffix or a wrapped row starting inside it; a suffix wholly
+beyond the right edge or in a fringe does not keep the timer alive. The per-view
+timer animates only a progress label or pending-tool indicator visible in an
+attended window, and updates registered spans instead of scanning the transcript
+each frame. Attention and target
 visibility must hold in the *same* window: a focused frame where the label is
 offscreen cannot make a visible label in another, unfocused frame animate.
 This stricter animation gate leaves the buffer-wide transcript rendering

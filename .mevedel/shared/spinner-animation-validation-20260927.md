@@ -866,3 +866,42 @@ independent `/root/animation_review`, clean Eask checks):
   changing-bound and repaint regressions passed. The full suite is **not
   green**. No active host Emacs was hot-reloaded; physical input delivery,
   scanout and attributable battery-life savings remain unmeasured.
+
+Glyph-separator and narrow elapsed-suffix follow-up, 2026-09-28 (source:
+`/root/verify_14` fresh graphical production views, independent
+`/root/animation_review`, current source and Eask checks):
+
+- A whole-Goal verifier found that a tool's invariant trailing ASCII space
+  alone at hscroll 1 still ran its decorative 120-ms timer after `73d05bef`.
+  Motion bounds now exclude the separator of main and compact tool ASCII,
+  Braille and dots indicators, while theme/frame paint visibility remains
+  independent. Fresh GUI event-loop runs of all six main/tool combinations
+  saw zero callbacks over 550 ms while only the separator was visible; revealing
+  a changing glyph restored 120/240-ms cadence. A separate GUI face-color
+  change repainted a static-colored shimmer tail without arming motion.
+- The same verifier found a static view whose elapsed digit remained visible in
+  a narrow viewport, but both ends of its ordinary-text metadata span lay
+  offscreen and its one-second timer stopped. Another case began a wrapped
+  window *inside* the suffix. Plain metadata visibility now accepts overlap
+  with the window-start position and checks bounded text-row edges if both
+  endpoint probes miss; replacement-string motion still uses its separate
+  displayed-index gate. Fresh GUI replays showed the timer at 1.0 s and elapsed
+  text advancing in ten narrow horizontal-scroll cases and a wrapped-start
+  case; wholly offscreen suffixes retained no timer. In a short graphical
+  60-Hz cost comparison the new row fallback ran only six times over 91 ticks;
+  median callbacks were 0.105 ms in both current and prior source. This
+  measurement does not establish end-to-end input latency.
+- Independent read-only reviews of each correction returned `VERDICT: PASS`;
+  the latter also checked the row-fallback cost and a wholly hidden suffix.
+  After Eask cleanup, focused animation+stream tests passed **182/182**
+  (`.scratch/spinner-metadata-final-focused.log`); the accepted plan's named
+  view roster plus power, chat, hooks, and integrity passed **1088/1089
+  expected, zero unexpected, one optional composer skip**
+  (`.scratch/spinner-metadata-roster.log`). All **210 files** compiled without
+  warnings (`.scratch/spinner-metadata-final-compile.log`). The complete
+  two-worker suite discovered **8760 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-metadata-final-full-suite/summary.json`,
+  `.scratch/spinner-metadata-final-full-run.log`). The eight unexpected names
+  exactly match the earlier non-animation gptel bridge, presets, injection,
+  skills-layout and concurrent plan-handoff failures above; the full suite is
+  **not green**. `git diff --check` passed. No active host Emacs was hot-reloaded.
