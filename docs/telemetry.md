@@ -164,6 +164,10 @@ cancellation releases the fence and leaves the machine retryable.
   and only when it blocked for 20 ms or more. Nothing is measured while a
   measurement is being recorded, since a remote session appends telemetry
   through the same programs;
+- `publication-collection` when a collection job ends, with `:outcome`
+  (`completed`, `proof-failed` when a deletion proof refused and nothing was
+  deleted, or `failed`), candidate and retained head counts, deleted file and
+  directory counts, and duration;
 - `journal-capture-queued` when a checkpoint first becomes ready, carrying its
   capture identity, checkpoint trigger, and frozen input byte count; no evidence
   body is logged;
