@@ -71,6 +71,7 @@
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir &optional names))
 (defvar mevedel-session-durability--asserted-directories)
+(defvar mevedel-session-durability--final-commit)
 (defvar mevedel-session-durability--transaction-clock)
 
 ;; `mevedel-session-recovery'
@@ -1410,6 +1411,12 @@ as the reservation that opens a publication does."
                     (prog1 (mevedel-session-publication-queue session)
                       (setf (mevedel-session-publication-queue session) nil))))
             (setq current (pop remaining))
+            ;; A final commit returned the lease to `active'; work that
+            ;; queued afterwards reserves the window again before writing.
+            (when (eq 'active (plist-get (mevedel-session-lease session) :status))
+              (unless (mevedel-session-durability--renew-publication-lease session)
+                (user-error "Portable session lease could not reserve publication"))
+              (setcar mevedel-session-publication--proved t))
             (mevedel-session-publication--publish-batch session current)
             (if-let* ((marker
                       (mevedel-session-publication--batch-marker current)))
@@ -1420,10 +1427,13 @@ as the reservation that opens a publication does."
                         (list current)))
                       (publication-before (mevedel-session-publication session)))
                   (unwind-protect
-                      (setq result
-                            (mevedel-session-publication--commit-marker-publication
-                             session transaction marker)
-                            committed t)
+                      (let ((mevedel-session-durability--final-commit
+                             (and (null remaining)
+                                  (null (mevedel-session-publication-queue session)))))
+                        (setq result
+                              (mevedel-session-publication--commit-marker-publication
+                               session transaction marker)
+                              committed t))
                     ;; The head commit proved ownership after every write.
                     (setcar mevedel-session-publication--proved committed)
                     ;; A changed head commits this transaction even if its
