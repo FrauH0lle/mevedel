@@ -581,7 +581,12 @@ Terminology:
 
 - **History region**: rendered transcript above `mevedel-view--status-marker`.
   Pending tool rows like `Calling Read...` are fragment-backed live-tail
-  history content, not status-zone content.
+  history content, not status-zone content. Empty-input `WriteStdin` polls with
+  a nonempty execution ID do not add pending rows or a separate pre-tool
+  spinner, including a ToolCall consisting solely of one literal poll. Invalid
+  arguments and compound or ambiguous ToolCall scripts keep their pending row.
+  The request progress row remains visible, and a failed poll control appears
+  in the settled transcript.
 - **Status zone**: session status chrome between `mevedel-view--status-marker`
   and `mevedel-view--interaction-marker`. Task, live-execution, and
   aggregate-agent rows appear here. The agent roster lists every active agent,
