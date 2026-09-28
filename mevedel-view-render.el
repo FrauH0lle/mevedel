@@ -1769,8 +1769,19 @@ insert a non-string or `funcall' a non-symbol."
               (or (not (plist-member p :coalesce-key))
                   (stringp coalesce-key))))))
 
+(defun mevedel-view--presentation-render-data (render-data)
+  "Return RENDER-DATA with a successful observation's visual status.
+The handler's error status is still sent to the model, including nested
+ToolCall error values.  A collected process failure belongs to Bash, not
+to the input or poll that successfully observed it."
+  (if (and (memq (plist-get render-data :execution-control) '(input poll))
+           (eq (plist-get render-data :control-succeeded-p) t))
+      (plist-put (copy-sequence render-data) :status 'success)
+    render-data))
+
 (defun mevedel-view--tool-render-status (result &optional render-data)
   "Return the renderer dispatch status for RESULT and RENDER-DATA."
+  (setq render-data (mevedel-view--presentation-render-data render-data))
   (or (pcase (plist-get render-data :status)
         ('success 'success)
         ((or 'error 'failed 'denied 'blocked) 'error))
@@ -1821,7 +1832,8 @@ straight off ARGS and RESULT without needing render-data."
                                            (plist-get child :args) result)
             (mevedel-view--generic-tool-rendering
              name (plist-get child :args) result nil data)))
-    (let* ((explicit-status
+    (let* ((render-data (mevedel-view--presentation-render-data render-data))
+           (explicit-status
             (and (memq (plist-get render-data :status) '(success error))
 		 (plist-get render-data :status)))
            (renderer (and tool (mevedel-tool-renderer tool)))
@@ -2022,7 +2034,8 @@ Return nil when HEADER is not a `Tool: argument' style line."
   "Return RENDERING's visual status, with errors preceding warnings.
 RENDER-DATA supplies child status and sandbox facts before attachment.
 Execution outcome remains independent of lifecycle and disclosure state."
-  (let ((status (plist-get rendering :status)))
+  (let ((status (plist-get rendering :status))
+        (render-data (mevedel-view--presentation-render-data render-data)))
     (cond
      ((or (memq status '(error failed denied blocked))
           (memq (plist-get render-data :status) '(error failed denied blocked)))

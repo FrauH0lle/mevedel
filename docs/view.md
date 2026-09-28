@@ -516,16 +516,19 @@ facts belong in expanded details. Their output disclosure starts closed for
 running and completed commands. The original row owns all progress and output,
 including output returned by a hidden, successful empty-input WriteStdin poll.
 Input and stop interactions remain visible and link to the original execution;
-failed control operations do not
-disappear, and a command's failed exit is attributed to the command instead of
-to its successful poll. Source-backed disclosure choices and reader/composer
-positions survive progress and completion. A separate execution-history
-disclosure preserves inspectable polling and delivery records. The same rules
-apply to execution tools nested within ToolCall. Completion lookup follows the
-receiving transcript's own history: root session segments or numbered agent
-compaction archives. A missing earlier archive does not hide available later
-terminal evidence; when the source row itself is gone, the result link opens
-retained output read-only instead of navigating into the parent's segments.
+failed control operations do not disappear. A command's failed exit is attributed
+to the command instead of to its successful input or poll. A terminal event
+projects its durable breadcrumb into an open current view immediately, without
+waiting for a full rerender; views opened later reconstruct it from the
+transcript. Source-backed disclosure choices and reader/composer positions
+survive progress and completion. A separate execution-history disclosure
+preserves inspectable polling and delivery records.
+The same rules apply to execution tools nested within ToolCall. Completion
+lookup follows the receiving transcript's own history: root session segments or
+numbered agent compaction archives. A missing earlier archive does not hide
+available later terminal evidence; when the source row itself is gone, the
+result link opens retained output read-only instead of navigating into the
+parent's segments.
 On reload, nested Bash calls whose process is gone show a lost state and error
 marker rather than inheriting the ToolCall's earlier successful call status.
 

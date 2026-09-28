@@ -41,6 +41,21 @@
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection" (data-buffer))
+(declare-function mevedel-collaboration--forwarded-execution
+                  "mevedel-collaboration-projection" (segment))
+(declare-function mevedel-collaboration--truncate-bytes
+                  "mevedel-collaboration-projection" (string limit))
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-prepare "mevedel-resource"
+                  (operation address &optional context))
+(autoload 'mevedel-resource-prepare "mevedel-resource")
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-read-transcript-segment
+                  "mevedel-session-artifacts" (session descriptor))
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
@@ -48,6 +63,20 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-registry "mevedel-structs" (session))
+(defvar mevedel--session)
+
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-segments "mevedel-transcript" (start end))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-buffer-spans
+                  "mevedel-transcript-audit" (&optional type start end))
+(declare-function mevedel-transcript-audit-records
+                  "mevedel-transcript-audit" (text &optional type))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-for-tool
+                  "mevedel-tool-render-data" (buffer tool-use-id))
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--agent-record-status
@@ -55,6 +84,8 @@
 
 (defconst mevedel-collaboration--agent-fetch-window 1.0
   "Seconds within which repeated agent fetches from one guest are dropped.")
+(defconst mevedel-collaboration--execution-result-limit 50000
+  "Maximum bytes of retained execution evidence in one guest response.")
 
 (defun mevedel-collaboration--agent-rows (room)
   "Return ROOM's guest-visible retained agent rows, sorted by path.
@@ -182,6 +213,205 @@ transcript stays reachable from the viewer's finished-agents list."
              transport peer
              (list :t "agent" :reqId req-id
                    :error "This agent's transcript is not available"))))))))
+
+(defun mevedel-collaboration--find-transcript-evidence (session live-buffer find)
+  "Run FIND on SESSION's readable source-backed segments of LIVE-BUFFER.
+Return the newest matching value.  Archive buffers are always released."
+  (when (and session (buffer-live-p live-buffer))
+    (catch 'found
+      (dolist (descriptor (reverse
+                           (mevedel-session-artifacts-transcript-segments
+                            session live-buffer)))
+        (when (eq (plist-get descriptor :status) 'readable)
+          (let ((buffer (if (plist-get descriptor :current-p) live-buffer
+                          (condition-case nil
+                              (mevedel-session-artifacts-read-transcript-segment
+                               session descriptor)
+                            (error nil)))))
+            (when (buffer-live-p buffer)
+              (unwind-protect
+                  (with-current-buffer buffer
+                    (save-restriction
+                      (widen)
+                      (when-let* ((value (funcall find)))
+                        (throw 'found value))))
+                (unless (eq buffer live-buffer) (kill-buffer buffer))))))))))
+
+(defun mevedel-collaboration--forwarded-evidence (room owner id)
+  "Return validated parent mailbox evidence for OWNER and execution ID.
+Only a matching forwarded completion in this room authorizes a fetch."
+  (mevedel-collaboration--find-transcript-evidence
+   (plist-get room :session) (plist-get room :data-buffer)
+   (lambda ()
+     (cl-some
+      (lambda (segment)
+        (when (eq (car segment) 'mailbox)
+          (let ((record (mevedel-collaboration--forwarded-execution segment)))
+            (when (and (equal owner (plist-get record :owner))
+                       (equal id (plist-get record :execution-id)))
+              record))))
+      (mevedel-transcript-segments (point-min) (point-max))))))
+
+(defun mevedel-collaboration--local-execution (room owner id)
+  "Return (BREADCRUMB . BUFFER) for a trusted local OWNER/ID in ROOM.
+The receiving transcript must itself be the root or the registered child;
+a client cannot authorize a result by naming another agent or a path."
+  (when-let* ((buffer (if (equal owner "/root")
+                         (plist-get room :data-buffer)
+                       (mevedel-collaboration--agent-conversation room owner)))
+              ((buffer-live-p buffer))
+              (session (buffer-local-value 'mevedel--session buffer))
+              (record
+               (mevedel-collaboration--find-transcript-evidence
+                session buffer
+                (lambda ()
+                  (cl-some
+                   (lambda (span)
+                     (let ((audit (plist-get span :record)))
+                       (when (and (equal owner (plist-get audit :owner))
+                                  (equal id (plist-get audit :execution-id)))
+                         audit)))
+                   (reverse (mevedel-transcript-audit-buffer-spans
+                             'execution-breadcrumb)))))))
+    (cons record buffer)))
+
+(defun mevedel-collaboration--execution-row-facts (buffer tool-id id)
+  "Find TOOL-ID's terminal Bash render data for ID in BUFFER's segments."
+  (when (and (stringp tool-id) (buffer-live-p buffer))
+    (mevedel-collaboration--find-transcript-evidence
+     (buffer-local-value 'mevedel--session buffer) buffer
+     (lambda ()
+       (let ((data (mevedel-tool-render-data-for-tool
+                    (current-buffer) tool-id)))
+         (when (and (equal (plist-get data :execution-id) id)
+                    (memq (plist-get data :state)
+                          '(completed interrupted lost)))
+           data))))))
+
+(defun mevedel-collaboration--terminal-execution-facts
+    (buffer id &optional tool-id)
+  "Find trusted terminal audit facts for ID in BUFFER's source segments.
+When TOOL-ID is supplied by an authorized local breadcrumb, require its
+matching tool-use id; nested ToolCall Bash children have no separate row."
+  (when (buffer-live-p buffer)
+    (mevedel-collaboration--find-transcript-evidence
+     (buffer-local-value 'mevedel--session buffer) buffer
+     (lambda ()
+       (cl-some
+        (lambda (span)
+          (let* ((record (plist-get span :record))
+                 (facts (plist-get record :render-data)))
+            (when (and (memq (plist-get record :type)
+                             '(execution-completion execution-archive))
+                       (equal id (plist-get facts :execution-id))
+                       (or (null tool-id)
+                           (equal tool-id (plist-get record :tool-use-id))))
+              facts)))
+        (reverse (mevedel-transcript-audit-buffer-spans)))))))
+
+(defun mevedel-collaboration--child-execution-facts (room owner id)
+  "Return source-backed terminal facts for OWNER's ID when the child is live.
+Compaction segments are searched as well as the current buffer; a cold child
+has no resident transcript, so its forwarded parent delivery is the fallback."
+  (when-let* ((session (plist-get room :session))
+              (entry (assoc owner (mevedel-session-agent-registry session)))
+              (buffer (mevedel-agent-record-conversation-buffer (cdr entry)))
+              ((buffer-live-p buffer))
+              ((buffer-local-value 'mevedel--session buffer)))
+    (or (mevedel-collaboration--terminal-execution-facts buffer id)
+        (when-let* ((breadcrumb (car (mevedel-collaboration--local-execution
+                                      room owner id))))
+          (or (mevedel-collaboration--execution-row-facts
+               buffer (plist-get breadcrumb :tool-use-id) id)
+              (plist-get breadcrumb :facts))))))
+
+(defun mevedel-collaboration--retained-execution-output (session facts)
+  "Return bounded retained output from canonical FACTS and SESSION, or nil.
+Only trusted source-backed child/local facts supply a path; never accept a
+guest-supplied artifact address or read paths from a forwarded mailbox."
+  (let* ((path (plist-get facts :output-path))
+         (artifact (and (stringp path) (string-prefix-p "artifact://" path)
+                        (condition-case nil
+                            (mevedel-resource-prepare
+                             'read path (list :session session))
+                          (error nil))))
+         (physical (and artifact (not (plist-get artifact :unavailable-p))
+                        (plist-get artifact :physical-path))))
+    (or (and (stringp physical) (file-regular-p physical)
+             (file-readable-p physical)
+             (with-temp-buffer
+               (insert-file-contents physical nil 0
+                                     (min (1+ mevedel-collaboration--execution-result-limit)
+                                          (file-attribute-size
+                                           (file-attributes physical))))
+               (buffer-string)))
+        (plist-get facts :execution-output))))
+
+(defun mevedel-collaboration--handle-execution-result-get (room peer frame)
+  "Serve bounded, read-only execution evidence to registered guest PEER.
+OWNER and identity must occur together in a trusted local breadcrumb or the
+parent's forwarded mailbox; no guest-supplied path grants authority."
+  (let ((guest (mevedel-collaboration--guest room peer))
+        (req-id (plist-get frame :reqId))
+        (owner (plist-get frame :owner))
+        (id (plist-get frame :executionId)))
+    (when (and guest (mevedel-collaboration--request-id-p req-id)
+               (stringp owner) (<= (string-bytes owner) 256)
+               (stringp id) (<= (string-bytes id) 256))
+      (let* ((now (float-time))
+             (recent (plist-get guest :last-execution-result-fetch))
+             (throttled (and recent
+                             (< (- now recent)
+                                mevedel-collaboration--agent-fetch-window)))
+             (_ (unless throttled
+                  (plist-put guest :last-execution-result-fetch now)))
+             (forwarded (unless throttled
+                          (mevedel-collaboration--forwarded-evidence room owner id)))
+             (local (unless (or throttled forwarded)
+                      (mevedel-collaboration--local-execution room owner id)))
+             (child-buffer (or (cdr local)
+                               (and forwarded
+                                    (mevedel-collaboration--agent-conversation
+                                     room owner))))
+             (child-session (and (buffer-live-p child-buffer)
+                                 (buffer-local-value 'mevedel--session child-buffer)))
+             (facts (or (and forwarded
+                             (mevedel-collaboration--child-execution-facts
+                              room owner id))
+                        (and local
+                             (or (mevedel-collaboration--execution-row-facts
+                                  child-buffer (plist-get (car local) :tool-use-id) id)
+                                 (and (stringp (plist-get (car local) :tool-use-id))
+                                      (mevedel-collaboration--terminal-execution-facts
+                                       child-buffer id
+                                       (plist-get (car local) :tool-use-id)))
+                                 (plist-get (car local) :facts)))))
+             (canonical-output (and facts (or child-session
+                                               (plist-get room :session))
+                                    (mevedel-collaboration--retained-execution-output
+                                     (or child-session (plist-get room :session)) facts)))
+             (mailbox-output (and forwarded
+                                  (plist-get (plist-get forwarded :facts)
+                                             :execution-output)))
+             (output (or canonical-output
+                         (and (stringp mailbox-output)
+                              (string-remove-prefix "\n" mailbox-output))))
+             (bounded (and (stringp output)
+                           (mevedel-collaboration--truncate-bytes
+                            output mevedel-collaboration--execution-result-limit))))
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (list :t "execution-result" :reqId req-id
+               :owner owner :executionId id
+               :source (cond (throttled "missing")
+                             ((stringp canonical-output) "child")
+                             ((stringp output) "forwarded")
+                             (t "missing"))
+               :output (or bounded "")
+               :truncated (and (stringp output) (not (equal output bounded)))
+               :error (cond (throttled "Retry result fetch shortly.")
+                            ((not (stringp output))
+                             "Original execution row and retained output are unavailable."))))))))
 
 (provide 'mevedel-collaboration-agent)
 ;;; mevedel-collaboration-agent.el ends here

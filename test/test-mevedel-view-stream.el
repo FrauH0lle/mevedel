@@ -553,6 +553,118 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(mevedel-deftest mevedel-view-stream-terminal-breadcrumb-live ()
+  ,test
+  (test)
+  :doc "terminal event projects its durable audit immediately in an idle open view"
+  (mevedel-view-stream-test--with-buffers
+    (let ((session (mevedel-session--create :name "live-breadcrumb"))
+          (draft "> quoted\nsecond line")
+          (rerenders 0)
+          (event (list :type 'terminal :delivery 'mailbox
+                       :owner "main" :tool-use-id "call-live"
+                       :tool-args '(:command "printf run")
+                       :whole-output "done"
+                       :facts '(:execution-id "exec-live" :command "printf run"
+                                :state completed :termination exited
+                                :exit-code 0 :outcome success))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "#+begin_tool (Bash :command \"printf run\")\n")
+        (let ((start (point)))
+          (insert "(:name \"Bash\" :args (:command \"printf run\"))\n\nyielded\n")
+          (put-text-property start (point) 'gptel '(tool . "call-live")))
+        (insert "#+end_tool\n"))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--full-rerender)
+        (mevedel-view-stream-test--insert-composer-draft draft 4)
+        (set-mark (+ (mevedel-view--input-start) 1))
+        (setq mark-active t))
+      (setq event (plist-put event :data-buffer data-buf)
+            event (plist-put event :session session))
+      (cl-letf (((symbol-function 'mevedel-view--full-rerender)
+                 (lambda () (cl-incf rerenders))))
+        (mevedel-view-stream-handle-execution-event event)
+        (with-current-buffer view-buf
+          (let ((visible (buffer-substring-no-properties
+                          (point-min) (mevedel-view--input-start))))
+            (should (= 1 (mevedel-view-stream-test--count-substring
+                          "[Show result]" visible)))
+            (should (string-match-p "↳ Finished: printf run" visible))
+            (should (equal draft (mevedel-view--input-text)))
+            (should (= 4 (- (point) (mevedel-view--input-start))))
+            (should mark-active)
+            (should (= 1 (- (mark) (mevedel-view--input-start))))
+            (save-excursion
+              (goto-char (point-min))
+              (search-forward "[Show result]")
+              (let ((at (match-beginning 0)))
+                (should (eq 'execution-breadcrumb
+                            (get-text-property at 'mevedel-view-type)))
+                (should (get-text-property at 'mevedel-view-source))
+                (should (equal "exec-live"
+                               (plist-get
+                                (get-text-property
+                                 at 'mevedel-view-execution-breadcrumb)
+                                :execution-id)))))))
+        (mevedel-view-stream-handle-execution-event event)
+        (with-current-buffer view-buf
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "[Show result]" (buffer-string))))
+          (should (zerop rerenders))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (should (= 1 (mevedel-view-stream-test--count-substring
+                      "[Show result]" (buffer-string))))
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= 4 (- (point) (mevedel-view--input-start)))))
+      (with-current-buffer data-buf
+        (should (= 1 (length (mevedel-transcript-audit-records
+                              (buffer-string) 'execution-breadcrumb))))))))
+
+(mevedel-deftest mevedel-view-stream-terminal-breadcrumb-projection ()
+  ,test
+  (test)
+  :doc "headless completions reconstruct; historical views stay on their segment"
+  (mevedel-view-stream-test--with-buffers
+    (let* ((session (mevedel-session--create :name "deferred-breadcrumb"))
+           (event (list :type 'terminal :delivery 'mailbox :session session
+                        :data-buffer data-buf :owner "main"
+                        :tool-use-id "call-late"
+                        :tool-args '(:command "printf late")
+                        :whole-output "done"
+                        :facts '(:execution-id "exec-late"
+                                 :command "printf late" :state completed
+                                 :termination exited :exit-code 0
+                                 :outcome success))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "#+begin_tool (Bash :command \"printf late\")\n")
+        (let ((start (point)))
+          (insert "(:name \"Bash\" :args (:command \"printf late\"))\n\nyielded\n")
+          (put-text-property start (point) 'gptel '(tool . "call-late")))
+        (insert "#+end_tool\n"))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--data-buffer nil))
+      (mevedel-view-stream-handle-execution-event event)
+      (with-current-buffer view-buf
+        (setq-local mevedel--data-buffer data-buf))
+      (let ((archive (generate-new-buffer " *breadcrumb historical source*")))
+        (unwind-protect
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () archive)))
+              (mevedel-view-stream-handle-execution-event event)
+              (with-current-buffer view-buf
+                (should (= 0 (mevedel-view-stream-test--count-substring
+                              "[Show result]" (buffer-string))))))
+          (kill-buffer archive)))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (should (= 1 (mevedel-view-stream-test--count-substring
+                      "[Show result]" (buffer-string))))))))
+
 (mevedel-deftest mevedel-view-stream-handle-tool-progress ()
   ,test
   (test)

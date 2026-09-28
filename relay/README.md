@@ -21,6 +21,19 @@ metadata does not change the relay's content-blind forwarding contract.
   frames broadcast to every guest when the prefix is 0 and target guest N
   otherwise; guest frames get the prefix overwritten with the sender's
   peerId before forwarding to the host.
+- Yielded root/child completions and forwarded child completions are projected
+  as output-free `execution` records with `status` and
+  `execution: {owner, id, command, exitCode}`. The viewer's **Show result**
+  button sends a sealed
+  `{"t":"execution-result-get","reqId":N,"owner":"/root/child",
+  "executionId":"exec-1"}` frame. The host answers that peer with
+  `execution-result` carrying the same request ID, owner and execution ID,
+  plus `source` (`child`, `forwarded`, or `missing`), bounded `output`,
+  `truncated`, and optional `error`. This is read-only for all link tiers.
+  The host validates owner/ID against a trusted local completion breadcrumb
+  in the root or registered child transcript, or a retained forwarded parent
+  mailbox, before resolving evidence; the browser never supplies an artifact
+  path.
 - TEXT control messages (unencrypted, no session data): relay→host
   `{"t":"peer-joined"|"peer-left","peer":N}`; relay→guest
   `{"t":"room-closed"}`; host→relay Web Push subscription routing and wake
