@@ -298,6 +298,76 @@
           (funcall original-signal-process (- group-id) 'KILL)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-execution-process-interrupt-attribution ()
+  ,test
+  (test)
+  :doc "requested INT and unsolicited signals differ; ignored INT may finish"
+  (skip-unless (and (not (eq system-type 'windows-nt))
+                    (executable-find "bash")))
+  (let* ((root (make-temp-file "mevedel-interrupt-attribution-" t))
+         (mevedel-execution-process--child-kill-delay 0.05)
+         requested unsolicited ignored later-signal
+         (child (mevedel-execution-process-create
+                 :workdir root
+                 :terminal-function (lambda (_child value)
+                                      (setq requested value))))
+         (other (mevedel-execution-process-create
+                 :workdir root
+                 :terminal-function (lambda (_child value)
+                                      (setq unsolicited value))))
+         (survivor (mevedel-execution-process-create
+                    :workdir root
+                    :terminal-function (lambda (_child value)
+                                         (setq ignored value))))
+         (later (mevedel-execution-process-create
+                 :workdir root
+                 :terminal-function (lambda (_child value)
+                                      (setq later-signal value)))))
+    (unwind-protect
+        (progn
+          (mevedel-execution-process-start
+           child :name "mevedel-requested-interrupt"
+           :command '("bash" "--noprofile" "--norc" "-c" "exec sleep 30")
+           :coding 'utf-8-unix)
+          (should (mevedel-execution-process-interrupt child))
+          (test-mevedel-execution-process--wait (lambda () requested))
+          (should (eq 'interrupted (plist-get requested :termination)))
+          (mevedel-execution-process-start
+           other :name "mevedel-unsolicited-signal"
+           :command '("bash" "--noprofile" "--norc" "-c"
+                      "sleep .05; kill -PIPE $$")
+           :coding 'utf-8-unix)
+          (test-mevedel-execution-process--wait (lambda () unsolicited))
+          (should (eq 'signaled (plist-get unsolicited :termination)))
+          (mevedel-execution-process-start
+           survivor :name "mevedel-ignored-interrupt"
+           :command '("bash" "--noprofile" "--norc" "-c"
+                      "trap '' INT; printf ready; sleep .3; exit 0")
+           :coding 'utf-8-unix)
+          (test-mevedel-execution-process--wait
+           (lambda () (string-match-p
+                       "ready" (mevedel-execution-process-read survivor))))
+          (should (mevedel-execution-process-interrupt survivor))
+          (test-mevedel-execution-process--wait (lambda () ignored))
+          (should (zerop (plist-get ignored :exit-code)))
+          (should-not (plist-get ignored :termination))
+          (mevedel-execution-process-start
+           later :name "mevedel-later-signal"
+           :command '("bash" "--noprofile" "--norc" "-c"
+                      "trap '' INT; printf ready; sleep .3; kill -PIPE $$")
+           :coding 'utf-8-unix)
+          (test-mevedel-execution-process--wait
+           (lambda () (string-match-p
+                       "ready" (mevedel-execution-process-read later))))
+          (should (mevedel-execution-process-interrupt later))
+          (test-mevedel-execution-process--wait (lambda () later-signal))
+          (should (eq 'signaled (plist-get later-signal :termination))))
+      (mevedel-execution-process-release child)
+      (mevedel-execution-process-release other)
+      (mevedel-execution-process-release survivor)
+      (mevedel-execution-process-release later)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-execution-process-start ()
   ,test
   (test)

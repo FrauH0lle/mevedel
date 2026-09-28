@@ -840,7 +840,7 @@ mailboxes are not guest completion records."
          (facts (plist-get completion :facts))
          (outcome (plist-get facts :outcome))
          (termination (plist-get facts :termination))
-         (status (cond ((memq termination '(stopped interrupted signaled
+         (status (cond ((memq termination '(stopped interrupted
                                           cancelled owner-stopped)) "cancelled")
                        ((memq outcome '(success no-match different false))
                         "completed")
@@ -854,7 +854,8 @@ mailboxes are not guest completion records."
              (substring (secure-hash 'sha256 (concat owner "\0" id)) 0 24))
      "execution" :revision 0 :identity-fixed t :status status
      :execution (list :owner owner :id id :command command
-                      :exitCode (plist-get facts :exit-code)))))
+                      :exitCode (unless (memq termination '(signaled interrupted))
+                                  (plist-get facts :exit-code))))))
 
 (defun mevedel-collaboration--canonical-records
     (data-buffer &optional completion-buffer completions)

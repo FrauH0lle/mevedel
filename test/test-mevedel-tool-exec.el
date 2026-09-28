@@ -1642,6 +1642,29 @@ the execution boundary owns the session's single unavailable warning"
              '(:state completed :termination stopped :outcome failure))
             :header)))
   (should (string-match-p
+           "signaled"
+           (plist-get
+            (mevedel-tool-exec--render-bash
+             "Bash" '(:command "sleep 10") ""
+             '(:state completed :termination signaled :exit-code 13
+                      :outcome failure))
+            :header)))
+  (let ((metadata (mevedel-tool-exec-format-execution-metadata
+                   '(:state completed :termination signaled :exit-code 13
+                            :outcome failure))))
+    (should (string-match-p "signal 13" metadata))
+    (should-not (string-match-p "exit 13" metadata)))
+  (let ((metadata (mevedel-tool-exec-format-execution-metadata
+                   '(:state completed :termination interrupted :exit-code 2
+                            :outcome failure))))
+    (should (string-match-p "signal 2" metadata))
+    (should-not (string-match-p "exit 2" metadata)))
+  (let ((metadata (mevedel-tool-exec-format-execution-metadata
+                   '(:state completed :termination stopped :exit-code 15
+                            :outcome failure))))
+    (should-not (string-match-p "exit 15" metadata))
+    (should-not (string-match-p "signal 15" metadata)))
+  (should (string-match-p
            "lost execution"
            (plist-get
             (mevedel-tool-exec--render-bash

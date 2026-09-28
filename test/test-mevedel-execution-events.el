@@ -618,7 +618,7 @@
               (should (eq 'running
                           (plist-get (plist-get pending :facts) :state)))
               (should (= 2 (plist-get (plist-get final :facts) :exit-code)))
-              (should (eq 'signaled
+              (should (eq 'interrupted
                           (plist-get (plist-get final :facts) :termination)))
               (should (eq 'completed
                           (plist-get (plist-get final :facts) :state)))
