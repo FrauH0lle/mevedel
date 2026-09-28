@@ -210,6 +210,24 @@
                                :result "Error: invalid handle"
                                :render-data (:status error)) "control")
                             :status)))
+  :doc "accepted input retains a completed guest status despite failed Bash exit"
+  (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_ (mevedel-tool-register
+             (mevedel-tool--create :name "WriteStdin" :category "mevedel"
+                                  :renderer #'mevedel-tool-exec--render-bash)))
+         (record
+          (mevedel-collaboration--tool-record
+           '(:name "WriteStdin" :args (:execution_id "exec-1" :chars "answer\n")
+             :result "failed command"
+             :render-data (:execution-control input :control-succeeded-p t
+                           :status error :state completed :termination exited
+                           :outcome failure :exit-code 2 :execution-id "exec-1"))
+           "input")))
+    (should (equal "completed" (plist-get record :status)))
+    (should (equal "completed"
+                   (plist-get (plist-get record :presentation) :status)))
+    (should (equal "WriteStdin: sent input"
+                   (plist-get (plist-get record :presentation) :header))))
   (should (mevedel-collaboration--tool-record
            '(:name "WriteStdin" :args (:chars "hi") :result "sent") "input")))
 
@@ -267,7 +285,41 @@
                    (plist-get (aref children 0) :body)))
     (should (equal "failed" (plist-get (aref children 0) :status)))
     (should (equal "failed" (plist-get (aref children 1) :status)))
-    (should (equal "ToolCall" (plist-get record :name)))))
+    (should (equal "ToolCall" (plist-get record :name))))
+  :doc "deeper direct polls vanish but failed controls remain inspectable"
+  (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_ (mevedel-tool-register
+             (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                  :renderer #'mevedel-tool-ptc--render)))
+         (parsed '(:name "ToolCall" :result "unaltered provider result"
+                   :render-data
+                   (:kind ptc :outcome completed
+                    :calls ((:id "outer/1" :tool "ToolCall" :status success
+                             :result "polled output"
+                             :render-data
+                             (:kind ptc :outcome completed :direct-tool "WriteStdin"
+                              :calls ((:id "outer/1/1" :tool "WriteStdin"
+                                       :args (:execution_id "exec-1" :chars "")
+                                       :status success :result "polled output"
+                                       :render-data (:control-succeeded-p t
+                                                     :state completed :outcome failure
+                                                     :status error)))))
+                            (:id "outer/2" :tool "ToolCall" :status error
+                             :result "Error: invalid handle"
+                             :render-data
+                             (:kind ptc :outcome tool-error :direct-tool "WriteStdin"
+                              :calls ((:id "outer/2/1" :tool "WriteStdin"
+                                       :args (:execution_id "missing" :chars "")
+                                       :status error :result "Error: invalid handle"
+                                       :render-data (:status error)))))))))
+         (original (copy-tree parsed))
+         (record (mevedel-collaboration--tool-record parsed "raw"))
+         (children (plist-get (plist-get record :presentation) :children)))
+    (should (equal "unaltered provider result" (plist-get record :result)))
+    (should (= 1 (length children)))
+    (should (equal "failed" (plist-get (aref children 0) :status)))
+    (should (string-match-p "invalid handle" (plist-get (aref children 0) :body)))
+    (should (equal original parsed))))
 
 (mevedel-deftest mevedel-collaboration--direct-tool-poll
   () ,test (test)
@@ -548,7 +600,7 @@
       (delete-file path))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records-archived-bash
-  (:doc "current guest transcript does not duplicate the archived Bash result")
+  (:doc "current guest transcript keeps only an output-free completion breadcrumb")
   (with-temp-buffer
     (delay-mode-hooks (org-mode))
     (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
@@ -580,7 +632,13 @@
         (put-text-property (1+ start) (point) 'gptel '(tool . "poll-1")))
       (should (= 1 (length (mevedel-transcript-audit-records
                             (buffer-string) 'execution-completion))))
-      (should-not (mevedel-collaboration--canonical-records (current-buffer))))))
+      (let* ((records (mevedel-collaboration--canonical-records (current-buffer)))
+             (record (car records))
+             (wire (json-encode (mevedel-collaboration--json-record record))))
+        (should (= 1 (length records)))
+        (should (equal "execution" (plist-get record :kind)))
+        (should (equal "failed" (plist-get record :status)))
+        (should-not (string-match-p "initial output\\|final output" wire))))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records-present-bash
   (:doc "existing Bash row and nested child completions do not become duplicate cards")

@@ -783,7 +783,10 @@ the full command, bounded output and execution details."
                      (if (string-empty-p (or (plist-get args :chars) ""))
                          'poll 'input))
                 (and stop-p 'stop)))
-           (status (plist-get render-data :status))
+           (status (if (and (memq control '(input poll))
+                            (plist-get render-data :control-succeeded-p))
+                       'success
+                     (plist-get render-data :status)))
            (state (plist-get render-data :state))
            (facts (and state
                        (mevedel-tool-exec-format-execution-metadata

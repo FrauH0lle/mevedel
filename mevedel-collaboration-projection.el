@@ -7,28 +7,42 @@
 
 ;;; Code:
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-record-conversation-buffer
+                  "mevedel-agent-control" (record))
+
 ;; `mevedel-collaboration-artifact-projection'
 (declare-function mevedel-collaboration--artifact-fields
                   "mevedel-collaboration-artifact-projection" (render-data))
-
-;; `mevedel-execution-transcript'
-(declare-function mevedel-execution-transcript-pending-render-data
-                  "mevedel-execution-transcript" (data-buffer tool-use-id))
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list-user
                   "mevedel-execution" (session))
 
-;; `mevedel-structs'
-(defvar mevedel--session)
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-pending-render-data
+                  "mevedel-execution-transcript" (data-buffer tool-use-id))
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
-(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-lease-owned-p
+                  "mevedel-session-durability" (session))
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-read
+                  "mevedel-session-publication" (session-dir &optional head names))
+(declare-function mevedel-session-publication-uncommitted-artifact
+                  "mevedel-session-publication" (session logical))
+
+;; `mevedel-structs'
+(defvar mevedel--session)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
@@ -41,12 +55,16 @@
                   (result-string &optional session expected-tool-use-id allow-payload-tool-use-id))
 
 ;; `mevedel-transcript'
+(declare-function mevedel-transcript--mailbox-any-block-at-point
+                  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--strip-hook-audit-blocks
                   "mevedel-transcript-audit" (text))
+(declare-function mevedel-transcript-audit-buffer-spans
+                  "mevedel-transcript-audit" (&optional type start end))
 (declare-function mevedel-transcript-audit-guest-prompts
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-buffer-directive-ranges
@@ -54,6 +72,11 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
+
+;; `mevedel-view-audit'
+(declare-function mevedel-view-audit-mailbox-breadcrumb
+                  "mevedel-view-audit" (text sender))
+(autoload 'mevedel-view-audit-mailbox-breadcrumb "mevedel-view-audit")
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--generic-tool-rendering
@@ -74,6 +97,11 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-utilities)
 (require 'mevedel-view-render)
+
+(defvar-local mevedel-collaboration--execution-prior-cache nil
+  "Derived archive identity cache for this live transcript only.
+The source descriptor signature is checked before each use; this is never
+used to authorize a guest result fetch or persisted as execution state.")
 
 (defconst mevedel-collaboration--protocol-version 3)
 (defconst mevedel-collaboration--max-record-text-bytes
@@ -189,7 +217,8 @@ an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :detail :diff
-                       :artifact :size :missing :presentation :shared))
+                       :artifact :size :missing :presentation :shared
+                       :execution))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -620,6 +649,113 @@ the turn always begins before its own attribution block."
         (when-let* ((shared (plist-get (cdr attribution) :shared)))
           (plist-put owner :shared shared))))))
 
+(defun mevedel-collaboration--execution-ids-in-buffer (buffer ids)
+  "Add trusted execution identities in BUFFER to hash table IDS."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (dolist (span (mevedel-transcript-audit-buffer-spans
+                     'execution-breadcrumb))
+        (when-let* ((record (plist-get span :record))
+                    (owner (plist-get record :owner))
+                    (id (plist-get record :execution-id))
+                    ((stringp owner)) ((stringp id)))
+          (puthash (plist-get
+                    (mevedel-collaboration--forwarded-execution-record
+                     record) :id)
+                   t ids)))
+      (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
+        (when (eq (car segment) 'mailbox)
+          (when-let* ((completion
+                       (mevedel-collaboration--forwarded-execution segment))
+                      (owner (plist-get completion :owner))
+                      (id (plist-get completion :execution-id))
+                      ((stringp owner)) ((stringp id)))
+            (puthash (plist-get
+                      (mevedel-collaboration--forwarded-execution-record
+                       completion) :id)
+                     t ids))))))
+  ids)
+
+(defun mevedel-collaboration--execution-archive-signature (session descriptor)
+  "Return source fingerprint for archived DESCRIPTOR in SESSION."
+  (let* ((number (plist-get descriptor :number))
+         (logical (or (plist-get descriptor :logical)
+                      (format "segment-%04d.chat.org" number)))
+         (portable (mevedel-session-codec-portable-authority-p session))
+         (source (if portable
+                     (and (mevedel-session-durability-lease-owned-p session)
+                          (mevedel-session-publication-uncommitted-artifact
+                           session logical))
+                   (plist-get descriptor :path)))
+         (publication (and portable
+                           (or (mevedel-session-publication session)
+                               (mevedel-session-publication-read
+                                (mevedel-session-save-path session)))))
+         (published (and publication
+                         (cdr (assoc logical
+                                     (plist-get publication :artifacts)))))
+         (attributes (and source (file-attributes source 'string))))
+    (list number logical (plist-get descriptor :status)
+          (if source
+              ;; Do not include atime: reading an archive can change it and
+              ;; would immediately invalidate the memo on every publication.
+              (list source
+                    (and attributes
+                         (list (file-attribute-modification-time attributes)
+                               (file-attribute-status-change-time attributes)
+                               (file-attribute-size attributes)
+                               (file-attribute-inode-number attributes))))
+            (and published (plist-get published :sha256))))))
+
+(defun mevedel-collaboration--prior-execution-ids
+    (session live-buffer &optional target-number)
+  "Return execution identities before TARGET-NUMBER in SESSION.
+When TARGET-NUMBER is nil, scan readable history preceding LIVE-BUFFER.
+Unreadable archives do not suppress later source-backed breadcrumbs."
+  (let* ((descriptors
+          (when (and session (buffer-live-p live-buffer))
+            (cl-loop for descriptor in
+                     (mevedel-session-artifacts-transcript-segments
+                      session live-buffer)
+                     until (or (plist-get descriptor :current-p)
+                               (and target-number
+                                    (equal target-number
+                                           (plist-get descriptor :number))))
+                     collect descriptor)))
+         (signature (mapcar (lambda (descriptor)
+                              (mevedel-collaboration--execution-archive-signature
+                               session descriptor))
+                            descriptors))
+         (cache (and (not target-number) (buffer-live-p live-buffer)
+                     (buffer-local-value
+                      'mevedel-collaboration--execution-prior-cache live-buffer)))
+         (prior (if (and cache (eq session (plist-get cache :session))
+                         (equal signature (plist-get cache :signature)))
+                    (plist-get cache :ids)
+                  (let ((ids (make-hash-table :test #'equal))
+                        (read-ok t))
+                    (dolist (descriptor descriptors)
+                      (when (eq (plist-get descriptor :status) 'readable)
+                        (let ((buffer
+                               (condition-case nil
+                                   (mevedel-session-artifacts-read-transcript-segment
+                                    session descriptor)
+                                 (error nil))))
+                          (if (not (buffer-live-p buffer))
+                              (setq read-ok nil)
+                            (unwind-protect
+                                (mevedel-collaboration--execution-ids-in-buffer
+                                 buffer ids)
+                              (kill-buffer buffer))))))
+                    (when (and read-ok (not target-number))
+                      (with-current-buffer live-buffer
+                        (setq mevedel-collaboration--execution-prior-cache
+                              (list :session session :signature signature
+                                    :ids ids))))
+                    ids))))
+    prior))
+
 (defun mevedel-collaboration--session-bash-completions
     (session live-buffer target-number)
   "Return terminal facts after TARGET-NUMBER in SESSION.
@@ -628,6 +764,10 @@ Flag missing or unreadable later segments under :gap so a stale running
 row does not imply success.  This table lives only for one history fetch."
   (let ((completions (make-hash-table :test #'equal))
         (later nil))
+    (puthash :prior-executions
+             (mevedel-collaboration--prior-execution-ids
+              session live-buffer target-number)
+             completions)
     (when (and session (buffer-live-p live-buffer))
       (dolist (descriptor (mevedel-session-artifacts-transcript-segments
                            session live-buffer))
@@ -659,6 +799,49 @@ row does not imply success.  This table lives only for one history fetch."
                       (kill-buffer buffer))))))))))
     completions))
 
+(defun mevedel-collaboration--forwarded-execution (segment)
+  "Return the native completion for EXECUTION mailbox SEGMENT, or nil.
+The structural mailbox parser supplies its bounds; malformed or ordinary
+mailboxes are not guest completion records."
+  (save-excursion
+    (goto-char (cadr segment))
+    (when (search-forward "<" (caddr segment) t)
+      (backward-char)
+      (when-let* ((block (mevedel-transcript--mailbox-any-block-at-point
+                          (caddr segment)))
+                  ((eq (plist-get block :kind) 'agent-message))
+                  (open (buffer-substring-no-properties
+                         (plist-get block :open-start)
+                         (plist-get block :open-end)))
+                  ((string-match-p "\\_<type=\"EXECUTION\"" open)))
+        (mevedel-view-audit-mailbox-breadcrumb
+         (buffer-substring-no-properties
+          (plist-get block :body-start) (plist-get block :body-end))
+         (plist-get block :id))))))
+
+(defun mevedel-collaboration--forwarded-execution-record (completion)
+  "Project trusted COMPLETION as an output-free linked guest breadcrumb."
+  (let* ((owner (plist-get completion :owner))
+         (id (plist-get completion :execution-id))
+         (facts (plist-get completion :facts))
+         (outcome (plist-get facts :outcome))
+         (termination (plist-get facts :termination))
+         (status (cond ((memq termination '(stopped interrupted signaled
+                                          cancelled owner-stopped)) "cancelled")
+                       ((memq outcome '(success no-match different false))
+                        "completed")
+                       ((null outcome) "warning")
+                       (t "failed")))
+         (command (mevedel-collaboration--truncate-bytes
+                   (car (split-string (or (plist-get completion :command)
+                                          (plist-get facts :command) "Bash") "\n")) 200)))
+    (mevedel-collaboration--record
+     (concat "forwarded-execution-"
+             (substring (secure-hash 'sha256 (concat owner "\0" id)) 0 24))
+     "execution" :revision 0 :identity-fixed t :status status
+     :execution (list :owner owner :id id :command command
+                      :exitCode (plist-get facts :exit-code)))))
+
 (defun mevedel-collaboration--canonical-records
     (data-buffer &optional completion-buffer completions)
   "Return allowlisted records reconstructed from DATA-BUFFER.
@@ -672,7 +855,49 @@ segments."
       (let ((ranges (mevedel-collaboration--directive-ranges))
             (segments (mevedel-transcript-segments (point-min) (point-max)))
             (following-render-data (make-hash-table :test #'eql))
+            (breadcrumbs (mevedel-transcript-audit-buffer-spans
+                          'execution-breadcrumb))
+            (forwarded-executions (make-hash-table :test #'equal))
+            (prior-executions (and completions
+                                   (gethash :prior-executions completions)))
+            (prior-ready (and completions t))
             records user-starts (occurrences (make-hash-table :test #'equal)))
+        (cl-labels
+            ((add-execution (completion directive)
+               (when-let* ((owner (plist-get completion :owner))
+                           (id (plist-get completion :execution-id))
+                           ((stringp owner)) ((stringp id))
+                           (record (mevedel-collaboration--forwarded-execution-record
+                                    completion))
+                           (key (plist-get record :id))
+                           ((not (gethash key forwarded-executions)))
+                           (_ (progn
+                                (unless prior-ready
+                                  (setq prior-ready t)
+                                  (when-let* ((session (bound-and-true-p mevedel--session))
+                                            ;; Agent fetch projects only the
+                                            ;; current child, not its archives.
+                                            ((not (and (stringp buffer-file-name)
+                                                       (string-match-p
+                                                        "/agents/.*\\.chat\\.org\\'"
+                                                        buffer-file-name))))
+                                            ((not (cl-some
+                                                   (lambda (entry)
+                                                     (eq data-buffer
+                                                         (mevedel-agent-record-conversation-buffer
+                                                          (cdr entry))))
+                                                   (mevedel-session-agent-registry
+                                                    session)))))
+                                    (setq prior-executions
+                                          (mevedel-collaboration--prior-execution-ids
+                                           session data-buffer))))
+                                t))
+                           ((not (and prior-executions
+                                      (gethash key prior-executions)))))
+                 (puthash key t forwarded-executions)
+                 (when directive
+                   (setq record (plist-put record :directive directive)))
+                 (push record records))))
         ;; On reload gptel classifies the hidden render-data block separately
         ;; from its preceding tool row.  Include it when parsing the row, but
         ;; leave the raw model-visible result and transcript segments intact.
@@ -680,6 +905,13 @@ segments."
           (when (eq (car segment) 'render-data)
             (puthash (cadr segment) (caddr segment) following-render-data)))
         (dolist (segment segments)
+          (while (and breadcrumbs (< (plist-get (car breadcrumbs) :start)
+                                     (cadr segment)))
+            (let* ((span (pop breadcrumbs))
+                   (record (plist-get span :record)))
+              (add-execution record
+                             (mevedel-collaboration--directive-at
+                              ranges (plist-get span :start)))))
           (let ((directive (mevedel-collaboration--directive-at
                             ranges (cadr segment))))
             (cond
@@ -727,6 +959,10 @@ segments."
                            "assistant" :revision 0 :status "failed"
                            :text (mevedel-collaboration--truncate-bytes text 2000))
                           records)))))
+             ((eq (car segment) 'mailbox)
+              (when-let* ((completion (mevedel-collaboration--forwarded-execution
+                                       segment)))
+                (add-execution completion directive)))
              ((eq (car segment) 'tool)
               (let* ((start (cadr segment))
                      (end (caddr segment))
@@ -740,8 +976,12 @@ segments."
                   (when directive
                     (setq record (plist-put record :directive directive)))
                   (push record records)))))))
+        (dolist (span breadcrumbs)
+          (add-execution (plist-get span :record)
+                         (mevedel-collaboration--directive-at
+                          ranges (plist-get span :start))))
         (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))
-        (nreverse records)))))
+        (nreverse records))))))
 
 (defun mevedel-collaboration--tool-records (records)
   "Return the tool records in RECORDS, preserving their order."

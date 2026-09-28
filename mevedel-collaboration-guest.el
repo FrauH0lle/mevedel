@@ -60,6 +60,8 @@
                   "mevedel-collaboration-agent" (room))
 (declare-function mevedel-collaboration--handle-fetch-agent
                   "mevedel-collaboration-agent" (room peer frame))
+(declare-function mevedel-collaboration--handle-execution-result-get
+                  "mevedel-collaboration-agent" (room peer frame))
 
 ;; `mevedel-collaboration-artifact'
 (declare-function mevedel-collaboration--handle-artifact-get
@@ -985,6 +987,8 @@ handling stops the room instead of leaking into the session."
           ("abort" (mevedel-collaboration--handle-abort room peer))
           ("fetch-agent"
            (mevedel-collaboration--handle-fetch-agent room peer frame))
+          ("execution-result-get"
+           (mevedel-collaboration--handle-execution-result-get room peer frame))
           ("artifact-get"
            (mevedel-collaboration--handle-artifact-get room peer frame))
           ("history-get"
