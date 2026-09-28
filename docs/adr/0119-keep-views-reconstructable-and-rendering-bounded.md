@@ -110,7 +110,12 @@ source buffer position constant; that path checks the displayed index instead
 of taking the unscrolled fast path. Replacement display strings map all their
 characters to one buffer span, so looking up buffer positions could leave a
 60-Hz timer running after a long label's bounded color prefix was offscreen;
-the hscrolled check now reads the visible display-string index instead. Since
+the hscrolled check now reads the visible display-string index instead. It
+compares that index with the *changing* color bound recorded once while
+preparing the bank, not merely the face-bearing prefix: shimmer and bounce
+leave some colored characters unchanged throughout the cycle. An event-driven
+theme or display-frame repaint instead considers any visible part of the
+colored label; it does not schedule motion for a constant-colored tail. Since
 `window-scroll-functions` does not run for horizontal scrolling, a scoped
 `set-window-hscroll` observer rearms explicitly scrolled views; an internal
 automatic pan does not call that primitive. Explicit pixel scrolling has a

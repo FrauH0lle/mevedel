@@ -151,7 +151,9 @@ leave that entire final cluster unanimated."
          (end (mevedel-view-animation--prefix-end label))
          (suffix (substring label end))
          (head (substring label 0 end))
-         (frames (make-vector mevedel-view-animation--frame-count nil)))
+         (frames (make-vector mevedel-view-animation--frame-count nil))
+         (first-shades (make-vector end nil))
+         (changing-end 0))
     (when palette
       (dotimes (tick mevedel-view-animation--frame-count)
         (let* ((seconds (/ tick 60.0))
@@ -167,9 +169,20 @@ leave that entire final cluster unanimated."
                         (max 0.0 (- 1 (/ (abs (- i center)) 2.5)))))
                    (shade (aref palette
                                 (min 63 (max 0 (round (* 63 intensity)))))))
+              (if (zerop tick)
+                  (aset first-shades i shade)
+                (unless (equal shade (aref first-shades i))
+                  (setq changing-end (max changing-end (1+ i)))))
               (put-text-property i (1+ i) 'face
                                  `(:foreground ,shade) sample)))
           (aset frames tick sample)))
+      ;; A colored prefix is not necessarily a moving prefix.  In particular,
+      ;; the right-hand shades of shimmer and bounce never change.  Record the
+      ;; actual bound once per prepared bank, not by comparing frames on ticks.
+      (when (> end 0)
+        (dotimes (tick mevedel-view-animation--frame-count)
+          (put-text-property 0 1 'mevedel-view-animation--changing-end
+                             changing-end (aref frames tick))))
       (list frames suffix colors))))
 
 (defun mevedel-view-animation--remember-view-bank (key bank)

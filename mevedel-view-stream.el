@@ -626,12 +626,32 @@ more than one distinct frame can display the buffer."
           (unless found (setq found (window-frame window))))))
     (or found :multiple)))
 
-(defun mevedel-view--animation-span-in-window-p (start end window)
+(defun mevedel-view--animation-paint-row-visible-p (start end window display)
+  "Return non-nil if WINDOW shows a row of DISPLAY from START..END.
+Only use this on theme/frame/visibility events: source positions of a
+replacement string can resolve to a fringe even when its scrolled text
+is visible.  Do not scan window rows in decorative frame callbacks."
+  (let ((height (window-body-height window t))
+        (step (max 1 (frame-char-height (window-frame window)))))
+    (cl-labels ((shown (y)
+                  (when-let* ((position (posn-at-x-y 0 y window))
+                              ((null (posn-area position)))
+                              (point (posn-point position))
+                              ((and (integerp point)
+                                    (<= start point) (< point end)))
+                              (index (cdr-safe (posn-string position))))
+                    (and (integerp index) (< index (length display))))))
+      (or (cl-loop for y from 0 below height by step
+                   thereis (shown y))
+          (and (> height 0) (shown (1- height)))))))
+
+(defun mevedel-view--animation-span-in-window-p (start end window &optional paint)
   "Return non-nil if the animated span START..END appears in WINDOW.
 Replacement display strings map every character back to their source span,
 so buffer positions alone cannot reveal which animated characters survive
 horizontal scrolling.  Leading glyphs use a cheap unscrolled boundary path
-unless the window is vertically pixel-scrolled."
+unless the window is vertically pixel-scrolled.  When PAINT is non-nil,
+check the entire displayed label instead, for event-driven theme repaints."
   (and (< start end)
        (<= (window-start window) start)
        (< start (or (window-end window) (point-min)))
@@ -651,7 +671,13 @@ unless the window is vertically pixel-scrolled."
            ;; end can instead extend beyond the unscrolled right edge.
            (or (and (zerop (window-hscroll window))
                     (zerop (window-vscroll window t))
-                    (or (not (eq mevedel-view-spinner-style 'ellipsis))
+                    (or paint
+                        (not (eql (get-text-property
+                                   0 'mevedel-view-animation--changing-end
+                                   display)
+                                  0)))
+                    (or paint
+                        (not (eq mevedel-view-spinner-style 'ellipsis))
                         (get-text-property
                          start 'mevedel-view-inline-spinner-frame)))
                (and (zerop (window-hscroll window))
@@ -693,18 +719,22 @@ unless the window is vertically pixel-scrolled."
                              (max 0 (- (length display) 3))
                            0))
                         (animated-end
-                         (cond (tool (length display))
+                         (cond (paint (length display))
+                               (tool (length display))
                                ((memq style '(shimmer breathe bounce))
                                 (if (get-text-property 0 'face display)
-                                    ;; A combining mark crossing the limit
-                                    ;; leaves the final cluster uncolored.
-                                    (let ((limit (min (length display)
-                                                      mevedel-view-animation--prefix-limit)))
-                                      (while (and (> limit 0)
-                                                  (not (get-text-property
-                                                        (1- limit) 'face display)))
-                                        (setq limit (1- limit)))
-                                      limit)
+                                    (or (get-text-property
+                                         0 'mevedel-view-animation--changing-end
+                                         display)
+                                        ;; A combining mark crossing the limit
+                                        ;; leaves the final cluster uncolored.
+                                        (let ((limit (min (length display)
+                                                          mevedel-view-animation--prefix-limit)))
+                                          (while (and (> limit 0)
+                                                      (not (get-text-property
+                                                            (1- limit) 'face display)))
+                                            (setq limit (1- limit)))
+                                          limit))
                                   2))
                                ((eq style 'dots) 5)
                                ((memq style '(braille ascii)) 2)
@@ -722,7 +752,9 @@ unless the window is vertically pixel-scrolled."
                                        (>= right-point end))
                                   (and right-string
                                        (>= (cdr right-string)
-                                           animated-start)))))))))))))
+                                           animated-start))))))))
+               (and paint (mevedel-view--animation-paint-row-visible-p
+                           start end window display)))))))
 
 (defun mevedel-view--animation-window-attended-p (window)
   "Return non-nil when WINDOW can show animation to an attentive reader.
@@ -736,9 +768,10 @@ to the same window as the target's on-screen position."
          (or (not (display-graphic-p top))
              (frame-focus-state top)))))
 
-(defun mevedel-view--animation-target-visible-p (target property &optional any-value)
+(defun mevedel-view--animation-target-visible-p (target property &optional any-value paint)
   "Return non-nil when TARGET is a visible span marked PROPERTY.
-If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
+If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t.
+PAINT also considers visible constant-colored characters for theme repaints."
   (when-let* ((start (car-safe target))
               ((eq (marker-buffer start) (current-buffer)))
               (pos (marker-position start))
@@ -748,7 +781,7 @@ If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
     (cl-some (lambda (window)
                (and (mevedel-view--animation-window-attended-p window)
                     (mevedel-view--animation-span-in-window-p
-                     pos (marker-position (cdr target)) window)))
+                     pos (marker-position (cdr target)) window paint)))
              (get-buffer-window-list (current-buffer) nil t))))
 
 (defun mevedel-view--spinner-metadata-visible-p ()
@@ -757,19 +790,20 @@ If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
    mevedel-view--spinner-metadata-target
    'mevedel-view-spinner-status t))
 
-(defun mevedel-view--animation-target-frame (target &optional all)
+(defun mevedel-view--animation-target-frame (target &optional all paint)
   "Return TARGET's visible frame, or `:multiple' across display frames.
 Color display properties cannot use two palettes simultaneously, so the
 caller uses a glyph fallback when more than one frame shows the span.
 When ALL is non-nil, return the frames actually showing TARGET instead;
 glyph styles can check their display support without inspecting unrelated
-windows."
+windows.  PAINT counts a visible constant-colored tail for theme refresh."
   (let ((position (marker-position (car target)))
         (end (marker-position (cdr target)))
         found frames)
     (dolist (window (get-buffer-window-list (current-buffer) nil t))
       (when (and (eq (frame-visible-p (window-frame window)) t)
-                 (mevedel-view--animation-span-in-window-p position end window))
+                 (mevedel-view--animation-span-in-window-p
+                  position end window paint))
         (when all (cl-pushnew (window-frame window) frames))
         (if (and found (not (eq found (window-frame window))))
             (setq found :multiple)
@@ -898,13 +932,15 @@ neither the status row nor the composer is rebuilt."
                  (not (eq mevedel-view-spinner-style 'static)))
         (let ((target mevedel-view--spinner-label-target))
           (if (mevedel-view--animation-target-visible-p
-               target 'mevedel-view-spinner-frame)
+               target 'mevedel-view-spinner-frame nil
+               (memq mevedel-view-spinner-style '(shimmer breathe bounce)))
               (let* ((start (marker-position (car target)))
                      (end (marker-position (cdr target)))
                      (style mevedel-view-spinner-style)
                      (label (buffer-substring-no-properties start end))
                      (display-frame (mevedel-view--animation-target-frame
-                                     target (eq style 'dots)))
+                                     target (eq style 'dots)
+                                     (memq style '(shimmer breathe bounce))))
                      (frame (mevedel-view-animation-frame
                              style label seconds 'mevedel-view-spinner
                              display-frame)))
@@ -952,14 +988,21 @@ rechecked without changing the displayed animation phase."
   ;; timer to notice it; defer the repaint while the label is hidden.
   (when (and mevedel-view--spinner-status
              (memq mevedel-view-spinner-style
-                   '(shimmer breathe bounce braille dots))
-             (mevedel-view--animation-target-visible-p
-              mevedel-view--spinner-label-target 'mevedel-view-spinner-frame)
-             (not (equal mevedel-view--spinner-sample-frame
-                         (mevedel-view--animation-target-frame
-                          mevedel-view--spinner-label-target
-                          (eq mevedel-view-spinner-style 'dots)))))
-    (setq mevedel-view--spinner-theme-stale-p t))
+                   '(shimmer breathe bounce braille dots)))
+    (let* ((target mevedel-view--spinner-label-target)
+           (moving (mevedel-view--animation-target-visible-p
+                    target 'mevedel-view-spinner-frame))
+           (paint (and (not moving) resumed
+                       (memq mevedel-view-spinner-style
+                             '(shimmer breathe bounce))
+                       (mevedel-view--animation-target-visible-p
+                        target 'mevedel-view-spinner-frame nil t))))
+      (when (and (or moving paint)
+                 (not (equal mevedel-view--spinner-sample-frame
+                             (mevedel-view--animation-target-frame
+                              target (eq mevedel-view-spinner-style 'dots)
+                              paint))))
+        (setq mevedel-view--spinner-theme-stale-p t))))
   (let ((frozen-glyphs
          (and resumed
               (zerop (mevedel-view-power-framerate
@@ -975,7 +1018,11 @@ rechecked without changing the displayed animation phase."
                (or (eq mevedel-view-spinner-style 'dots)
                    (eq mevedel-view-tool-spinner-style 'dots)))
       (mevedel-view-animation-reset-glyph-support))
-    (when (or mevedel-view--spinner-theme-stale-p frozen-glyphs)
+    ;; A hidden color label can remain stale while tools keep animating.  A
+    ;; theme event or visibility rearm probes its rows once, not on each tool
+    ;; frame; both enter this scheduler with RESUMED non-nil.
+    (when (or (and resumed mevedel-view--spinner-theme-stale-p)
+              frozen-glyphs)
       (mevedel-view--refresh-themed-status frozen-glyphs)))
   (when (and (mevedel-view--spinner-active-p)
              (not mevedel-view--spinner-phase-start))
@@ -1107,7 +1154,7 @@ hidden label retains its pending refresh until visibility rearms its view."
                             (not (eq mevedel-view-tool-spinner-style 'static)))))
           (setq mevedel-view--spinner-theme-stale-p t)
           (condition-case nil
-              (mevedel-view--start-spinner-timer)
+              (mevedel-view--start-spinner-timer t)
             (error nil)))))))
 
 ;; Animation cache invalidation is installed first by the animation module.
