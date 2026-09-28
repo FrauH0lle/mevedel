@@ -495,15 +495,56 @@ explicitly decides and releases its lease."
                        (equal session-id (plist-get winner :session-id))
                        winner))))))))))
 
+(defvar mevedel-session-transfer--quiet-mailboxes
+  (make-hash-table :test #'eq :weakness 'key)
+  "Session to the request mailbox stamp its last empty owner poll saw.")
+
+(defun mevedel-session-transfer--mailbox-stamp (session)
+  "Return a native stamp of local SESSION's request mailbox, or nil.
+A requester adds a file to the flat mailbox, which changes its modification
+time, so an unchanged stamp proves no request arrived.  Remote sessions
+return nil: a remote stat costs the round trip it would save."
+  (when-let* ((session-dir (mevedel-session-save-path session))
+              ((not (file-remote-p session-dir))))
+    (let ((attributes (file-attributes
+                       (file-name-concat
+                        (mevedel-session-durability--lease-path session-dir)
+                        "requests"))))
+      (if attributes
+          (list (file-attribute-modification-time attributes)
+                (file-attribute-inode-number attributes)
+                (file-attribute-size attributes))
+        'absent))))
+
 (defun mevedel-session-transfer-poll (session)
   "Poll SESSION's immutable control-transfer request and decision records.
 
 The owner may call this from a UI timer or command loop.  An unanswered
 request is granted once `mevedel-session-transfer-prompt-timeout' has passed
 since this owner could first see it, but grant does not release the lease or
-transfer authority."
+transfer authority.
+
+A local owner with no transfer in flight skips the target program while its
+request mailbox is unchanged since a poll that found no request: that program
+spawned a shell every few seconds per view, and lease renewal, not this
+poll, detects a lost lease."
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
+  (let ((stamp (mevedel-session-transfer--mailbox-stamp session))
+        (state (plist-get (mevedel-session-control-transfer session) :state)))
+    (if (and stamp
+             (not (memq state '(requested quiescing)))
+             (equal stamp (gethash session mevedel-session-transfer--quiet-mailboxes)))
+        (mevedel-session-control-transfer session)
+      (prog1 (mevedel-session-transfer--poll-target session)
+        (if (and stamp
+                 (not (memq (plist-get (mevedel-session-control-transfer session) :state)
+                            '(requested quiescing))))
+            (puthash session stamp mevedel-session-transfer--quiet-mailboxes)
+          (remhash session mevedel-session-transfer--quiet-mailboxes))))))
+
+(defun mevedel-session-transfer--poll-target (session)
+  "Poll SESSION's transfer records on its target, as the owner poll does."
   (mevedel-session-durability-with-transaction
     (let* ((session-dir (mevedel-session-save-path session))
            (session-id (mevedel-session-session-id session))
