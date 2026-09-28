@@ -36,6 +36,7 @@
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
@@ -1229,6 +1230,72 @@
     (should (= 1 (mevedel-tool-render-data-reconcile-lost-executions
                   (current-buffer))))
     (should (string-match-p ":state lost" (buffer-string)))))
+
+(mevedel-deftest mevedel-tool-render-data-reconcile-nested-lost-executions ()
+  ,test
+  (test)
+  :doc "resume repairs deep ToolCall Bash children without changing siblings"
+  (with-temp-buffer
+    (insert (propertize "outer result" 'gptel '(tool . "outer")))
+    (insert
+     (propertize
+      (mevedel-tool-render-data-format
+       '(:kind ptc
+         :calls ((:id "outer/1" :tool "ToolCall" :status success
+                  :render-data
+                  (:kind ptc
+                   :calls ((:id "outer/1/1" :tool "Bash" :status success
+                            :render-data (:execution-id "exec-lost"
+                                          :state running :live-execution-p t))
+                           (:id "outer/1/2" :tool "Bash" :status success
+                            :render-data (:execution-id "exec-successor"
+                                          :state running :live-execution-p t)))))
+                 (:id "outer/2" :tool "Read" :status success
+                  :render-data (:state running))))
+       "outer")
+      'gptel '(tool . "outer")))
+    (should (= 2 (mevedel-tool-render-data-reconcile-lost-executions
+                  (current-buffer) '("exec-successor"))))
+    (let* ((outer (mevedel-tool-render-data-for-tool (current-buffer) "outer"))
+           (children (plist-get (plist-get (car (plist-get outer :calls))
+                                           :render-data)
+                                :calls))
+           (lost (plist-get (car children) :render-data))
+           (successor (plist-get (cadr children) :render-data)))
+      (should (eq 'lost (plist-get lost :state)))
+      (should (eq 'lost (plist-get lost :termination)))
+      (should-not (plist-get lost :live-execution-p))
+      (should (string-match-p
+               "lost execution"
+               (plist-get (mevedel-tool-exec--render-bash
+                           "Bash" '(:command "sleep 60") "initial" lost)
+                          :header)))
+      (should (eq 'archived (plist-get successor :state)))
+      (should (eq 'compacted (plist-get successor :termination)))
+      (should-not (plist-get successor :live-execution-p))
+      (should (equal '(:state running)
+                     (plist-get (cadr (plist-get outer :calls))
+                                :render-data)))))
+  :doc "resume repairs nested Bash retained in a transcript archive audit"
+  (with-temp-buffer
+    (insert
+     (mevedel--format-hook-audit-record
+      '(:type execution-archive :tool-use-id "outer"
+              :render-data
+              (:kind ptc
+               :calls ((:id "outer/1" :tool "Bash" :status success
+                        :render-data (:execution-id "archived-child"
+                                      :state running :live-execution-p t)))))))
+    (should (= 1 (mevedel-tool-render-data-reconcile-lost-executions
+                  (current-buffer))))
+    (should-not (mevedel-transcript-audit-records
+                 (buffer-string) 'execution-archive))
+    (let* ((record (car (mevedel-transcript-audit-records
+                         (buffer-string) 'execution-completion)))
+           (child (car (plist-get (plist-get record :render-data) :calls)))
+           (data (plist-get child :render-data)))
+      (should (eq 'lost (plist-get data :state)))
+      (should-not (plist-get data :live-execution-p)))))
 
 (provide 'test-mevedel-tool-render-data)
 ;;; test-mevedel-tool-render-data.el ends here
