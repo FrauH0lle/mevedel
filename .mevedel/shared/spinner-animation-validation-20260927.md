@@ -530,3 +530,38 @@ Eask checks):
   both extra tests passed after the source settled, in the clean focused roster
   and final full run. The earlier run does not represent the final source
   (`.scratch/spinner-face-lifecycle-full-suite/`).
+
+Cross-frame frozen-label follow-up, 2026-09-28 (source: Goal completion
+verifier `/root/verify_13`, independent graphical rerun and code review,
+current Eask checks):
+
+- Completion verification exposed a paused zero-fps shimmer indicator that
+  retained frame A's palette after its view moved to frame B; in the probe the
+  old foreground equaled B's background. The view stream now remembers the
+  frame context of its rendered request label. A changed attended target frame
+  repaints the existing frozen/active phase without clearing reusable banks or
+  creating a timer; hidden targets defer until resumed. Semantic replacement
+  records its initial context, and request cleanup resets it. The regression
+  checks frame switch, redundant rearm, hidden deferral, phase, timer, point,
+  undo, and modification state.
+- A fresh graphical production-view replay of the original failure returned
+  `VERDICT: PASS`: A->B changed the shade to B's palette; A+B chose the
+  phase-correct portable ASCII fallback; B-only restored B's shade; five
+  redundant resumes and a hidden interval made no extra display writes; and
+  revealing A restored its shade without timers or changed phase, selection,
+  draft, undo, or modified state (`artifact://executions/execution-EyanYT.log`).
+  The compositor reported unfocused frames, so the verifier controlled only
+  `frame-focus-state` to establish attention. The earlier separate actual-focus
+  transfer probe above remains the genuine focus-event check. Independent
+  read-only review returned `VERDICT: PASS` on the source and regression.
+- After Eask cleanup, the named eight-file view roster plus power, chat,
+  hooks, and integrity tests passed **1080/1081 expected, zero unexpected, one
+  optional skip** (`.scratch/spinner-frame-final-roster.log`). All **210 files**
+  compiled without warning matches (`.scratch/spinner-frame-final-compile.log`);
+  `git diff --check` passed. The final four-worker full suite discovered
+  **8750 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-frame-final-full-suite/summary.json`,
+  `.scratch/spinner-frame-final-full-run.log`). The new frame-refresh test
+  passed. All eight failures exactly match the recurring unrelated gptel,
+  preset, tool-injection, skills layout, and concurrent plan-handoff cases
+  recorded above; the full suite is **not green**.

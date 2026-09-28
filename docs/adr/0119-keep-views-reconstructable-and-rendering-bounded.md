@@ -91,7 +91,10 @@ cannot borrow attention from another frame where the target is offscreen.
 The transcript's separate buffer-wide attention gate remains unchanged.
 A theme change repaints visible color labels at their displayed or frozen
 phase, even when paused metadata and zero fps remove timers; hidden labels
-wait until visible again to repaint. Horizontal visibility checks the
+wait until visible again to repaint. A move between display frames likewise
+repaints the existing sample when the target is attended, using the destination
+frame's prepared bank or a portable multi-frame fallback; no timer or global
+cache invalidation is needed. Horizontal visibility checks the
 bounded animated span only in hscrolled windows, leaving ordinary callbacks
 on the cheap window-boundary path. Since
 `window-scroll-functions` does not run for horizontal scrolling, a scoped

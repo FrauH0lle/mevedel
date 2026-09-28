@@ -5137,6 +5137,85 @@
               (should (= frozen mevedel-view--spinner-frozen-seconds))
               (should-not mevedel-view--spinner-timer))))))))
 
+(mevedel-deftest mevedel-view-animation-frame-refreshes-frozen-status
+  (:doc "A paused zero-fps label changes palettes when its display frame changes.")
+  (let ((display-frame :first))
+    (cl-letf (((symbol-function 'mevedel-view--animation-buffer-frame)
+               (lambda () display-frame))
+              ((symbol-function 'mevedel-view--animation-target-frame)
+               (lambda (&rest _) display-frame))
+              ((symbol-function 'mevedel-view-animation-color-available-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-view-animation-frame)
+               (lambda (_style label _seconds _face frame)
+                 (propertize label 'face
+                             (list :foreground
+                                   (if (eq frame :first)
+                                       "#ff0000" "#00ff00"))))))
+      (mevedel-view-stream-test--with-buffers
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :started-at (current-time)))
+          (mevedel-request-set-active-work-paused
+           mevedel--current-request t))
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-spinner-power-policy 'save)
+                (mevedel-view-spinner-battery-framerate 0))
+            (mevedel-view--start-spinner "Working...")
+            (let* ((start (marker-position
+                           (car mevedel-view--spinner-label-target)))
+                   (before (get-text-property start 'display))
+                   (phase mevedel-view--spinner-phase-start)
+                   (frozen mevedel-view--spinner-frozen-seconds)
+                   (render-state mevedel-view--spinner-rendered-state)
+                   (modified (buffer-modified-p))
+                   (undo buffer-undo-list)
+                   (here (point)))
+              (should (eq mevedel-view--spinner-sample-frame :first))
+              (should-not mevedel-view--spinner-timer)
+              (setq display-frame :second)
+              (mevedel-view--resume-on-window-change (selected-window))
+              (should-not (equal-including-properties
+                           before (get-text-property start 'display)))
+              (should (equal (plist-get
+                              (get-text-property 0 'face
+                                                 (get-text-property start 'display))
+                              :foreground)
+                             "#00ff00"))
+              (should (eq mevedel-view--spinner-sample-frame :second))
+              (should-not mevedel-view--spinner-theme-stale-p)
+              (should-not mevedel-view--spinner-timer)
+              (should (= phase mevedel-view--spinner-phase-start))
+              (should (= frozen mevedel-view--spinner-frozen-seconds))
+              (should (equal render-state mevedel-view--spinner-rendered-state))
+              (should (eq modified (buffer-modified-p)))
+              (should (eq undo buffer-undo-list))
+              (should (= here (point)))
+              (setq before (get-text-property start 'display))
+              (mevedel-view--resume-on-window-change (selected-window))
+              (should (equal-including-properties
+                       before (get-text-property start 'display)))
+              (should-not mevedel-view--spinner-timer)
+              ;; The old sample must stay untouched while its window is
+              ;; hidden; returning to an attended frame repairs it.
+              (set-window-buffer (selected-window) data-buf)
+              (setq display-frame :first)
+              (mevedel-view--start-spinner-timer)
+              (should (eq mevedel-view--spinner-sample-frame :second))
+              (should (equal-including-properties
+                       before (get-text-property start 'display)))
+              (set-window-buffer (selected-window) view-buf)
+              (mevedel-view--resume-on-window-change (selected-window))
+              (should (eq mevedel-view--spinner-sample-frame :first))
+              (should (equal-including-properties
+                       (get-text-property start 'display)
+                       (propertize "Waiting for input" 'face
+                                   '(:foreground "#ff0000"))))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (should (= frozen mevedel-view--spinner-frozen-seconds))
+              (should-not mevedel-view--spinner-timer))))))))
+
 (mevedel-deftest mevedel-view-animation-face-refreshes-frozen-status
   (:doc "Customize and direct face edits repaint paused color without a timer.")
   (let ((mevedel-view-animation--cache nil)

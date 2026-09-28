@@ -174,6 +174,10 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-theme-stale-p nil
   "Non-nil when a theme change has invalidated the displayed color sample.")
 
+(defvar-local mevedel-view--spinner-sample-frame nil
+  "Display frame used for the request label's last color sample.
+The value `:multiple' means the portable multi-frame fallback was used.")
+
 (defvar-local mevedel-view--spinner-rendered-tool-style nil
   "Style of the current pending-tool indicator fragments.")
 
@@ -362,14 +366,16 @@ the view has already inserted the in-flight markers."
   (mevedel-view-zone-clear 'progress)
   (setq mevedel-view--spinner-rendered-state nil
         mevedel-view--spinner-label-target nil
-        mevedel-view--spinner-metadata-target nil))
+        mevedel-view--spinner-metadata-target nil
+        mevedel-view--spinner-sample-frame nil))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
   (mevedel-view-zone-forget 'progress)
   (setq mevedel-view--spinner-rendered-state nil
         mevedel-view--spinner-label-target nil
-        mevedel-view--spinner-metadata-target nil))
+        mevedel-view--spinner-metadata-target nil
+        mevedel-view--spinner-sample-frame nil))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.
@@ -506,7 +512,8 @@ FACE defaults to `mevedel-view-spinner'."
 (defun mevedel-view--capture-request-animation-target ()
   "Remember the label and metadata spans after a semantic progress render."
   (setq mevedel-view--spinner-label-target nil
-        mevedel-view--spinner-metadata-target nil)
+        mevedel-view--spinner-metadata-target nil
+        mevedel-view--spinner-sample-frame nil)
   (when-let* ((region (mevedel-view-zone-region 'progress))
               (pos (text-property-any (overlay-start region)
                                       (overlay-end region)
@@ -517,7 +524,9 @@ FACE defaults to `mevedel-view-spinner'."
                          (overlay-end region)))
           (metadata-end (1- (overlay-end region))))
       (setq mevedel-view--spinner-label-target
-            (cons (copy-marker pos) (copy-marker label-end t)))
+            (cons (copy-marker pos) (copy-marker label-end t))
+            mevedel-view--spinner-sample-frame
+            (mevedel-view--animation-buffer-frame))
       ;; The fragment ends with a newline.  Its suffix can remain visible
       ;; after horizontal scrolling hides the decorative label.
       (when (< label-end metadata-end)
@@ -742,10 +751,10 @@ untouched."
            (style mevedel-view-spinner-style)
            (seconds (mevedel-view--animation-display-seconds))
            (label (buffer-substring-no-properties start end))
+           (display-frame (mevedel-view--animation-target-frame
+                           target (eq style 'dots)))
            (frame (mevedel-view-animation-frame
-                   style label seconds 'mevedel-view-spinner
-                   (mevedel-view--animation-target-frame
-                    target (eq style 'dots)))))
+                   style label seconds 'mevedel-view-spinner display-frame)))
       (unless (equal-including-properties
                frame (get-text-property start 'display))
         (let ((inhibit-read-only t)
@@ -753,10 +762,22 @@ untouched."
           (with-silent-modifications
             (put-text-property start end 'display frame))))
       (setq mevedel-view--spinner-last-sample-seconds seconds
+            mevedel-view--spinner-sample-frame display-frame
             mevedel-view--spinner-theme-stale-p nil))))
 
 (defun mevedel-view--start-spinner-timer ()
   "Start one view timer at the next needed visual or metadata cadence."
+  ;; A shared display property cannot carry separate palettes for two frames.
+  ;; Repaint on a frame move even when this view has no decorative or elapsed
+  ;; timer to notice it; defer the repaint while the label is hidden.
+  (when (and mevedel-view--spinner-status
+             (memq mevedel-view-spinner-style '(shimmer breathe bounce))
+             (mevedel-view--animation-target-visible-p
+              mevedel-view--spinner-label-target 'mevedel-view-spinner-frame)
+             (not (eq mevedel-view--spinner-sample-frame
+                      (mevedel-view--animation-target-frame
+                       mevedel-view--spinner-label-target))))
+    (setq mevedel-view--spinner-theme-stale-p t))
   (when mevedel-view--spinner-theme-stale-p
     (mevedel-view--refresh-themed-status))
   (when (and (mevedel-view--spinner-active-p)
@@ -978,6 +999,8 @@ animation or elapsed timer remains to notice the new colors."
                               style label seconds 'mevedel-view-spinner
                               display-frame)))
                   (setq mevedel-view--spinner-last-sample-seconds seconds)
+                  (when (memq style '(shimmer breathe bounce))
+                    (setq mevedel-view--spinner-sample-frame display-frame))
                   (unless (equal-including-properties
                            frame (get-text-property start 'display))
                     (put-text-property start end 'display frame))))))
@@ -1113,6 +1136,7 @@ Return non-nil when the status was restored."
            mevedel-view--spinner-phase-start nil
            mevedel-view--spinner-frozen-seconds nil
            mevedel-view--spinner-last-sample-seconds nil
+           mevedel-view--spinner-sample-frame nil
            mevedel-view--spinner-theme-stale-p nil)
      (unless mevedel-view--pending-tool-calls
         (unless (and (boundp 'mevedel--data-buffer)
