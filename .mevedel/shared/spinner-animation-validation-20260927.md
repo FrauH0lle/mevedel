@@ -684,3 +684,36 @@ Additional isolated graphical cost/responsiveness measurements, 2026-09-28
   compositor would not focus benchmark frames: attention was controlled within
   fresh subprocesses. Queued Emacs events do **not** establish OS keyboard
   delivery, physical typing, screen-response latency, or monitor scanout.
+
+Full-projection frozen-tool follow-up, 2026-09-28 (source: whole-Goal verifier
+`/root/verify_14`, independent review `/root/animation_review`, clean Eask):
+
+- After `ac1fd14b`, the verifier found that a surviving pending-tool row still
+  restarted at phase zero when *full* transcript projection erased its row.
+  Full rendering now snapshots displayed tool samples before reset and restores
+  matching IDs on reconstruction. Batched installation also snapshots at
+  publication, before its reset; a changed transcript does not inherit samples.
+  A six-case production full-rerender regression covers ASCII, Braille, and dots
+  with global-off and battery-zero freeze, including subsequent visibility
+  rearm. Existing incremental and lightweight tests continue to pass.
+- The verifier's fresh source-loaded replay passed **18/18** incremental, full,
+  and actual batched-install cases (three styles, two freeze policies). It
+  instrumented one real batch install per case rather than taking the
+  synchronous fallback. The independent reviewer returned `VERDICT: PASS` and
+  separately replayed a batched ASCII row and changed-source reset. Those
+  controlled probes do not imply the user Emacs was reloaded.
+- After `eask clean elc`, stream/render/animation focused tests passed
+  **552/552** (`.scratch/spinner-full-projection-focused2.log`). The plan's
+  named view roster plus power, chat, hooks, and integrity tests passed
+  **1084/1085 expected, zero unexpected, one optional composer skip**
+  (`.scratch/spinner-full-projection-final-roster.log`). A fresh post-clean
+  compile processed **210 files** without warnings or stale-bytecode notices
+  (`.scratch/spinner-full-projection-final-compile.log`); `git diff --check`
+  passed. The complete isolated four-worker suite discovered **8754 tests:
+  8 unexpected, 30 skipped**
+  (`.scratch/spinner-full-projection-full-suite/summary.json`). The new test
+  passed; all eight failures match the prior unrelated gptel bridge, preset,
+  message/steering injection, skills layout, and concurrent plan-handoff
+  cases. The full suite remains **not green**. Separate graphical input probes
+  and the user's prior approval of the preview support qualitative smoothness;
+  physical keyboard latency and screen scanout were not instrumented.

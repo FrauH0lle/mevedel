@@ -355,7 +355,7 @@
 (declare-function mevedel-view--insert-pending-tool-lines
                   "mevedel-view-stream" (entries &optional previous))
 (declare-function mevedel-view--refresh-pending-tool-lines
-                  "mevedel-view-stream" ())
+                  "mevedel-view-stream" (&optional previous))
 (declare-function mevedel-view--snapshot-tool-animation-targets
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-animation-frame
@@ -7752,6 +7752,10 @@ Until the complete plan is ready, keep the previous view in place."
            (immediate (mevedel-view-render--priority-turns (plist-get plan :turns) t))
            (states (mevedel-view-disclosure-capture-state
                     (point-min) (mevedel-view--input-marker-position)))
+           (preserved-tools
+            (when (and (not historical) (not agent)
+                       mevedel-view--pending-tool-calls)
+              (mevedel-view--snapshot-tool-animation-targets)))
            installed)
       ;; A reader can move onto any pending response before its callback.
       ;; Project chat prompts now so each such response has a real header
@@ -7804,7 +7808,8 @@ Until the complete plan is ready, keep the previous view in place."
                             (cl-remove-if-not (lambda (entry) (memq (car entry) priority)) pending)
                             (cl-remove-if (lambda (entry) (memq (car entry) priority)) pending))))
                    (mevedel-view--full-rerender-finish
-                    data live-data (list :view-buffer view) historical started)))))
+                    data live-data (list :view-buffer view) historical started
+                    preserved-tools)))))
             (setf (plist-get job :phase) 'project)
             (if (plist-get job :pending)
                 (mevedel-view-render-resume-batch)
@@ -7916,16 +7921,17 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
              (with-current-buffer data-buf (point-max)))))))))
 
 (defun mevedel-view--full-rerender-finish
-    (data-buf live-data-buf rendering historical-p start-time)
+    (data-buf live-data-buf rendering historical-p start-time preserved-tools)
   "Rebuild live chrome after projecting DATA-BUF.
 LIVE-DATA-BUF owns live status.  RENDERING identifies the view.
-HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics."
+HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics.
+PRESERVED-TOOLS holds displayed pending-tool samples from before the reset."
   (with-current-buffer (plist-get rendering :view-buffer)
     (unless mevedel-view--agent-transcript-p
       (mevedel-view-refresh-input-prompt)
       (when (and (not historical-p)
                  mevedel-view--pending-tool-calls)
-        (mevedel-view--refresh-pending-tool-lines))
+        (mevedel-view--refresh-pending-tool-lines preserved-tools))
       (mevedel-view--render-status live-data-buf)
       (mevedel-view--interaction-rebuild)
       (mevedel-view--ensure-request-progress live-data-buf)
@@ -8008,7 +8014,13 @@ view chrome."
                            (marker-position mevedel-view--status-marker))
                           ((< tail-start tail-end)))
                 (mevedel-view--strip-history-live-fragments-from-string
-                 (buffer-substring tail-start tail-end)))))
+                 (buffer-substring tail-start tail-end))))
+             (preserved-tools
+              (when (and (not source-changed-p)
+                         (not historical-p)
+                         (not agent-transcript-p)
+                         mevedel-view--pending-tool-calls)
+                (mevedel-view--snapshot-tool-animation-targets))))
         (unless mevedel-view--pending-tool-calls
           (mevedel-view--delete-pending-tool-live-lines))
         (mevedel-view--debug-log
@@ -8031,7 +8043,8 @@ view chrome."
            data-buf rendering in-flight-was
            data-turn-start-pos preserved-live-tail)
             (mevedel-view--full-rerender-finish
-             data-buf live-data-buf rendering historical-p start-time))))))))
+             data-buf live-data-buf rendering historical-p start-time
+             preserved-tools))))))))
 
 ;;
 ;;; Optimistic user turn rendering
