@@ -1233,7 +1233,20 @@ can no longer be trusted."
              (push entry result)))
           (_ (throw 'done nil)))))
     (while (and result (null (car result))) (pop result))
-    (nreverse result)))
+    ;; A command that only moved point leaves a group holding nothing but
+    ;; its position; kept, such groups accumulated for as long as the view
+    ;; lived.  Undo has nothing to do in them.
+    (let (kept group)
+      (dolist (entry (nreverse result))
+        (if entry
+            (push entry group)
+          (when (seq-some #'consp group)
+            (setq kept (append (list nil) group kept)))
+          (setq group nil)))
+      (when (seq-some #'consp group)
+        (setq kept (append group kept)))
+      (while (and kept (null (car kept))) (pop kept))
+      (nreverse kept))))
 
 (defun mevedel-view--sanitize-undo ()
   "Keep only composer edits on the current view's undo list."
