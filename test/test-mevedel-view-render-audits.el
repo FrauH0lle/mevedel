@@ -673,6 +673,49 @@
         (when-let* ((buffer (get-buffer "*mevedel execution result*")))
           (kill-buffer buffer))))))
 
+(mevedel-deftest mevedel-view-audit-retained-empty-evidence ()
+  ,test
+  (test)
+  :doc "empty terminal output is retained evidence, not missing output"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "old-call"
+               :render-data (:state completed :outcome success :exit-code 0
+                             :execution-output ""))))
+    (let ((mevedel--data-buffer (current-buffer)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+            (let ((result (mevedel-view-audit--evidence
+                           '(:tool-use-id "old-call" :command "sleep .3; true"))))
+              (with-current-buffer result
+                (should (derived-mode-p 'special-mode))
+                (should (equal "sleep .3; true\n\nExecution produced no output.\n"
+                               (buffer-string))))))
+        (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+          (kill-buffer buffer)))))
+  :doc "an empty retained output artifact also shows a zero-output result"
+  (let ((physical (make-temp-file "mevedel-empty-execution-output-"))
+        (data (generate-new-buffer " *empty execution source*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (setq-local mevedel--session (mevedel-session--create :name "empty")))
+          (with-temp-buffer
+            (let ((mevedel--data-buffer data))
+              (cl-letf (((symbol-function 'mevedel-resource-prepare)
+                         (lambda (&rest _) (list :physical-path physical)))
+                        ((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+                (let ((result (mevedel-view-audit--evidence
+                               '(:command "true"
+                                 :facts (:output-path "artifact://executions/empty")))))
+                  (with-current-buffer result
+                    (should (equal "true\n\nExecution produced no output.\n"
+                                   (buffer-string))))))))
+      (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+        (kill-buffer buffer))
+      (kill-buffer data)
+      (delete-file physical)))))
+
 (mevedel-deftest mevedel-view-audit--result-position ()
   ,test
   (test)
