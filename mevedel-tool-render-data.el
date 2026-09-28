@@ -77,9 +77,14 @@ is display metadata only; it never replaces the provider's call identity."
                  (equal (plist-get child :tool) (plist-get data :direct-tool))
                  (not (and (eq (plist-get data :status) 'error)
                            (not (eq (plist-get child :status) 'error)))))
-        (plist-put (copy-sequence child) :render-data
-                   (plist-put (copy-sequence (plist-get child :render-data))
-                              :status (plist-get child :status)))))))
+        (let ((facts (plist-get child :render-data)))
+          ;; A persisted child call's status predates terminal or reload facts.
+          (plist-put (copy-sequence child) :render-data
+                     (if (memq (plist-get facts :state)
+                               '(completed interrupted lost archived))
+                         facts
+                       (plist-put (copy-sequence facts)
+                                  :status (plist-get child :status)))))))))
 
 (defun mevedel-tool-render-data--plain (value)
   "Return VALUE with text properties stripped from all contained strings."
@@ -521,6 +526,48 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
             (buffer-substring-no-properties (car block) (cdr block))
             nil tool-use-id)))))))
 
+(defun mevedel-tool-render-data--reconcile-running
+    (data successor-execution-ids)
+  "Return (REPAIRED-DATA . COUNT) for stale executions in DATA.
+ToolCall render data may contain other ToolCalls and Bash calls; repair their
+children without changing successful siblings or unrelated outer metadata."
+  (let ((count 0)
+        (repaired data))
+    (when (and (listp data)
+               (or (plist-get data :execution-id)
+                   (plist-get data :live-execution-p))
+               (or (eq (plist-get data :state) 'running)
+                   (plist-get data :live-execution-p)))
+      (setq repaired
+            (mevedel-tool-render-data--plist-merge
+             data
+             (if (member (plist-get data :execution-id)
+                         successor-execution-ids)
+                 '(:state archived :status nil :live-execution-p nil
+                          :termination compacted :outcome nil)
+               '(:state lost :status error :live-execution-p nil
+                        :termination lost :outcome failure)))
+            count 1))
+    (when (and (listp data) (eq (plist-get data :kind) 'ptc))
+      (let ((child-count 0) calls)
+        (dolist (call (plist-get data :calls))
+          (pcase-let ((`(,child . ,repaired-count)
+                       (mevedel-tool-render-data--reconcile-running
+                        (plist-get call :render-data)
+                        successor-execution-ids)))
+            (cl-incf child-count repaired-count)
+            (push (if (> repaired-count 0)
+                      (mevedel-tool-render-data--plist-merge
+                       call (list :render-data child))
+                    call)
+                  calls)))
+        (when (> child-count 0)
+          (setq repaired
+                (mevedel-tool-render-data--plist-merge
+                 repaired (list :calls (nreverse calls))))
+          (cl-incf count child-count))))
+    (cons repaired count)))
+
 (defun mevedel-tool-render-data-reconcile-lost-executions
     (buffer &optional successor-execution-ids)
   "Mark stale running Bash render records in BUFFER as lost.
@@ -528,7 +575,7 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
 This repairs transcript state after resume or fork.  It never attempts to
 reattach an operating-system process.  Records named by
 SUCCESSOR-EXECUTION-IDS are marked archived because a newer segment owns their
-terminal truth.  Return the number of repaired records."
+terminal truth.  Return the number of repaired executions."
   (let (records archived-records)
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
@@ -559,42 +606,30 @@ terminal truth.  Return the number of repaired records."
                           (and (mevedel-tool-render-data-call-range-p
                                 stored begin end)
                                (mevedel-tool-render-data-without-owner
-                                stored))))
-                    (when (and data
-                               (or (plist-get data :execution-id)
-                                   (plist-get data :live-execution-p))
-                               (or (eq (plist-get data :state) 'running)
-                                   (plist-get data :live-execution-p)))
-                      (push (list begin end data) records)))))))
+                                stored)))
+                         (repair (and data
+                                      (mevedel-tool-render-data--reconcile-running
+                                       data successor-execution-ids))))
+                    (when (and repair (> (cdr repair) 0))
+                      (push (list begin end repair) records)))))))
           (dolist (record records)
-            (pcase-let ((`(,begin ,end ,data) record))
+            (pcase-let ((`(,begin ,end ,repair) record))
               (mevedel-tool-render-data-patch-block
-               begin end
-               (mevedel-tool-render-data--plist-merge
-                data
-                (if (member (plist-get data :execution-id)
-                            successor-execution-ids)
-                    '(:state archived :status nil :live-execution-p nil
-                             :termination compacted :outcome nil)
-                  '(:state lost :status error :live-execution-p nil
-                           :termination lost :outcome failure))))))
+               begin end (car repair))))
           (setq archived-records
-                (cl-remove-if-not
-                 (lambda (span)
-                   (let* ((record (plist-get span :record))
-                          (data (plist-get record :render-data)))
-                     (and (or (eq (plist-get data :state) 'running)
-                              (plist-get data :live-execution-p))
-                          data)))
-                 (mevedel-transcript-audit-spans
-                  (buffer-substring (point-min) (point-max))
-                  'execution-archive)))
-          (dolist (span (reverse archived-records))
-            (let* ((record (plist-get span :record))
-                   (data (plist-get record :render-data))
-                   (successor-p
-                    (member (plist-get data :execution-id)
-                            successor-execution-ids))
+                (cl-loop for span in (mevedel-transcript-audit-spans
+                                      (buffer-substring (point-min) (point-max))
+                                      'execution-archive)
+                         for repair =
+                         (mevedel-tool-render-data--reconcile-running
+                          (plist-get (plist-get span :record) :render-data)
+                          successor-execution-ids)
+                         when (> (cdr repair) 0)
+                         collect (cons span repair)))
+          (dolist (entry (reverse archived-records))
+            (let* ((span (car entry))
+                   (repair (cdr entry))
+                   (record (plist-get span :record))
                    (begin (+ (point-min) (plist-get span :start)))
                    (end (+ (point-min) (plist-get span :end))))
               (setq record
@@ -602,20 +637,12 @@ terminal truth.  Return the number of repaired records."
                      record :type 'execution-completion))
               (setq record
                     (plist-put
-                     record :render-data
-                     (mevedel-tool-render-data--plist-merge
-                      data
-                      (if successor-p
-                          '(:state archived :status nil
-                                   :live-execution-p nil
-                                   :termination compacted :outcome nil)
-                        '(:state lost :status error
-                                 :live-execution-p nil
-                                 :termination lost :outcome failure)))))
+                     record :render-data (car repair)))
               (delete-region begin end)
               (goto-char begin)
               (insert (mevedel--format-hook-audit-record record))))))
-      (+ (length records) (length archived-records)))))
+      (+ (cl-loop for record in records sum (cdr (nth 2 record)))
+         (cl-loop for entry in archived-records sum (cdr (cdr entry)))))))
 
 (defun mevedel-tool-render-data--provider-advice (orig-fun backend tool-use)
   "Strip render-data blocks from TOOL-USE results for BACKEND via ORIG-FUN.

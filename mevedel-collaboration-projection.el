@@ -22,6 +22,14 @@
 ;; `mevedel-structs'
 (defvar mevedel--session)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
+(declare-function mevedel-session-artifacts-read-transcript-segment
+                  "mevedel-session-artifacts" (session descriptor))
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
 
@@ -258,6 +266,26 @@ it once the command settles.  No polling row becomes a second output owner."
                       (or (plist-get live :output-tail) ""))))
       parsed)))
 
+(defun mevedel-collaboration--missing-bash-data (data completions)
+  "Mark archived running DATA unknown if later evidence has a gap.
+COMPLETIONS records a missing later segment under :gap.  Do not infer a
+terminal outcome while the execution owner still reports a running process."
+  (if (and (hash-table-p completions)
+           (gethash :gap completions)
+           (eq (plist-get data :state) 'running)
+           (not (and (plist-get data :execution-id)
+                     mevedel--session
+                     (fboundp 'mevedel-execution-list-user)
+                     (cl-find-if
+                      (lambda (execution)
+                        (and (equal (plist-get execution :execution-id)
+                                    (plist-get data :execution-id))
+                             (eq (plist-get execution :state) 'running)))
+                      (mevedel-execution-list-user mevedel--session)))))
+      (plist-put (plist-put (copy-sequence data) :state 'unknown)
+                 :status 'warning)
+    data))
+
 (defun mevedel-collaboration--direct-facts (data direct)
   "Return DIRECT's authoritative child facts rather than a stale wrapper status.
 The direct-call helper copies the child's result status into render data; a
@@ -267,16 +295,18 @@ terminal Bash event or failed control operation may have newer facts."
                   '(error denied cancelled blocked failed))
             (and (equal (plist-get direct :tool) "Bash")
                  (memq (plist-get child-facts :state)
-                       '(completed interrupted lost))))
+                       '(completed interrupted lost unknown))))
         child-facts
       (plist-get direct :render-data))))
 
-(defun mevedel-collaboration--reconcile-ptc-children (data-buffer parsed)
+(defun mevedel-collaboration--reconcile-ptc-children
+    (data-buffer parsed &optional completion-buffer completions)
   "Return PARSED with pending terminal facts for its nested Bash children.
 PTC children use their own tool-use ids, but have no separate gptel segment;
 their completion may therefore be retained in the execution transcript's
-pending table rather than patched into the outer ToolCall render data.  Keep
-the raw parsed model value and transcript metadata unchanged."
+pending table rather than patched into the outer ToolCall render data.
+COMPLETION-BUFFER and COMPLETIONS supply later facts for an archived segment.
+Keep the raw parsed model value and transcript metadata unchanged."
   (cl-labels
       ((reconcile (data depth)
          (if (or (> depth 16) (not (eq (plist-get data :kind) 'ptc)))
@@ -291,17 +321,27 @@ the raw parsed model value and transcript metadata unchanged."
                             (terminal
                              (and (equal (plist-get child :tool) "Bash")
                                   (stringp (plist-get child :id))
-                                  (mevedel-execution-transcript-pending-render-data
-                                   data-buffer (plist-get child :id)))))
-                       (if (or terminal (and nested (not (eq prior nested))))
+                                  (or (and (hash-table-p completions)
+                                           (gethash (plist-get child :id) completions))
+                                      (and (buffer-live-p completion-buffer)
+                                           (mevedel-execution-transcript-pending-render-data
+                                            completion-buffer (plist-get child :id)))
+                                      (mevedel-execution-transcript-pending-render-data
+                                       data-buffer (plist-get child :id)))))
+                            (missing (and (equal (plist-get child :tool) "Bash")
+                                          (not terminal)
+                                          (mevedel-collaboration--missing-bash-data
+                                           prior completions))))
+                       (if (or terminal (and missing (not (eq prior missing)))
+                               (and nested (not (eq prior nested))))
                            (progn
                              (setq changed t)
                              (let ((copy (plist-put
                                           (copy-sequence child) :render-data
-                                          (or terminal nested))))
-                               (if terminal
+                                          (or terminal missing nested))))
+                               (if (or terminal (and missing (not (eq prior missing))))
                                    (plist-put copy :status
-                                              (plist-get terminal :status))
+                                              (plist-get (or terminal missing) :status))
                                  copy)))
                          child)))
                    (plist-get data :calls))))
@@ -358,6 +398,9 @@ are exported, with one shared text/structure budget across the entire tree."
                             data))
                     (result (or (and (equal name "Bash")
                                      (mevedel-collaboration--execution-output data))
+                                (and direct (equal name "Bash")
+                                     (eq (plist-get data :state) 'unknown)
+                                     (plist-get direct :result))
                                 result))
                     (tool (and (stringp name) (mevedel-tool-for-call name)))
                     (rendering
@@ -401,7 +444,7 @@ are exported, with one shared text/structure budget across the entire tree."
                                                   (plist-get child :render-data))))
                                       (if (and (equal (plist-get child :tool) "Bash")
                                                (memq (plist-get facts :state)
-                                                     '(completed interrupted lost)))
+                                               '(completed interrupted lost unknown)))
                                           facts
                                         (plist-put facts :status
                                                    (plist-get child :status))))
@@ -473,26 +516,38 @@ are exported, with one shared text/structure budget across the entire tree."
               name (plist-get parsed :args)))))))
 
 (defun mevedel-collaboration--tool-segment-records
-    (data-buffer segment &optional occurrence)
+    (data-buffer segment &optional occurrence completion-buffer render-end completions)
   "Return canonical records for tool SEGMENT in DATA-BUFFER.
 A settled ApplyPatch may produce several artifact cards.  A patch touching
 only artifact destinations reuses its ordinary tool record as the first card;
-a mixed patch retains the ordinary row and adds child cards."
+a mixed patch retains the ordinary row and adds child cards.
+COMPLETION-BUFFER may contain later completion evidence for archived Bash.
+RENDER-END includes a following, separately classified hidden metadata block."
   (with-current-buffer data-buffer
     (let* ((start (cadr segment))
            (end (caddr segment))
-           (parsed (mevedel-view--tool-call-parse data-buffer start end))
+           (parsed (mevedel-view--tool-call-parse
+                    data-buffer start (or render-end end)))
            (terminal (and (equal (plist-get parsed :name) "Bash")
                           (plist-get parsed :tool-use-id)
-                          (mevedel-execution-transcript-pending-render-data
-                           data-buffer (plist-get parsed :tool-use-id))))
+                          (or (and (hash-table-p completions)
+                                   (gethash (plist-get parsed :tool-use-id)
+                                            completions))
+                              (and (buffer-live-p completion-buffer)
+                                   (mevedel-execution-transcript-pending-render-data
+                                    completion-buffer (plist-get parsed :tool-use-id)))
+                              (mevedel-execution-transcript-pending-render-data
+                               data-buffer (plist-get parsed :tool-use-id)))))
            (parsed (if terminal
                        (plist-put (copy-sequence parsed) :render-data terminal)
                      (if (equal (plist-get parsed :name) "Bash")
-                         (mevedel-collaboration--live-bash-data parsed)
+                         (let ((live (mevedel-collaboration--live-bash-data parsed)))
+                           (plist-put (copy-sequence live) :render-data
+                                      (mevedel-collaboration--missing-bash-data
+                                       (plist-get live :render-data) completions)))
                        parsed)))
            (parsed (mevedel-collaboration--reconcile-ptc-children
-                    data-buffer parsed))
+                    data-buffer parsed completion-buffer completions))
            (base (mevedel-collaboration--tool-record
                   parsed (buffer-substring-no-properties start end)
                   occurrence))
@@ -565,17 +620,66 @@ the turn always begins before its own attribution block."
         (when-let* ((shared (plist-get (cdr attribution) :shared)))
           (plist-put owner :shared shared))))))
 
-(defun mevedel-collaboration--canonical-records (data-buffer)
+(defun mevedel-collaboration--session-bash-completions
+    (session live-buffer target-number)
+  "Return terminal facts after TARGET-NUMBER in SESSION.
+Read later source-backed segments chronologically, including LIVE-BUFFER.
+Flag missing or unreadable later segments under :gap so a stale running
+row does not imply success.  This table lives only for one history fetch."
+  (let ((completions (make-hash-table :test #'equal))
+        (later nil))
+    (when (and session (buffer-live-p live-buffer))
+      (dolist (descriptor (mevedel-session-artifacts-transcript-segments
+                           session live-buffer))
+        (if (equal target-number (plist-get descriptor :number))
+            (setq later t)
+          (when later
+            (unless (eq (plist-get descriptor :status) 'readable)
+              (puthash :gap t completions))
+            (when (eq (plist-get descriptor :status) 'readable)
+              (let ((buffer
+                     (if (plist-get descriptor :current-p)
+                         live-buffer
+                       (condition-case nil
+                           (mevedel-session-artifacts-read-transcript-segment
+                            session descriptor)
+                         (error (puthash :gap t completions) nil)))))
+                (when (buffer-live-p buffer)
+                  (unwind-protect
+                      (with-current-buffer buffer
+                        (save-restriction
+                          (widen)
+                          (dolist (audit (mevedel-transcript-audit-records
+                                          (buffer-substring (point-min) (point-max))
+                                          'execution-completion))
+                            (when-let* ((id (plist-get audit :tool-use-id))
+                                        (facts (plist-get audit :render-data)))
+                              (puthash id facts completions)))))
+                    (unless (eq buffer live-buffer)
+                      (kill-buffer buffer))))))))))
+    completions))
+
+(defun mevedel-collaboration--canonical-records
+    (data-buffer &optional completion-buffer completions)
   "Return allowlisted records reconstructed from DATA-BUFFER.
 Records inside a directive turn carry that directive's id so a viewer
 can filter the transcript to one directive client-side; user records
-attributed to a collaboration guest carry that guest's name."
+attributed to a collaboration guest carry that guest's name.
+COMPLETION-BUFFER and COMPLETIONS supply later terminal evidence for archived
+segments."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (let ((ranges (mevedel-collaboration--directive-ranges))
+            (segments (mevedel-transcript-segments (point-min) (point-max)))
+            (following-render-data (make-hash-table :test #'eql))
             records user-starts (occurrences (make-hash-table :test #'equal)))
-        (dolist (segment (mevedel-transcript-segments
-                          (point-min) (point-max)))
+        ;; On reload gptel classifies the hidden render-data block separately
+        ;; from its preceding tool row.  Include it when parsing the row, but
+        ;; leave the raw model-visible result and transcript segments intact.
+        (dolist (segment segments)
+          (when (eq (car segment) 'render-data)
+            (puthash (cadr segment) (caddr segment) following-render-data)))
+        (dolist (segment segments)
           (let ((directive (mevedel-collaboration--directive-at
                             ranges (cadr segment))))
             (cond
@@ -631,7 +735,8 @@ attributed to a collaboration guest carry that guest's name."
                      (occurrence (gethash key occurrences 0)))
                 (puthash key (1+ occurrence) occurrences)
                 (dolist (record (mevedel-collaboration--tool-segment-records
-                                 data-buffer segment occurrence))
+                                 data-buffer segment occurrence completion-buffer
+                                 (gethash end following-render-data) completions))
                   (when directive
                     (setq record (plist-put record :directive directive)))
                   (push record records)))))))
