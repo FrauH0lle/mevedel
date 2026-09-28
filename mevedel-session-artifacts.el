@@ -225,6 +225,8 @@
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-measure "mevedel-telemetry"
+                  (session event min-ms function &rest props))
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start "mevedel-telemetry" (session event &rest props))
 
@@ -2131,6 +2133,16 @@ mark the latest assistant response
 A portable session whose durable state is byte for byte the committed one
 performs no target transaction.  FORCE publishes anyway, for a caller that
 must materialize a snapshot rather than record a change."
+  (if (fboundp 'mevedel-telemetry-measure)
+      (mevedel-telemetry-measure
+       session 'session-save 0
+       (lambda () (mevedel-session-artifacts--save session buffer settled force))
+       :kind 'full :settled (and settled t))
+    (mevedel-session-artifacts--save session buffer settled force)))
+
+(defun mevedel-session-artifacts--save (session buffer settled force)
+  "Save SESSION from BUFFER as `mevedel-session-artifacts-save' documents.
+SETTLED and FORCE are its settlement and forced-publication flags."
   ;; A direct data-buffer caller establishes the session-owned root before
   ;; the projection boundary is consulted.  View callers must pass their
   ;; registered data buffer, never the view projection itself.
@@ -2247,6 +2259,15 @@ and the next critical commit carries the registry.
 
 Returns SESSION's save path on success, nil when SESSION is not yet
 materialized or has no committed sidecar."
+  (if (fboundp 'mevedel-telemetry-measure)
+      (mevedel-telemetry-measure
+       session 'session-save 0
+       (lambda () (mevedel-session-artifacts--save-agent-registry session buffer))
+       :kind 'agent-registry)
+    (mevedel-session-artifacts--save-agent-registry session buffer)))
+
+(defun mevedel-session-artifacts--save-agent-registry (session buffer)
+  "Persist SESSION's sidecar from BUFFER as the public entry documents."
   (when-let* ((save-path (mevedel-session-save-path session))
               (buffer (mevedel-session-persistence-authoritative-buffer
                        buffer)))
