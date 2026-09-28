@@ -15,6 +15,7 @@
 (require 'gptel)
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
+(require 'mevedel-execution)
 (require 'mevedel-execution-transcript)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-artifacts)
@@ -154,7 +155,37 @@
                           :state 'completed :outcome 'success))))
     (should (= 2 (length (mevedel-transcript-audit-records
                           (buffer-string) 'execution-breadcrumb))))
-    (should (buffer-modified-p))))
+    (should (buffer-modified-p)))
+  :doc "retains a new completion after reload when the execution counter restarts"
+  (let (saved old-id new-id)
+    (with-temp-buffer
+      (org-mode)
+      (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+      (setq old-id (mevedel-execution--next-id
+                    (mevedel-execution--new-state)))
+      (mevedel-execution-transcript-handle-event
+       (list :type 'terminal :data-buffer (current-buffer)
+             :owner "/root" :tool-use-id "before-reload"
+             :facts (list :execution-id old-id :command "echo BEFORE"
+                          :state 'completed :outcome 'success)))
+      (mevedel-session-artifacts-stabilize-gptel-bounds)
+      (setq saved (buffer-substring-no-properties (point-min) (point-max))))
+    (with-temp-buffer
+      (org-mode)
+      (insert saved)
+      (mevedel-transcript-restore-properties)
+      (setq new-id (mevedel-execution--next-id
+                    (mevedel-execution--new-state)))
+      (mevedel-execution-transcript-handle-event
+       (list :type 'terminal :data-buffer (current-buffer)
+             :owner "/root" :tool-use-id "after-reload"
+             :facts (list :execution-id new-id :command "echo AFTER"
+                          :state 'completed :outcome 'success)))
+      (should-not (equal old-id new-id))
+      (should (equal '("before-reload" "after-reload")
+                     (mapcar (lambda (record) (plist-get record :tool-use-id))
+                             (mevedel-transcript-audit-records
+                              (buffer-string) 'execution-breadcrumb)))))))
 
 (mevedel-deftest mevedel-execution-transcript--record-breadcrumb ()
   ,test

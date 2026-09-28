@@ -30,6 +30,18 @@
 ;;
 ;;; One-shot execution
 
+(mevedel-deftest mevedel-execution--next-id ()
+  ,test
+  (test)
+  :doc "keeps IDs distinct across fresh session states with restarted counters"
+  (let* ((first (mevedel-execution--new-state))
+         (second (mevedel-execution--new-state))
+         (first-id (mevedel-execution--next-id first))
+         (second-id (mevedel-execution--next-id second)))
+    (should (string-match-p "\\`exec-[[:alnum:]]+-000001\\'" first-id))
+    (should (string-suffix-p "-000002" (mevedel-execution--next-id first)))
+    (should-not (equal first-id second-id))))
+
 (mevedel-deftest mevedel-execution-start-one-shot ()
   ,test
   (test)
@@ -1018,7 +1030,8 @@
            :yield-time-ms nil)
           (let* ((state (mevedel-session-execution-state session))
                  (pending-id
-                  (format "exec-%06d"
+                  (format "%s-%06d"
+                          (mevedel-execution--state-id-prefix state)
                           (mevedel-execution--state-next-id state)))
                  (record (gethash pending-id
                                   (mevedel-execution--state-records state)))
