@@ -547,5 +547,125 @@
         (kill-buffer buffer))
       (delete-file path))))
 
+(mevedel-deftest mevedel-collaboration--canonical-records-archived-bash
+  (:doc "current guest transcript does not duplicate the archived Bash result")
+  (with-temp-buffer
+    (delay-mode-hooks (org-mode))
+    (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "Bash" :category "mevedel"
+                            :renderer #'mevedel-tool-exec--render-bash))
+      (let ((start (point)))
+        (insert "(:name \"Bash\" :args (:command \"exit 1\"))\n\ninitial output")
+        (insert (mevedel-tool-render-data-format
+                 '(:execution-id "exec-archived" :command "exit 1"
+                   :state running :status success :live-execution-p t)
+                 "bash-archived"))
+        (put-text-property start (point) 'gptel '(tool . "bash-archived")))
+      (let ((plan (mevedel-execution-transcript-prepare-archive
+                   (current-buffer) '("bash-archived"))))
+        (should (equal "bash-archived" (caar (plist-get plan :live))))
+        (erase-buffer)
+        (insert (mevedel-execution-transcript-archive-text plan))
+        (mevedel-execution-transcript-commit-archive (current-buffer) plan))
+      (mevedel-execution-transcript-handle-event
+       (list :type 'terminal :data-buffer (current-buffer)
+             :tool-use-id "bash-archived" :owner "/root"
+             :whole-output "initial output\nfinal output"
+             :facts '(:execution-id "exec-archived" :command "exit 1"
+                      :state completed :outcome failure :exit-code 1)))
+      (let ((start (point-max)))
+        (goto-char start)
+        (insert "\n(:name \"WriteStdin\" :args (:execution_id \"exec-archived\" :chars \"\"))\n\nfinal output")
+        (put-text-property (1+ start) (point) 'gptel '(tool . "poll-1")))
+      (should (= 1 (length (mevedel-transcript-audit-records
+                            (buffer-string) 'execution-completion))))
+      (should-not (mevedel-collaboration--canonical-records (current-buffer))))))
+
+(mevedel-deftest mevedel-collaboration--canonical-records-present-bash
+  (:doc "existing Bash row and nested child completions do not become duplicate cards")
+  (with-temp-buffer
+    (delay-mode-hooks (org-mode))
+    (let ((start (point)))
+      (insert "(:name \"Bash\" :args (:command \"true\"))\n\noriginal result")
+      (insert (mevedel-tool-render-data-format
+               '(:execution-id "exec-present" :state running) "bash-present"))
+      (put-text-property start (point) 'gptel '(tool . "bash-present")))
+    (insert (mevedel--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "bash-present"
+                     :render-data (:execution-id "exec-present" :command "true"
+                                   :state completed :status success
+                                   :outcome success :execution-output "whole output")))
+            (mevedel--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "outer/1"
+                     :render-data (:execution-id "exec-child" :command "true"
+                                   :state completed :status success
+                                   :outcome success :execution-output "child output"))))
+    (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+      (should (= 1 (length records)))
+      (should (equal "tool-bash-present" (plist-get (car records) :id)))
+      (should (equal "whole output" (plist-get (car records) :result))))))
+
+(mevedel-deftest mevedel-collaboration--missing-bash-data
+  (:doc "only running archived work with missing later evidence becomes unknown")
+  (let* ((completions (make-hash-table :test #'equal))
+         (running '(:execution-id "exec-1" :state running :status success)))
+    (should (eq running (mevedel-collaboration--missing-bash-data
+                         running completions)))
+    (puthash :gap t completions)
+    (let ((unknown (mevedel-collaboration--missing-bash-data
+                    running completions)))
+      (should (eq 'unknown (plist-get unknown :state)))
+      (should (eq 'warning (plist-get unknown :status)))
+      (should (eq 'running (plist-get running :state))))
+    (should (eq 'completed
+                (plist-get (mevedel-collaboration--missing-bash-data
+                            '(:state completed :status success) completions)
+                           :state)))))
+
+(mevedel-deftest mevedel-collaboration--reconcile-ptc-children-missing
+  (:doc "nested and direct Bash show warning without changing the raw result")
+  (with-temp-buffer
+    (let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+           (completions (make-hash-table :test #'equal))
+           (parsed '(:name "ToolCall" :result "raw model value"
+                     :render-data
+                     (:kind ptc :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "echo hi") :result "initial"
+                               :render-data (:execution-id "exec-1" :state running
+                                             :status success)))))))
+      (puthash :gap t completions)
+      (mevedel-tool-register
+       (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                             :renderer #'mevedel-tool-ptc--render))
+      (mevedel-tool-register
+       (mevedel-tool--create :name "Bash" :category "mevedel"
+                             :renderer #'mevedel-tool-exec--render-bash))
+      (dolist (direct '(nil "Bash"))
+        (let* ((raw (copy-tree parsed))
+               (_ (when direct
+                    (setf (plist-get (plist-get raw :render-data) :direct-tool)
+                          direct)))
+               (projected (mevedel-collaboration--reconcile-ptc-children
+                           (current-buffer) raw nil completions))
+               (record (mevedel-collaboration--tool-record projected "original"))
+               (display (mevedel-collaboration-tool-presentation projected))
+               (bash (if direct display
+                       (aref (plist-get display :children) 0))))
+          (should (equal "raw model value" (plist-get projected :result)))
+          (should (equal "raw model value" (plist-get record :result)))
+          (should (equal "warning" (plist-get bash :status)))
+          (when direct (should (equal "warning" (plist-get record :status))))
+          (should (string-match-p "completion unavailable"
+                                  (plist-get bash :header)))
+          (should (string-match-p "initial" (plist-get bash :body)))
+          (should (equal "running"
+                         (symbol-name (plist-get
+                                       (plist-get (car (plist-get
+                                                        (plist-get raw :render-data)
+                                                        :calls)) :render-data)
+                                       :state)))))))))
+
 (provide 'test-mevedel-collaboration-tool-presentation)
 ;;; test-mevedel-collaboration-tool-presentation.el ends here

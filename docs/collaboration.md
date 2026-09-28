@@ -359,6 +359,14 @@ rows, parallel groups and returned output. Skill bodies render as safe
 Markdown, with delivered dependencies in separate collapsed foldouts. Missing
 historical dependency bodies are labelled unavailable rather than reread from
 current files. Raw model-facing reminder wrappers are not the display body.
+Routine empty-input `WriteStdin` observations stay out of the guest transcript;
+their output and terminal status belong to the original Bash row. After
+compaction, that row appears only in **Earlier conversation**, where projection
+uses later completion evidence from the session's segments to show the final result
+without a duplicate current-segment output card. This also applies to Bash
+children of ToolCall. If an intervening archive is unreadable and the command
+is no longer running, its original row keeps the available output but warns
+that completion evidence is unavailable instead of guessing an outcome.
 Nested open and closed choices survive record updates, reconnect snapshots
 and agent transcript refreshes; the composer draft stays untouched. Direct
 ApplyPatch calls keep session artifact cards and diff presentation.

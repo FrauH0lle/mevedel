@@ -2375,9 +2375,12 @@ folding a run into a group does not lose the boundary it ran with."
                                     :render-data latest)
                          :status (plist-get latest :status)))))
                 (latest latest)
-                ((memq child-status '(success error failed denied blocked))
-              (plist-put (copy-sequence (plist-get child :render-data)) :status
-                         (if (eq child-status 'success) 'success 'error)))
+                ((and (not (memq (plist-get (plist-get child :render-data)
+                                            :state)
+                                 '(completed interrupted lost archived)))
+                      (memq child-status '(success error failed denied blocked)))
+                 (plist-put (copy-sequence (plist-get child :render-data)) :status
+                            (if (eq child-status 'success) 'success 'error)))
                 (t (plist-get child :render-data))))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
@@ -2820,8 +2823,10 @@ finish before this function invokes registered renderers or reads live events."
             (plist-put
              rendering :group-child
              (list :tool name :args args :result result :render-data render-data
-                   :status (mevedel-view--tool-render-status
-                            result render-data))))
+                   :status (if (and direct-child (plist-get rendering :status))
+                               (mevedel-view--rendering-status rendering)
+                             (mevedel-view--tool-render-status
+                              result render-data)))))
       (if collapsed-only
           (mevedel-view--omit-rendering-body-for-cache rendering)
         rendering))))
