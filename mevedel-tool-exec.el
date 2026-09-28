@@ -376,7 +376,9 @@ stopped command's outcome."
           :render-data
           (append (copy-sequence facts)
                   (list :sandbox-facts
-                        (plist-get observation :sandbox-facts))))))
+                        (plist-get observation :sandbox-facts)
+                        :model-result-envelope-p
+                        (not suppress-sandbox-disclosure-p))))))
 
 (defun mevedel-tool-exec-handle-execution-event (event owner-context)
   "Secure an independently completed Bash EVENT in its owner mailbox."
@@ -794,8 +796,14 @@ the full command, bounded output and execution details."
            (body
             (unless (bound-and-true-p mevedel-tool-render-summary-only)
               (let ((output
-                     (replace-regexp-in-string
-                      "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result)))
+                     (if (and (plist-get render-data :model-result-envelope-p)
+                              (not (plist-member render-data :execution-output))
+                              (not (plist-get render-data :live-execution-p)))
+                         (replace-regexp-in-string
+                          "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result)
+                       ;; Canonical output and unmarked results are not tool
+                       ;; envelopes, even if the command printed this XML.
+                       result)))
                 (string-join
                  (delq nil
                        (list (unless (or write-stdin-p stop-p)

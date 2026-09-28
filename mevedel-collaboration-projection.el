@@ -85,6 +85,8 @@
                   "mevedel-view-render" (tool render-data args result))
 (declare-function mevedel-view--rendering-status
                   "mevedel-view-render" (rendering &optional render-data))
+(declare-function mevedel-view--sandbox-summary-line
+                  "mevedel-view-render" (summary))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
 (declare-function mevedel-view--user-turn-text
@@ -435,6 +437,18 @@ are exported, with one shared text/structure budget across the entire tree."
                     (rendering
                      (or (and tool (mevedel-view--invoke-renderer tool data args result))
                          (mevedel-view--generic-tool-rendering name args result nil data)))
+                    (sandbox-line
+                     (when-let* ((summary (or (plist-get rendering :sandbox-summary)
+                                              (plist-get data :sandbox-summary)))
+                                 (line (mevedel-view--sandbox-summary-line summary)))
+                       (mevedel-collaboration--truncate-bytes
+                        (string-trim (substring-no-properties line)) 280)))
+                    (header (plist-get rendering :header))
+                    (header (if sandbox-line
+                                (concat (mevedel-collaboration--truncate-bytes
+                                         header 700)
+                                        " · " sandbox-line)
+                              header))
                     (status
                      (pcase (or (and (memq (plist-get data :status) '(denied cancelled))
                                      (plist-get data :status))
@@ -443,7 +457,7 @@ are exported, with one shared text/structure budget across the entire tree."
                        ('running "running") ('warning "warning") (_ "completed")))
                     (row (list :id (text id 200) :name (text name 200)
                                :detail (text (mevedel-collaboration--tool-detail args) 200)
-                               :header (text (plist-get rendering :header) 1000)
+                               :header (text header 1000)
                                :status status
                                :collapsed (if (plist-get rendering :initially-collapsed-p)
                                               t :json-false)

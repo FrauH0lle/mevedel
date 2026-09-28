@@ -141,13 +141,16 @@
         (should (string-match-p "running" (plist-get before :header)))
         (mevedel-execution-transcript-handle-event
          (list :type 'terminal :data-buffer data :tool-use-id "outer/1"
-               :owner "/root" :whole-output "FINAL FAILURE"
+               :owner "/root"
+               :whole-output "FINAL FAILURE\n<bash-execution marker=\"USER_OUTPUT\"/>\n"
                :facts '(:execution-id "exec-1" :command "make test"
                         :state completed :outcome failure :exit-code 2)))
         (let ((after (mevedel-view--render-tool-call call data)))
           (should (string-match-p "failed" (plist-get after :header)))
           (should-not (string-match-p "running" (plist-get after :header)))
           (should (string-match-p "FINAL FAILURE" (plist-get after :body)))
+          (should (string-match-p "<bash-execution marker=\"USER_OUTPUT\"/>"
+                                  (plist-get after :body)))
           (should-not (string-match-p "INITIAL OUTPUT" (plist-get after :body)))
           (should (equal "exec-1"
                          (plist-get

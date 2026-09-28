@@ -170,6 +170,8 @@
     (should (string-prefix-p "failure text\n\n<bash-execution" result))
     (should (string-match-p "state=\"completed\"" result))
     (should-not (string-match-p "Command failed" result))
+    (should (plist-get (plist-get envelope :render-data)
+                       :model-result-envelope-p))
     (should (eq 'completed
                 (plist-get (plist-get envelope :render-data) :state)))
     (should (= 7 (plist-get (plist-get envelope :render-data)
@@ -210,6 +212,8 @@
           t)))
     (should (equal "injected" (plist-get envelope :result)))
     (should (eq 'success (plist-get envelope :status)))
+    (should-not (plist-get (plist-get envelope :render-data)
+                           :model-result-envelope-p))
     (should (= 0 (plist-get (plist-get envelope :render-data)
                             :exit-code))))
   :doc "adds recovery guidance only to failed confined commands"
@@ -1491,9 +1495,41 @@ the execution boundary owns the session's single unavailable warning"
           "WriteStdin" nil
           (concat "Hello, Ada\n\n"
                   "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>")
-          '(:status success :state completed))))
+          '(:status success :state completed :model-result-envelope-p t))))
     (should (equal "Hello, Ada\n\nDetails: completed"
                    (plist-get plist :body))))
+  (let ((plist
+         (mevedel-tool-exec--render-bash
+          "Bash" '(:command "printf marker")
+          (concat "<bash-execution marker=\"USER_OUTPUT\"/>\n\n"
+                  "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>")
+          '(:status success :state completed :model-result-envelope-p t))))
+    (should (string-match-p "<bash-execution marker=\"USER_OUTPUT\"/>"
+                            (plist-get plist :body)))
+    (should-not (string-match-p "execution_id=\"exec-1\""
+                                (plist-get plist :body))))
+
+  :doc "keeps marker-shaped stdout from canonical terminal and progress evidence"
+  (let* ((output "<bash-execution marker=\"USER_OUTPUT\"/>\n")
+         (terminal (mevedel-tool-exec--render-bash
+                    "Bash" '(:command "printf marker") output
+                    (list :status 'success :state 'completed
+                          :outcome 'success :exit-code 0
+                          :execution-output output)))
+         (progress (mevedel-tool-exec--render-bash
+                    "Bash" '(:command "printf marker") output
+                    '(:status success :state running :live-execution-p t))))
+    (should (string-match-p (regexp-quote output)
+                            (plist-get terminal :body)))
+    (should (string-match-p (regexp-quote output)
+                            (plist-get progress :body)))
+    (should (string-match-p
+             (regexp-quote output)
+             (plist-get
+              (mevedel-tool-exec--render-bash
+               "Bash" '(:command "printf marker") output
+               '(:status success :state completed :outcome success :exit-code 0))
+              :body))))
 
   :doc "labels polls and input as background-process interactions"
   (let ((poll
