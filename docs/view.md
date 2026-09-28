@@ -566,6 +566,16 @@ Terminology:
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
 
+Only composer edits are undoable. Renders above the composer record their
+own undo entries, which Emacs never trims between commands: a busy view once
+held 24,000 entries and several megabytes, mostly text-property changes, and
+undoing one would rewrite read-only transcript. Asynchronous redraws, zone
+reconciliation, scheduled render flushes, and every command start therefore
+reduce the view's undo list to composer entries, shifted past the text
+renders inserted or removed above the input marker. An entry that cannot be
+placed ends the history there. Transcript inspection views and generated data
+buffers keep no undo history.
+
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command
 runs asynchronously survives the send it started, together with its mention

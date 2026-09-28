@@ -980,6 +980,20 @@ rejects trailing binary operators"
   (should-error (mevedel--tag-query-prefix-from-infix '(foo and)))
   (should-error (mevedel--tag-query-prefix-from-infix '(foo or))))
 
+(mevedel-deftest mevedel--optimize-transcript-buffer ()
+  ,test
+  (test)
+  :doc "keeps no undo history in generated transcript storage"
+  (with-temp-buffer
+    (buffer-enable-undo)
+    (insert "streamed chunk")
+    (should (consp buffer-undo-list))
+    (mevedel--optimize-transcript-buffer)
+    (should (eq t buffer-undo-list))
+    (insert "tool result")
+    (should (eq t buffer-undo-list))
+    (should-not save-place-mode)))
+
 (mevedel-deftest mevedel--forget-place ()
   ,test
   (test)

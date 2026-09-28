@@ -185,6 +185,7 @@
 (declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
+(declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
@@ -1513,7 +1514,8 @@ redisplay hooks reschedule it once someone can see the result."
                          data-buffer))))))
             (error
              (message "mevedel: view refresh failed: %s"
-                      (error-message-string err))))))))))
+                      (error-message-string err))))
+          (mevedel-view--sanitize-undo)))))))
 
 (defun mevedel-view--resume-render-if-attended (view-buffer)
   "Reschedule VIEW-BUFFER's pending render once someone can see it again."
