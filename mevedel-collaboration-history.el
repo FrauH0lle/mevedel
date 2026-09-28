@@ -26,7 +26,10 @@
 (defun mevedel-collaboration--history-records (room number)
   "Project archived segment NUMBER in ROOM without activating it."
   (let* ((session (plist-get room :session))
-         (buffer (mevedel-session-artifacts-read-segment session number)))
+         (live (plist-get room :data-buffer))
+         (buffer (mevedel-session-artifacts-read-segment session number))
+         (completions (mevedel-collaboration--session-bash-completions
+                       session live number)))
     (unwind-protect
         (with-current-buffer buffer
           ;; Inspection buffers do not inherit session authority. Projection
@@ -35,7 +38,8 @@
           (mapcar (lambda (record)
                     (plist-put record :id
                                (format "history-%d-%s" number (plist-get record :id))))
-                  (mevedel-collaboration--canonical-records buffer)))
+                  (mevedel-collaboration--canonical-records
+                   buffer live completions)))
       (kill-buffer buffer))))
 
 (defun mevedel-collaboration--history-artifacts (room)

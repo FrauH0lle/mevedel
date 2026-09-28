@@ -123,6 +123,32 @@
       (should (eq status (plist-get rendering :status)))
       (should (eq status (plist-get child :status))))))
 
+(mevedel-deftest mevedel-view-tool-outcomes/recovered-nested-execution
+  ()
+  ,test
+  (test)
+  :doc "stale success metadata cannot mark a recovered lost Bash as successful"
+  (progn
+    (mevedel-tools-register)
+    (let* ((repaired (car (mevedel-tool-render-data--reconcile-running
+                         '(:kind ptc :status success :outcome completed
+                                 :direct-tool "Bash"
+                                 :calls ((:id "outer/1" :tool "Bash" :status success
+                                          :args (:command "sleep 60") :result "initial"
+                                          :render-data (:execution-id "exec-lost"
+                                                        :state running)))) nil)))
+         (recovered (car (plist-get repaired :calls)))
+         (direct (mevedel-view--render-tool-call
+                  (list :name "ToolCall" :args '(:expression "Bash")
+                        :result "initial" :render-data repaired) nil))
+         (child (mevedel-view--child-call-rendering recovered)))
+    (should (equal "outer/1" (plist-get recovered :id)))
+    (dolist (row (list direct child))
+      (should (eq 'error (plist-get row :status)))
+      (should (string-match-p "lost execution" (plist-get row :header)))
+      (should (string-match-p "×" (mevedel-view--rendering-header-line row))))
+      (should (eq 'error (plist-get (plist-get direct :group-child) :status))))))
+
 (mevedel-deftest mevedel-view-tool-outcomes/wrapped ()
   ,test
   (test)

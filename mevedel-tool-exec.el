@@ -812,6 +812,7 @@ the full command, bounded output and execution details."
                    (memq (plist-get render-data :termination)
                          '(stopped owner-stopped interrupted signaled)))
               "interrupted")
+             ((eq state 'unknown) "completion unavailable")
              ((eq state 'running) "running")
              ((eq state 'completed)
               (if (eq (plist-get render-data :outcome) 'failure)
