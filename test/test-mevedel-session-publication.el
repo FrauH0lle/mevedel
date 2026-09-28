@@ -537,8 +537,13 @@ and its segment path."
          (should (mevedel-session-publication-read directory old))
          (should (mevedel-session-publication-read directory current))
          (mevedel-journal-pins-release directory capture)
-         (test-mevedel-session-persistence--publish-generation session directory segment "later" 2)
-         (should-error (mevedel-session-publication-collect-step session plan)))))))
+         ;; A later head joins the retained set instead of ending the plan.
+         (let ((later (test-mevedel-session-persistence--publish-generation
+                       session directory segment "later" 2)))
+           (should (mevedel-session-publication-collect-step session plan))
+           (should (equal later (plist-get plan :head)))
+           (should (gethash (file-name-concat (plist-get plan :root) later)
+                            (plist-get plan :keep)))))))))
 
 (mevedel-deftest mevedel-session-publication-collect-step/batched-directories ()
   ;; Wholly unreferenced generations need no listing, so their deletion shares
