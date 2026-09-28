@@ -536,6 +536,12 @@ archive does not hide available later terminal evidence. If the source row is
 gone, the result link opens retained output read-only instead of navigating
 into the parent's segments. An empty retained output is shown as an explicit
 no-output result; only absent evidence reports an unavailable result.
+The read-only fallback shows material sandbox disclosures and marks incomplete
+preview output when the complete output artifact is unavailable. A readable
+artifact capped by the execution output limit remains marked as truncated. A process
+signal is labeled as signaled rather than as a requested stop in the Bash row
+and completion breadcrumb; the guest projection reports it as a failure without
+calling its signal number an exit code.
 An agent result link opens a surviving source row in its own read-only
 compaction-archive view, with Latest returning to the current agent transcript;
 agent archive navigation does not enter the parent session's segments.
