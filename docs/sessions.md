@@ -857,7 +857,11 @@ the payload directory is gone. Missing bytes without that recorded intent remain
 an invalid recovery marker.
 
 Critical publication changes the owned generation to `publishing` and reserves
-a one-hour ownership window before each fixed artifact write. Timer callbacks perform no
+a one-hour ownership window before each fixed artifact write. The head commit
+that ends a drain, with nothing remaining or queued, returns the generation
+to `active` with its ordinary expiry in the same write, so the window closes
+without a separate finishing write; work queued after it reserves again
+before writing. Timer callbacks perform no
 target I/O while publication is active, avoiding reentrant TRAMP calls; the
 serialized publisher renews before each such write that no fresher proof
 precedes, and after the final write of a batch that does not commit. An owned

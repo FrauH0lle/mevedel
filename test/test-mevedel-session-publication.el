@@ -251,6 +251,28 @@ and its segment path."
                                   (natnump (plist-get entry :operation-count))))
                            programs)))))))
 
+(mevedel-deftest mevedel-session-publication-publish/final-commit (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-final-commit" "mevedel-final-commit-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((content (mevedel-session-artifacts-printed-value
+                      (mevedel-session-artifacts-build-sidecar session (current-buffer))))
+            (updates nil)
+            (count (lambda (original session accepted status &rest args)
+                     (push status updates)
+                     (apply original session accepted status args))))
+       (advice-add 'mevedel-session-durability--update-owned-lease :around count)
+       (unwind-protect
+           (mevedel-session-publication-publish
+            session (list (list :path (file-name-concat session-dir "session.meta.el")
+                                :content content :commit-marker t))
+            t)
+         (advice-remove 'mevedel-session-durability--update-owned-lease count))
+       ;; The reservation, then a commit that also ends the window.
+       (should (equal '(publishing active) (nreverse updates)))
+       (should (eq 'active (plist-get (mevedel-session-lease session) :status)))
+       (should (eq 'owned (plist-get (mevedel-session-lease session) :state)))))))
+
 (mevedel-deftest mevedel-session-publication-publish/transcript-copies (:quiet t)
   (test-mevedel-session-publication--with-published
    "publication-transcripts" "mevedel-transcript-copies-" ?c
