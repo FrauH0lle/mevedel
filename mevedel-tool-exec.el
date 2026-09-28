@@ -811,6 +811,14 @@ the full command, bounded output and execution details."
                              (and (eq control 'input)
                                   (format "Submitted input:\n%s"
                                           (plist-get args :chars)))
+                             (when-let* ((execution-error
+                                          (plist-get render-data :execution-error)))
+                               (format "%s: %s"
+                                       (if (eq (plist-get render-data :termination)
+                                               'spawn-failed)
+                                           "Failed to start process"
+                                         "Execution error")
+                                       execution-error))
                              (unless (string-empty-p output) output)
                              (and facts (format "Details: %s" facts))
                              (when-let* ((path (plist-get render-data :output-path)))

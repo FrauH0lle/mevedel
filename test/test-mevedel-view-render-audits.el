@@ -182,6 +182,41 @@
                                                       :render-data)
                                            :calls)) :render-data)
                           :execution-id)))))))
+  :doc "a terminal launch failure stays visible in direct and nested Bash rows"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                           :renderer #'mevedel-tool-exec--render-bash))
+    (with-temp-buffer
+      (let* ((data (current-buffer))
+             (mevedel--data-buffer data)
+             (facts '(:state completed :termination spawn-failed
+                      :outcome failure :exit-code -1))
+             (observation
+              (list :facts facts :output ""
+                    :error "spawning child process: no such file: bash"))
+             (envelope (mevedel-tool-exec--observation-envelope observation)))
+        (dolist (tool-id '("direct-fail" "outer/1"))
+          (mevedel-execution-transcript-handle-event
+           (list :type 'terminal :data-buffer data :tool-use-id tool-id
+                 :owner "/root" :whole-output "" :observation observation
+                 :facts facts)))
+        (let* ((direct
+                (mevedel-view--render-tool-call
+                 (list :name "Bash" :tool-use-id "direct-fail"
+                       :args '(:command "printf hello")
+                       :result (plist-get envelope :result)
+                       :render-data (plist-get envelope :render-data)) data))
+               (nested
+                (mevedel-view--child-call-rendering
+                 (list :id "outer/1" :tool "Bash" :status 'error
+                       :args '(:command "printf hello")
+                       :result (plist-get envelope :result)
+                       :render-data (plist-get envelope :render-data)))))
+          (dolist (row (list direct nested))
+            (should (string-match-p "Failed to start process: spawning child process"
+                                    (plist-get row :body)))
+            (should-not (string-match-p "execution_id=" (plist-get row :body))))))))
   :doc "a direct Bash keeps its terminal sandbox disclosure on the outer row"
   (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
     (mevedel-tool-register
@@ -1251,7 +1286,46 @@
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
         (kill-buffer buffer))
       (kill-buffer data)
-      (delete-file physical)))))
+      (delete-file physical))))
+
+  :doc "read-only fallback discloses a retained launch error without stdout"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "failed-call"
+               :render-data (:termination spawn-failed :execution-output ""
+                             :execution-error "no such file: bash"))))
+    (let ((mevedel--data-buffer (current-buffer)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+            (let ((result (mevedel-view-audit--evidence
+                           '(:tool-use-id "failed-call" :command "printf hello"))))
+              (with-current-buffer result
+                (should (derived-mode-p 'special-mode))
+                (should (string-match-p "Failed to start process: no such file: bash"
+                                        (buffer-string)))
+                (should-not (string-match-p "Execution produced no output"
+                                            (buffer-string))))))
+        (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+          (kill-buffer buffer)))))
+
+  :doc "read-only fallback labels a post-launch diagnostic without claiming spawn failure"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "lost-call"
+               :render-data (:termination unknown :execution-output ""
+                             :execution-error "remote output write failed"))))
+    (let ((mevedel--data-buffer (current-buffer)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-buffer) (lambda (buffer) buffer)))
+            (let ((result (mevedel-view-audit--evidence
+                           '(:tool-use-id "lost-call" :command "remote-write"))))
+              (with-current-buffer result
+                (should (string-match-p "Execution error: remote output write failed"
+                                        (buffer-string)))
+                (should-not (string-match-p "Failed to start process"
+                                            (buffer-string))))))
+        (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+          (kill-buffer buffer))))))
 
 (mevedel-deftest mevedel-view-audit-show-result/folded-turn ()
   ,test
