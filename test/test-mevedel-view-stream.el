@@ -4491,7 +4491,10 @@
             (should-not (timer--repeat-delay timer))))))))
 
 (mevedel-deftest mevedel-view-animation-auto-transition
-  (:doc "Battery notifications rearm the view, preserving phase and color bank.")
+  ()
+  ,test
+  (test)
+  :doc "Battery notifications rearm the view, preserving phase and color bank."
   (cl-letf (((symbol-function 'mevedel-view-animation--colors)
              (lambda (_face _frame) '("#ff0000" . "#ffffff"))))
     (let ((mevedel-view-power--state 'unknown)
@@ -4518,7 +4521,44 @@
               (should (< (abs (- mevedel-view--spinner-timer-period (/ 1.0 30)))
                          1e-7))
               (should (= phase mevedel-view--spinner-phase-start))
-              (should (eq bank mevedel-view-animation--cache)))))))))
+              (should (eq bank mevedel-view-animation--cache))))))))
+
+  :doc "An expired AC sample followed by unknown notification slows the real timer"
+  (let ((mevedel-view-power--watchers (make-hash-table :test #'eq))
+        (mevedel-view-power--timer nil)
+        (mevedel-view-power--state 'unknown)
+        (mevedel-view-power--sample-time nil)
+        (mevedel-view-power--last-query nil)
+        (battery-update-functions (copy-sequence battery-update-functions))
+        (window-state-change-functions
+         (copy-sequence window-state-change-functions))
+        (now 1000.5)
+        (queries 0))
+    (let ((battery-status-function (lambda () (cl-incf queries) nil)))
+      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-spinner-style 'ascii)
+                  (mevedel-view-spinner-power-policy 'auto)
+                  (mevedel-view-spinner-framerate 60)
+                  (mevedel-view-spinner-battery-framerate 1))
+              (mevedel-view--start-spinner "Working...")
+              (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
+              (should (= 0.12 mevedel-view--spinner-timer-period))
+              (let ((fast mevedel-view--spinner-timer)
+                    (phase mevedel-view--spinner-phase-start))
+                (setq now 1060.5)
+                (should (eq 'unknown (mevedel-view-power--current-state)))
+                (should (mevedel--ui-timer-pending-p fast))
+                (run-hook-with-args 'battery-update-functions
+                                    '((?L . "N/A") (?B . "N/A") (?p . "N/A")))
+                (should (= 1.0 mevedel-view--spinner-timer-period))
+                (should-not (eq fast mevedel-view--spinner-timer))
+                (should-not (mevedel--ui-timer-pending-p fast))
+                (should (mevedel--ui-timer-pending-p
+                         mevedel-view--spinner-timer))
+                (should (= phase mevedel-view--spinner-phase-start))
+                (should (= 0 queries))))))))))
 
 (mevedel-deftest mevedel-view-animation-expired-external
   (:doc "An expired AC reading with a failed backend drops the actual timer rate.")

@@ -127,7 +127,10 @@ unsubscription, even inside the temporary binding. The view timer uses the
 same list ownership primitive. Callback identity rejects
 stale delivery. The fallback query runs outside animation callbacks. Neither
 the observer nor the spinner enables battery mode or changes
-request execution. Reduced wakeups are an overhead reduction, not a claim
+request execution. When a confirmed external sample expires, a subsequent
+unknown battery notification must rearm views even though the fresh-state
+comparison already says unknown: their actual timer may still use the old
+external-power cadence. Reduced wakeups are an overhead reduction, not a claim
 of proportional battery-life improvement.
 
 Projection ownership also inhibits redisplay through queued work. Disclosure

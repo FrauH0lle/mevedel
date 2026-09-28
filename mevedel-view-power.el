@@ -98,10 +98,16 @@ the views' own scheduling callbacks so visibility policy stays in the view."
 
 (defun mevedel-view-power--sample (data)
   "Record battery.el DATA and notify watchers on effective state changes."
-  (let ((old (mevedel-view-power--current-state)))
+  (let ((old (mevedel-view-power--current-state))
+        (previous mevedel-view-power--state))
     (setq mevedel-view-power--state (mevedel-view-power--normalize data)
           mevedel-view-power--sample-time (float-time))
-    (unless (eq old mevedel-view-power--state)
+    ;; The old sample may have expired before this notification.  Its
+    ;; effective state is already unknown, but views can still own timers
+    ;; scheduled at the previously confirmed external-power cadence.
+    (when (or (not (eq old mevedel-view-power--state))
+              (and (eq previous 'external)
+                   (eq mevedel-view-power--state 'unknown)))
       (mevedel-view-power--notify)))
   (mevedel-view-power--schedule))
 
