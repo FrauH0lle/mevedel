@@ -171,7 +171,7 @@ profile file larger and cost a little more per sample."
     :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
     :exit-status :failure-class :failure-stage :filesystem :first-byte-seen
     :fresh-visible-prompt-estimate
-    :git-head :goal-id
+    :gc-count :gc-ms :git-head :goal-id
     :gptel-commit :gptel-file-hash :gptel-version :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
@@ -202,7 +202,7 @@ profile file larger and cost a little more per sample."
     :specifier-key :stage :status :step :summary-threshold
     :system-configuration :target-model :target-origin :target-pressure
     :target-threshold :termination :test-scope :threshold :threshold-ms
-    :timed-out :timeout-ms :timer-callback :timer-ms :token-source :tokens-after :tokens-before
+    :timed-out :timeout-ms :timer-callback :timer-gc-count :timer-gc-ms :timer-ms :token-source :tokens-after :tokens-before
     :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
     :trigger :tty :turns-run :updated-file-count :via
     :workload :yield-time-ms)
@@ -591,7 +591,12 @@ the editor as much as the request did.")
   "Float time the next heartbeat is due.")
 
 (defvar mevedel-telemetry--lag-slowest nil
-  "(NAME . SECONDS) of the slowest timer callback since the last heartbeat.")
+  "The slowest timer callback since the last heartbeat, or nil.
+A plist (:name NAME :seconds SECONDS :gc-seconds GC :gc-count COUNT), GC
+and COUNT being the collection time and count inside that callback.")
+
+(defvar mevedel-telemetry--lag-gc nil
+  "(GCS-DONE . GC-ELAPSED) when the previous heartbeat ran.")
 
 (defvar mevedel-telemetry--lag-windows nil
   "Alist from watched session to its lag window.
@@ -599,29 +604,74 @@ A window is (:request-id ID :until TIME :counts COUNTS).  UNTIL is nil
 while the request runs and the end of the tail afterwards; COUNTS is a
 plist of the delays counted for the running request.")
 
+(defconst mevedel-telemetry--lag-closure-scan-limit 400
+  "Most conses searched in an interpreted closure's body for its callee.")
+
+(defun mevedel-telemetry--lag-closure-callee (function)
+  "Return the function closure FUNCTION calls that best names it, or nil.
+A byte-compiled closure, native-compiled ones included, keeps its callees
+among its constants; an interpreted one in its body, searched only up to
+`mevedel-telemetry--lag-closure-scan-limit' conses.  A `mevedel-'
+function wins, else the first non-primitive function."
+  (let ((budget mevedel-telemetry--lag-closure-scan-limit)
+        symbols)
+    (cond
+     ((byte-code-function-p function)
+      (mapc (lambda (constant) (when (symbolp constant) (push constant symbols)))
+            (aref function 2)))
+     ((interpreted-function-p function)
+      (let ((stack (list (aref function 1))))
+        (while (and stack (> budget 0))
+          (let ((form (pop stack)))
+            (cond
+             ((symbolp form) (push form symbols))
+             ((consp form)
+              (setq budget (1- budget))
+              (push (cdr form) stack)
+              (push (car form) stack))))))))
+    (setq symbols
+          (seq-filter (lambda (symbol)
+                        (and symbol (functionp symbol)
+                             (not (primitive-function-p (indirect-function symbol)))))
+                      (nreverse symbols)))
+    (or (seq-find (lambda (symbol) (string-prefix-p "mevedel-" (symbol-name symbol)))
+                  symbols)
+        (car symbols))))
+
 (defun mevedel-telemetry--lag-callback-name (timer)
-  "Return a label for TIMER's callback."
+  "Return a label for TIMER's callback.
+A closure is labelled `closure:' plus the function it calls, which names
+what it does rather than where it was created."
   (let ((function (timer--function timer)))
-    (if (and (symbolp function) function)
-        (symbol-name function)
-      "anonymous")))
+    (cond
+     ((and (symbolp function) function) (symbol-name function))
+     ((when-let* ((callee (mevedel-telemetry--lag-closure-callee function)))
+        (concat "closure:" (symbol-name callee))))
+     (t "anonymous"))))
 
 (defun mevedel-telemetry--lag-time-callback (original timer)
   "Run ORIGINAL on TIMER, remembering the slowest callback since a heartbeat.
 The heartbeat can only tell that the loop was late; this names what held
-it for most stalls, since timers run most of mevedel's deferred work."
-  (let ((start (float-time)))
+it for most stalls, since timers run most of mevedel's deferred work.
+Collection inside the callback is kept apart from its own work."
+  (let ((start (float-time))
+        (gc-count gcs-done)
+        (gc-seconds gc-elapsed))
     (unwind-protect (funcall original timer)
       (let ((elapsed (- (float-time) start)))
-        (when (> elapsed (or (cdr mevedel-telemetry--lag-slowest) 0))
+        (when (> elapsed (or (plist-get mevedel-telemetry--lag-slowest :seconds) 0))
           (setq mevedel-telemetry--lag-slowest
-                (cons (mevedel-telemetry--lag-callback-name timer) elapsed)))))))
+                (list :name (mevedel-telemetry--lag-callback-name timer)
+                      :seconds elapsed
+                      :gc-seconds (- gc-elapsed gc-seconds)
+                      :gc-count (- gcs-done gc-count))))))))
 
 (defun mevedel-telemetry--lag-start ()
   "Start the heartbeat and callback timing unless they already run."
   (unless mevedel-telemetry--lag-timer
     (setq mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval)
           mevedel-telemetry--lag-slowest nil
+          mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
           mevedel-telemetry--lag-timer
           (run-at-time mevedel-telemetry--lag-interval
                        mevedel-telemetry--lag-interval
@@ -634,6 +684,7 @@ it for most stalls, since timers run most of mevedel's deferred work."
   (when (timerp mevedel-telemetry--lag-timer)
     (cancel-timer mevedel-telemetry--lag-timer))
   (setq mevedel-telemetry--lag-timer nil
+        mevedel-telemetry--lag-gc nil
         mevedel-telemetry--lag-windows nil)
   (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback))
 
@@ -677,9 +728,11 @@ it for most stalls, since timers run most of mevedel's deferred work."
   "Record how late this heartbeat ran for every watched session."
   (let* ((now (float-time))
          (delay (- now (or mevedel-telemetry--lag-due now)))
-         (slowest mevedel-telemetry--lag-slowest))
+         (slowest mevedel-telemetry--lag-slowest)
+         (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed))))
     (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
           mevedel-telemetry--lag-slowest nil
+          mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
           mevedel-telemetry--lag-windows
           (seq-filter (lambda (entry)
                         (let ((until (plist-get (cdr entry) :until)))
@@ -702,9 +755,15 @@ it for most stalls, since timers run most of mevedel's deferred work."
                      :settled (and (plist-get window :until) t)
                      :command-name (and (symbolp this-command) this-command
                                         (symbol-name this-command))
+                     ;; Collection anywhere since the previous heartbeat:
+                     ;; timers, process output, redisplay and commands.
+                     :gc-count (- gcs-done (car gc))
+                     :gc-ms (round (* 1000 (- gc-elapsed (cdr gc))))
                      (and slowest
-                          (list :timer-callback (car slowest)
-                                :timer-ms (round (* 1000 (cdr slowest)))))))))))
+                          (list :timer-callback (plist-get slowest :name)
+                                :timer-ms (round (* 1000 (plist-get slowest :seconds)))
+                                :timer-gc-count (plist-get slowest :gc-count)
+                                :timer-gc-ms (round (* 1000 (plist-get slowest :gc-seconds)))))))))))
     (unless mevedel-telemetry--lag-windows
       (mevedel-telemetry--lag-stop))))
 

@@ -276,7 +276,9 @@
           (mevedel-telemetry-record session 'request-start :request-id "request-2")
           (dolist (delay '(0.3 0.7 1.5 0.05))
             (setq mevedel-telemetry--lag-due (- (float-time) delay)
-                  mevedel-telemetry--lag-slowest '("mevedel-slow-step" . 0.6))
+                  mevedel-telemetry--lag-gc (cons (- gcs-done 3) (- gc-elapsed 0.25))
+                  mevedel-telemetry--lag-slowest
+                  '(:name "mevedel-slow-step" :seconds 0.6 :gc-seconds 0.4 :gc-count 2))
             (mevedel-telemetry--lag-tick))
           (mevedel-telemetry-record session 'request-settled :request-id "request-2")
           (let ((lags (test-mevedel-telemetry--events session 'event-loop-lag))
@@ -288,6 +290,11 @@
             (should (equal "mevedel-slow-step" (plist-get (car lags) :timer-callback)))
             (should (= 600 (plist-get (car lags) :timer-ms)))
             (should (<= 700 (plist-get (car lags) :delay-ms) 800))
+            ;; Collection since the previous heartbeat, and inside the timer.
+            (should (= 3 (plist-get (car lags) :gc-count)))
+            (should (= 250 (plist-get (car lags) :gc-ms)))
+            (should (= 2 (plist-get (car lags) :timer-gc-count)))
+            (should (= 400 (plist-get (car lags) :timer-gc-ms)))
             (should-not (plist-get (car lags) :dropped-keys))
             (should (equal "request-2" (plist-get summary :request-id)))
             (should (= 3 (plist-get summary :over-200-ms)))
@@ -314,10 +321,44 @@
         (timer (timer-create)))
     (timer-set-function timer #'ignore)
     (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.02)) timer)
-    (should (equal "ignore" (car mevedel-telemetry--lag-slowest)))
+    (should (equal "ignore" (plist-get mevedel-telemetry--lag-slowest :name)))
     (timer-set-function timer (lambda ()))
     (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.05)) timer)
-    (should (equal "anonymous" (car mevedel-telemetry--lag-slowest)))))
+    (should (equal "anonymous" (plist-get mevedel-telemetry--lag-slowest :name))))
+
+  :doc "separates collection inside the slowest callback"
+  (let ((mevedel-telemetry--lag-slowest nil)
+        (timer (timer-create)))
+    (timer-set-function timer #'ignore)
+    (mevedel-telemetry--lag-time-callback
+     (lambda (_) (garbage-collect) (garbage-collect)) timer)
+    (should (= 2 (plist-get mevedel-telemetry--lag-slowest :gc-count)))
+    (should (<= 0 (plist-get mevedel-telemetry--lag-slowest :gc-seconds)
+                (plist-get mevedel-telemetry--lag-slowest :seconds))))
+
+  :doc "labels a closure by the function it calls"
+  (let ((timer (timer-create))
+        (interpreted
+         (eval '(let ((session nil))
+                  (lambda () (seq-filter #'identity (list session))
+                    (when session (mevedel-telemetry-flush session))))
+               t)))
+    (should (interpreted-function-p interpreted))
+    (timer-set-function timer interpreted)
+    ;; A `mevedel-' callee wins over an earlier generic one.
+    (should (equal "closure:mevedel-telemetry-flush"
+                   (mevedel-telemetry--lag-callback-name timer)))
+    (let ((compiled (byte-compile interpreted)))
+      (should (byte-code-function-p compiled))
+      (timer-set-function timer compiled)
+      (should (equal "closure:mevedel-telemetry-flush"
+                     (mevedel-telemetry--lag-callback-name timer))))
+    ;; Without a `mevedel-' callee, the first non-primitive function names it.
+    (timer-set-function timer (eval '(lambda () (seq-filter #'identity (list 1))) t))
+    (should (equal "closure:seq-filter" (mevedel-telemetry--lag-callback-name timer)))
+    ;; Primitives alone name nothing.
+    (timer-set-function timer (eval '(lambda () (car (list 1))) t))
+    (should (equal "anonymous" (mevedel-telemetry--lag-callback-name timer)))))
 
 (mevedel-deftest mevedel-telemetry--queue-order
   ()
