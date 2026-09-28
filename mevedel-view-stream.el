@@ -159,6 +159,9 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-label-target nil
   "Marker for the foreground label's animation property.")
 
+(defvar-local mevedel-view--spinner-metadata-target nil
+  "Markers for the foreground label's separate elapsed metadata span.")
+
 (defvar-local mevedel-view--spinner-tool-targets nil
   "Markers for the visible pending-tool indicator properties.")
 
@@ -358,13 +361,15 @@ the view has already inserted the in-flight markers."
   "Remove the fragment-managed request-progress row."
   (mevedel-view-zone-clear 'progress)
   (setq mevedel-view--spinner-rendered-state nil
-        mevedel-view--spinner-label-target nil))
+        mevedel-view--spinner-label-target nil
+        mevedel-view--spinner-metadata-target nil))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
   (mevedel-view-zone-forget 'progress)
   (setq mevedel-view--spinner-rendered-state nil
-        mevedel-view--spinner-label-target nil))
+        mevedel-view--spinner-label-target nil
+        mevedel-view--spinner-metadata-target nil))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.
@@ -499,18 +504,26 @@ FACE defaults to `mevedel-view-spinner'."
       (mevedel-view--request-progress-active-p)))
 
 (defun mevedel-view--capture-request-animation-target ()
-  "Remember the request label span after a semantic progress render."
-  (setq mevedel-view--spinner-label-target nil)
+  "Remember the label and metadata spans after a semantic progress render."
+  (setq mevedel-view--spinner-label-target nil
+        mevedel-view--spinner-metadata-target nil)
   (when-let* ((region (mevedel-view-zone-region 'progress))
               (pos (text-property-any (overlay-start region)
                                       (overlay-end region)
                                       'mevedel-view-spinner-frame t)))
-    (setq mevedel-view--spinner-label-target
-          (cons (copy-marker pos)
-                (copy-marker (or (next-single-property-change
-                                  pos 'mevedel-view-spinner-frame nil
-                                  (overlay-end region))
-                                 (overlay-end region)) t)))))
+    (let ((label-end (or (next-single-property-change
+                          pos 'mevedel-view-spinner-frame nil
+                          (overlay-end region))
+                         (overlay-end region)))
+          (metadata-end (1- (overlay-end region))))
+      (setq mevedel-view--spinner-label-target
+            (cons (copy-marker pos) (copy-marker label-end t)))
+      ;; The fragment ends with a newline.  Its suffix can remain visible
+      ;; after horizontal scrolling hides the decorative label.
+      (when (< label-end metadata-end)
+        (setq mevedel-view--spinner-metadata-target
+              (cons (copy-marker label-end)
+                    (copy-marker metadata-end t)))))))
 
 (defun mevedel-view--capture-tool-animation-targets ()
   "Remember the bounded pending-tool spans after live-tail reconciliation."
@@ -558,18 +571,27 @@ windows, the usual high-frequency case."
                  (posn-at-point last window)
                  (posn-at-point middle window))))))
 
-(defun mevedel-view--animation-target-visible-p (target property)
-  "Return non-nil when TARGET is still a visible span marked PROPERTY."
+(defun mevedel-view--animation-target-visible-p (target property &optional any-value)
+  "Return non-nil when TARGET is a visible span marked PROPERTY.
+If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
   (when-let* ((start (car-safe target))
               ((eq (marker-buffer start) (current-buffer)))
               (pos (marker-position start))
-              ((eq (get-text-property pos property) t)))
+              ((if any-value
+                   (get-text-property pos property)
+                 (eq (get-text-property pos property) t))))
     (cl-some (lambda (window)
                (and (eq (frame-visible-p (window-frame window)) t)
                     (not (mevedel-view--unattended-p))
                     (mevedel-view--animation-span-in-window-p
                      pos (marker-position (cdr target)) window)))
              (get-buffer-window-list (current-buffer) nil t))))
+
+(defun mevedel-view--spinner-metadata-visible-p ()
+  "Return non-nil when the request's elapsed suffix is on screen."
+  (mevedel-view--animation-target-visible-p
+   mevedel-view--spinner-metadata-target
+   'mevedel-view-spinner-status t))
 
 (defun mevedel-view--animation-target-frame (target &optional all)
   "Return TARGET's visible frame, or `:multiple' across display frames.
@@ -627,7 +649,8 @@ Emacs can update hscroll internally without calling `set-window-hscroll'
 or `window-scroll-functions'.  Defer the full scheduler until redisplay
 finishes; at most one probe timer belongs to this view in the meantime."
   (when (and (eq (window-buffer window) (current-buffer))
-             (not (mevedel--timer-pending-p mevedel-view--spinner-timer))
+             (not (and (mevedel--timer-pending-p mevedel-view--spinner-timer)
+                       (not (equal mevedel-view--spinner-timer-period 1.0))))
              (mevedel-view--animation-target-in-window-rows-p window)
              (or (zerop (window-hscroll window))
                  (mevedel-view--animation-visible-p)))
@@ -757,13 +780,14 @@ untouched."
                              mevedel-view--spinner-tool-targets)
                     (mevedel-view--spinner-visual-period
                      mevedel-view-tool-spinner-style)))
-         (metadata (and visible mevedel-view--spinner-status
+         (metadata (and mevedel-view--spinner-status
+                        (mevedel-view--spinner-metadata-visible-p)
                         (not (and-let* ((request (mevedel-view--spinner-request)))
                                (mevedel-request-active-work-pause-started-at
                                 request)))
                         1.0))
          (periods (delq nil (list main tool metadata)))
-         (period (and visible periods (apply #'min periods))))
+         (period (and periods (apply #'min periods))))
     (if (and (not visible) (mevedel-view--spinner-active-p)
              (mevedel-view--animation-hscrolled-p))
         (add-hook 'pre-redisplay-functions
@@ -794,7 +818,8 @@ untouched."
                        (if (and (eq timer mevedel-view--spinner-timer)
                                 (or mevedel-view--spinner-status
                                     mevedel-view--pending-tool-calls)
-                                (mevedel-view--animation-visible-p))
+                                (or (mevedel-view--animation-visible-p)
+                                    (mevedel-view--spinner-metadata-visible-p)))
                            (condition-case nil
                                (progn
                                  (mevedel-view--spinner-tick)
@@ -860,9 +885,10 @@ hidden label retains its pending refresh until visibility rearms its view."
       (setq mevedel-view--spinner-last-second second)
       (mevedel-view-animation-check-colors)
       (when (and mevedel-view--spinner-status
-                 (mevedel-view--animation-target-visible-p
-                  mevedel-view--spinner-label-target
-                  'mevedel-view-spinner-frame))
+                 (or (mevedel-view--animation-target-visible-p
+                      mevedel-view--spinner-label-target
+                      'mevedel-view-spinner-frame)
+                     (mevedel-view--spinner-metadata-visible-p)))
         (mevedel-view--call-preserving-user-view-state
          (lambda () (mevedel-view--ensure-request-progress))))
       ;; Theme/face changes can turn a color bank into a glyph fallback (or

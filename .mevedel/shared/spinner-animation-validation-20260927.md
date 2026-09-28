@@ -235,3 +235,41 @@ independent production-view review, clean Eask runs):
   (`.scratch/spinner-theme-final-full-suite/`,
   `.scratch/spinner-theme-final-full-run.log`). The full suite is **not green**;
   all eight failing names match the previously recorded non-view failures.
+
+Horizontally hidden labels with visible elapsed text and concurrent color-bank
+eviction, 2026-09-28 (source: latest Goal verifier, independent production-view
+verification, current clean Eask runs):
+
+- The completion verifier reproduced two defects: a static status row's elapsed
+  suffix stayed at `0s` when only the label was horizontally offscreen, and the
+  oldest of seven active shimmer views kept its 60-Hz timer but stopped changing
+  color frames after eviction from the six-entry shared cache. The view stream
+  now registers a separate metadata span and schedules its semantic update
+  independently of decorative-label visibility; its timer callback and semantic
+  redraw use the same gate. The animation module pins up to four color banks
+  per live view alongside the six-entry shared reuse cache. Theme invalidation
+  clears both. Unit regressions cover the isolated suffix visibility and
+  seven-view bank retention/bounds (`test/test-mevedel-view-stream.el`,
+  `test/test-mevedel-view-animation.el`).
+- A fresh graphical production view with `static` style and hscroll 12 had
+  `label-visible=nil`, `metadata-visible=t`, a one-second timer, and changed
+  `Working... · 0s` to `Working... · 4s` after two seconds
+  (`.scratch/spinner-followup-gui.log`,
+  `artifact://executions/execution-KNKZwt.log`). An independent source-loaded
+  graphical verifier observed the same transition to `3s` after 3.2 seconds
+  (`artifact://executions/execution-jpPQmG.log`). It also displayed seven
+  distinct shimmer views at once: every view had a 16.67-ms timer, the oldest
+  changed frames after eviction, and 20 warm ticks resolved no colors
+  (`artifact://executions/execution-1p9MQF.log`). Read-only review and this
+  production verification each returned PASS. Neither observation guarantees
+  60 *displayed* frames per second under the concurrent test workload.
+- After `eask clean elc`, the plan's named eight-file focused roster passed
+  **914/915 expected, zero unexpected, one optional Markdown-mode skip**
+  (`.scratch/spinner-followup-final-focused.log`). Compilation completed all
+  210 files without warnings (`.scratch/spinner-followup-final-compile.log`).
+  An isolated four-worker full run discovered **8736 tests: 8 unexpected,
+  30 skipped** (`.scratch/spinner-followup-final-full-suite/`,
+  `.scratch/spinner-followup-final-full-run.log`). The full suite is **not green**;
+  the unexpected names match the eight recorded above, none in view/animation
+  tests. Concurrent plan-handoff working-tree changes are unrelated to this
+  follow-up. No running user Emacs library was hot-reloaded.

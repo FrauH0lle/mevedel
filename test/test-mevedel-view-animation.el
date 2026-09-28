@@ -10,6 +10,82 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view-animation)
+(require 'mevedel-view)
+(require 'mevedel-view-stream)
+
+(mevedel-deftest mevedel-view-animation-color-ready-p
+  (:doc "Seven live views retain prepared banks after global cache eviction.")
+  (let ((mevedel-view-animation--cache nil)
+        (mevedel-user-dir
+         (file-name-as-directory
+          (make-temp-file "mevedel-animation-user-" t)))
+        (mevedel-permission-mode 'ask)
+        (mevedel-plugin-extra-roots nil)
+        pairs
+        (prepares 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                   (lambda (_face _frame) '("#ffffff" . "#000000")))
+                  ((symbol-function 'mevedel-view-animation--prepare)
+                   (let ((original (symbol-function
+                                    'mevedel-view-animation--prepare)))
+                     (lambda (style label colors frame)
+                       (cl-incf prepares)
+                       (funcall original style label colors frame)))))
+          (dotimes (i 7)
+            (let ((data (generate-new-buffer " *animation-data*"))
+                  (view (generate-new-buffer " *animation-view*")))
+              (push (cons view data) pairs)
+              (with-current-buffer data
+                (org-mode)
+                (setq-local mevedel--current-request nil)
+                (setq-local mevedel--session nil)
+                (setq-local gptel-response-separator "\n\n")
+                (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+                (setq-local mevedel-view--abort-function
+                            #'mevedel-view-test--abort-interactions))
+              (mevedel-view--setup view data)
+              (with-current-buffer view
+                (should (mevedel-view-animation-color-available-p
+                         'shimmer (format "Working %d" i) 'default nil)))))
+          (should (= prepares 7))
+          (should (= (length mevedel-view-animation--cache) 6))
+          (cl-loop for (view . _data) in (reverse pairs)
+                   for i from 0 do
+                   (with-current-buffer view
+                     (let ((label (format "Working %d" i)))
+                       (should (mevedel-view-animation-color-ready-p
+                                'shimmer label 'default nil))
+                       (should (mevedel-view-animation-frame
+                                'shimmer label 1.0 'default)))))
+          (should (= prepares 7))
+          (with-current-buffer (caar pairs)
+            (dotimes (i 12)
+              (mevedel-view-animation-frame
+               'shimmer (format "Replacement %d" i) 1.0 'default))
+            (should (<= (length mevedel-view-animation--view-cache)
+                        mevedel-view-animation--view-cache-limit)))
+          (mevedel-view-animation-invalidate)
+          (cl-loop for (view . _data) in pairs
+                   for i downfrom 6 do
+                   (with-current-buffer view
+                     (should-not (mevedel-view-animation-color-ready-p
+                                  'shimmer (format "Working %d" i)
+                                  'default nil))))
+          (with-current-buffer (caar pairs)
+            (should (mevedel-view-animation-color-available-p
+                     'shimmer "Working 6" 'default nil))
+            (should (mevedel-view-animation-color-ready-p
+                     'shimmer "Working 6" 'default nil))))
+      (dolist (pair pairs)
+        (when (buffer-live-p (car pair))
+          (with-current-buffer (car pair)
+            (mevedel-view-stream-stop))
+          (kill-buffer (car pair)))
+        (when (buffer-live-p (cdr pair))
+          (kill-buffer (cdr pair))))
+      (when (file-directory-p mevedel-user-dir)
+        (delete-directory mevedel-user-dir t)))))
 
 (mevedel-deftest mevedel-view-animation-period
   (:doc "Natural frame cadence is independent of the caller's frame ceiling.")

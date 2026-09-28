@@ -5,7 +5,9 @@
 ;; Pure time-based animation samples for the view's request and tool indicators.
 ;; Scheduling, status ownership, and buffer writes belong to the view stream.
 ;; Color banks hold only a bounded animated prefix; the entire label remains
-;; readable.  Theme changes discard prepared banks before the next sample.
+;; readable.  Six shared banks reuse frames between views; each live view can
+;; pin four banks so another view cannot evict its active sample.  Theme changes
+;; discard both caches before the next sample.
 
 ;;; Code:
 
@@ -27,6 +29,9 @@
 (defconst mevedel-view-animation--cache-limit 6
   "Maximum number of prepared color banks retained across labels and frames.")
 
+(defconst mevedel-view-animation--view-cache-limit 4
+  "Maximum prepared color banks retained by each active view.")
+
 (defconst mevedel-view-animation-prefixes
   (append (mapcar (lambda (char) (concat (string char) " "))
                   (string-to-list "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏-\\|/"))
@@ -40,6 +45,10 @@ would match every row.")
 (defvar mevedel-view-animation--cache nil
   "Recent banks or fallback markers (KEY . DATA), newest first.")
 
+(defvar-local mevedel-view-animation--view-cache nil
+  "Prepared banks pinned by this view while it remains alive.
+Unlike the shared reuse cache, these banks cannot be evicted by other views.")
+
 (defvar mevedel-view-animation--dots-cache nil
   "Recent dots glyph support readings (FRAME . SUPPORTED).")
 
@@ -48,7 +57,11 @@ would match every row.")
 Call this after changing a face outside of the theme system.  The view
 may redisplay its active indicators immediately after invalidation."
   (setq mevedel-view-animation--cache nil
-        mevedel-view-animation--dots-cache nil))
+        mevedel-view-animation--dots-cache nil)
+  (dolist (buffer (buffer-list))
+    (when (local-variable-p 'mevedel-view-animation--view-cache buffer)
+      (with-current-buffer buffer
+        (setq mevedel-view-animation--view-cache nil)))))
 
 (defun mevedel-view-animation-check-colors ()
   "Discard prepared banks if their resolved display colors changed.
@@ -63,7 +76,8 @@ also retries a fallback bank when a frame gains color support."
              (not (equal (mevedel-view-animation--colors
                           (nth 2 key) (nth 3 key))
                          (and (consp bank) (nth 2 bank))))))
-         mevedel-view-animation--cache)
+         (append mevedel-view-animation--view-cache
+                 mevedel-view-animation--cache))
     (mevedel-view-animation-invalidate)))
 
 (add-hook 'enable-theme-functions #'mevedel-view-animation-invalidate)
@@ -154,11 +168,24 @@ leave that entire final cluster unanimated."
           (aset frames tick sample)))
       (list frames suffix colors))))
 
+(defun mevedel-view-animation--remember-view-bank (key bank)
+  "Pin BANK for KEY within the current live view, up to its local limit."
+  (when (derived-mode-p 'mevedel-view-mode)
+    (setq mevedel-view-animation--view-cache
+          (cons (cons key bank)
+                (assoc-delete-all key mevedel-view-animation--view-cache)))
+    (when (> (length mevedel-view-animation--view-cache)
+             mevedel-view-animation--view-cache-limit)
+      (setcdr (nthcdr (1- mevedel-view-animation--view-cache-limit)
+                      mevedel-view-animation--view-cache)
+              nil))))
+
 (defun mevedel-view-animation--color-frame (style label seconds face frame)
   "Return prepared color STYLE for LABEL at SECONDS with FACE on FRAME."
   (let* ((frame (or frame (selected-frame)))
          (key (list style label face frame))
-         (entry (assoc key mevedel-view-animation--cache))
+         (local (assoc key mevedel-view-animation--view-cache))
+         (entry (or local (assoc key mevedel-view-animation--cache)))
          (bank (if entry (cdr entry)
                  (let* ((colors (mevedel-view-animation--colors face frame))
                         (prepared (and colors (mevedel-view-animation--prepare
@@ -171,6 +198,8 @@ leave that entire final cluster unanimated."
                                      mevedel-view-animation--cache)
                              nil))
                    prepared))))
+    (unless local
+      (mevedel-view-animation--remember-view-bank key (or bank :fallback)))
     (when (consp bank)
       (let* ((tick (mod (floor (* (mod (max 0.0 seconds)
                                        mevedel-view-animation--cycle)
@@ -192,8 +221,9 @@ bounded bank prepared for the first visible frame when available."
 Unlike `mevedel-view-animation-color-available-p', this never resolves
 colors or constructs frames; visual callbacks can use it after a theme
 invalidation to defer bank preparation until semantic maintenance."
-  (assoc (list style label face (or frame (selected-frame)))
-         mevedel-view-animation--cache))
+  (let ((key (list style label face (or frame (selected-frame)))))
+    (or (assoc key mevedel-view-animation--view-cache)
+        (assoc key mevedel-view-animation--cache))))
 
 (defun mevedel-view-animation--braille-supported-p (frame)
   "Return non-nil when the display FRAME can draw Braille.
