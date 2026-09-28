@@ -78,6 +78,20 @@
                      (plist-get rendering :header)))
       (should (string-search "Details: no-match · exit 1"
                              (plist-get rendering :body)))))
+  :doc "accepted input is successful even when the Bash process fails"
+  (progn
+    (mevedel-tools-register)
+    (let* ((data '(:status error :execution-control input
+                           :control-succeeded-p t :execution-id "exec-1"
+                           :state completed :outcome failure
+                           :termination exited :exit-code 2))
+           (rendering (mevedel-view--invoke-renderer
+                       (mevedel-tool-get "WriteStdin") data
+                       '(:execution_id "exec-1" :chars "answer\n")
+                       "failed command"))
+           (line (mevedel-view--rendering-header-line rendering)))
+      (should (eq 'success (mevedel-view--rendering-status rendering data)))
+      (should (string-match-p "✓ WriteStdin: sent input" line))))
   :doc "abnormal termination remains visible without an exit code"
   (should (equal "failure · timeout"
                  (mevedel-tool-exec-format-execution-metadata

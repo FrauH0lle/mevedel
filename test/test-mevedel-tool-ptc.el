@@ -82,6 +82,20 @@
       (should (eq 'warning (plist-get full :status)))
       (should (equal value (plist-get (car (last (plist-get full :child-calls))) :result)))))
 
+  :doc "collected command failure does not mark successful nested input failed"
+  (let* ((child '(:id "ptc/1" :tool "WriteStdin" :status error
+                  :result "<bash-execution exit_code=\"2\"/>"
+                  :render-data (:execution-control input :control-succeeded-p t
+                                :outcome failure)))
+         (rendering (mevedel-tool-ptc--render
+                     "ToolCall" nil "handled"
+                     (list :kind 'ptc :outcome 'completed :calls (list child)))))
+    (should (eq 'error (plist-get child :status)))
+    (should (eq 'success (plist-get rendering :status)))
+    (should-not (string-search "failed" (plist-get rendering :header)))
+    (should (eq 'error (plist-get (car (plist-get rendering :child-calls))
+                                 :status))))
+
   :doc "keeps the returned value in the body and child output in its own row"
   (with-temp-buffer
     (let* ((rendering

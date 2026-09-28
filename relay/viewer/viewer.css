@@ -352,6 +352,11 @@ code, pre { font-family: var(--font-mono); }
   font-size: .78rem;
 }
 .tool > summary .st.completed { color: var(--ok); }
+.execution-breadcrumb { display: flex; align-items: baseline; flex-wrap: wrap; gap: .3rem; font-size: .9rem; }
+.execution-result-link { border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
+.execution-result-dialog { width: min(850px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; background: var(--surface); color: var(--ink); border: 1px solid var(--rule-strong); border-radius: 6px; }
+.execution-result-dialog::backdrop { background: #0006; }
+.execution-result-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool > summary .st.failed { color: var(--failed); }
 .tool > summary .st.running { color: var(--running); }
 .tool > summary:hover .tname { text-decoration: underline; }

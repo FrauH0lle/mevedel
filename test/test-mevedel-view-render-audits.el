@@ -1010,6 +1010,77 @@
                          (plist-get (plist-get (car records) :args)
                                     :sender))))))))
 
+(mevedel-deftest mevedel-view-audit--history-records-across-segments ()
+  ,test
+  (test)
+  :doc "an archived Bash row retains later input, polls and delivery in order"
+  (dolist (agent-p '(nil t))
+    (let ((live (generate-new-buffer " *execution history live*"))
+          (archive (generate-new-buffer " *execution history archived*"))
+          (session (mevedel-session--create :authority-mode 'pid-lock
+                                            :name "execution history"))
+          opened)
+      (unwind-protect
+          (progn
+            (with-current-buffer live
+              (setq-local mevedel--session session)
+              (insert (propertize
+                       "(:name \"WriteStdin\" :args (:execution_id \"exec-1\" :chars \"\"))\npolled\n"
+                       'gptel '(tool . "poll")))
+              (insert (propertize
+                       "(:name \"WriteStdin\" :args (:execution_id \"exec-1\" :chars \"hi\"))\ninput sent\n"
+                       'gptel '(tool . "input")))
+              (insert "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+                      "DELIVERED\n"
+                      "<bash-execution execution_id=\"exec-1\" outcome=\"success\"/>\n"
+                      "</agent-message>\n")
+              (should (equal '("WriteStdin" "WriteStdin")
+                             (cl-loop for segment in (mevedel-transcript-segments
+                                                       (point-min) (point-max))
+                                      when (eq (car segment) 'tool)
+                                      collect (plist-get
+                                               (mevedel-view--tool-call-parse
+                                                live (cadr segment) (caddr segment))
+                                               :name)))))
+            (with-current-buffer archive
+              (insert (propertize
+                       (concat "(:name \"Bash\" :args (:command \"sleep 1\"))\n"
+                               "yielded"
+                               (mevedel-tool-render-data-format
+                                '(:execution-id "exec-1" :state running) "bash"))
+                       'gptel '(tool . "bash"))))
+            (with-temp-buffer
+              (setq-local mevedel--data-buffer live)
+              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                         (lambda () archive))
+                        ((symbol-function 'mevedel-session-artifacts-transcript-segments)
+                         (lambda (_session _buffer)
+                           (list (append '(:number 1 :status readable :current-p nil)
+                                         (when agent-p '(:logical "agents/child.compact-0001.chat.org")))
+                                 '(:number 2 :status missing :current-p nil)
+                                 '(:number 3 :status readable :current-p t))))
+                        ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
+                         (lambda (_session descriptor)
+                           (should (= 1 (plist-get descriptor :number)))
+                           (let ((copy (generate-new-buffer " *history inspection*")))
+                             (push copy opened)
+                             (with-current-buffer copy
+                               (insert-buffer-substring archive))
+                             copy))))
+                (let ((records (mevedel-view-audit--history-records "exec-1")))
+                  (should (equal '("Bash" "WriteStdin" "WriteStdin"
+                                   "Execution delivery")
+                                 (mapcar (lambda (record) (plist-get record :name))
+                                         records)))
+                  (should (equal "hi"
+                                 (plist-get (plist-get (nth 2 records) :args) :chars)))
+                  (should (string-match-p "DELIVERED"
+                                          (plist-get (nth 3 records) :result)))
+                  (should-not (cl-some #'buffer-live-p opened))
+                  (should (buffer-live-p archive))))))
+        (dolist (buffer (append opened (list archive live)))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (mevedel-deftest mevedel-view-audit--owner-record ()
   ,test
   (test)

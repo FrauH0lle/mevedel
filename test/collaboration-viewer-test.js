@@ -586,6 +586,8 @@ async function main() {
       return selector === '.dock' ? dockNode : null;
     },
     body: {
+      children: [],
+      append(...children) { this.children.push(...children); },
       attributes: {},
       hasAttribute(name) { return name in this.attributes; },
       removeAttribute(name) { delete this.attributes[name]; },
@@ -1771,6 +1773,37 @@ async function main() {
   assert.equal(skillTurn.disclosures.get('root').open, true);
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
+
+  // Forwarded completion stays one compact line; result bytes travel only
+  // after an explicit read-only fetch, including the missing-evidence case.
+  const execution = {id: 'forwarded-1', kind: 'execution', status: 'failed',
+    execution: {id: 'exec-1', owner: '/root/child', command: 'exit 2', exitCode: 2}};
+  await deliverTo(sockets[1], {t: 'record', record: execution});
+  const breadcrumb = findByRecordId(nodes.transcript, execution.id);
+  assert.ok(textOf(breadcrumb).includes('Failed: exit 2 · exit 2 · /root/child'));
+  assert.ok(!textOf(breadcrumb).includes('CHILD OUTPUT'));
+  assert.equal(breadcrumb.disclosures.size, 0);
+  const beforeResult = sockets[1].sent.length;
+  breadcrumb.children[1].children[1].children[1].dispatch('click');
+  await waitFor(() => sockets[1].sent.length === beforeResult + 1, 'execution result request');
+  const fetchResult = await unseal(key, sockets[1].sent[beforeResult]);
+  assert.deepEqual(fetchResult, {t: 'execution-result-get', reqId: 1,
+    owner: '/root/child', executionId: 'exec-1'});
+  const resultDialog = document.body.children.find(child => child.className === 'execution-result-dialog');
+  assert.equal(resultDialog.open, true);
+  await deliverTo(sockets[1], {t: 'execution-result', reqId: fetchResult.reqId,
+    owner: fetchResult.owner, executionId: fetchResult.executionId,
+    source: 'child', output: 'CHILD OUTPUT'});
+  assert.ok(textOf(resultDialog).includes('CHILD OUTPUT'));
+  assert.ok(!textOf(breadcrumb).includes('CHILD OUTPUT'));
+  breadcrumb.children[1].children[1].children[1].dispatch('click');
+  await waitFor(() => sockets[1].sent.length === beforeResult + 2, 'second result request');
+  await deliverTo(sockets[1], {t: 'execution-result', reqId: 2,
+    owner: '/root/child', executionId: 'exec-1', source: 'missing', output: '',
+    error: 'Original execution row and retained output are unavailable.'});
+  assert.ok(textOf(resultDialog).includes('retained output are unavailable'));
+  assert.ok(!textOf(resultDialog).includes('CHILD OUTPUT'));
+  await deliverTo(sockets[1], {t: 'remove', ids: ['forwarded-1']});
 
   // Shared questions show their exact sent context in a closed disclosure.
   // Metadata is required; host edits and lookalike headings stay visible.

@@ -17,6 +17,7 @@
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-pipeline)
+(require 'mevedel-ptc-driver)
 (require 'mevedel-sandbox)
 (require 'mevedel-telemetry)
 (require 'mevedel-workspace)
@@ -353,6 +354,46 @@
                         (plist-get result :result)
                         (plist-get result :render-data))
                        :hidden-p)))
+  :doc "accepted input collecting a failed command is a successful interaction"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "failed-after-input"))
+        result)
+    (let ((mevedel--session session)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-observe)
+                 (lambda (_session _owner _id callback &rest _)
+                   (funcall callback
+                            '(:output "failed command"
+                                      :facts (:execution-id "exec-1"
+                                            :state completed :termination exited
+                                            :outcome failure :exit-code 2)
+                                      :sandbox-facts
+                                      (:sandbox bubblewrap :filesystem workspace-write
+                                                :network isolated)))))
+                ((symbol-function 'mevedel-telemetry-record) #'ignore))
+        (mevedel-tool-exec--write-stdin
+         (lambda (value) (setq result value))
+         '(:execution_id "exec-1" :chars "answer\n" :yield_time_ms 1000))))
+    (should (string-prefix-p "failed command" (plist-get result :result)))
+    (should (string-search mevedel-tool-exec--sandbox-recovery-guidance
+                           (plist-get result :result)))
+    (should (eq 'error (plist-get result :status)))
+    (should (plist-get (plist-get result :render-data) :control-succeeded-p))
+    (should (eq 'failure (plist-get (plist-get result :render-data) :outcome)))
+    (cl-letf (((symbol-function 'mevedel-ptc-intern)
+               (lambda (_state _symbol) :error))
+              ((symbol-function 'mevedel-ptc-check-value) #'ignore))
+      (pcase-let ((`(,status ,text (:error ,value))
+                   (mevedel-ptc-driver--classify-outcome nil result)))
+        (should (eq 'error status))
+        (should (equal text value))))
+    (let* ((data (plist-put (copy-sequence (plist-get result :render-data))
+                            :status (plist-get result :status)))
+           (row (mevedel-tool-exec--render-bash
+                 "WriteStdin" '(:chars "answer\n")
+                 (plist-get result :result) data)))
+      (should (eq 'success (plist-get row :status)))
+      (should (equal "WriteStdin: sent input" (plist-get row :header)))))
   :doc "side execution observations use the durable audit target"
   (let* ((parent (mevedel-session--create :authority-mode 'pid-lock :name "parent"))
          (session (mevedel-session--create

@@ -367,6 +367,20 @@ without a duplicate current-segment output card. This also applies to Bash
 children of ToolCall. If an intervening archive is unreadable and the command
 is no longer running, its original row keeps the available output but warns
 that completion evidence is unavailable instead of guessing an outcome.
+Yielded root and child Bash executions produce one compact, output-free
+completion breadcrumb in their owning guest transcripts. A forwarded child
+`EXECUTION` mailbox gives the parent its own breadcrumb. Each receiving
+transcript deduplicates by owner and execution ID.
+**Show result** makes a separate read-only request for retained output; it does
+not duplicate the body in the parent transcript or alter the model-visible
+mailbox. The host validates owner and ID against either the receiving root or
+registered child's trusted local breadcrumb, or a forwarded mailbox in the
+parent's live or archived segments. It prefers the child's trusted terminal
+row or completion audit and retained output when the child transcript is resident. If it is cold,
+the bounded forwarded mailbox output is the fallback. Missing archives or
+evidence are reported explicitly, not resolved from a browser-supplied path.
+Each response is capped at 50,000 output bytes and repeated requests from one
+guest are throttled. View-only guests can use the link.
 Nested open and closed choices survive record updates, reconnect snapshots
 and agent transcript refreshes; the composer draft stays untouched. Direct
 ApplyPatch calls keep session artifact cards and diff presentation.

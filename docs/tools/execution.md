@@ -93,7 +93,9 @@ link opens the original Bash row, including a ToolCall child, or shows retained
 read-only evidence (or an explicit absence) if the row is unavailable. Failed control
 operations, such as a permission denial or invalid execution handle, remain
 visible. A command's nonzero exit is recorded on the command, not presented as
-a failed polling operation. Retained tool records remain inspectable through
+a failed input or polling operation that successfully observed it. The model
+still receives the original failure status, command outcome, and output.
+Retained tool records remain inspectable through
 the execution-history disclosure. These rules also apply within ToolCall.
 
 Only a command that actually yielded receives a completion breadcrumb. Whether

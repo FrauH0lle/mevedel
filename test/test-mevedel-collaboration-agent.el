@@ -24,6 +24,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-transcript)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-render)
 (require 'mevedel-workspace)
@@ -286,6 +287,323 @@
                                        (nreverse sent)))))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-collaboration--handle-execution-result-get
+  () ,test (test)
+  :doc "parent breadcrumb has no stdout; authorized click prefers child evidence"
+  (let* ((directory (make-temp-file "mevedel-guest-result-" t))
+         (session (mevedel-session--create :name "parent" :save-path directory
+                                          :current-segment 2 :authority-mode 'pid-lock))
+         (child-session (mevedel-session--create :name "child" :save-path
+                                                (file-name-concat directory "child")
+                                                :current-segment 1))
+         (parent (generate-new-buffer " *guest parent result*"))
+         (child (generate-new-buffer " *guest child result*"))
+         (agent (mevedel-agent-record--create :path "/root/child"
+                                             :conversation-buffer child))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :data-buffer parent :transport 'transport
+                     :guests guests))
+         sent)
+    (setf (mevedel-session-agent-registry session) (list (cons "/root/child" agent)))
+    (puthash 1 (list :ready t :writable nil) guests)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+                    "forwarded bounded output\n"
+                    "<bash-execution execution_id=\"exec-1\" command=\"exit 2\" "
+                    "outcome=\"failure\" exit_code=\"2\"/>\n"
+                    "</agent-message>\n"))
+          (with-current-buffer child
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session child-session)
+            (insert (mevedel--format-hook-audit-record
+                     '(:type execution-completion :tool-use-id "tool-1"
+                       :render-data (:execution-id "exec-1" :state completed
+                                     :execution-output "CANONICAL CHILD OUTPUT")))))
+          (should (equal "CANONICAL CHILD OUTPUT"
+                         (plist-get
+                          (plist-get
+                           (car (mevedel-transcript-audit-records
+                                 (with-current-buffer child (buffer-string))))
+                           :render-data)
+                          :execution-output)))
+          (should (eq 'execution-completion
+                      (plist-get (car (mevedel-transcript-audit-records
+                                       (with-current-buffer child (buffer-string))))
+                                 :type)))
+          (should (mevedel-session-artifacts-transcript-segments
+                   child-session child))
+          (should (mevedel-collaboration--agent-conversation room "/root/child"))
+          (should (equal 'readable
+                         (plist-get (car (last (mevedel-session-artifacts-transcript-segments
+                                                child-session child))) :status)))
+          (should (equal "CANONICAL CHILD OUTPUT"
+                         (plist-get (mevedel-collaboration--child-execution-facts
+                                     room "/root/child" "exec-1")
+                                    :execution-output)))
+          ;; A normally settled Bash updates its row and leaves only a
+          ;; breadcrumb audit: it need not emit execution-completion.
+          (with-current-buffer child
+            (erase-buffer)
+            (let ((start (point)))
+              (insert "(:name \"Bash\" :args (:command \"exit 2\"))\ninitial")
+              (insert (mevedel-tool-render-data-format
+                       '(:execution-id "exec-1" :command "exit 2"
+                         :state completed :outcome failure :status error
+                         :execution-output "CANONICAL CHILD OUTPUT") "tool-1"))
+              (put-text-property start (point) 'gptel '(tool . "tool-1")))
+            (insert (mevedel--format-hook-audit-record
+                     '(:type execution-breadcrumb :execution-id "exec-1"
+                       :tool-use-id "tool-1" :owner "/root/child"
+                       :command "exit 2"
+                       :facts (:execution-id "exec-1" :state completed
+                               :outcome failure)))))
+          (should (equal "CANONICAL CHILD OUTPUT"
+                         (plist-get (mevedel-collaboration--child-execution-facts
+                                     room "/root/child" "exec-1")
+                                    :execution-output)))
+          (let* ((records (mevedel-collaboration--canonical-records parent))
+                 (record (car records))
+                 (wire (json-encode (mevedel-collaboration--json-record record))))
+            (should (= 1 (length records)))
+            (should (equal "execution" (plist-get record :kind)))
+            (should (equal "failed" (plist-get record :status)))
+            (should (equal "/root/child" (plist-get (plist-get record :execution)
+                                                  :owner)))
+            (should-not (string-match-p "bounded output\\|CANONICAL CHILD OUTPUT"
+                                        wire)))
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport peer frame)
+                       (push (cons peer frame) sent) t)))
+            (mevedel-collaboration--handle-execution-result-get
+             room 999 '(:reqId 1 :owner "/root/child" :executionId "exec-1"))
+            (should-not sent)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 1 :owner "/root/other" :executionId "exec-1"))
+            (should (plist-get (cdar sent) :error))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 2 :owner "/root/child" :executionId "exec-1"))
+            (should (equal "child" (plist-get (cdar sent) :source)))
+            (should (equal "CANONICAL CHILD OUTPUT" (plist-get (cdar sent) :output)))
+            (should (= 1 (caar sent)))
+            ;; Repeating a scan too soon earns a bounded retry response.
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 3 :owner "/root/child" :executionId "exec-1"))
+            (should (equal "Retry result fetch shortly."
+                           (plist-get (cdar sent) :error)))
+            ;; After child loss and parent compaction, retained forwarded
+            ;; evidence still answers from a readable older parent segment.
+            (write-region (with-current-buffer parent (buffer-string)) nil
+                          (mevedel-session-artifacts-segment-path directory 1)
+                          nil 'silent)
+            (with-current-buffer parent (erase-buffer))
+            (kill-buffer child)
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 4 :owner "/root/child" :executionId "exec-1"))
+            (should (equal "forwarded" (plist-get (cdar sent) :source)))
+            (should (equal "forwarded bounded output" (plist-get (cdar sent) :output)))
+            ;; A gone archive has no authority or result; no path is accepted
+            ;; from the guest as a substitute.
+            (delete-file (mevedel-session-artifacts-segment-path directory 1))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 5 :owner "/root/child" :executionId "exec-1"
+                     :outputPath "artifact://unrelated"))
+            (should (equal "missing" (plist-get (cdar sent) :source)))
+            (should (plist-get (cdar sent) :error))))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (when (buffer-live-p child) (kill-buffer child))
+      (delete-directory directory t)))
+  :doc "bounded retained output never exceeds the guest result frame budget"
+  (let* ((directory (make-temp-file "mevedel-guest-result-bound-" t))
+         (session (mevedel-session--create :name "bound" :save-path directory
+                                          :current-segment 1))
+         (parent (generate-new-buffer " *guest result bound*"))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :data-buffer parent :transport 'transport
+                     :guests guests)) sent)
+    (puthash 1 (list :ready t :writable nil) guests)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+                    (make-string 60000 ?x) "\n"
+                    "<bash-execution execution_id=\"exec-large\" "
+                    "outcome=\"success\"/>\n</agent-message>\n"))
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport _peer frame) (setq sent frame) t)))
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 1 :owner "/root/child" :executionId "exec-large"))
+            (should (eq t (plist-get sent :truncated)))
+            (should (<= (string-bytes (plist-get sent :output)) 50000))
+            (should (< (string-bytes (json-encode sent)) 100000))))
+      (kill-buffer parent)
+      (delete-directory directory t)))
+  :doc "trusted root and child breadcrumbs resolve terminal rows without forwarding"
+  (let* ((directory (make-temp-file "mevedel-local-guest-result-" t))
+         (session (mevedel-session--create :name "root" :save-path directory))
+         (child-session (mevedel-session--create
+                         :name "child" :save-path (file-name-concat directory "child")))
+         (parent (generate-new-buffer " *local guest result*"))
+         (child (generate-new-buffer " *local child result*"))
+         (agent (mevedel-agent-record--create :path "/root/child"
+                                             :conversation-buffer child))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :data-buffer parent :transport 'transport
+                     :guests guests)) sent)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/child" agent)))
+    (puthash 1 (list :ready t :writable nil) guests)
+    (unwind-protect
+        (progn
+          (cl-loop for buffer in (list parent child)
+                   for owner in '("/root" "/root/child")
+                   for own-session in (list session child-session)
+                   for id in '("exec-root" "exec-child")
+                   for output in '("ROOT CANONICAL" "CHILD CANONICAL") do
+                   (with-current-buffer buffer
+                     (delay-mode-hooks (org-mode))
+                     (setq-local mevedel--session own-session)
+                     (let ((start (point)))
+                       (insert "(:name \"Bash\" :args (:command \"echo done\"))\ninitial")
+                       (insert (mevedel-tool-render-data-format
+                                (list :execution-id id :command "echo done"
+                                      :state 'completed :outcome 'success
+                                      :execution-output output) id))
+                       (put-text-property start (point) 'gptel (cons 'tool id)))
+                     (insert (mevedel--format-hook-audit-record
+                              (list :type 'execution-breadcrumb :execution-id id
+                                    :tool-use-id id :owner owner :command "echo done"
+                                    :facts (list :execution-id id :state 'completed
+                                                 :outcome 'success))))))
+          (let ((records (mevedel-collaboration--canonical-records parent))
+                (child-records (mevedel-collaboration--canonical-records child)))
+            (should (= 2 (length records)))
+            (should (= 2 (length child-records)))
+            (should (equal "execution" (plist-get (cadr records) :kind)))
+            (should (equal "execution" (plist-get (cadr child-records) :kind)))
+            (should-not (string-search "ROOT CANONICAL"
+                                       (json-encode (mevedel-collaboration--json-record
+                                                     (cadr records))))))
+          (with-current-buffer parent
+            (insert (mevedel--format-hook-audit-record
+                     '(:type execution-breadcrumb :execution-id "exec-root"
+                       :tool-use-id "exec-root" :owner "/root"
+                       :command "echo done"
+                       :facts (:execution-id "exec-root" :outcome success)))
+                    (mevedel--format-hook-audit-record
+                     '(:type execution-breadcrumb :execution-id "exec-other"
+                       :tool-use-id "other" :owner "/root"
+                       :command "echo done"
+                       :facts (:execution-id "exec-other" :outcome failure
+                               :exit-code 2)))))
+          (let ((records (mevedel-collaboration--canonical-records parent)))
+            (should (= 3 (length records)))
+            (should (equal "failed" (plist-get (nth 2 records) :status)))
+            (should-not (equal (plist-get (nth 1 records) :id)
+                               (plist-get (nth 2 records) :id))))
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport _peer frame) (setq sent frame) t)))
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 1 :owner "/root" :executionId "exec-root"))
+            (should (equal "child" (plist-get sent :source)))
+            (should (equal "ROOT CANONICAL" (plist-get sent :output)))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 2 :owner "/root/child" :executionId "exec-child"))
+            (should (equal "CHILD CANONICAL" (plist-get sent :output)))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 3 :owner "/root/other" :executionId "exec-child"
+                     :outputPath "artifact://forged"))
+            (should (equal "missing" (plist-get sent :source)))
+            (should (plist-get sent :error))
+            ;; The breadcrumb still authorizes a read, but missing source
+            ;; output is reported instead of guessed from the original text.
+            (with-current-buffer parent
+              (delete-region (point-min)
+                             (plist-get (car (mevedel-transcript-audit-buffer-spans
+                                              'execution-breadcrumb)) :start)))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 4 :owner "/root" :executionId "exec-root"))
+            (should (equal "missing" (plist-get sent :source)))
+            (should (plist-get sent :error))
+            (with-current-buffer parent (erase-buffer))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 5 :owner "/root" :executionId "exec-root"))
+            (should (equal "missing" (plist-get sent :source)))))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (when (buffer-live-p child) (kill-buffer child))
+      (delete-directory directory t)))
+  :doc "local nested Bash audit supplies retained output without a child row or artifact"
+  (let* ((directory (make-temp-file "mevedel-nested-guest-result-" t))
+         (session (mevedel-session--create :name "root" :save-path directory))
+         (child-session (mevedel-session--create
+                         :name "child" :save-path (file-name-concat directory "child")))
+         (parent (generate-new-buffer " *nested guest result*"))
+         (child (generate-new-buffer " *nested child result*"))
+         (agent (mevedel-agent-record--create :path "/root/child"
+                                             :conversation-buffer child))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :data-buffer parent :transport 'transport
+                     :guests guests)) sent)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/child" agent)))
+    (puthash 1 (list :ready t :writable nil) guests)
+    (unwind-protect
+        (progn
+          (cl-loop for buffer in (list parent child)
+                   for owner in '("/root" "/root/child")
+                   for own-session in (list session child-session)
+                   for id in '("exec-nested-root" "exec-nested-child")
+                   for tool-id in '("outer-root/1" "outer-child/1")
+                   for output in '("ROOT NESTED OUTPUT" "CHILD NESTED OUTPUT") do
+                   (with-current-buffer buffer
+                     (delay-mode-hooks (org-mode))
+                     (setq-local mevedel--session own-session)
+                     (insert (mevedel--format-hook-audit-record
+                              (list :type 'execution-breadcrumb
+                                    :execution-id id :owner owner
+                                    :tool-use-id tool-id :command "exit 1"
+                                    :facts (list :execution-id id :outcome 'failure)))
+                             (mevedel--format-hook-audit-record
+                              (list :type 'execution-completion
+                                    :tool-use-id tool-id :owner owner
+                                    :render-data
+                                    (list :execution-id id :state 'completed
+                                          :outcome 'failure :status 'error
+                                          :output-path "artifact://executions/unavailable.log"
+                                          :execution-output output)))
+                             (mevedel--format-hook-audit-record
+                              (list :type 'execution-completion
+                                    :tool-use-id "unrelated/1" :owner owner
+                                    :render-data
+                                    (list :execution-id id :state 'completed
+                                          :execution-output "WRONG TOOL"))))))
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport _peer frame) (setq sent frame) t)))
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 1 :owner "/root" :executionId "exec-nested-root"))
+            (should (equal "child" (plist-get sent :source)))
+            (should (equal "ROOT NESTED OUTPUT" (plist-get sent :output)))
+            (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+            (mevedel-collaboration--handle-execution-result-get
+             room 1 '(:reqId 2 :owner "/root/child" :executionId "exec-nested-child"))
+            (should (equal "child" (plist-get sent :source)))
+            (should (equal "CHILD NESTED OUTPUT" (plist-get sent :output)))))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (when (buffer-live-p child) (kill-buffer child))
+      (delete-directory directory t))))
 
 
 (provide 'test-mevedel-collaboration-agent)

@@ -81,6 +81,16 @@
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
                   "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-with-render-boundaries-advancing
+                  "mevedel-view-composer" (thunk))
+
+;; `mevedel-view-audit'
+(declare-function mevedel-view--hook-audit-records-from-text
+                  "mevedel-view-audit" (text &optional type data-buf source-start))
+(declare-function mevedel-view--insert-hook-audit-block
+                  "mevedel-view-audit" (record &optional source expanded))
+(declare-function mevedel-view-audit-breadcrumb-present-p
+                  "mevedel-view-audit" (record before))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-mutate
@@ -116,6 +126,13 @@
                   "mevedel-view-render" (data-buf))
 (declare-function mevedel-view-render-settle
                   "mevedel-view-render" (data-buf start end))
+
+;; `mevedel-view-segments'
+(declare-function mevedel-view-segments-display-buffer
+                  "mevedel-view-segments" ())
+
+;; `mevedel-transcript-audit'
+(defvar mevedel--hook-audit-open)
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-clear "mevedel-view-zone" (namespace))
@@ -1512,6 +1529,49 @@ Without PREVIOUS, capture displayed samples before replacing the live rows."
     (mevedel-view--schedule-render
      'incremental data-buffer mevedel-view-stream-render-delay)))
 
+(defun mevedel-view-stream--terminal-breadcrumb (event)
+  "Project EVENT's newly persisted breadcrumb into an open current view.
+Only the transcript audit supplies its identity and source range.  A view
+opened later, or one inspecting a historical segment, uses normal source
+projection instead of maintaining a second completion registry."
+  (when-let* ((data (plist-get event :data-buffer))
+              ((buffer-live-p data))
+              (view (mevedel-view-stream--execution-view-buffer data))
+              (execution-id (plist-get (plist-get event :facts) :execution-id))
+              (record
+               (with-current-buffer data
+                 (save-restriction
+                   (widen)
+                   (save-excursion
+                     (goto-char (point-max))
+                     (when (search-backward mevedel--hook-audit-open nil t)
+                       (cl-find-if
+                        (lambda (item)
+                          (and (equal execution-id
+                                      (plist-get item :execution-id))
+                               (equal (plist-get event :tool-use-id)
+                                      (plist-get item :tool-use-id))))
+                        (mevedel-view--hook-audit-records-from-text
+                         (buffer-substring (point) (point-max))
+                         'execution-breadcrumb data (point)))))))))
+    (with-current-buffer view
+      (when (eq data (mevedel-view-segments-display-buffer))
+        (mevedel-view-render-mutate
+         (list 'execution-breadcrumb execution-id)
+         (lambda ()
+           (unless (mevedel-view-audit-breadcrumb-present-p
+                    record (mevedel-view--history-insertion-marker))
+             (mevedel-view--call-preserving-user-view-state
+              (lambda ()
+                (mevedel-view--call-with-render-boundaries-advancing
+                 (lambda ()
+                   (let ((inhibit-read-only t)
+                         (inhibit-modification-hooks t))
+                     (save-excursion
+                       (goto-char (mevedel-view--history-insertion-marker))
+                       (mevedel-view--insert-hook-audit-block
+                        record (plist-get record :source)))))))))))))))
+
 (defun mevedel-view-stream-handle-execution-event (event)
   "Apply Bash EVENT to its authoritative row and visible view.
 Always return nil; only the mailbox sink may acknowledge durable delivery."
@@ -1523,7 +1583,10 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
            (string-join
             (last (string-lines (or (plist-get event :output-tail) "")) 5)
             "\n"))))
-  (mevedel-view-stream-handle-tool-progress event))
+  (mevedel-view-stream-handle-tool-progress event)
+  (when (eq (plist-get event :type) 'terminal)
+    (mevedel-view-stream--terminal-breadcrumb event))
+  nil)
 
 (defun mevedel-view-stream-handle-tool-progress (event)
   "Apply transient tool progress EVENT to its visible aggregate row."
