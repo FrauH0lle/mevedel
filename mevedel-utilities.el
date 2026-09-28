@@ -1430,6 +1430,17 @@ A batch Emacs keeps its own collection behaviour."
     (remhash key mevedel--gc-holds)
     (mevedel--gc-maintain)))
 
+(defmacro mevedel--with-gc-busy (&rest body)
+  "Run BODY holding the busy collection threshold.
+For lifecycle transactions that copy a session outside any request: a
+large Save As allocated 350 MB and collected 21 times."
+  (declare (indent 0) (debug t))
+  (let ((key (make-symbol "busy")))
+    `(let ((,key (list 'busy)))
+       (mevedel--gc-hold ,key #'always)
+       (unwind-protect (progn ,@body)
+         (mevedel--gc-release ,key)))))
+
 (defun mevedel--write-remote-file-atomically (path content coding mode)
   "Replace remote PATH with CONTENT in one pinned target program, or return nil.
 

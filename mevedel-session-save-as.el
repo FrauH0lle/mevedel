@@ -17,6 +17,7 @@
 ;; compiles to a call to a function that does not exist.
 (eval-when-compile (require 'mevedel-structs))
 
+(eval-when-compile (require 'mevedel-utilities))
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 (require 'mevedel-session-durability)
@@ -432,22 +433,23 @@ or committed-child adoption.
 The caller must already have checked live mutation authority.  This module
 rechecks the portable parent head while holding the reserved lease and uses
 the existing lease/publication gates for every child write."
-  (let ((transaction
-         (mevedel-session-save-as--validate
-          session buffer new-name new-id new-save-path)))
-    (unwind-protect
-        (condition-case error
+  (mevedel--with-gc-busy
+    (let ((transaction
+           (mevedel-session-save-as--validate
+            session buffer new-name new-id new-save-path)))
+      (unwind-protect
+          (condition-case error
+              (setq transaction
+                    (mevedel-session-save-as--run-stages transaction))
+            (error
+             (setq transaction
+                   (mevedel-session-save-as--record-error transaction error))))
+        (if (mevedel-session-save-as--committed-p transaction)
             (setq transaction
-                  (mevedel-session-save-as--run-stages transaction))
-          (error
-           (setq transaction
-                 (mevedel-session-save-as--record-error transaction error))))
-      (if (mevedel-session-save-as--committed-p transaction)
+                  (mevedel-session-save-as--adopt-child transaction))
           (setq transaction
-                (mevedel-session-save-as--adopt-child transaction))
-        (setq transaction
-              (mevedel-session-save-as--cleanup transaction))))
-    (mevedel-session-save-as--finish transaction)))
+                (mevedel-session-save-as--cleanup transaction))))
+      (mevedel-session-save-as--finish transaction))))
 
 (defun mevedel-session-save-as--rename-live-session-buffers
     (session data-buffer)
