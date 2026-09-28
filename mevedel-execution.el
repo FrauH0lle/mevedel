@@ -1135,6 +1135,9 @@ execution's progress cost."
     (mevedel-execution--emit-event
      (mevedel-execution--event
       record 'progress
+      :output-preview-truncated-p
+      (> (or (mevedel-execution--record-output-chars record) 0)
+         mevedel-execution-inline-output-limit)
       :output-tail (or (mevedel-execution--record-output-tail record) "")))
     (setf (mevedel-execution--record-progress-timer record)
           (run-at-time
@@ -1255,6 +1258,9 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
           record 'terminal
           :delivery delivery
           :observation observation
+          :whole-output-truncated-p
+          (> (or (mevedel-execution--record-output-chars record) 0)
+             mevedel-execution-inline-output-limit)
           :whole-output (mevedel-execution--whole-preview record))))
     (plist-put event :facts (plist-get observation :facts))))
 

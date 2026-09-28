@@ -1512,6 +1512,8 @@ Without PREVIOUS, capture displayed samples before replacing the live rows."
      mevedel-view--execution-events tool-use-id
      (list :type 'progress
            :facts (copy-tree (plist-get event :facts))
+           :output-preview-truncated-p
+           (plist-get event :output-preview-truncated-p)
            :output-tail (plist-get event :output-tail))
      'mevedel-view--execution-event-entries)))
 

@@ -93,7 +93,29 @@
                                :sandbox bubblewrap :filesystem workspace-write
                                :network isolated :proc fresh
                                :additional-read-count 0 :additional-write-count 1))))
-    :sandbox-summary)))
+    :sandbox-summary))
+  :doc "reports cumulative preview truncation after individually complete polls"
+  (let* ((mevedel-execution-inline-output-limit 2000)
+         (record (mevedel-execution--record-create)))
+    (dotimes (i 3)
+      (mevedel-execution--retain-output record (make-string 1000 (+ ?A i)))
+      (let ((range (mevedel-execution--unread-preview record 1000)))
+        (should (= 0 (plist-get range :omitted)))
+        (mevedel-execution--consume-unread-range
+         record (list :end (* 1000 (1+ i))
+                      :omitted (plist-get range :omitted)))))
+    (should (= 0 (mevedel-execution--record-omitted-output-bytes record)))
+    (let ((render-data
+           (mevedel-execution-transcript-terminal-render-data
+            (list :facts (list :state 'completed :outcome 'success
+                               :omitted-output-bytes 0)
+                  :whole-output (mevedel-execution--whole-preview record)
+                  :whole-output-truncated-p
+                  (> (mevedel-execution--record-output-chars record)
+                     mevedel-execution-inline-output-limit)))))
+      (should (plist-get render-data :output-preview-truncated-p))
+      (should (string-match-p "omitted 1000 chars"
+                              (plist-get render-data :execution-output))))))
 (mevedel-deftest mevedel-execution-transcript-handle-event ()
   ,test
   (test)
