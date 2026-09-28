@@ -277,13 +277,25 @@ without claiming anything went wrong."
        (string-match-p "\\btest[ ]+ert\\b" command)
        (null (mevedel-execution-telemetry--eask-targets command))))
 
+(defun mevedel-execution-telemetry--eask-scope (command targets)
+  "Classify Eask COMMAND, with its test TARGETS, as a workload scope.
+Named test files make it `focused'; an untargeted ERT run or the test
+script `full'; otherwise `compile', `clean', or `other'.  Calling every
+untargeted command full once made cleanups count as complete suites."
+  (cond
+   (targets 'focused)
+   ((string-match-p "\\btest[ ]+ert\\b\\|\\brun[ ]+script[ ]+test\\b" command) 'full)
+   ((string-match-p "\\bcompile\\b" command) 'compile)
+   ((string-match-p "\\bclean\\b" command) 'clean)
+   (t 'other)))
+
 (defun mevedel-execution-telemetry-command-properties (command)
   "Return non-sensitive profiler properties for COMMAND text."
   (when (mevedel-execution-telemetry--eask-command-p command)
     (let ((targets (mevedel-execution-telemetry--eask-targets command)))
       (list :workload 'eask
             :test-targets targets
-            :test-scope (if targets 'focused 'full)
+            :test-scope (mevedel-execution-telemetry--eask-scope command targets)
             :cache-identity
             (mevedel-execution-telemetry--cache-identity)))))
 
