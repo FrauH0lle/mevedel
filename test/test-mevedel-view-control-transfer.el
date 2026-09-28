@@ -63,6 +63,25 @@
                 (member 'help-key-binding
                         (if (proper-list-p face) face (list face))))))))
 
+(mevedel-deftest mevedel-view--control-transfer-refresh ()
+  ,test
+  (test)
+  :doc "rebuilds the interaction zone only when the transfer descriptor changes"
+  (let ((session (mevedel-session--create :name "main"))
+        (rebuilds 0))
+    (test-mevedel-view-control-transfer--with-pair session nil
+      (setq-local mevedel-view--control-transfer-rebuild-function
+                  (lambda () (cl-incf rebuilds)))
+      (dotimes (_ 3) (mevedel-view--control-transfer-refresh view))
+      (should (= 1 rebuilds))
+      (mevedel-session-set-control-transfer
+       session (list :state 'requested
+                     :request (list :requester-label "laptop")))
+      (mevedel-view--control-transfer-refresh view)
+      (should (= 2 rebuilds))
+      (mevedel-view--control-transfer-refresh view)
+      (should (= 2 rebuilds)))))
+
 (mevedel-deftest mevedel-view--control-transfer-poll-seconds ()
   ,test
   (test)

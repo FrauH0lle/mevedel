@@ -181,6 +181,9 @@ timer would outlive the buffer as a stray wakeup holding a dead view.")
 (defvar-local mevedel-view--control-transfer-drain-token nil
   "Registered control-transfer drain predicate for this view.")
 
+(defvar-local mevedel-view--control-transfer-descriptor 'unset
+  "Transfer descriptor this view's interaction zone last showed.")
+
 (defvar-local mevedel-view--control-transfer-rebuild-function nil
   "Function that asks the generic interaction owner to rebuild this view.")
 
@@ -276,7 +279,15 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
               (ignore-errors
                 (mevedel-session-control-transfer-poll
                  session data nil))))
-          (mevedel-view--control-transfer-rebuild)))
+          ;; The zone shows only this descriptor; rebuilding it unchanged
+          ;; every poll allocated about 180 KB per view every five seconds.
+          (let ((descriptor
+                 (and session
+                      (mevedel-session-control-transfer-descriptor
+                       session read-only-p))))
+            (unless (equal descriptor mevedel-view--control-transfer-descriptor)
+              (setq mevedel-view--control-transfer-descriptor descriptor)
+              (mevedel-view--control-transfer-rebuild)))))
       (mevedel-view--control-transfer-schedule (current-buffer)))))
 
 
@@ -490,6 +501,7 @@ can still use its root registration to seal journal work before teardown."
   (mevedel-view-control-transfer-teardown)
   ;; Initialization is the one legitimate re-arm after a teardown.
   (setq-local mevedel-view--control-transfer-torn-down-p nil)
+  (setq-local mevedel-view--control-transfer-descriptor 'unset)
   (setq-local mevedel-view--control-transfer-rebuild-function rebuild-function)
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer)
