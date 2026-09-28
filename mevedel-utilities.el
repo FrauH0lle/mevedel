@@ -1367,6 +1367,69 @@ batched section.  Both are raised, and neither is ever lowered."
          (gc-cons-percentage (max gc-cons-percentage 0.5)))
      ,@body))
 
+(defcustom mevedel-gc-cons-threshold-while-busy (* 64 1024 1024)
+  "Lowest `gc-cons-threshold', in bytes, while a mevedel request runs.
+
+A request allocates continuously in timers and process callbacks, which
+the command loop never sees.  Idle-oriented tuning such as gcmh lowers the
+threshold after its idle collection and raises it again only before the
+next command, so an unattended request collected about every ten megabytes:
+a pause of 150 ms every few seconds on a large session.  While any root or
+agent request runs, the threshold is kept at least this high; the previous
+value returns when the last one ends.  Nil leaves the threshold alone."
+  :type '(choice (const :tag "Leave the threshold alone" nil)
+                 (natnum :tag "Bytes"))
+  :group 'mevedel)
+
+(defvar mevedel--gc-holds (make-hash-table :test #'eq)
+  "Keys holding the busy collection threshold, to their liveness predicate.")
+
+(defvar mevedel--gc-timer nil
+  "Timer keeping the busy threshold while holds exist.")
+
+(defvar mevedel--gc-restore nil
+  "(PREVIOUS . FLOOR) once mevedel raised `gc-cons-threshold'.")
+
+(defun mevedel--gc-maintain ()
+  "Apply or release the busy collection threshold for the current holds.
+Holds whose predicate fails are dropped, so an ended request that skipped
+its release cannot keep the threshold raised.  Re-applying every second
+also outlasts tuning that lowers the threshold after an idle collection."
+  (maphash (lambda (key live-p)
+             (unless (ignore-errors (funcall live-p))
+               (remhash key mevedel--gc-holds)))
+           mevedel--gc-holds)
+  (let ((floor mevedel-gc-cons-threshold-while-busy))
+    (if (and floor (> (hash-table-count mevedel--gc-holds) 0))
+        (progn
+          (unless mevedel--gc-restore
+            (setq mevedel--gc-restore (cons gc-cons-threshold floor)))
+          (when (< gc-cons-threshold floor)
+            (setq gc-cons-threshold floor))
+          (unless (timerp mevedel--gc-timer)
+            (setq mevedel--gc-timer (run-at-time 1 1 #'mevedel--gc-maintain))))
+      (when (timerp mevedel--gc-timer)
+        (cancel-timer mevedel--gc-timer))
+      (setq mevedel--gc-timer nil)
+      (when mevedel--gc-restore
+        ;; Someone else chose a value meanwhile; theirs stands.
+        (when (eql gc-cons-threshold (cdr mevedel--gc-restore))
+          (setq gc-cons-threshold (car mevedel--gc-restore)))
+        (setq mevedel--gc-restore nil)))))
+
+(defun mevedel--gc-hold (key live-p)
+  "Keep the busy collection threshold while KEY holds and LIVE-P is non-nil.
+A batch Emacs keeps its own collection behaviour."
+  (unless noninteractive
+    (puthash key live-p mevedel--gc-holds)
+    (mevedel--gc-maintain)))
+
+(defun mevedel--gc-release (key)
+  "Release KEY's hold on the busy collection threshold."
+  (when (gethash key mevedel--gc-holds)
+    (remhash key mevedel--gc-holds)
+    (mevedel--gc-maintain)))
+
 (defun mevedel--write-remote-file-atomically (path content coding mode)
   "Replace remote PATH with CONTENT in one pinned target program, or return nil.
 
