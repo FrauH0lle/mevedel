@@ -4199,6 +4199,84 @@
           (should-not (mevedel--timer-pending-p timer))
           (should-not (gethash view-buf mevedel-view-power--watchers)))))))
 
+(mevedel-deftest mevedel-view-animation-window-departure
+  (:doc "Hiding the last frozen tool view releases power monitoring immediately.")
+  (let ((queries 0)
+        (battery-status-function (lambda () (cl-incf queries) nil))
+        (mevedel-view-power--watchers (make-hash-table :test #'eq))
+        (mevedel-view-power--timer nil)
+        (mevedel-view-power--state 'unknown)
+        (mevedel-view-power--sample-time nil)
+        (mevedel-view-power--last-query nil)
+        (battery-update-functions (copy-sequence battery-update-functions))
+        (window-state-change-functions
+         (copy-sequence window-state-change-functions))
+        (mevedel-view-spinner-power-policy 'auto)
+        (mevedel-view-spinner-battery-framerate 0))
+    (unwind-protect
+        (mevedel-view-stream-test--with-buffers
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer view-buf)
+            (redisplay t)
+            (with-current-buffer view-buf
+              (setq mevedel-view--pending-tool-calls
+                    '(("call-1" . "Calling Read...")))
+              (mevedel-view--refresh-pending-tool-lines)
+              (should (gethash view-buf mevedel-view-power--watchers))
+              (should (timerp mevedel-view-power--timer))
+              (should-not mevedel-view--spinner-timer))
+            ;; The first departure must not unsubscribe while a second window
+            ;; still displays the target.
+            (let ((other (split-window-right)))
+              (set-window-buffer other view-buf)
+              (redisplay t)
+              (switch-to-buffer data-buf)
+              (redisplay t)
+              ;; Batch Emacs has no live redisplay loop; deliver the departing
+              ;; buffer's local callback with that buffer current.
+              (with-current-buffer view-buf
+                (should (memq #'mevedel-view--resume-on-window-change
+                              window-buffer-change-functions))
+                (run-hook-with-args 'window-buffer-change-functions
+                                    (selected-window)))
+              (should (gethash view-buf mevedel-view-power--watchers))
+              (set-window-buffer other data-buf)
+              (redisplay t)
+              (with-current-buffer view-buf
+                (run-hook-with-args 'window-buffer-change-functions other))
+              (should-not (gethash view-buf mevedel-view-power--watchers))
+              (should-not mevedel-view-power--timer)
+              (should-not (memq #'mevedel-view-power--sample
+                                battery-update-functions))
+              (mevedel-view-power--poll)
+              (mevedel-view-power--poll)
+              (should (zerop queries))
+              (should-not mevedel-view-power--timer)
+              ;; Reopening the same view restores its observer without
+              ;; restarting or changing the pending tool call.
+              (set-window-buffer other view-buf)
+              (redisplay t)
+              (with-current-buffer view-buf
+                (run-hook-with-args 'window-buffer-change-functions other))
+              (should (gethash view-buf mevedel-view-power--watchers))
+              (should (equal (with-current-buffer view-buf
+                               mevedel-view--pending-tool-calls)
+                             '(("call-1" . "Calling Read..."))))
+              ;; Deleting the last view window has no departing buffer-local
+              ;; callback.  A shared window-state observer must do the cleanup.
+              (delete-window other)
+              (run-hook-with-args 'window-state-change-functions
+                                  (selected-frame))
+              (should-not (gethash view-buf mevedel-view-power--watchers))
+              (should-not mevedel-view-power--timer)
+              (should-not (memq #'mevedel-view-power--sample
+                                battery-update-functions))
+              (should-not (memq #'mevedel-view-power--on-window-state-change
+                                window-state-change-functions)))))
+      (when mevedel-view-power--timer
+        (cancel-timer mevedel-view-power--timer)))))
+
 (mevedel-deftest mevedel-view-animation-power-cadence
   (:doc "The actual view timer changes cadence without restarting the phase.")
   (let ((mevedel-view-animation--cache nil))

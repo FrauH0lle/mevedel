@@ -308,9 +308,13 @@ visible in an attended window, and updates registered spans instead of scanning
 the transcript each frame. Focus, window and scroll changes rearm it (horizontal
 scroll uses a scoped `set-window-hscroll` observer because Emacs does not call
 `window-scroll-functions` for that change; automatic panning instead arms a
-buffer-local redisplay observer only while a target is horizontally suspended);
-each
-one-shot callback rearms from the present rather than queuing overdue repeats
+buffer-local redisplay observer only while a target is horizontally suspended).
+The buffer-local window-change hook reevaluates a view when its window switches
+buffers; a shared window-state hook catches deletion of its last window. Both
+release power monitoring even if zero-fps tool-only progress has no animation
+or elapsed timer, and the shared hooks are removed after the last eligible
+view unsubscribes. Each one-shot callback rearms from the present rather than
+queuing overdue repeats
 after a stall. Static or frozen indicators require no decorative timer,
 although a visible active request can still update elapsed text once a second
 without advancing a frozen indicator. Freezing keeps the last displayed

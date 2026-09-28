@@ -21,7 +21,9 @@
          (mevedel-view-power--sample-time nil)
          (mevedel-view-power--last-query nil)
          (mevedel-view-power--timer nil)
-         (battery-update-functions (copy-sequence battery-update-functions)))
+         (battery-update-functions (copy-sequence battery-update-functions))
+         (window-state-change-functions
+          (copy-sequence window-state-change-functions)))
      (unwind-protect
          (progn ,@body)
        (maphash (lambda (view _callback)
@@ -91,6 +93,8 @@
             (mevedel-view-power-watch one (lambda () (cl-incf calls)))
             (let ((timer mevedel-view-power--timer))
               (should (timerp timer))
+              (should (memq #'mevedel-view-power--on-window-state-change
+                            window-state-change-functions))
               (mevedel-view-power-watch
                two (lambda ()
                      (should (eq (current-buffer) two))
@@ -123,6 +127,8 @@
               (should-not mevedel-view-power--timer)
               (should-not (memq #'mevedel-view-power--sample
                                 battery-update-functions))
+              (should-not (memq #'mevedel-view-power--on-window-state-change
+                                window-state-change-functions))
               (should (memq other battery-update-functions))
               (setq now 1065.0)
               (mevedel-view-power-test--fire-poll)

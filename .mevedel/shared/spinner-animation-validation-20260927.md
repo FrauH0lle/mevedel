@@ -184,3 +184,32 @@ probes, independent review, clean Eask runs, and full-suite runner):
   above. An overlapping cleanup caused three extra view cold-load/parse
   failures in the first follow-up attempt; they did not recur when the final
   full run was isolated from cleanup.
+
+Hidden frozen-tool power cleanup, 2026-09-28 (source: completion verifier,
+independent nonbatch re-review, clean Eask runs):
+
+- A completion verifier reproduced battery fallback queries continuing after
+  the only zero-fps, tool-only view was hidden. A buffer-local window-change
+  callback had considered the replacement buffer but not the departing view.
+  The callback now reevaluates the departing view without resuming its pending
+  transcript render. Deleting the view's last window does not dispatch that
+  buffer-local hook, so the shared power observer also installs a default
+  window-state callback only while subscribed views exist. It asks their
+  schedulers to recheck visibility and removes itself with the final watcher.
+- A regression covers replacement, preservation with a second window, last-
+  window deletion, no battery queries after unsubscription, and reopening
+  (`test/test-mevedel-view-stream.el`). In batch Eask it explicitly dispatches
+  the hooks; the independent reviewer also observed automatic delivery in
+  nonbatch Emacs 31.1: replacement and last-window deletion both cleared the
+  watcher, shared timer, and hooks; a second visible window retained them;
+  reopening restored watching without a decorative timer. Review returned
+  PASS. No active user Emacs library was hot-reloaded.
+- After `eask clean elc`, the named view roster plus power and chat tests
+  passed **973/974 expected, zero unexpected, one optional Markdown-mode
+  skip** (`.scratch/spinner-delete-final-focused.log`). All 210 files compiled
+  without warnings (`.scratch/spinner-delete-final-compile.log`). The isolated
+  four-worker full suite discovered **8733 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-delete-final-full-suite/`,
+  `.scratch/spinner-delete-final-full-run.log`). The full suite is **not green**;
+  the eight failing names match earlier runs and do not include a view or
+  power test. `git diff --check` passed.
