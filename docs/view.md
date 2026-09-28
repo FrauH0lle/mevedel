@@ -305,12 +305,16 @@ contract: a windowless or vertically/horizontally offscreen indicator has no
 decorative wakeups. A replacement display string maps its entire label to one
 buffer span, so horizontal visibility checks its actually displayed animated
 characters, not merely source positions. A long color label's static tail
-does not keep a high-frequency timer alive after the bounded animated prefix
-scrolls away. The trailing ellipsis is checked against the last visible glyph
-even without horizontal scrolling: truncation can hide it beyond the right
-edge, while a wrapped final row may still show it. Vertical pixel scrolling
-can likewise hide a wrapped color prefix without advancing the source position;
-visibility then uses the displayed index and rearming observes pixel scrolls.
+does not keep a high-frequency timer alive after the *changing* part of its
+bounded colored prefix scrolls away. Preparation records that bound from the
+actual frame colors: shimmer and bounce can leave some colored characters
+constant across the cycle. The trailing ellipsis is checked against the last
+visible glyph even without horizontal scrolling: truncation can hide it beyond
+the right edge, while a wrapped final row may still show it. Vertical pixel
+scrolling can likewise hide a wrapped color prefix without advancing the source
+position; visibility then uses the displayed index and rearming observes pixel
+scrolls. Event-driven theme or display-frame changes still repaint a visible
+constant-colored tail without restarting decorative callbacks.
 If horizontal scrolling
 hides the label but leaves its elapsed suffix visible in the text area, a
 separate visibility check keeps the

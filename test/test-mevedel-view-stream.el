@@ -4831,11 +4831,11 @@
                  (initial (get-text-property pos 'display)))
             (setq mevedel-view--spinner-last-second (floor (float-time)))
             (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
-                       (lambda (_target &optional _all) :multiple))
+                       (lambda (_target &optional _all _paint) :multiple))
                       ;; This case tests frame selection, not the pixel
                       ;; visibility unavailable in batch Emacs for ellipsis.
                       ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                       (lambda (_start _end _window) t))
+                       (lambda (_start _end _window &optional _paint) t))
                       ((symbol-function 'mevedel-view--animation-seconds)
                        (lambda () 0.48)))
               (mevedel-view--spinner-tick))
@@ -4878,7 +4878,8 @@
                   ;; Fake window symbols have no redisplay positions; this
                   ;; case checks which frame receives the dots bank.
                   ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                   (lambda (_start _end window) (eq window 'visible)))
+                   (lambda (_start _end window &optional _paint)
+                     (eq window 'visible)))
                   ((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
                    (lambda (frame) (eq frame visible-frame))))
           (let ((frames (mevedel-view--animation-target-frame target t)))
@@ -4939,7 +4940,8 @@
                     ((symbol-function 'frame-focus-state)
                      (lambda (frame) (eq frame focused)))
                     ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                     (lambda (_start _end window) (eq window background))))
+                     (lambda (_start _end window &optional _paint)
+                       (eq window background))))
             (should-not (mevedel-view--animation-visible-p))
             (should-not (mevedel-view--spinner-metadata-visible-p))
             (mevedel-view--start-spinner-timer)
@@ -5073,6 +5075,21 @@
         (setq left-index 48)
         (ert-info ("color suffix")
           (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        ;; Frame preparation records the *changing* prefix: shimmer and
+        ;; bounce leave part of their colored prefix visually constant.
+        (dolist (case '((shimmer 14 15) (bounce 9 10) (breathe 20 48)))
+          (let* ((mevedel-view-spinner-style (car case))
+                 (bank (mevedel-view-animation--prepare
+                        (car case) label '("#ffffff" . "#000000") nil))
+                 (display (concat (aref (car bank) 0) (cadr bank))))
+            (put-text-property start end 'display display)
+            (setq left-index (nth 1 case))
+            (should (mevedel-view--animation-span-in-window-p
+                     start end window))
+            (setq left-index (nth 2 case))
+            (should-not (mevedel-view--animation-span-in-window-p
+                         start end window))))
+        (setq mevedel-view-spinner-style 'shimmer)
         ;; A combining mark at the bound keeps its entire cluster uncolored.
         (setq display (concat (propertize (substring label 0 47)
                                            'face '(:foreground "red"))
@@ -5468,6 +5485,76 @@
                        (get-text-property start 'display)))
               (should (= frozen mevedel-view--spinner-frozen-seconds))
               (should-not mevedel-view--spinner-timer))))))))
+
+(mevedel-deftest mevedel-view-animation-theme-refreshes-visible-static-tail
+  (:doc "A visible constant-colored tail repaints without restarting motion.")
+  (let ((mevedel-view-animation--cache nil)
+        (foreground "#ff0000"))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (_face _frame) (cons foreground "#000000"))))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'shimmer)
+                (mevedel-view-spinner-power-policy 'full))
+            (mevedel-view--start-spinner
+             (concat "Working " (make-string 92 ?w)))
+            (let* ((target mevedel-view--spinner-label-target)
+                   (start (marker-position (car target)))
+                   (end (marker-position (cdr target)))
+                   (before (get-text-property start 'display))
+                   (phase mevedel-view--spinner-phase-start)
+                   (undo buffer-undo-list)
+                   (modified (buffer-modified-p)))
+              (should (= 15 (get-text-property
+                             0 'mevedel-view-animation--changing-end before)))
+              (cl-letf (((symbol-function 'window-start) (lambda (_window) start))
+                        ((symbol-function 'window-end) (lambda (_window) (1+ end)))
+                        ((symbol-function 'window-hscroll) (lambda (_window) 20))
+                        ((symbol-function 'window-vscroll)
+                         (lambda (_window &optional _pixelwise) 0))
+                        ((symbol-function 'window-body-height)
+                         (lambda (_window &optional _pixelwise) 120))
+                        ((symbol-function 'frame-char-height)
+                         (lambda (&optional _frame) 16))
+                        ((symbol-function 'posn-at-point)
+                         (lambda (pos &optional _window)
+                           (unless (= pos start) '(fringe))))
+                        ((symbol-function 'posn-area)
+                         (lambda (pos)
+                           (and (eq (car pos) 'fringe) 'right-fringe)))
+                        ((symbol-function 'posn-x-y)
+                         (lambda (_pos) '(728 . 40)))
+                        ((symbol-function 'posn-at-x-y)
+                         (lambda (_x y &rest _)
+                           (if (>= y 64) '(left) '(blank))))
+                        ((symbol-function 'posn-point)
+                         (lambda (pos) (and (eq (car pos) 'left) start)))
+                        ((symbol-function 'posn-string)
+                         (lambda (_pos)
+                           (cons (get-text-property start 'display) 20))))
+                (mevedel-view--start-spinner-timer t)
+                (should-not mevedel-view--spinner-timer-period)
+                (should-not (mevedel-view--animation-target-visible-p
+                             target 'mevedel-view-spinner-frame))
+                (should (mevedel-view--animation-target-visible-p
+                         target 'mevedel-view-spinner-frame nil t))
+                (setq foreground "#00ff00")
+                (run-hook-with-args 'enable-theme-functions 'mevedel-test-theme)
+                (let ((after (get-text-property start 'display)))
+                  (should-not (equal (get-text-property 20 'face before)
+                                     (get-text-property 20 'face after)))
+                  (should (equal (get-text-property 20 'face after)
+                                 (get-text-property 20 'face
+                                   (mevedel-view-animation-frame
+                                    'shimmer (buffer-substring-no-properties
+                                              start end)
+                                    0 'mevedel-view-spinner
+                                    (selected-frame)))))
+                  (should-not mevedel-view--spinner-theme-stale-p)
+                  (should-not mevedel-view--spinner-timer-period)
+                  (should (= phase mevedel-view--spinner-phase-start))
+                  (should (eq undo buffer-undo-list))
+                  (should (eq modified (buffer-modified-p))))))))))))
 
 (mevedel-deftest mevedel-view-animation-frame-refreshes-frozen-status
   (:doc "A paused zero-fps label changes palettes when its display frame changes.")

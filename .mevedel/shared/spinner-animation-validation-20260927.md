@@ -815,3 +815,54 @@ independent `/root/animation_review`, current source and Eask runs):
   layout, and concurrent plan-handoff failures. The paused-motion and new
   pixel-scroll tests passed; the full suite is **not green**. Physical input
   delivery, scanout and attributable battery-life improvement remain unmeasured.
+
+Changing-color boundary and theme-repaint follow-up, 2026-09-28 (source:
+whole-Goal completion verifier after `b8a05bc7`, production graphical probes,
+independent `/root/animation_review`, clean Eask checks):
+
+- Whole-Goal verification found a 100-character shimmer label at horizontal
+  scroll 20 with **18 decorative callbacks over 350 ms**, despite every
+  visible color staying constant across all 216 prepared frames; bounce
+  exhibited the same static-colored tail. `b8a05bc7` therefore did not yet
+  satisfy the no-offscreen-wakeup contract. Preparation now records the last
+  actually *changing* color index once per bank on each prepared display
+  string, derived from frame colors rather than a duplicate geometry formula.
+  Motion visibility uses that bounded marker; unscrolled leading-glyph checks
+  remain cheap. A deterministic all-frames regression establishes bounds of
+  15/10/48 for long shimmer/bounce/breathe labels in the reference palette,
+  and a display-index regression tests the same visibility boundaries.
+- In a fresh source-loaded graphical replay of the original scroll-20 probe,
+  shimmer and bounce had **no timer or hidden callbacks in 350 ms** and each
+  resumed at 16.67 ms with 20 callbacks in the next 350 ms. Breathe is a
+  positive control: character 20 changes color and retained 16.67-ms cadence
+  and 20 callbacks. These use fresh Emacs rather than the user's already
+  loaded library (`artifact://executions/execution-E9pb8q.log`,
+  `artifact://executions/execution-dzzsAr.log`).
+- Review found a distinct side effect: checking only the moving prefix also
+  deferred event-driven theme repaint when a constant-colored tail remained
+  visible. The theme/frame repaint path now checks any displayed label row
+  independently of the motion gate. When source positions alias to nil or a
+  fringe under hscroll, it samples at most one position per visible screen
+  row, **only on theme/frame/visibility events**, not frame callbacks. A
+  regression models start=nil, midpoint/end=right-fringe, and visible row
+  index 20. The independent reviewer reproduced real GUI red-to-green repaint
+  of character 20 at hscroll 20, stale flag cleared, no timer, and preserved
+  phase/undo/modified state, returning `VERDICT: PASS` on this corrected
+  working snapshot. Hidden stale labels are not row-scanned on every tool
+  frame; explicit visibility rearm restores a deferred repaint.
+- After Eask cleanup, focused animation+stream tests passed **181/181**
+  (`.scratch/spinner-painted-tail-v3b-focused.log`). On the settled source,
+  the accepted plan's named eight-file roster plus power, chat, hooks and
+  integrity passed **1087/1088 expected, zero unexpected, one optional
+  composer skip** (`.scratch/spinner-painted-tail-final-roster.log`). All
+  **210 files** compiled without warning/error/stale-bytecode matches
+  (`.scratch/spinner-painted-tail-final-compile.log`); `git diff --check`
+  passed. The complete two-worker Eask suite discovered **8759 tests:
+  8 unexpected, 30 skipped**
+  (`.scratch/spinner-painted-tail-final-full-suite/summary.json`,
+  `.scratch/spinner-painted-tail-final-full-run.log`). The eight names match
+  the previously recorded unrelated bridge, preset, message/steering
+  injection, skills-layout, and concurrent plan-handoff failures. Both new
+  changing-bound and repaint regressions passed. The full suite is **not
+  green**. No active host Emacs was hot-reloaded; physical input delivery,
+  scanout and attributable battery-life savings remain unmeasured.

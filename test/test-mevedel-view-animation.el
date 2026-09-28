@@ -148,6 +148,28 @@
                47))
     (should (= (mevedel-view-animation--prefix-end "é") 2))))
 
+(mevedel-deftest mevedel-view-animation--changing-end
+  (:doc "Prepared motion bounds exclude constant-colored prefix characters.")
+  (let ((label (make-string 100 ?w)))
+    (dolist (case '((shimmer . 15) (bounce . 10) (breathe . 48)))
+      (let* ((frames (car (mevedel-view-animation--prepare
+                           (car case) label '("#ffffff" . "#000000") nil)))
+             (first (aref frames 0))
+             (bound (get-text-property
+                     0 'mevedel-view-animation--changing-end first))
+             (last-changing 0))
+        (dotimes (tick (length frames))
+          (let ((sample (aref frames tick)))
+            (should (= (get-text-property
+                        0 'mevedel-view-animation--changing-end sample)
+                       bound))
+            (dotimes (i (length sample))
+              (unless (equal (get-text-property i 'face sample)
+                             (get-text-property i 'face first))
+                (setq last-changing (max last-changing (1+ i)))))))
+        (should (= bound last-changing))
+        (should (= bound (cdr case)))))))
+
 (mevedel-deftest mevedel-view-animation-invalidate
   (:doc "A theme or face change clears prepared samples and changes shades.")
   (let ((mevedel-view-animation--cache nil)
