@@ -154,6 +154,29 @@ tests exercise compiled behavior before loading their ordinary test fixtures.
 Required dependencies loaded from source can also hide missing compile-time
 imports; use compiled dependency copies when testing that boundary.
 
+### Reloading into a running Emacs
+
+Load compiled code into a live editor, never bare sources. Interpreted
+mevedel is several times slower and allocates on every call: on a large
+session the transcript parser took 67 ms and 6.4 MB interpreted against
+19 ms and 1.6 MB compiled, and garbage collection dominated interactive
+pauses. Compile into a temporary directory so no bytecode is left beside
+the sources or in a package build, where it could shadow later edits:
+
+```elisp
+(let* ((dir (make-temp-file "mevedel-reload-" t))
+       (byte-compile-dest-file-function
+        (lambda (file)
+          (file-name-concat dir (concat (file-name-base file) ".elc")))))
+  (dolist (file '("mevedel-view-composer.el"))
+    (let ((source (expand-file-name file "~/Projekte/mevedel/")))
+      (byte-compile-file source)
+      (load (funcall byte-compile-dest-file-function source) nil t))))
+```
+
+A package build without `.elc` files loads every module from source. Check
+with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
+
 ## Code style
 
 - **Lexical binding**: `;;; file.el -- Description -*- lexical-binding: t -*-`
