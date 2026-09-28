@@ -117,6 +117,51 @@
         (plist-put copy :deadline (+ now 302)))
       now))))
 
+(mevedel-deftest mevedel-session-transfer-poll ()
+  ,test
+  (test)
+  :doc "skips the target program while a local mailbox stays empty"
+  (let* ((root (make-temp-file "mevedel-transfer-poll-" t))
+         (session-dir (file-name-concat root "session"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "poll"))
+         (owner (mevedel-session-create "main" workspace))
+         (requester (mevedel-session-create "requester" workspace))
+         (programs 0)
+         (count (lambda (original &rest args)
+                  (cl-incf programs)
+                  (apply original args))))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path owner) session-dir
+          (mevedel-session-session-id owner) "poll-session"
+          (mevedel-session-save-path requester) session-dir
+          (mevedel-session-session-id requester) "poll-session")
+    (unwind-protect
+        (let ((mevedel-session-durability--client-id (make-string 64 ?a)))
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "owner" owner))
+          (advice-add 'mevedel-session-control-fs-run-program :around count)
+          ;; The first poll observes the target; the next ones do not.
+          (should-not (plist-get (mevedel-session-transfer-poll owner) :state))
+          (should (> programs 0))
+          (setq programs 0)
+          (dotimes (_ 3) (mevedel-session-transfer-poll owner))
+          (should (= 0 programs))
+          ;; A request changes the mailbox and is seen on the next poll.
+          (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+            (should (mevedel-session-control-transfer-request requester)))
+          (should (eq 'requested
+                      (plist-get (mevedel-session-transfer-poll owner) :state)))
+          ;; While a transfer is in flight every poll reads the target.
+          (setq programs 0)
+          (mevedel-session-transfer-poll owner)
+          (should (> programs 0)))
+      (advice-remove 'mevedel-session-control-fs-run-program count)
+      (mevedel-session-durability--cancel-renewal owner)
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-session-durability-control-transfer ()
   ,test
   (test)

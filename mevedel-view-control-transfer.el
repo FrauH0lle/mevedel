@@ -121,8 +121,9 @@ for, so the interval trades handoff latency against connection time.
 (defcustom mevedel-view-control-transfer-remote-poll-seconds 30
   "Seconds between control-transfer polls when the session lives on a target.
 
-The poll costs nothing worth counting locally and several synchronous round
-trips remotely, so the two cases do not want the same cadence.  Connection
+A local owner skips the target program while its request mailbox is
+unchanged, and a remote poll costs several synchronous round trips, so the
+two cases do not want the same cadence.  Connection
 time is not the only cost: every command in flight is a window in which a
 process sentinel belonging to some other package can issue its own remote
 operation on the same connection, which TRAMP then refuses as a reentrant
