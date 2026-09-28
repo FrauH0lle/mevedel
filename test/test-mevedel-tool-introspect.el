@@ -234,6 +234,55 @@
         (unless (memq buffer before) (kill-buffer buffer))))))
 
 
+(mevedel-deftest mevedel-tool-introspect--source
+  (:before-each (mevedel-tool-introspect--register))
+  ,test
+  (test)
+  :doc "missing C sources deliver one tool error without prompting"
+  (let ((find-function-C-source-directory nil)
+        (mevedel-permission-mode 'full-auto)
+        prompted)
+    (cl-letf (((symbol-function 'read-directory-name)
+               (lambda (&rest _)
+                 (setq prompted t)
+                 (error "Unexpected source directory prompt"))))
+      (dolist (call '(("function_source" "scroll-left")
+                      ("variable_source" "fill-column")))
+        (let ((tool (mevedel-tool-get (car call) "mevedel-introspection"))
+              (deliveries 0)
+              result)
+          (mevedel-test--with-captured-diagnostics nil
+            (funcall (gptel-tool-function (mevedel-tool-gptel-tool tool))
+                     (lambda (value)
+                       (cl-incf deliveries)
+                       (setq result (gptel--to-string value)))
+                     (cadr call)))
+          (should (= 1 deliveries))
+          (should (string-match-p "Emacs C sources unavailable" result))
+          (should-not prompted)))))
+  :doc "configured C sources remain readable for functions and variables"
+  (let* ((directory (make-temp-file "mevedel-c-source-" t))
+         (find-function-C-source-directory directory)
+         (before (buffer-list)))
+    (unwind-protect
+        (progn
+          (write-region
+           "DEFUN (\"scroll-left\", Fscroll_left, Sscroll_left, 0, 2, 0,\n       doc: /* Fixture C function. */)\n  (Lisp_Object arg, Lisp_Object set_minimum)\n{\n  return Qnil;\n}\n"
+           nil (file-name-concat directory "window.c") nil 'silent)
+          (write-region
+           "DEFVAR_INT (\"fill-column\", fill_column,\n            doc: /* Fixture C variable. */);\n"
+           nil (file-name-concat directory "buffer.c") nil 'silent)
+          (mevedel-test--with-captured-diagnostics nil
+            (should (string-match-p
+                     "Fixture C function"
+                     (test-mevedel-tool-introspect--call "function_source" "scroll-left")))
+            (should (string-match-p
+                     "Fixture C variable"
+                     (test-mevedel-tool-introspect--call "variable_source" "fill-column")))))
+      (dolist (buffer (buffer-list))
+        (unless (memq buffer before) (kill-buffer buffer)))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-tool-introspect/variable-value-permission
   (:before-each (mevedel-tool-introspect--register))
   ,test

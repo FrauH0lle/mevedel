@@ -180,12 +180,28 @@ call prompts the user regardless of permission mode."
 
 (defun mevedel-tool-introspect--source (symbol &optional type)
   "Return source for SYMBOL, or nil if its definition is not found.
-TYPE is nil for functions or defvar for variables."
+TYPE is nil for functions or defvar for variables.
+Missing C source configuration signals an error instead of prompting."
   (mevedel-tool--with-quiet-file-visit
     (when-let* ((callable (intern-soft symbol))
                 (save-silently t)
                 (vc-follow-symlinks t)
-                (location (find-definition-noselect callable type)))
+                (definition
+                 (if type
+                     (cons callable (or (symbol-file callable type)
+                                        (help-C-file-name callable 'var)))
+                   (find-function-library callable)))
+                (location
+                 (let ((library (cdr definition)))
+                   ;; Emacs prompts for this directory even in a tool callback.
+                   ;; Keep native alias resolution and source search, but never
+                   ;; enter that interactive C-source configuration path.
+                   (when (and library
+                              (string-match-p "\\`src/.*\\.[cm]\\'" library)
+                              (null find-function-C-source-directory))
+                     (error "Emacs C sources unavailable; set find-function-C-source-directory"))
+                   (find-function-search-for-symbol
+                    (car definition) type library))))
       (with-current-buffer (car location)
         (save-excursion
           (goto-char (cdr location))
