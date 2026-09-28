@@ -4959,7 +4959,7 @@
                      (lambda (pos &optional target-window)
                        (and (eq target-window window)
                             (<= metadata-start pos) (< pos metadata-end)
-                            '(visible)))))
+                            (list window pos '(0 . 0))))))
             (should-not (mevedel-view--animation-visible-p))
             (should (mevedel-view--spinner-metadata-visible-p))
             (mevedel-view--start-spinner-timer)
@@ -4974,6 +4974,95 @@
                                      (overlay-end
                                       (mevedel-view-zone-region
                                        'progress)))))))))))
+
+(mevedel-deftest mevedel-view-animation-horizontal-hidden-metadata
+  (:doc "A suffix wholly beyond the right edge has no metadata wakeup.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'static)
+            (mevedel-view-tool-spinner-style 'static)
+            (window (selected-window)))
+        (setq-local truncate-lines t)
+        (mevedel-view--start-spinner "Working...")
+        (set-window-hscroll window 22)
+        (let ((metadata-start
+               (marker-position (car mevedel-view--spinner-metadata-target)))
+              (metadata-end
+               (marker-position (cdr mevedel-view--spinner-metadata-target))))
+          (cl-letf (((symbol-function 'posn-at-point)
+                     (lambda (pos &optional target-window)
+                       (and (eq target-window window)
+                            (<= metadata-start pos) (< pos metadata-end)
+                            (list window 'right-fringe '(0 . 0))))))
+            (should-not (mevedel-view--spinner-metadata-visible-p))
+            (mevedel-view--start-spinner-timer)
+            (should-not mevedel-view--spinner-timer-period)))))))
+
+(mevedel-deftest mevedel-view--animation-span-in-window-p
+  (:doc "A replacement string's visible index, not its buffer position, gates motion.")
+  (with-temp-buffer
+    (let* ((start (point))
+           (label (concat "Working " (make-string 92 ?w)))
+           (end (+ start (length label)))
+           (window (selected-window))
+           (left-index 47)
+           (right-index 48)
+           (mevedel-view-spinner-style 'shimmer)
+           (display (concat (propertize (substring label 0 48)
+                                        'face '(:foreground "red"))
+                            (substring label 48))))
+      (insert label)
+      (put-text-property start end 'display display)
+      (cl-letf (((symbol-function 'window-start) (lambda (_window) start))
+                ((symbol-function 'window-end) (lambda (_window) (1+ end)))
+                ((symbol-function 'window-hscroll) (lambda (_window) 60))
+                ((symbol-function 'window-body-width)
+                 (lambda (_window &optional _pixelwise) 80))
+                ((symbol-function 'posn-at-point)
+                 (lambda (_position &optional _window) '(sample)))
+                ((symbol-function 'posn-x-y)
+                 (lambda (_position) '(0 . 0)))
+                ((symbol-function 'posn-at-x-y)
+                 (lambda (x _y &optional _window _whole)
+                   (if (zerop x) '(left) '(right))))
+                ((symbol-function 'posn-point)
+                 (lambda (_position) start))
+                ((symbol-function 'posn-string)
+                 (lambda (position)
+                   (cons display (if (eq (car position) 'left)
+                                     left-index right-index)))))
+        (should (mevedel-view--animation-span-in-window-p start end window))
+        (setq left-index 48)
+        (ert-info ("color suffix")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        ;; A combining mark at the bound keeps its entire cluster uncolored.
+        (setq display (concat (propertize (substring label 0 47)
+                                           'face '(:foreground "red"))
+                              (substring label 47))
+              left-index 46)
+        (put-text-property start end 'display display)
+        (should (mevedel-view--animation-span-in-window-p start end window))
+        (setq left-index 47)
+        (ert-info ("uncolored final cluster")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        ;; A glyph fallback animates only its initial indicator, not the label.
+        (setq display (concat "- " label)
+              left-index 1)
+        (put-text-property start end 'display display)
+        (should (mevedel-view--animation-span-in-window-p start end window))
+        (setq left-index 2)
+        (ert-info ("glyph suffix")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        ;; Ellipsis animates at the end, so its rightmost visible index matters.
+        (setq mevedel-view-spinner-style 'ellipsis
+              display (concat label "...")
+              left-index 0
+              right-index (- (length display) 4))
+        (put-text-property start end 'display display)
+        (ert-info ("ellipsis offscreen")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        (setq right-index (- (length display) 3))
+        (should (mevedel-view--animation-span-in-window-p start end window))))))
 
 (mevedel-deftest mevedel-view-animation-horizontal-offscreen
   (:doc "A horizontally scrolled-away label stops writes and resumes at its phase.")
@@ -5156,7 +5245,7 @@
                            (lambda (pos &optional target-window)
                              (and (eq target-window window)
                                   (<= start pos) (< pos end)
-                                  '(visible)))))
+                                  (list window pos '(0 . 0))))))
                   (mevedel-view--start-spinner-timer)
                   (should (= 1.0 mevedel-view--spinner-timer-period))
                   (should (memq #'mevedel-view--resume-on-horizontal-redisplay

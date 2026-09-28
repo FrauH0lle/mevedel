@@ -717,3 +717,46 @@ Full-projection frozen-tool follow-up, 2026-09-28 (source: whole-Goal verifier
   cases. The full suite remains **not green**. Separate graphical input probes
   and the user's prior approval of the preview support qualitative smoothness;
   physical keyboard latency and screen scanout were not instrumented.
+
+Displayed-prefix and right-fringe visibility follow-up, 2026-09-28 (source:
+current scoped code/tests, fresh graphical probes, independent
+`/root/animation_review`, isolated Eask runs):
+
+- A long replacement display string maps its animated prefix and static tail
+  to the same buffer span. A horizontal position probe now checks the visible
+  *display-string index* against the animated portion. The colored bound is
+  derived from the actual prepared face properties, including a combining
+  cluster that shortens the nominal 48-character prefix to 47. Glyph fallback,
+  ellipsis and pending-tool rows retain their respective bounds. Ordinary
+  unscrolled callback checks still use the inexpensive buffer boundary.
+- A fresh production graphical probe found a long color prefix visible through
+  horizontal scroll 45 and hidden at 48; once hidden the timer ran at 1.0 s
+  with zero decorative callbacks over 350 ms, and revealing it restored a
+  16.67-ms timer and 20 callbacks (`.scratch/spinner-hscroll-prefix-timer.log`).
+  An independent source-loaded graphical replay verified the 47-character
+  combining-boundary check at scroll 46 (visible) versus 47 (hidden), plus the
+  low-color glyph fallback at scroll 2.
+- A separate graphical review found that `posn-at-point` can return a
+  `right-fringe` position for an elapsed suffix entirely beyond the right
+  edge. Plain-text metadata visibility now requires a position in the window
+  text body. An independent source-loaded GUI replay of a 158-character label
+  observed both suffix endpoints in the right fringe at scroll 1, with no
+  metadata timer; scrolling to 145 armed a pending 1.0-s timer, scrolling to
+  220 stopped it, and scrolling back to 145 rearmed it. The reviewer returned
+  `VERDICT: PASS` on the settled visibility diff. Only GUI focus was simulated
+  in that automated replay; no host Emacs was hot-reloaded.
+- After Eask cleanup, focused stream+animation tests passed **178/178**
+  (`.scratch/spinner-prefix-v3-focused.log`). The accepted plan's named view
+  roster plus power, chat, hooks and integrity passed **1084/1085 expected,
+  zero unexpected, one optional composer skip**
+  (`.scratch/spinner-prefix-v3-roster.log`). All **210 files** compiled with no
+  warning/error/stale-bytecode matches (`.scratch/spinner-prefix-v3-compile.log`),
+  and `git diff --check` passed.
+- The complete four-worker Eask run discovered **8756 tests, 9 unexpected,
+  30 skipped** (`.scratch/spinner-prefix-v3-full-suite/summary.json`). Eight
+  failures match previously documented non-animation gptel bridge, presets,
+  tool injection, skills layout and concurrent plan-handoff cases. The ninth
+  was a hooks remote-command-origin truncated-stderr assertion that passed in
+  the named roster and again in a clean, isolated 91/91 hooks replay
+  (`.scratch/spinner-prefix-v3-hook-replay.log`); its full-run failure remains
+  unexplained. The full suite is **not green**. No animation or view case failed.
