@@ -25,7 +25,9 @@ chronological completion breadcrumb per receiving transcript, independent of
 whether completion was collected by polling or delivered through a mailbox.
 The breadcrumb links to the original row or retained evidence and does not
 duplicate output. Its identity is scoped to session, owner, and execution, not
-command text. Foreground completion never produces a breadcrumb. Execution
+command text. Execution IDs carry a fresh per-state prefix so resumed sessions
+cannot reuse the earlier state's counter in durable records or output paths.
+Foreground completion never produces a breadcrumb. Execution
 presentation records in `mevedel-execution-transcript.el` keep these facts
 reconstructable across redraw, reload, and compaction; they do not create a
 second process registry or alter delivery to the model or agent.
