@@ -306,11 +306,18 @@ decorative wakeups. A replacement display string maps its entire label to one
 buffer span, so horizontal visibility checks its actually displayed animated
 characters, not merely source positions. A long color label's static tail
 does not keep a high-frequency timer alive after the bounded animated prefix
-scrolls away. If horizontal scrolling hides the label but leaves its
-elapsed suffix visible in the text area, a separate visibility check keeps the
+scrolls away. The trailing ellipsis is checked against the last visible glyph
+even without horizontal scrolling: truncation can hide it beyond the right
+edge, while a wrapped final row may still show it. Vertical pixel scrolling
+can likewise hide a wrapped color prefix without advancing the source position;
+visibility then uses the displayed index and rearming observes pixel scrolls.
+If horizontal scrolling
+hides the label but leaves its elapsed suffix visible in the text area, a
+separate visibility check keeps the
 once-per-second metadata refresh; a suffix beyond the right edge or in a fringe
-does not. The per-view timer animates only a progress label or
-pending-tool indicator visible in an attended window, and updates registered
+does not, even when the window has not scrolled. The per-view timer animates
+only a progress label or pending-tool indicator visible in an attended window,
+and updates registered
 spans instead of scanning the transcript each frame. Attention and target
 visibility must hold in the *same* window: a focused frame where the label is
 offscreen cannot make a visible label in another, unfocused frame animate.
@@ -319,7 +326,8 @@ attention rule unchanged. Focus, window and scroll
 changes rearm it (horizontal scroll uses a scoped `set-window-hscroll` observer
 because Emacs does not call
 `window-scroll-functions` for that change; automatic panning instead arms a
-buffer-local redisplay observer only while a target is horizontally suspended).
+buffer-local redisplay observer while a target is horizontally or vertically
+pixel-scrolled out of view; `set-window-vscroll` likewise rearms explicitly).
 Its deferred resume probe replaces any pending elapsed-metadata timer rather
 than leaving a second timer behind. The view-owned one-shot timer and that
 probe are queued on the Emacs UI host's top-level timer list: TRAMP's temporary

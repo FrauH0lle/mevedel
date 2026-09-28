@@ -100,15 +100,22 @@ frames likewise repaints the existing sample when the target is attended, using
 the destination frame's prepared bank or a portable multi-frame fallback; no
 timer or global
 cache invalidation is needed. Horizontal visibility checks the
-displayed animated portion only in hscrolled windows, leaving ordinary callbacks
-on the cheap window-boundary path. Replacement display strings map all their
+displayed animated portion in hscrolled windows, leaving ordinary leading-glyph
+callbacks on the cheap window-boundary path. Trailing ellipsis must check its
+last displayed glyph even without hscroll: truncation can hide it beyond the
+right edge while a wrapped final row can expose it. Plain elapsed text also
+needs a text-area/fringe check without hscroll. Vertical pixel scrolling of a
+wrapped label can also conceal the bounded animated prefix while keeping its
+source buffer position constant; that path checks the displayed index instead
+of taking the unscrolled fast path. Replacement display strings map all their
 characters to one buffer span, so looking up buffer positions could leave a
 60-Hz timer running after a long label's bounded color prefix was offscreen;
 the hscrolled check now reads the visible display-string index instead. Since
 `window-scroll-functions` does not run for horizontal scrolling, a scoped
 `set-window-hscroll` observer rearms explicitly scrolled views; an internal
-automatic pan does not call that primitive, so a buffer-local redisplay hook
-is installed only during horizontal suspension and defers one resume probe
+automatic pan does not call that primitive. Explicit pixel scrolling has a
+`set-window-vscroll` observer, while a buffer-local redisplay hook is installed
+only during horizontal/pixel suspension and defers one resume probe
 until after redisplay, only for a window with the target in its visible rows.
 The probe cancels and replaces a pending one-second elapsed timer before taking
 the view's timer slot; otherwise cleanup loses track of an extra wakeup. Both

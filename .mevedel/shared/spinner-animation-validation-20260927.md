@@ -760,3 +760,58 @@ current scoped code/tests, fresh graphical probes, independent
   the named roster and again in a clean, isolated 91/91 hooks replay
   (`.scratch/spinner-prefix-v3-hook-replay.log`); its full-run failure remains
   unexplained. The full suite is **not green**. No animation or view case failed.
+
+Unscrolled fringe, wrapped ellipsis and vertical pixel-scroll correction,
+2026-09-28 (source: independent `/root/verify_14` production GUI replay,
+independent `/root/animation_review`, current source and Eask runs):
+
+- The committed `d78d7247` follow-up above still treated a plain suffix at
+  hscroll 0 as visible without checking its right-fringe position. The
+  completion verifier reproduced a 158-character status label with a pending
+  one-second timer while both suffix endpoints were entirely offscreen.
+  Metadata now uses the actual text-area check at every hscroll. A fresh
+  source-loaded graphical replay saw **zero** offscreen callbacks in 2.2s,
+  a one-second semantic timer when hscroll 145 exposed the suffix, and no
+  timer again at hscroll 0/220. This later correction supersedes any earlier
+  claim that `d78d7247` satisfied the whole Goal.
+- Ellipsis animates only the final three characters. At hscroll 0, a long
+  *truncated* label's tail can be beyond the right edge, while default
+  visual-line wrapping places the tail on a later *visible* row. The final
+  gate inspects the actual display-string index immediately before the source
+  END position, including an x=0 boundary on the preceding row; it does not
+  infer visibility from the suffix alone. A production graphical matrix of
+  ten wrapped/truncated/vscrolled cases measured .48-s cadence only when a
+  trailing dot was visible, no decorative callbacks when truncated, and
+  one-second metadata-only cadence when the trailing glyphs had scrolled
+  above the viewport (`/root/verify_14`, graphical probe
+  `execution-SO3M9s.log`).
+- Vertical pixel scrolling a wrapped label can leave its source START inside
+  the window while its 48-character colored prefix has disappeared. The cheap
+  unscrolled shortcut now applies only without vertical pixel scroll. A
+  source-loaded graphical replay saw shimmer transition from 60 Hz to 1 Hz
+  (visible suffix) or no timer (all offscreen), then recover 60 Hz on reveal.
+  Explicit `set-window-vscroll` has a scoped view scheduler observer alongside
+  horizontal scroll, and automatic redisplay rearming now watches vertically
+  suspended targets too. A fresh event-loop replay with and without that
+  advice observed zero hidden ticks and 33–34 restored ticks over ~0.6s.
+  The independent reviewer returned `VERDICT: PASS` on the settled visibility
+  and lifecycle adjustment; neither review reloaded the host Emacs.
+- After bytecode cleanup, stream+animation tests passed **179/179**
+  (`.scratch/spinner-prefix-v9-focused.log`). Following the final test-only
+  correction to the paused-motion check, the plan's named eight-file roster
+  plus power, chat, hooks and integrity passed **1085/1086 expected,
+  zero unexpected, one optional composer skip**
+  (`.scratch/spinner-prefix-v10-roster.log`). All **210 files** compiled with
+  no warning/error/stale-bytecode matches
+  (`.scratch/spinner-prefix-v10-compile.log`); `git diff --check` passed.
+- A four-worker full attempt stopped with a missing worker result at case
+  1143/2189; the runner correctly rejected its incomplete inventory
+  (`.scratch/spinner-prefix-v10-full-suite/`,
+  `.scratch/spinner-prefix-v10-full-run.log`). A **complete two-worker retry**
+  discovered **8757 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-prefix-v10-full-suite-2/summary.json`,
+  `.scratch/spinner-prefix-v10-full-run-2.log`). These eight names match the
+  earlier unrelated bridge, preset, message/steering injection, skills
+  layout, and concurrent plan-handoff failures. The paused-motion and new
+  pixel-scroll tests passed; the full suite is **not green**. Physical input
+  delivery, scanout and attributable battery-life improvement remain unmeasured.
