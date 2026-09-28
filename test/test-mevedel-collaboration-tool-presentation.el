@@ -740,6 +740,26 @@
       (should (equal "tool-bash-present" (plist-get (car records) :id)))
       (should (equal "whole output" (plist-get (car records) :result))))))
 
+(mevedel-deftest mevedel-collaboration-forwarded-execution-signaled ()
+  ,test
+  (test)
+  :doc "unsolicited signal is a failed execution, not a requested stop"
+  (let ((record (mevedel-collaboration--forwarded-execution-record
+                 '(:owner "/root/child" :execution-id "exec-signaled"
+                   :command "sleep 10"
+                   :facts (:termination signaled :exit-code 13
+                           :outcome failure)))))
+    (should (equal "failed" (plist-get record :status)))
+    (should-not (plist-get (plist-get record :execution) :exitCode)))
+  :doc "requested INT is a cancellation without a fictitious exit code"
+  (let ((record (mevedel-collaboration--forwarded-execution-record
+                 '(:owner "/root/child" :execution-id "exec-interrupted"
+                   :command "sleep 10"
+                   :facts (:termination interrupted :exit-code 2
+                           :outcome failure)))))
+    (should (equal "cancelled" (plist-get record :status)))
+    (should-not (plist-get (plist-get record :execution) :exitCode))))
+
 (mevedel-deftest mevedel-collaboration--missing-bash-data
   (:doc "only running archived work with missing later evidence becomes unknown")
   (let* ((completions (make-hash-table :test #'equal))
