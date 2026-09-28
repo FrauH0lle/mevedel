@@ -343,3 +343,73 @@ verifier failure, scoped fix, current checks, independent `/root/verify_8`):
   full run's unrelated failures: gptel bridge install, preset transitions@2,
   message inject@2, steering inject@9, skills-ui layout@8, and three concurrent
   plan-handoff dispatch cases (@3, @8, @10). The full suite is **not green**.
+
+Power-observer TRAMP suspension investigation, 2026-09-28 (source: fresh
+`/root/verify_9` probe, scoped Eask runs, and installed Emacs 31.1 timer/TRAMP
+source):
+
+- When the shared fallback timer was created in a discarded temporary timer
+  list, a later visible-view rearm previously retained its dead timer object
+  and never queried power. A pending-list check and regression now recover
+  that path. Repeated `watch` calls inside a real `with-tramp-suspended-timers`
+  binding could also duplicate an already-existing timer; retaining uncertain
+  old references and reconciling after restoration fixes that ordinary
+  restoration path. `/root/verify_9` saw one timer on restoration, one
+  deferred query, zero additional queries on 120 frame callbacks, and normal
+  final cleanup when unwatch occurred after restoration.
+- **Remaining failure:** final unwatch *inside* the TRAMP binding cannot remove
+  its already-hidden outer timer with `cancel-timer`. Independent probe after
+  restoration: `watchers=0 queued-polls=1 reference=nil retired=nil
+  old-pending=t`. The callback's watcher guard avoids a backend query but the
+  orphan wakeup violates the plan. Installed `tramp.el` binds `timer-list`
+  dynamically to nil, and installed `timer.el` implements `cancel-timer` by
+  deleting only from the current binding. This is an unresolved completion
+  blocker; the current first repair must not be declared complete. The
+  interrupted first full run (`.scratch/spinner-power-final-full-run.log`)
+  has no summary and is not completion evidence.
+- After Eask bytecode cleanup, the plan's eight-file roster plus power tests
+  passed **924/925 expected, zero unexpected, one optional skip**
+  (`.scratch/spinner-power-suspension-roster.log`). All **210 files** compiled
+  without warning matches (`.scratch/spinner-power-suspension-compile.log`),
+  and `git diff --check` passed. A complete isolated four-worker suite
+  discovered **8741 tests**, with **8 unexpected and 30 skipped**
+  (`.scratch/spinner-power-suspension-full-suite/summary.json`); the eight
+  failures are the same non-view cases named in the preceding paragraph. The
+  new power tests and production-view timer-suspension test passed in this
+  suite. This run predates resolution of the inside-binding final-unwatch case
+  and is not a green full suite.
+
+Top-level power-timer ownership resolution, 2026-09-28 (source: current
+source/tests, independent `/root/verify_9` fresh Emacs 31.1 verification,
+independent `/root/power_timer_review`, and isolated Eask runs):
+
+- The **remaining failure above is resolved in the current source**. Instead of
+  replacing timers that merely appear absent inside TRAMP's dynamically bound
+  temporary `timer-list`, the shared UI-host poll is inserted into the
+  top-level timer list. Cancellation also removes its owned timer there even
+  when called inside nested suspension, and stale callbacks are rejected by
+  identity. Regression tests exercise creation, repeated watching, final
+  unwatch inside suspension, notification rearming, and stale callbacks.
+- `/root/verify_9` returned `VERDICT: PASS` after a fresh production-view
+  probe: one deferred external-power query, unchanged animation phase, no
+  further queries across 120 frame callbacks, and no remaining observer
+  timers or hooks after stopping inside suspension. The independent review
+  returned PASS; its in-memory nested-TRAMP probe confirmed that foreign
+  timers and their ordering remain intact. These are controlled Emacs 31.1
+  checks, not a live remote-connection test. Neither reloaded the user's
+  active Emacs.
+- After Eask cleanup, power and stream tests passed **159/159**
+  (`.scratch/spinner-power-toplevel-focused.log`), and the accepted plan's
+  eight-file view roster plus power tests passed **924/925 expected, zero
+  unexpected, one optional skip**
+  (`.scratch/spinner-power-toplevel-roster.log`). All **210 files** compiled
+  without warnings (`.scratch/spinner-power-toplevel-compile.log`), and
+  `git diff --check` passed. The current isolated four-worker full suite ran
+  **8741 tests, 8 unexpected, 31 skipped**
+  (`.scratch/spinner-power-toplevel-full-suite/summary.json`,
+  `.scratch/spinner-power-toplevel-full-run.log`). Its eight failures exactly
+  match the earlier non-view gptel bridge, preset, message-inject,
+  steering-inject, skills-ui, and three concurrent plan-handoff cases. Every
+  power test passed; the full suite is **not green**. The optional skip count
+  differs by one from the previous run. Genuine KDE/Wayland focus transfer
+  remains unverified; the earlier deterministic focus-hook recovery passed.

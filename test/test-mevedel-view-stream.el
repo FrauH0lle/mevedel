@@ -4228,7 +4228,8 @@
               (should-not mevedel-view--spinner-timer))
             ;; The first departure must not unsubscribe while a second window
             ;; still displays the target.
-            (let ((other (split-window-right)))
+            (let ((other (split-window-right))
+                  (last-power mevedel-view-power--timer))
               (set-window-buffer other view-buf)
               (redisplay t)
               (switch-to-buffer data-buf)
@@ -4249,8 +4250,8 @@
               (should-not mevedel-view-power--timer)
               (should-not (memq #'mevedel-view-power--sample
                                 battery-update-functions))
-              (mevedel-view-power--poll)
-              (mevedel-view-power--poll)
+              (mevedel-view-power--poll last-power)
+              (mevedel-view-power--poll last-power)
               (should (zerop queries))
               (should-not mevedel-view-power--timer)
               ;; Reopening the same view restores its observer without
@@ -4374,6 +4375,51 @@
                               'ascii "Working..." (- now phase)
                               'mevedel-view-spinner (selected-frame)))))))))))
 
+(mevedel-deftest mevedel-view-animation-auto-power-timer-suspension
+  (:doc "Resuming a visible view restores the shared auto-power poll too.")
+  (let* ((mevedel-view-power--watchers (make-hash-table :test #'eq))
+         (mevedel-view-power--state 'unknown)
+         (mevedel-view-power--sample-time nil)
+         (mevedel-view-power--last-query nil)
+         (mevedel-view-power--timer nil)
+         (battery-update-functions (copy-sequence battery-update-functions))
+         (window-state-change-functions
+          (copy-sequence window-state-change-functions))
+         (queries 0)
+         (battery-status-function
+          (lambda ()
+            (cl-incf queries)
+            '((?L . "AC") (?B . "high")))))
+    (mevedel-view-stream-test--with-buffers
+      (mevedel-view-stream-test--with-visible-view
+        (let ((mevedel-view-spinner-style 'ascii)
+              (mevedel-view-spinner-power-policy 'auto)
+              (mevedel-view-spinner-battery-framerate 0))
+          ;; The view timer can be discarded by TRAMP, but the shared power
+          ;; timer is installed on the persistent top-level list.
+          (let ((timer-list nil) (timer-idle-list nil))
+            (mevedel-view--start-spinner "Working...")
+            (should (= 1.0 mevedel-view--spinner-timer-period))
+            (should (memq mevedel-view-power--timer
+                          (default-toplevel-value 'timer-list))))
+          (let ((original mevedel-view-power--timer)
+                (phase mevedel-view--spinner-phase-start))
+            (should (mevedel--timer-pending-p original))
+            (mevedel-view--resume-render-if-attended view-buf)
+            (should (mevedel--timer-pending-p mevedel-view-power--timer))
+            (should (eq original mevedel-view-power--timer))
+            (should (= 0 queries))
+            (should (= 1.0 mevedel-view--spinner-timer-period))
+            (mevedel-view-power--cancel-timer original)
+            (mevedel-view-power--poll original)
+            (should (= 1 queries))
+            (should (= 60 (mevedel-view-power-framerate 60 0 'auto t)))
+            (should (= 0.12 mevedel-view--spinner-timer-period))
+            (should (= phase mevedel-view--spinner-phase-start))
+            (mevedel-view-stream-stop)
+            (should (zerop (hash-table-count mevedel-view-power--watchers)))
+            (should-not mevedel-view-power--timer)))))))
+
 (mevedel-deftest mevedel-view-animation-overdue-timer
   (:doc "An overdue one-shot does not replay missed callbacks or allocate timers.")
   (mevedel-view-stream-test--with-buffers
@@ -4453,8 +4499,8 @@
               (let ((fast mevedel-view--spinner-timer))
                 (setq now 1060.0)
                 (when mevedel-view-power--timer
-                  (cancel-timer mevedel-view-power--timer))
-                (mevedel-view-power--poll)
+                  (mevedel-view-power--cancel-timer mevedel-view-power--timer))
+                (mevedel-view-power--poll mevedel-view-power--timer)
                 (should-not (mevedel--timer-pending-p fast))
                 (should (= 1.0 mevedel-view--spinner-timer-period))))))))))
 

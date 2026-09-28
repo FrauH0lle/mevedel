@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view-power)
+(eval-when-compile (require 'tramp))
 
 (defmacro mevedel-view-power-test--isolated (&rest body)
   "Run BODY with isolated power observation state and cancel its timer."
@@ -30,13 +31,14 @@
                   (mevedel-view-power-unwatch view))
                 (copy-hash-table mevedel-view-power--watchers))
        (when mevedel-view-power--timer
-         (cancel-timer mevedel-view-power--timer)))))
+         (mevedel-view-power--cancel-timer mevedel-view-power--timer)))))
 
 (defun mevedel-view-power-test--fire-poll ()
   "Simulate the scheduled timer firing without leaving the old timer active."
   (when mevedel-view-power--timer
-    (cancel-timer mevedel-view-power--timer))
-  (mevedel-view-power--poll))
+    (let ((timer mevedel-view-power--timer))
+      (mevedel-view-power--cancel-timer timer)
+      (mevedel-view-power--poll timer))))
 
 (mevedel-deftest mevedel-view-power--normalize
   (:doc "Line and battery evidence classify upstream variants conservatively")
@@ -132,6 +134,114 @@
               (should (memq other battery-update-functions))
               (setq now 1065.0)
               (mevedel-view-power-test--fire-poll)
+              (should (= 1 queries))))
+        (when (buffer-live-p one) (kill-buffer one))
+        (when (buffer-live-p two) (kill-buffer two))))))
+
+(mevedel-deftest mevedel-view-power--schedule
+  (:doc "A fallback scheduled during TRAMP suspension survives restoration")
+  (mevedel-view-power-test--isolated
+    (let* ((one (generate-new-buffer " *power-suspended-one*"))
+          (two (generate-new-buffer " *power-suspended-two*"))
+          (queries 0)
+          (calls 0)
+          (battery-status-function
+           (lambda ()
+             (cl-incf queries)
+             '((?L . "AC") (?B . "high")))))
+      (unwind-protect
+          (progn
+            (with-tramp-suspended-timers
+              (mevedel-view-power-watch one (lambda () (cl-incf calls)))
+              (should-not (memq mevedel-view-power--timer timer-list))
+              (should (mevedel-view-power--pending-timer-p
+                       mevedel-view-power--timer)))
+            (let ((original mevedel-view-power--timer))
+              (should (memq original timer-list))
+              (mevedel-view-power-watch two (lambda () (cl-incf calls)))
+              (let ((replacement mevedel-view-power--timer))
+                (should (eq original replacement))
+                (should (= 0 queries))
+                (mevedel-view-power-watch one (lambda () (cl-incf calls)))
+                (should (eq replacement mevedel-view-power--timer))
+                (should (= 2 (hash-table-count mevedel-view-power--watchers)))
+                (mevedel-view-power-test--fire-poll)
+                (should (= 1 queries))
+                (should (= 2 calls))
+                (should (= 60 (mevedel-view-power-framerate 60 0 'auto t)))
+                (let ((active mevedel-view-power--timer))
+                  (mevedel-view-power--poll original)
+                  (should (eq active mevedel-view-power--timer))
+                  (should (= 1 queries)))
+                (mevedel-view-power-unwatch one)
+                (mevedel-view-power-unwatch two)
+                (should-not (memq replacement timer-list))
+                (should-not mevedel-view-power--timer))))
+        (when (buffer-live-p one) (kill-buffer one))
+        (when (buffer-live-p two) (kill-buffer two))))))
+
+(mevedel-deftest mevedel-view-power--pending-timer-p
+  (:doc "An outer poll remains shared under TRAMP and stops inside its binding")
+  (mevedel-view-power-test--isolated
+    (let* ((one (generate-new-buffer " *power-hidden-one*"))
+          (two (generate-new-buffer " *power-hidden-two*"))
+          (queries 0)
+          (battery-status-function
+           (lambda ()
+             (cl-incf queries)
+             '((?L . "AC") (?B . "high")))))
+      (unwind-protect
+          (progn
+            (mevedel-view-power-watch one #'ignore)
+            (let ((outer mevedel-view-power--timer))
+              (should (memq outer timer-list))
+              (with-tramp-suspended-timers
+                (should-not (mevedel--timer-pending-p outer))
+                (mevedel-view-power-watch two #'ignore)
+                (dotimes (_ 5) (mevedel-view-power-watch two #'ignore))
+                (should (eq outer mevedel-view-power--timer))
+                (should (mevedel-view-power--pending-timer-p outer))
+                (should-not (memq outer timer-list)))
+              (should (memq outer timer-list))
+              (mevedel-view-power-watch two #'ignore)
+              (should (eq outer mevedel-view-power--timer))
+              (should (= 1 (cl-count-if
+                            (lambda (timer)
+                              (eq (timer--function timer)
+                                  #'mevedel-view-power--poll))
+                            timer-list)))
+              (should (= 0 queries))
+              (mevedel-view-power-test--fire-poll)
+              (should (= 1 queries))
+              (mevedel-view-power-unwatch one)
+              (mevedel-view-power-unwatch two)
+              (should-not mevedel-view-power--timer)
+              (should-not
+               (cl-find-if (lambda (timer)
+                             (eq (timer--function timer)
+                                 #'mevedel-view-power--poll))
+                           timer-list)))
+            ;; Repeated suspension must not make replacement timers or retain
+            ;; references to timers scheduled on a temporary list.
+            (mevedel-view-power-watch one #'ignore)
+            (dotimes (_ 15)
+              (with-tramp-suspended-timers
+                (mevedel-view-power-watch two #'ignore))
+              (mevedel-view-power-watch one #'ignore)
+              (should (= 1 (cl-count-if
+                            (lambda (timer)
+                              (eq (timer--function timer)
+                                  #'mevedel-view-power--poll))
+                            timer-list))))
+            (let ((last mevedel-view-power--timer))
+              (with-tramp-suspended-timers
+                (mevedel-view-power-unwatch one)
+                (mevedel-view-power-unwatch two)
+                (should-not (memq last
+                                  (default-toplevel-value 'timer-list))))
+              (should-not (memq last timer-list))
+              (should-not mevedel-view-power--timer)
+              (mevedel-view-power--poll last)
               (should (= 1 queries))))
         (when (buffer-live-p one) (kill-buffer one))
         (when (buffer-live-p two) (kill-buffer two))))))

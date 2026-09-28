@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'battery)
+(require 'mevedel-utilities)
 (require 'subr-x)
 
 (defconst mevedel-view-power--interval 60
@@ -104,10 +105,26 @@ the views' own scheduling callbacks so visibility policy stays in the view."
       (mevedel-view-power--notify)))
   (mevedel-view-power--schedule))
 
+(defun mevedel-view-power--pending-timer-p (timer)
+  "Return whether TIMER is queued, including on TRAMP's hidden outer list."
+  (and (timerp timer)
+       (or (mevedel--timer-pending-p timer)
+           (memq timer (default-toplevel-value 'timer-list)))))
+
+(defun mevedel-view-power--cancel-timer (timer)
+  "Cancel TIMER on the current and top-level lists, even inside TRAMP.
+`cancel-timer' only edits the current dynamic binding of `timer-list'.
+The shared UI-host poll is always installed on the top-level list."
+  (when (timerp timer)
+    (cancel-timer timer)
+    (let ((outer (default-toplevel-value 'timer-list)))
+      (when (memq timer outer)
+        (set-default-toplevel-value 'timer-list (delq timer outer))))))
+
 (defun mevedel-view-power--schedule ()
   "Keep one deferred fallback check only while watchers remain."
   (when mevedel-view-power--timer
-    (cancel-timer mevedel-view-power--timer)
+    (mevedel-view-power--cancel-timer mevedel-view-power--timer)
     (setq mevedel-view-power--timer nil))
   (when (> (hash-table-count mevedel-view-power--watchers) 0)
     (let* ((now (float-time))
@@ -119,40 +136,48 @@ the views' own scheduling callbacks so visibility policy stays in the view."
                              (<= mevedel-view-power--last-query now)
                              (+ mevedel-view-power--last-query
                                 mevedel-view-power--interval)))
-           (due (max (or fresh-until now) (or query-after now))))
-      (setq mevedel-view-power--timer
-            (run-at-time (max 0 (- due now)) nil
-                         #'mevedel-view-power--poll)))))
+           (due (max (or fresh-until now) (or query-after now)))
+           (timer (timer-create))
+           (timer-list (default-toplevel-value 'timer-list)))
+      ;; `run-at-time' on TRAMP's temporary timer list would be discarded on
+      ;; return.  Activate on a copy of the outer list, then install its new
+      ;; sorted head in that binding even when the current list is suspended.
+      (timer-set-time timer (time-add nil (max 0 (- due now))))
+      (timer-set-function timer #'mevedel-view-power--poll (list timer))
+      (timer-activate timer)
+      (set-default-toplevel-value 'timer-list timer-list)
+      (setq mevedel-view-power--timer timer))))
 
-(defun mevedel-view-power--poll ()
-  "Check the local battery backend outside all animation callbacks."
-  (setq mevedel-view-power--timer nil)
-  (when (> (hash-table-count mevedel-view-power--watchers) 0)
-    (let* ((now (float-time))
-           (old (mevedel-view-power--current-state now))
-           (previous mevedel-view-power--state))
-      (when (or (null mevedel-view-power--last-query)
-                (< now mevedel-view-power--last-query)
-                (>= (- now mevedel-view-power--last-query)
-                    mevedel-view-power--interval))
-        (setq mevedel-view-power--last-query now)
-        (let ((data (condition-case nil
-                        (let ((default-directory temporary-file-directory))
-                          (and battery-status-function
-                               (funcall battery-status-function)))
-                      (error nil))))
-          (setq mevedel-view-power--state (mevedel-view-power--normalize data)
-                mevedel-view-power--sample-time (float-time))))
-      ;; A previously confirmed external sample has just expired.  The
-      ;; effective policy is already conservative, but its view timer may
-      ;; still be running at the old 60 Hz until notified.  Failed polls must
-      ;; rearm that timer even though unknown == unknown at this instant.
-      (unless (and (eq old (mevedel-view-power--current-state))
-                   (not (and (eq previous 'external)
-                             (eq (mevedel-view-power--current-state)
-                                 'unknown))))
-        (mevedel-view-power--notify)))
-    (mevedel-view-power--schedule)))
+(defun mevedel-view-power--poll (timer)
+  "Check the local battery backend only if TIMER still owns the poll."
+  (when (eq timer mevedel-view-power--timer)
+    (setq mevedel-view-power--timer nil)
+    (when (> (hash-table-count mevedel-view-power--watchers) 0)
+      (let* ((now (float-time))
+             (old (mevedel-view-power--current-state now))
+             (previous mevedel-view-power--state))
+        (when (or (null mevedel-view-power--last-query)
+                  (< now mevedel-view-power--last-query)
+                  (>= (- now mevedel-view-power--last-query)
+                      mevedel-view-power--interval))
+          (setq mevedel-view-power--last-query now)
+          (let ((data (condition-case nil
+                          (let ((default-directory temporary-file-directory))
+                            (and battery-status-function
+                                 (funcall battery-status-function)))
+                        (error nil))))
+            (setq mevedel-view-power--state (mevedel-view-power--normalize data)
+                  mevedel-view-power--sample-time (float-time))))
+        ;; A previously confirmed external sample has just expired.  The
+        ;; effective policy is already conservative, but its view timer may
+        ;; still be running at the old 60 Hz until notified.  Failed polls must
+        ;; rearm that timer even though unknown == unknown at this instant.
+        (unless (and (eq old (mevedel-view-power--current-state))
+                     (not (and (eq previous 'external)
+                               (eq (mevedel-view-power--current-state)
+                                   'unknown))))
+          (mevedel-view-power--notify)))
+      (mevedel-view-power--schedule))))
 
 (defun mevedel-view-power--on-kill ()
   "Remove the current buffer's power subscription before it dies."
@@ -172,7 +197,8 @@ deferred, shared poll.  Repeated calls replace the callback, not the timer."
     (add-hook 'battery-update-functions #'mevedel-view-power--sample)
     (add-hook 'window-state-change-functions
               #'mevedel-view-power--on-window-state-change)
-    (unless mevedel-view-power--timer
+    ;; The top-level poll remains pending even if TRAMP hides the current list.
+    (unless (mevedel-view-power--pending-timer-p mevedel-view-power--timer)
       (mevedel-view-power--schedule))))
 
 (defun mevedel-view-power-unwatch (view)
@@ -186,7 +212,7 @@ deferred, shared poll.  Repeated calls replace the callback, not the timer."
     (remove-hook 'window-state-change-functions
                  #'mevedel-view-power--on-window-state-change)
     (when mevedel-view-power--timer
-      (cancel-timer mevedel-view-power--timer)
+      (mevedel-view-power--cancel-timer mevedel-view-power--timer)
       (setq mevedel-view-power--timer nil))))
 
 (provide 'mevedel-view-power)

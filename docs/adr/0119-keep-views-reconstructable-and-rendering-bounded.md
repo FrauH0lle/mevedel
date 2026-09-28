@@ -116,7 +116,13 @@ changes its cycle duration. A saving ceiling of zero freezes decorative
 motion while active elapsed time and status remain current. A shared battery
 observer consumes existing notifications and uses a deferred, at-most-minute
 fallback query while subscribed views exist; animation callbacks never query
-power. Neither the observer nor the spinner enables battery mode or changes
+power. TRAMP temporarily binds Emacs's timer list to nil, so a fallback
+scheduled on that list can be discarded, while `cancel-timer` there cannot
+remove an older timer from the hidden outer list. The observer instead arms
+its single poll on the UI host's top-level list and removes it there on final
+unsubscription, even inside the temporary binding. Callback identity rejects
+stale delivery. The fallback query runs outside animation callbacks. Neither
+the observer nor the spinner enables battery mode or changes
 request execution. Reduced wakeups are an overhead reduction, not a claim
 of proportional battery-life improvement.
 
