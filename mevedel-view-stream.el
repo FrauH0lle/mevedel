@@ -692,7 +692,7 @@ finishes; at most one probe timer belongs to this view in the meantime."
            (with-current-buffer buffer
              (when (eq timer mevedel-view--spinner-timer)
                (setq mevedel-view--spinner-timer nil)
-               (mevedel-view--start-spinner-timer))))))
+               (mevedel-view--start-spinner-timer t))))))
       (mevedel--ui-timer-activate timer)
       (setq mevedel-view--spinner-timer timer))))
 
@@ -735,51 +735,92 @@ MAIN means use the actual color/glyph rendering of the request label."
         mevedel-view--spinner-timer-period nil)
   (mevedel-view-power-unwatch (current-buffer)))
 
-(defun mevedel-view--refresh-themed-status ()
-  "Repaint a theme-invalidated label at its current or frozen phase.
-Leave hidden labels pending until they enter a visible window.  Only
-the registered display span changes; the status row and composer stay
-untouched."
-  (when (and mevedel-view--spinner-theme-stale-p
-             mevedel-view--spinner-status
-             (mevedel-view--animation-target-visible-p
-              mevedel-view--spinner-label-target
-              'mevedel-view-spinner-frame))
-    (let* ((target mevedel-view--spinner-label-target)
-           (start (marker-position (car target)))
-           (end (marker-position (cdr target)))
-           (style mevedel-view-spinner-style)
-           (seconds (mevedel-view--animation-display-seconds))
-           (label (buffer-substring-no-properties start end))
-           (display-frame (mevedel-view--animation-target-frame
-                           target (eq style 'dots)))
-           (frame (mevedel-view-animation-frame
-                   style label seconds 'mevedel-view-spinner display-frame)))
-      (unless (equal-including-properties
-               frame (get-text-property start 'display))
-        (let ((inhibit-read-only t)
-              (buffer-undo-list t))
-          (with-silent-modifications
-            (put-text-property start end 'display frame))))
-      (setq mevedel-view--spinner-last-sample-seconds seconds
-            mevedel-view--spinner-sample-frame display-frame
-            mevedel-view--spinner-theme-stale-p nil))))
+(defun mevedel-view--refresh-themed-status (&optional force)
+  "Repaint visible indicator spans at their current or frozen phase.
+FORCE also checks frozen glyph fallbacks on a visibility rearm, even
+without a theme change.  Hidden targets retain the pending refresh;
+neither the status row nor the composer is rebuilt."
+  (when (or force mevedel-view--spinner-theme-stale-p)
+    (let ((seconds (mevedel-view--animation-display-seconds))
+          (pending nil))
+      (when (and mevedel-view--spinner-status
+                 (not (eq mevedel-view-spinner-style 'static)))
+        (let ((target mevedel-view--spinner-label-target))
+          (if (mevedel-view--animation-target-visible-p
+               target 'mevedel-view-spinner-frame)
+              (let* ((start (marker-position (car target)))
+                     (end (marker-position (cdr target)))
+                     (style mevedel-view-spinner-style)
+                     (label (buffer-substring-no-properties start end))
+                     (display-frame (mevedel-view--animation-target-frame
+                                     target (eq style 'dots)))
+                     (frame (mevedel-view-animation-frame
+                             style label seconds 'mevedel-view-spinner
+                             display-frame)))
+                (unless (equal-including-properties
+                         frame (get-text-property start 'display))
+                  (let ((inhibit-read-only t)
+                        (buffer-undo-list t))
+                    (with-silent-modifications
+                      (put-text-property start end 'display frame))))
+                (setq mevedel-view--spinner-last-sample-seconds seconds
+                      mevedel-view--spinner-sample-frame display-frame))
+            (setq pending t))))
+      (unless (eq mevedel-view-tool-spinner-style 'static)
+        (dolist (target mevedel-view--spinner-tool-targets)
+          (if (mevedel-view--animation-target-visible-p
+               target 'mevedel-view-inline-spinner-frame)
+              (let* ((start (marker-position (car target)))
+                     (end (marker-position (cdr target)))
+                     (display-frame (mevedel-view--animation-target-frame
+                                     target (eq mevedel-view-tool-spinner-style
+                                                'dots)))
+                     (frame (mevedel-view-animation-frame
+                             mevedel-view-tool-spinner-style "" seconds
+                             'mevedel-view-ephemeral display-frame)))
+                (unless (equal-including-properties
+                         frame (get-text-property start 'display))
+                  (let ((inhibit-read-only t)
+                        (buffer-undo-list t))
+                    (with-silent-modifications
+                      (put-text-property start end 'display frame)))))
+            (setq pending t))))
+      (setq mevedel-view--spinner-theme-stale-p pending))))
 
-(defun mevedel-view--start-spinner-timer ()
-  "Start one view timer at the next needed visual or metadata cadence."
+(defun mevedel-view--start-spinner-timer (&optional resumed)
+  "Start one view timer at the next needed visual or metadata cadence.
+RESUMED means visibility or focus changed, so frozen glyph support can be
+rechecked without changing the displayed animation phase."
   ;; A shared display property cannot carry separate palettes for two frames.
   ;; Repaint on a frame move even when this view has no decorative or elapsed
   ;; timer to notice it; defer the repaint while the label is hidden.
   (when (and mevedel-view--spinner-status
-             (memq mevedel-view-spinner-style '(shimmer breathe bounce))
+             (memq mevedel-view-spinner-style
+                   '(shimmer breathe bounce braille dots))
              (mevedel-view--animation-target-visible-p
               mevedel-view--spinner-label-target 'mevedel-view-spinner-frame)
-             (not (eq mevedel-view--spinner-sample-frame
-                      (mevedel-view--animation-target-frame
-                       mevedel-view--spinner-label-target))))
+             (not (equal mevedel-view--spinner-sample-frame
+                         (mevedel-view--animation-target-frame
+                          mevedel-view--spinner-label-target
+                          (eq mevedel-view-spinner-style 'dots)))))
     (setq mevedel-view--spinner-theme-stale-p t))
-  (when mevedel-view--spinner-theme-stale-p
-    (mevedel-view--refresh-themed-status))
+  (let ((frozen-glyphs
+         (and resumed
+              (zerop (mevedel-view-power-framerate
+                      mevedel-view-spinner-framerate
+                      mevedel-view-spinner-battery-framerate
+                      mevedel-view-spinner-power-policy
+                      mevedel-view-spinner-animate))
+              (or (memq mevedel-view-spinner-style '(braille dots))
+                  (and mevedel-view--spinner-tool-targets
+                       (memq mevedel-view-tool-spinner-style
+                             '(braille dots)))))))
+    (when (and frozen-glyphs
+               (or (eq mevedel-view-spinner-style 'dots)
+                   (eq mevedel-view-tool-spinner-style 'dots)))
+      (mevedel-view-animation-reset-glyph-support))
+    (when (or mevedel-view--spinner-theme-stale-p frozen-glyphs)
+      (mevedel-view--refresh-themed-status frozen-glyphs)))
   (when (and (mevedel-view--spinner-active-p)
              (not mevedel-view--spinner-phase-start))
     (setq mevedel-view--spinner-phase-start (float-time)))
@@ -904,9 +945,10 @@ hidden label retains its pending refresh until visibility rearms its view."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when (and (derived-mode-p 'mevedel-view-mode)
-                   mevedel-view--spinner-status
-                   (memq mevedel-view-spinner-style
-                         '(shimmer breathe bounce)))
+                   (or (and mevedel-view--spinner-status
+                            (not (eq mevedel-view-spinner-style 'static)))
+                       (and mevedel-view--spinner-tool-targets
+                            (not (eq mevedel-view-tool-spinner-style 'static)))))
           (setq mevedel-view--spinner-theme-stale-p t)
           (condition-case nil
               (mevedel-view--start-spinner-timer)
@@ -999,8 +1041,7 @@ animation or elapsed timer remains to notice the new colors."
                               style label seconds 'mevedel-view-spinner
                               display-frame)))
                   (setq mevedel-view--spinner-last-sample-seconds seconds)
-                  (when (memq style '(shimmer breathe bounce))
-                    (setq mevedel-view--spinner-sample-frame display-frame))
+                  (setq mevedel-view--spinner-sample-frame display-frame)
                   (unless (equal-including-properties
                            frame (get-text-property start 'display))
                     (put-text-property start end 'display frame))))))

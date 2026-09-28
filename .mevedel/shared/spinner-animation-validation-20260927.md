@@ -565,3 +565,36 @@ current Eask checks):
   passed. All eight failures exactly match the recurring unrelated gptel,
   preset, tool-injection, skills layout, and concurrent plan-handoff cases
   recorded above; the full suite is **not green**.
+
+Frozen glyph-fallback follow-up, 2026-09-28 (source: Goal completion verifier
+`/root/verify_14`, independent fresh-process replay/review, scoped Eask):
+
+- Completion verification found that paused Braille and dots indicators (main
+  and pending-tool) kept unsupported glyphs after display capabilities
+  changed, with either global motion disabled or battery saving set to zero.
+  Theme events now repaint visible registered main and tool spans at the frozen
+  phase; hidden spans defer. Visibility/focus resume retries dots glyph support
+  and repaints frozen glyphs without disturbing style-change semantics for
+  newly rendered tool rows. No periodic fallback timer or frame-callback
+  capability query was added. Tests cover both styles and both freeze policies,
+  theme invalidation, resume without a second theme event, hidden deferral,
+  paused status, phase, timer, undo, point, and modification state.
+- Fresh-process production-renderer probes with controlled
+  `char-displayable-p` showed Unicode -> ASCII -> Unicode for both spans in all
+  four cases. They confirmed the frozen phase and user state (including a
+  multiline `>` composer draft, selection, and underlying text) remained
+  unchanged, zero timers, and no hidden repaint. The verifier returned
+  `VERDICT: PASS` (`artifact://executions/execution-075U6e.log`). A separate
+  read-only reviewer returned `VERDICT: PASS`, including a tool-only zero-fps
+  probe. The probes simulate font support rather than changing a physical font.
+- After Eask bytecode cleanup, the plan's eight-file view roster plus power,
+  chat, hooks, and integrity tests passed **1081/1082 expected, zero unexpected,
+  one optional composer skip** (`.scratch/spinner-glyph-roster.log`). All
+  **210 files** compiled without warning matches
+  (`.scratch/spinner-glyph-compile.log`); `git diff --check` passed. The final
+  four-worker full suite discovered **8751 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-glyph-full-suite/summary.json`,
+  `.scratch/spinner-glyph-full-run.log`). It is **not green**. The eight failures
+  are the same gptel bridge, preset transition, message injection, steering
+  injection, skills layout, and three concurrent plan-handoff cases identified
+  in earlier full runs; the new glyph regression passed in the focused roster.

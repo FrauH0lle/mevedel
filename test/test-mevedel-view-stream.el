@@ -5216,6 +5216,141 @@
               (should (= frozen mevedel-view--spinner-frozen-seconds))
               (should-not mevedel-view--spinner-timer))))))))
 
+(mevedel-deftest mevedel-view-animation-glyph-fallback-refreshes-frozen-status
+  (:doc "Theme/capability changes repaint frozen main and tool glyphs without timers.")
+  (dolist (style '(braille dots))
+    (dolist (freeze '(global battery))
+      (let ((supported t)
+            (mevedel-view-animation--dots-cache nil))
+        (cl-letf (((symbol-function 'char-displayable-p)
+                   (lambda (char &optional _frame)
+                     (or supported (not (memq char '(?⠋ ?● ?·)))))))
+          (mevedel-view-stream-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--current-request
+                          (mevedel-request--create :started-at (current-time)))
+              (mevedel-request-set-active-work-paused
+               mevedel--current-request t))
+            (mevedel-view-stream-test--with-visible-view
+              (let ((mevedel-view-spinner-style style)
+                    (mevedel-view-tool-spinner-style style)
+                    (mevedel-view-spinner-power-policy 'full)
+                    (mevedel-view-spinner-battery-framerate 30)
+                    (mevedel-view-spinner-animate t)
+                    (mevedel-view--pending-tool-calls
+                     '(("call-1" . "Calling Read..."))))
+                (mevedel-view--start-spinner "Working...")
+                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view--spinner-tick)
+                (let* ((main (car mevedel-view--spinner-label-target))
+                       (tool (caar mevedel-view--spinner-tool-targets))
+                       (before-main (get-text-property (marker-position main)
+                                                       'display))
+                       (before-tool (get-text-property (marker-position tool)
+                                                       'display)))
+                  (should (mevedel-view--animation-visible-p))
+                  (should (if (eq style 'braille)
+                              (string-prefix-p "⠋ " before-main)
+                            (string-prefix-p "●" before-main)))
+                  (should (if (eq style 'braille)
+                              (string-prefix-p "⠋ " before-tool)
+                            (string-prefix-p "●" before-tool)))
+                  (if (eq freeze 'global)
+                      (setq mevedel-view-spinner-animate nil)
+                    (setq mevedel-view-spinner-power-policy 'save
+                          mevedel-view-spinner-battery-framerate 0))
+                  (mevedel-view--start-spinner-timer)
+                  (let ((phase mevedel-view--spinner-phase-start)
+                        (frozen mevedel-view--spinner-frozen-seconds)
+                        (modified (buffer-modified-p))
+                        (undo buffer-undo-list)
+                        (here (point)))
+                    (should-not mevedel-view--spinner-timer)
+                    (setq supported nil)
+                    (run-hook-with-args 'enable-theme-functions 'mevedel-test-theme)
+                    (let ((expected-main
+                           (mevedel-view-animation-frame
+                            style "Waiting for input" frozen
+                            'mevedel-view-spinner
+                            (mevedel-view--animation-target-frame
+                             mevedel-view--spinner-label-target
+                             (eq style 'dots))))
+                          (expected-tool
+                           (mevedel-view-animation-frame
+                            style "" frozen 'mevedel-view-ephemeral
+                            (mevedel-view--animation-target-frame
+                             (car mevedel-view--spinner-tool-targets)
+                             (eq style 'dots)))))
+                      (should-not (equal-including-properties
+                                   before-main (get-text-property
+                                                (marker-position main) 'display)))
+                      (should-not (equal-including-properties
+                                   before-tool (get-text-property
+                                                (marker-position tool) 'display)))
+                      (should (equal-including-properties
+                               expected-main (get-text-property
+                                              (marker-position main) 'display)))
+                      (should (equal-including-properties
+                               expected-tool (get-text-property
+                                              (marker-position tool) 'display))))
+                    (setq mevedel-view--spinner-last-second nil)
+                    (mevedel-view--spinner-tick)
+                    (should-not mevedel-view--spinner-timer)
+                    (should (= phase mevedel-view--spinner-phase-start))
+                    (should (= frozen mevedel-view--spinner-frozen-seconds))
+                    (should (eq modified (buffer-modified-p)))
+                    (should (eq undo buffer-undo-list))
+                    (should (= here (point)))
+                    ;; A font capability change need not run a theme hook.
+                    ;; Visibility rearming retries the cached dots support.
+                    (setq supported t)
+                    (mevedel-view--resume-on-window-change (selected-window))
+                    (should (equal-including-properties
+                             (mevedel-view-animation-frame
+                              style "Waiting for input" frozen
+                              'mevedel-view-spinner
+                              (mevedel-view--animation-target-frame
+                               mevedel-view--spinner-label-target
+                               (eq style 'dots)))
+                             (get-text-property (marker-position main)
+                                                'display)))
+                    (should (equal-including-properties
+                             (mevedel-view-animation-frame
+                              style "" frozen 'mevedel-view-ephemeral
+                              (mevedel-view--animation-target-frame
+                               (car mevedel-view--spinner-tool-targets)
+                               (eq style 'dots)))
+                             (get-text-property (marker-position tool)
+                                                'display)))
+                    (let ((visible-main (get-text-property
+                                         (marker-position main) 'display))
+                          (visible-tool (get-text-property
+                                         (marker-position tool) 'display)))
+                      (set-window-buffer (selected-window) data-buf)
+                      (setq supported nil)
+                      (run-hook-with-args 'enable-theme-functions
+                                          'mevedel-test-theme)
+                      (should mevedel-view--spinner-theme-stale-p)
+                      (should (equal-including-properties
+                               visible-main (get-text-property
+                                             (marker-position main) 'display)))
+                      (should (equal-including-properties
+                               visible-tool (get-text-property
+                                             (marker-position tool) 'display)))
+                      (set-window-buffer (selected-window) view-buf)
+                      (mevedel-view--resume-on-window-change
+                       (selected-window))
+                      (should-not mevedel-view--spinner-theme-stale-p)
+                      (should-not (equal-including-properties
+                                   visible-main (get-text-property
+                                                 (marker-position main)
+                                                 'display)))
+                      (should-not (equal-including-properties
+                                   visible-tool (get-text-property
+                                                 (marker-position tool)
+                                                 'display))))
+                    (should-not mevedel-view--spinner-timer)))))))))))
+
 (mevedel-deftest mevedel-view-animation-face-refreshes-frozen-status
   (:doc "Customize and direct face edits repaint paused color without a timer.")
   (let ((mevedel-view-animation--cache nil)

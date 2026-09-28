@@ -52,6 +52,10 @@ Unlike the shared reuse cache, these banks cannot be evicted by other views.")
 (defvar mevedel-view-animation--dots-cache nil
   "Recent dots glyph support readings (FRAME . SUPPORTED).")
 
+(defun mevedel-view-animation-reset-glyph-support ()
+  "Retry dots glyph support after a display or font change."
+  (setq mevedel-view-animation--dots-cache nil))
+
 (defun mevedel-view-animation-invalidate (&rest _ignored)
   "Discard color banks after theme or face changes.
 Call this after changing a face outside of the theme system.  The view
@@ -69,7 +73,7 @@ Call from semantic maintenance, never on each animation frame.  This
 also retries a fallback bank when a frame gains color support."
   ;; A changed display font need not change resolved face colors.  Retry dots
   ;; support at semantic cadence rather than probing on every visual sample.
-  (setq mevedel-view-animation--dots-cache nil)
+  (mevedel-view-animation-reset-glyph-support)
   (when (cl-some
          (lambda (entry)
            (let ((key (car entry)) (bank (cdr entry)))
