@@ -276,6 +276,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
 (cl-defstruct (mevedel-execution--record
                (:constructor mevedel-execution--record-create))
   "Private managed lifecycle and one-shot ownership state."
+  artifact-address
   callback
   child
   delivery-state
@@ -998,17 +999,26 @@ preserve the default zero-success/nonzero-failure rule."
   "Return RECORD's logical model-visible artifact address, or nil.
 
 A remote execution keeps its recoverable output artifact, so its address
-does not depend on the local spool the target never wrote to."
+does not depend on the local spool the target never wrote to.  The address
+is remembered for its path: every progress event carries it, and resolving
+it walks the path's components for symlinks, which dominated a live
+execution's progress cost."
   (when-let* ((path
                (if (file-remote-p
                     (or (mevedel-execution--record-workdir record) ""))
                    (mevedel-execution--record-recoverable-output-path record)
                  (and (mevedel-execution--record-yielded-p record)
                       (mevedel-execution--spool-path record)))))
-    (mevedel-resource-artifact-address
-     path
-     (mevedel-execution--origin-session
-      (mevedel-execution--record-origin record)))))
+    (let ((memo (mevedel-execution--record-artifact-address record)))
+      (if (equal path (car memo))
+          (cdr memo)
+        (let ((address (mevedel-resource-artifact-address
+                        path
+                        (mevedel-execution--origin-session
+                         (mevedel-execution--record-origin record)))))
+          (setf (mevedel-execution--record-artifact-address record)
+                (cons path address))
+          address)))))
 
 (defun mevedel-execution--facts (record)
   "Return an immutable public fact snapshot for RECORD."
