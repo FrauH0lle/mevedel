@@ -4582,6 +4582,50 @@
               (should (= queries color-queries))
               (should (= 0.12 mevedel-view--spinner-timer-period)))))))))
 
+(mevedel-deftest mevedel-view-animation-horizontal-metadata
+  (:doc "Elapsed metadata stays current when hscroll hides only the label.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'static)
+            (mevedel-view-tool-spinner-style 'static)
+            (window (selected-window))
+            (auto-hscroll-mode nil))
+        (setq-local truncate-lines t)
+        (mevedel-view--start-spinner "Working...")
+        (redisplay t)
+        (should mevedel-view--spinner-metadata-target)
+        (should (get-text-property
+                 (marker-position (car mevedel-view--spinner-metadata-target))
+                 'mevedel-view-spinner-status))
+        (should (eq (window-buffer window) view-buf))
+        (set-window-hscroll window 22)
+        (redisplay t)
+        ;; Batch redisplay cannot position this truncated row reliably.  Its
+        ;; actual hscroll visibility is also exercised in the GUI probe.
+        (let ((metadata-start (marker-position
+                               (car mevedel-view--spinner-metadata-target)))
+              (metadata-end (marker-position
+                             (cdr mevedel-view--spinner-metadata-target))))
+          (cl-letf (((symbol-function 'posn-at-point)
+                     (lambda (pos &optional target-window)
+                       (and (eq target-window window)
+                            (<= metadata-start pos) (< pos metadata-end)
+                            '(visible)))))
+            (should-not (mevedel-view--animation-visible-p))
+            (should (mevedel-view--spinner-metadata-visible-p))
+            (mevedel-view--start-spinner-timer)
+            (should (= 1.0 mevedel-view--spinner-timer-period))
+            (setq mevedel-view--spinner-start-time
+                  (time-subtract (current-time) (seconds-to-time 3))
+                  mevedel-view--spinner-last-second nil)
+            (mevedel-view--spinner-tick)
+            (should (string-match-p "Working\\.\\.\\. · [3-9]s"
+                                    (buffer-substring-no-properties
+                                     (mevedel-view-zone-start 'progress)
+                                     (overlay-end
+                                      (mevedel-view-zone-region
+                                       'progress)))))))))))
+
 (mevedel-deftest mevedel-view-animation-horizontal-offscreen
   (:doc "A horizontally scrolled-away label stops writes and resumes at its phase.")
   (let ((mevedel-view-animation--cache nil)

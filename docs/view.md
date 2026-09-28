@@ -302,11 +302,13 @@ state. The rendering measurements are recorded in
 
 Animation adds a stricter visibility gate without changing that rendering
 contract: a windowless or vertically/horizontally offscreen indicator has no
-animation wakeups. The
-per-view timer runs only while a progress label or pending-tool indicator is
-visible in an attended window, and updates registered spans instead of scanning
-the transcript each frame. Focus, window and scroll changes rearm it (horizontal
-scroll uses a scoped `set-window-hscroll` observer because Emacs does not call
+decorative wakeups. If horizontal scrolling hides the label but leaves its
+elapsed suffix visible, a separate visibility check keeps the once-per-second
+metadata refresh. The per-view timer animates only a progress label or
+pending-tool indicator visible in an attended window, and updates registered
+spans instead of scanning the transcript each frame. Focus, window and scroll
+changes rearm it (horizontal scroll uses a scoped `set-window-hscroll` observer
+because Emacs does not call
 `window-scroll-functions` for that change; automatic panning instead arms a
 buffer-local redisplay observer only while a target is horizontally suspended).
 The buffer-local window-change hook reevaluates a view when its window switches
@@ -331,9 +333,12 @@ The foreground request label supports `shimmer`, `breathe`, `bounce`, `dots`,
 rows use compact `braille`, `ascii`, `dots`, or `static` indicators (`braille` by
 default), independently of the request label. Color styles use 64 theme-derived
 shades and a 3.6-second cycle; the prepared frames are cached with a bounded
-animated prefix so long labels remain readable. If colors cannot be resolved
-on a display, color styles fall back to a glyph indicator; when Braille is
-unavailable on its target display, the indicator uses ASCII. Terminal palettes
+animated prefix so long labels remain readable. A live view pins up to four
+prepared banks independently of the shared six-bank reuse cache, so other views
+cannot evict its active frame. Theme changes clear both caches. If colors
+cannot be resolved on a display, color styles fall back to a glyph indicator;
+when Braille is unavailable on its target display, the indicator uses ASCII.
+Terminal palettes
 with fewer than 256 colors use the glyph fallback even when their face colors
 resolve: their coarse shade mapping cannot support a smooth color animation,
 so the view also uses glyph rather than color-rate timer wakeups. When either dots

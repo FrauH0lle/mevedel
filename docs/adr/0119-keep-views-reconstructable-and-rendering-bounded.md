@@ -65,7 +65,10 @@ allocates a new timer at frame rate. Time-based frame selection skips missed
 samples and retains phase across power changes. The foreground label
 offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
 pending-tool rows use compact braille, ascii, dots, or static indicators.
-Color animations prepare bounded, theme-derived frame banks; glyphs have a
+Color animations prepare bounded, theme-derived frame banks; each live view
+pins at most four banks in addition to a six-bank shared reuse cache, preventing
+other views from evicting an active sample. Theme changes invalidate both.
+Glyphs have a
 natural, slower cadence; colorless and low-color terminals use the glyph
 fallback cadence rather than waking at the color rate. Even resolvable face
 colors cannot distinguish the prepared shades on an eight-color terminal;
@@ -77,7 +80,9 @@ semantic tick (or theme invalidation), not at every decorative frame. A global
 reduced-motion switch disables decorative updates, not semantic progress or
 elapsed metadata; semantic redraws retain the last displayed sample, and
 unchanged tool rows are not rebuilt at their initial frame. Hidden
-and vertically or horizontally offscreen indicators suspend animation wakeups.
+and vertically or horizontally offscreen indicators suspend decorative wakeups;
+a still-visible elapsed suffix independently retains its one-second semantic
+refresh even when horizontal scrolling hides its label.
 A theme change repaints visible color labels at their displayed or frozen
 phase, even when paused metadata and zero fps remove timers; hidden labels
 wait until visible again to repaint. Horizontal visibility checks the
