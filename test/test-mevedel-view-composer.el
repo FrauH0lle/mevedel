@@ -907,6 +907,28 @@
         (mevedel-view--sanitize-undo)
         (should (equal (list (cons start (point-max))) buffer-undo-list)))))
 
+  :doc "drops groups that only recorded point"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (goto-char (mevedel-view--input-start))
+      (insert "kept")
+      (undo-boundary)
+      (let ((start (mevedel-view--input-start)))
+        ;; Commands that only moved point while renders ran above.
+        (dotimes (_ 5)
+          (push (1+ start) buffer-undo-list)
+          (undo-boundary))
+        (mevedel-view--sanitize-undo)
+        ;; One group remains: the insertion, with no boundaries left over.
+        (should (member (cons start (+ start 4)) buffer-undo-list))
+        (should-not (memq nil buffer-undo-list))
+        (should-not (seq-some #'integerp buffer-undo-list))
+        (undo-start)
+        (undo-more 1)
+        (should (equal "" (mevedel-view--input-text))))))
+
   :doc "keeps nothing for a transcript view without a composer"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
