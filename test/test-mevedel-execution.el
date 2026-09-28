@@ -955,7 +955,12 @@
                             "tool-results" "executions"))
          (mevedel-sandbox-mode 'off)
          (temporary-artifact-directory (file-name-concat root "artifacts"))
+         (resolutions 0)
+         (count (lambda (original &rest args)
+                  (cl-incf resolutions)
+                  (apply original args)))
          initial final id yielded foreground pending-final)
+    (advice-add 'mevedel-resource-artifact-address :around count)
     (unwind-protect
         (progn
           (mevedel-execution-start-bash
@@ -974,6 +979,8 @@
           (setq final (test-mevedel-execution--observe session id))
           (should (equal (plist-get (plist-get initial :facts) :output-path)
                          (plist-get (plist-get final :facts) :output-path)))
+          ;; Its events share one resolution of the unchanged spool path.
+          (should (= 1 resolutions))
           (should (string-match-p "first" (plist-get initial :output)))
           (should (string-match-p "second" (plist-get final :output)))
           (mevedel-execution-start-bash
@@ -1014,6 +1021,7 @@
                                     spool))
             (should-not (mevedel-resource-artifact-address spool session)))
           (test-mevedel-execution--wait (lambda () pending-final)))
+      (advice-remove 'mevedel-resource-artifact-address count)
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
