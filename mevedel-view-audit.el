@@ -705,9 +705,12 @@ The completion's source target may be a later segment after compaction."
         (cond
          ((and (stringp physical) (file-regular-p physical)
                (file-readable-p physical))
-          (insert-file-contents physical))
-         ((and (stringp output) (not (string-empty-p output)))
-          (insert output))
+          (when (zerop (cadr (insert-file-contents physical)))
+            (insert "Execution produced no output.\n")))
+         ((stringp output)
+          (insert (if (string-empty-p output)
+                      "Execution produced no output.\n"
+                    output)))
          (t
           (insert "Original execution row and retained output are unavailable.\n"
                   (if (stringp path)

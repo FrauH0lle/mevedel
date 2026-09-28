@@ -528,7 +528,8 @@ lookup follows the receiving transcript's own history: root session segments or
 numbered agent compaction archives. A missing earlier archive does not hide
 available later terminal evidence; when the source row itself is gone, the
 result link opens retained output read-only instead of navigating into the
-parent's segments.
+parent's segments. An empty retained output is shown as an explicit no-output
+result; only absent evidence reports an unavailable result.
 On reload, nested Bash calls whose process is gone show a lost state and error
 marker rather than inheriting the ToolCall's earlier successful call status.
 
