@@ -525,12 +525,14 @@ survive progress and completion. Folding a turn retains its projected
 breadcrumb for retry deduplication; Show result first unfolds the turn holding
 the source-backed Bash row. A separate execution-history disclosure
 preserves inspectable polling and delivery records.
-The same rules apply to execution tools nested within ToolCall. Completion
-lookup follows the receiving transcript's own history: root session segments or
-numbered agent compaction archives. A missing earlier archive does not hide
-available later terminal evidence; when the source row itself is gone, the
-result link opens retained output read-only instead of navigating into the
-parent's segments. An empty retained output is shown as an explicit no-output
+The same rules apply to execution tools nested within ToolCall. A direct
+ToolCall Bash shows its child's latest sandbox disclosure on the outer row;
+its expanded history action uses that child's execution ID, not the outer
+ToolCall ID. Completion lookup follows the receiving transcript's own history:
+root session segments or numbered agent compaction archives. A missing earlier
+archive does not hide available later terminal evidence. If the source row is
+gone, the result link opens retained output read-only instead of navigating
+into the parent's segments. An empty retained output is shown as an explicit no-output
 result; only absent evidence reports an unavailable result.
 On reload, nested Bash calls whose process is gone show a lost state and error
 marker rather than inheriting the ToolCall's earlier successful call status.

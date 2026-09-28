@@ -64,12 +64,12 @@
                   "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
-(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-open-agent-transcript

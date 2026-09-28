@@ -217,33 +217,40 @@
   ,test
   (test)
   :doc "a retry after compaction does not append a second completion breadcrumb"
-  (with-temp-buffer
-    (let ((current (current-buffer))
-          (archive (generate-new-buffer " *completed previous segment*")))
-      (unwind-protect
-          (let ((event (list :type 'terminal :data-buffer current
-                             :owner "/root" :tool-use-id "original"
-                             :facts '(:execution-id "exec-1" :command "true"
-                                     :state completed :outcome success))))
+  (let* ((root (make-temp-file "mevedel-breadcrumb-archives-" t))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3)))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((current (current-buffer))
+                 (event (list :type 'terminal :data-buffer current
+                              :owner "/root" :tool-use-id "original"
+                              :facts '(:execution-id "exec-1" :command "true"
+                                      :state completed :outcome success))))
             (mevedel-execution-transcript--record-breadcrumb event)
-            (with-current-buffer archive (insert (with-current-buffer current
-                                                   (buffer-string))))
+            (let ((text (mevedel-execution-transcript-test--persisted-audit-transcript
+                         (buffer-string))))
+              (with-temp-file archive (insert text)))
             (erase-buffer)
-            (setq-local mevedel--session t)
-            (cl-letf (((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                       (lambda (_session _buffer)
-                         '((:number 1 :status readable :current-p nil)
-                           (:number 2 :status readable :current-p t))))
-                      ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                       (lambda (_session _number) archive))
-                      ((symbol-function
-                        'mevedel-execution-transcript--persist-terminal-record)
-                       (lambda (&rest _) (ert-fail "Duplicate completion"))))
-              (mevedel-execution-transcript--record-breadcrumb event)
-              (should-not (mevedel-transcript-audit-records
-                           (buffer-string) 'execution-breadcrumb))
-              (should-not (buffer-live-p archive))))
-        (when (buffer-live-p archive) (kill-buffer archive))))))
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session)
+            (should (equal '(readable missing readable)
+                           (mapcar (lambda (descriptor)
+                                     (plist-get descriptor :status))
+                                   (mevedel-session-artifacts-transcript-segments
+                                    session current))))
+            (let ((before (buffer-list)))
+              (cl-letf (((symbol-function
+                          'mevedel-execution-transcript--persist-terminal-record)
+                         (lambda (&rest _) (ert-fail "Duplicate completion"))))
+                (mevedel-execution-transcript--record-breadcrumb event))
+              (should-not (cl-set-difference (buffer-list) before)))
+            (should-not (mevedel-transcript-audit-records
+                         (buffer-string) 'execution-breadcrumb))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-transcript--record-nested-terminal ()
   ,test
