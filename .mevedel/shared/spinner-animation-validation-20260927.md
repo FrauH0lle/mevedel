@@ -310,3 +310,36 @@ checks and independent read-only graphical verifier `/root/verify_7`):
   (`.scratch/spinner-attended-focus-hook-{clean,focused,compile}.log`). The
   completed full suite above predates only this test assertion improvement;
   its production source and other tests are unchanged.
+
+Horizontal redisplay timer-ownership follow-up, 2026-09-28 (source: Goal
+verifier failure, scoped fix, current checks, independent `/root/verify_8`):
+
+- The Goal completion verifier reproduced two pending timers when an automatic
+  horizontal pan revealed a label while its suffix still owned a one-second
+  metadata timer: the deferred zero-delay probe replaced the buffer's timer
+  pointer but did not cancel the old callback. The old callback was eventually
+  guarded as stale, but stop could not cancel its queued wakeup. The redisplay
+  handoff now cancels that timer and clears its cadence before installing the
+  probe; the existing timer-identity check still guards stale callbacks.
+  A new source-backed ERT case checks pending metadata, probe replacement,
+  duplicate redisplay, and stop cleanup. Docs and ADR 0119 describe the handoff.
+- Independent fresh graphical production-view verification observed automatic
+  horizontal pan with `hscroll=12`, hidden label, visible suffix, and a 1-s
+  timer. After the pan, `old-pending=nil probe-pending=t`; stop cleared both.
+  A second pan resumed a 16.67-ms animation timer (36 ticks), and a major-mode
+  change left no current timer. Its adversarial stale-callback checks for stop,
+  buffer kill, and supersession also passed (`/root/verify_8`, graphical
+  execution `exec-000761`, `VERDICT: PASS`).
+- After clean Eask bytecode, the plan's named eight-file roster passed
+  **916/917 expected, zero unexpected, one optional skip**
+  (`.scratch/spinner-timer-final-focused.log`); **210 files** compiled without
+  warning matches (`.scratch/spinner-timer-final-compile.log`). A direct
+  source-loaded replay of the verifier's batch scenario showed
+  `old=nil probe=t period=nil` and no timer after stop.
+- The isolated four-worker full suite discovered **8738 tests, 8 unexpected,
+  30 skipped** (`.scratch/spinner-timer-final-full-suite/summary.json`,
+  `.scratch/spinner-timer-final-full-run.log`). The new timer-ownership test
+  passed in worker 1. All eight unexpected names exactly match the preceding
+  full run's unrelated failures: gptel bridge install, preset transitions@2,
+  message inject@2, steering inject@9, skills-ui layout@8, and three concurrent
+  plan-handoff dispatch cases (@3, @8, @10). The full suite is **not green**.

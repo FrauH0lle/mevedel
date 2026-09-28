@@ -667,6 +667,12 @@ finishes; at most one probe timer belongs to this view in the meantime."
                  (mevedel-view--animation-visible-p)))
     (remove-hook 'pre-redisplay-functions
                  #'mevedel-view--resume-on-horizontal-redisplay t)
+    ;; A visible elapsed suffix may already own a one-second timer.  Transfer
+    ;; ownership to the deferred probe instead of leaving that timer queued.
+    (when (timerp mevedel-view--spinner-timer)
+      (cancel-timer mevedel-view--spinner-timer))
+    (setq mevedel-view--spinner-timer nil
+          mevedel-view--spinner-timer-period nil)
     (let ((buffer (current-buffer)) timer)
       (setq timer
             (run-at-time
