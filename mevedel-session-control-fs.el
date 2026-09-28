@@ -273,6 +273,26 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      decode_payload >&8 || exit 67\n"
    "      ;;\n"
+   ;; A local target receives large payloads as a staged file beside the
+   ;; nearest existing ancestor instead of base64 on stdin: same filesystem,
+   ;; so the rename or link into the pinned parent stays atomic.
+   "    write-staged|create-staged)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      [[ \"$payload\" =~ ^/.*/\\.mevedel-control-fs-staged-[^/]+$ ]] || exit 71\n"
+   "      test ! -L \"$payload\" && test -f \"$payload\" || exit 66\n"
+   "      if test \"$op\" = write-staged; then\n"
+   "        mv -fT -- \"$payload\" \"$leaf\" || exit 67\n"
+   "        exit 0\n"
+   "      fi\n"
+   "      if test ! -d \"$leaf\" && ln -- \"$payload\" \"$leaf\"; then\n"
+   "        rm -f -- \"$payload\"\n"
+   "        exit 0\n"
+   "      fi\n"
+   "      if test -e \"$leaf\" || test -L \"$leaf\"; then\n"
+   "        exit 73\n"
+   "      fi\n"
+   "      exit 75\n"
+   "      ;;\n"
    "    create)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
@@ -532,6 +552,8 @@ parent must not turn into a `Setting current directory' failure."
     (append . "append")
     (append-rotating . "append-rotating")
     (create . "create")
+    (create-staged . "create-staged")
+    (write-staged . "write-staged")
     (make-directory . "mkdir")
     (path-exists-p . "probe")
     (directory-p . "directory")
@@ -597,7 +619,9 @@ parent must not turn into a `Setting current directory' failure."
               (error "Read byte limit must be a non-negative integer"))
             (number-to-string (plist-get op :max-bytes)))
            ((null content) "")
-           ((memq (plist-get op :op) '(verify-mode before-time)) content)
+           ((memq (plist-get op :op)
+                  '(verify-mode before-time write-staged create-staged))
+            content)
            ((multibyte-string-p content)
             (base64-encode-string
              (encode-coding-string
@@ -904,6 +928,49 @@ is extracted to disk. A rejected archive requires fresh ordinary reads."
         (error "Unexpected control read archive member"))
       (nreverse results))))
 
+(defconst mevedel-session-control-fs--stage-min-bytes 4096
+  "Smallest local payload written as a staged file instead of base64.")
+
+(defvar mevedel-session-control-fs--stage-local t
+  "Non-nil stages large local payloads; tests bind nil to exercise carriers.")
+
+(defun mevedel-session-control-fs--stage-payloads (operations staged)
+  "Return local OPERATIONS with large writes carried by staged files.
+
+Base64 encoding a payload into the request and decoding it on the target
+cost a 260 KB sidecar write 31 ms, most of a save.  A local target shares
+the editor's filesystem, so the bytes are written once to a private file
+in the destination's nearest existing ancestor -- a directory the same
+program creates lives on that same filesystem -- and the program renames
+or links it after proving the destination's parent as before.  Record each
+staged file in the car of STAGED for cleanup."
+  (mapcar
+   (lambda (op)
+     (let ((content (plist-get op :content)))
+       (if (not (and (memq (plist-get op :op) '(write create))
+                     (stringp content)
+                     (>= (string-bytes content) mevedel-session-control-fs--stage-min-bytes)))
+           op
+         (let* ((parent (plist-get (mevedel-session-control-fs--descriptor
+                                    (plist-get op :path))
+                                   :parent))
+                (directory parent))
+           (while (not (file-directory-p directory))
+             (setq directory (file-name-directory (directory-file-name directory))))
+           (let ((file (make-temp-file
+                        (file-name-concat directory ".mevedel-control-fs-staged-")))
+                 (coding-system-for-write
+                  (if (multibyte-string-p content)
+                      (or (plist-get op :coding) 'utf-8-unix)
+                    'no-conversion)))
+             (push file (car staged))
+             (write-region content nil file nil 'silent)
+             (list :op (if (eq (plist-get op :op) 'write) 'write-staged 'create-staged)
+                   :path (plist-get op :path)
+                   :content (file-local-name file)
+                   :optional (plist-get op :optional)))))))
+   operations))
+
 (defvar mevedel-session-control-fs--measure-min-ms 20
   "Shortest synchronous program, in milliseconds, recorded as telemetry.
 Pause attribution needs only programs long enough to be seen; recording
@@ -978,10 +1045,14 @@ LOCK-DIRECTORY is its optional target-side lock."
               (mevedel-session-control-fs--connection-directory
                (or remote "/")))
              (bash (car (mevedel-session-control-fs--programs remote)))
+             (staged (list nil))
              ;; Encoded once: the oversized path used to re-encode every
              ;; payload a second time for the request file.
              (fields (mapcar #'mevedel-session-control-fs--program-fields
-                             operations))
+                             (if (or remote (not mevedel-session-control-fs--stage-local))
+                                 operations
+                               (mevedel-session-control-fs--stage-payloads
+                                operations staged))))
              (archive-p (and (<= 2 (length operations) 32)
                              (cl-every (lambda (op)
                                          (and (eq (plist-get op :op) 'read)
@@ -1070,6 +1141,9 @@ LOCK-DIRECTORY is its optional target-side lock."
                              (mevedel-session-control-fs--program-results operations text)))))))
           (when (and input (file-exists-p input))
             (delete-file input))
+          ;; A program that stopped early leaves its later payloads staged.
+          (dolist (file (car staged))
+            (when (file-exists-p file) (delete-file file)))
           (when (buffer-live-p pipe)
             (kill-buffer pipe))
           (when (buffer-live-p output)
