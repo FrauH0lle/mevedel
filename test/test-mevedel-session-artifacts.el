@@ -4542,7 +4542,22 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                          :fork-point (plist-get prompt :fork-point-id)
                                          :start (plist-get prompt :pos)
                                          :end (plist-get prompt :transcript-cutoff))))))
-              (should (string-search "Completed response" (plist-get evidence :text))))
+              (should (string-search "Completed response" (plist-get evidence :text)))
+              (should-not (plist-get evidence :unavailable)))
+            ;; A turn indexed past its committed bytes is named, not fatal.
+            (let ((evidence (mevedel-journal-evidence-turns
+                             restored-session
+                             (list (list :number 1 :segment 1
+                                         :fork-point (plist-get prompt :fork-point-id)
+                                         :start (plist-get prompt :pos)
+                                         :end (plist-get prompt :transcript-cutoff))
+                                   (list :number 2 :segment 1 :fork-point nil
+                                         :start (* 10 1000 1000)
+                                         :end (* 11 1000 1000))))))
+              (should (string-search "Completed response" (plist-get evidence :text)))
+              (should (string-search "Completed turn 2; source: segment-0001.chat.org: evidence unavailable"
+                                     (plist-get evidence :text)))
+              (should (equal '(2) (plist-get evidence :unavailable))))
             ;; Recovery is complete: an ordinary second inspection must not
             ;; rewrite the already-finalized predecessor or its index.
             (should-not (mevedel-session-artifacts-self-heal-segment-counter
