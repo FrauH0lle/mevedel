@@ -1303,18 +1303,28 @@ Return non-nil only when the current owned lease generation commits VALUE."
   "Return non-nil when SESSION's bound lease records unsettled mutation."
   (and (plist-get (mevedel-session-lease session) :unsettled-mutation) t))
 
+(defvar mevedel-session-durability--final-commit nil
+  "Non-nil while committing a head that ends its publication window.")
+
 (defun mevedel-session-durability-commit-publication-head (session head)
   "Commit immutable session-relative HEAD while SESSION is the current owner.
 
 Return non-nil only when SESSION's publishing generation remains the exact
-lease head through the commit."
+lease head through the commit.  A commit bound as final by
+`mevedel-session-durability--final-commit' also returns the lease to
+`active' with its ordinary expiry: nothing follows it in the window, so a
+separate finishing write only repeated the proof the commit just made."
   (unless (mevedel-session-publication-valid-head-p head)
     (error "Publication head must name an immutable manifest"))
   (let ((expected
          (plist-get (mevedel-session-lease session) :publication-head)))
-    (mevedel-session-durability--update-owned-lease
-     session '(publishing) 'publishing
-     mevedel-session-publication-lease-seconds head t expected)))
+    (if mevedel-session-durability--final-commit
+        (mevedel-session-durability--update-owned-lease
+         session '(publishing) 'active
+         mevedel-session-lease-seconds head t expected)
+      (mevedel-session-durability--update-owned-lease
+       session '(publishing) 'publishing
+       mevedel-session-publication-lease-seconds head t expected))))
 
 (defun mevedel-session-durability--reclaim-own-lease (session)
   "Retake SESSION's own expired lease, returning non-nil on success.
@@ -1490,11 +1500,16 @@ its lease state."
     (error nil)))
 
 (defun mevedel-session-durability--finish-publication-lease (session)
-  "Return SESSION's publishing lease to its ordinary renewable state."
-  (condition-case nil
-      (mevedel-session-durability--update-owned-lease
-       session '(publishing) 'active mevedel-session-lease-seconds)
-    (error nil)))
+  "Return SESSION's publishing lease to its ordinary renewable state.
+A final head commit already did, and that commit is the latest proof."
+  (let ((lease (mevedel-session-lease session)))
+    (if (and (eq 'owned (plist-get lease :state))
+             (eq 'active (plist-get lease :status)))
+        t
+      (condition-case nil
+          (mevedel-session-durability--update-owned-lease
+           session '(publishing) 'active mevedel-session-lease-seconds)
+        (error nil)))))
 
 (defun mevedel-session-durability-call-with-reserved-lease
     (session function)
