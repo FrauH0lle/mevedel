@@ -364,6 +364,9 @@ the collapsed tool header, including nested Bash rows. Raw sandbox facts and
 grant details are not sent as presentation metadata.
 Routine empty-input `WriteStdin` observations stay out of the guest transcript;
 their output and terminal status belong to the original Bash row. After
+the running owner's bounded tail replaces earlier output, the Bash row discloses
+that its preview is truncated even when the latest poll omitted no bytes. On
+completion, retained output remains available through the result link. After
 compaction, that row appears only in **Earlier conversation**, where projection
 uses later completion evidence from the session's segments to show the final result
 without a duplicate current-segment output card. This also applies to Bash
