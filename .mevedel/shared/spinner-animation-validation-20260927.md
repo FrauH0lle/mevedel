@@ -273,3 +273,40 @@ verification, current clean Eask runs):
   the unexpected names match the eight recorded above, none in view/animation
   tests. Concurrent plan-handoff working-tree changes are unrelated to this
   follow-up. No running user Emacs library was hot-reloaded.
+
+Same-window animation attention follow-up, 2026-09-28 (source: current Eask
+checks and independent read-only graphical verifier `/root/verify_7`):
+
+- Animation target and elapsed-suffix visibility, horizontal suspension, and
+  redisplay rearming require target visibility and frame attention in the same
+  window. Transcript rendering keeps its separate buffer-wide attention gate.
+  The target-frame selection still considers all visible frames because a
+  shared display property must work in unfocused frames with other palettes.
+  A two-window regression checks no timer, frame writes, or metadata updates
+  for a background-only target, then a resumed glyph timer through the
+  focus-change hook on a deterministic focus-state change
+  (`mevedel-view-stream.el`, `test/test-mevedel-view-stream.el`).
+- A fresh two-frame production-view probe measured `ticks=0 writes=0
+  watcher=nil queries=0` across 350 ms with a focused offscreen label and an
+  unfocused visible label under `auto`. Hscroll 13 revealed only the suffix:
+  `period=1.0`, `writes=0`, no watcher, and `Working... · 0s` advanced to
+  `Working... · 2s` in 1.15 s. A deterministic focus-state swap rearmed a
+  16.67-ms timer and delivered 20 frame writes; actual compositor focus
+  transfer was not granted, so recovery after a genuine focus event is not
+  directly verified. The verifier returned `VERDICT: PARTIAL` on that basis.
+- After Eask cleanup, the named eight-file roster passed **915/916 expected,
+  zero unexpected, one optional skip** (`.scratch/spinner-attended-final2-focused.log`);
+  all **210 files** compiled without warnings
+  (`.scratch/spinner-attended-final2-compile.log`). The isolated full suite ran
+  **8737 tests, 8 unexpected, 31 skipped**
+  (`.scratch/spinner-attended-final2-full-suite/summary.json`,
+  `.scratch/spinner-attended-final2-full-run.log`). The eight failures are the
+  same non-view failures recorded above, including the concurrent plan-handoff
+  failures; the full suite is **not green**. No user Emacs library was hot-reloaded.
+- The final regression was tightened to call the production focus-change hook
+  instead of directly restarting its timer. After another Eask cleanup, the
+  named roster again passed **915/916 expected, zero unexpected, one skip**;
+  **210 files** compiled with no warnings
+  (`.scratch/spinner-attended-focus-hook-{clean,focused,compile}.log`). The
+  completed full suite above predates only this test assertion improvement;
+  its production source and other tests are unchanged.

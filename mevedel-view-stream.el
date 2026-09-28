@@ -571,6 +571,18 @@ windows, the usual high-frequency case."
                  (posn-at-point last window)
                  (posn-at-point middle window))))))
 
+(defun mevedel-view--animation-window-attended-p (window)
+  "Return non-nil when WINDOW can show animation to an attentive reader.
+Unlike the transcript's buffer-wide attention gate, this check must apply
+to the same window as the target's on-screen position."
+  (let* ((frame (window-frame window))
+         (top frame))
+    (while (frame-parent top)
+      (setq top (frame-parent top)))
+    (and (eq (frame-visible-p frame) t)
+         (or (not (display-graphic-p top))
+             (frame-focus-state top)))))
+
 (defun mevedel-view--animation-target-visible-p (target property &optional any-value)
   "Return non-nil when TARGET is a visible span marked PROPERTY.
 If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
@@ -581,8 +593,7 @@ If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
                    (get-text-property pos property)
                  (eq (get-text-property pos property) t))))
     (cl-some (lambda (window)
-               (and (eq (frame-visible-p (window-frame window)) t)
-                    (not (mevedel-view--unattended-p))
+               (and (mevedel-view--animation-window-attended-p window)
                     (mevedel-view--animation-span-in-window-p
                      pos (marker-position (cdr target)) window)))
              (get-buffer-window-list (current-buffer) nil t))))
@@ -637,9 +648,8 @@ windows."
   "Return non-nil if a target is vertically in a hscrolled view window."
   (cl-some
    (lambda (window)
-     (and (eq (frame-visible-p (window-frame window)) t)
+     (and (mevedel-view--animation-window-attended-p window)
           (> (window-hscroll window) 0)
-          (not (mevedel-view--unattended-p))
           (mevedel-view--animation-target-in-window-rows-p window)))
    (get-buffer-window-list (current-buffer) nil t)))
 
@@ -649,6 +659,7 @@ Emacs can update hscroll internally without calling `set-window-hscroll'
 or `window-scroll-functions'.  Defer the full scheduler until redisplay
 finishes; at most one probe timer belongs to this view in the meantime."
   (when (and (eq (window-buffer window) (current-buffer))
+             (mevedel-view--animation-window-attended-p window)
              (not (and (mevedel--timer-pending-p mevedel-view--spinner-timer)
                        (not (equal mevedel-view--spinner-timer-period 1.0))))
              (mevedel-view--animation-target-in-window-rows-p window)

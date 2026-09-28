@@ -4582,6 +4582,60 @@
               (should (= queries color-queries))
               (should (= 0.12 mevedel-view--spinner-timer-period)))))))))
 
+(mevedel-deftest mevedel-view-animation-attended-target-window
+  (:doc "A focused offscreen window cannot animate an unfocused visible target.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full)
+            (auto-hscroll-mode nil))
+        (setq-local truncate-lines t)
+        (mevedel-view--start-spinner "Working...")
+        (let* ((foreground (selected-window))
+               (background (split-window-right))
+               (focused (window-frame foreground))
+               (background-frame 'background-animation-test-frame)
+               (original-window-frame (symbol-function 'window-frame))
+               (target mevedel-view--spinner-label-target)
+               (position (marker-position (car target)))
+               (initial (get-text-property position 'display)))
+          (set-window-buffer background view-buf)
+          (redisplay t)
+          (set-window-hscroll foreground 50)
+          (cl-letf (((symbol-function 'window-frame)
+                     (lambda (window)
+                       (if (eq window background) background-frame
+                         (funcall original-window-frame window))))
+                    ((symbol-function 'frame-parent) (lambda (_frame) nil))
+                    ((symbol-function 'frame-visible-p) (lambda (_frame) t))
+                    ((symbol-function 'display-graphic-p) (lambda (&optional _frame) t))
+                    ((symbol-function 'frame-focus-state)
+                     (lambda (frame) (eq frame focused)))
+                    ((symbol-function 'mevedel-view--animation-span-in-window-p)
+                     (lambda (_start _end window) (eq window background))))
+            (should-not (mevedel-view--animation-visible-p))
+            (should-not (mevedel-view--spinner-metadata-visible-p))
+            (mevedel-view--start-spinner-timer)
+            (should-not mevedel-view--spinner-timer-period)
+            (mevedel-view--resume-on-horizontal-redisplay background)
+            (should-not mevedel-view--spinner-timer)
+            (let ((mevedel-view--spinner-last-second (floor (float-time))))
+              (mevedel-view--spinner-tick))
+            (should (equal-including-properties
+                     initial (get-text-property position 'display)))
+            ;; The focus-change hook rearms the window showing the label.
+            (cl-letf (((symbol-function 'frame-focus-state)
+                       (lambda (frame) (eq frame background-frame))))
+              (should (mevedel-view--animation-visible-p))
+              (mevedel-view--resume-attended-views)
+              (should (= 0.12 mevedel-view--spinner-timer-period))
+              (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                         (lambda () 0.24)))
+                (setq mevedel-view--spinner-last-second (floor (float-time)))
+                (mevedel-view--spinner-tick))
+              (should-not (equal-including-properties
+                           initial (get-text-property position 'display))))))))))
+
 (mevedel-deftest mevedel-view-animation-horizontal-metadata
   (:doc "Elapsed metadata stays current when hscroll hides only the label.")
   (mevedel-view-stream-test--with-buffers
