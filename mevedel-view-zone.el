@@ -29,6 +29,7 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-render'
@@ -595,8 +596,10 @@ priorities."
         (inhibit-redisplay t)
         result)
     (unwind-protect
-        (setq result
-              (mevedel-view-zone--call-with-marker-types zone thunk))
+        (progn
+          (setq result
+                (mevedel-view-zone--call-with-marker-types zone thunk))
+          (mevedel-view--sanitize-undo))
       (unwind-protect
           (mevedel-view-zone--restore-view-state state)
         (set-marker (plist-get state :point) nil)
