@@ -905,3 +905,17 @@ Glyph-separator and narrow elapsed-suffix follow-up, 2026-09-28 (source:
   exactly match the earlier non-animation gptel bridge, presets, injection,
   skills-layout and concurrent plan-handoff failures above; the full suite is
   **not green**. `git diff --check` passed. No active host Emacs was hot-reloaded.
+- Completion follow-up on committed `2313e32e`: a new fresh graphical process
+  could not obtain compositor focus for either of its frames, even after
+  `select-frame-set-input-focus` (`.scratch/spinner-native-focus-final.log`), so
+  that attempt alone cannot test native focus-return. The *earlier* real native
+  focus-transfer probe above did observe focus-out cancelling the timer and
+  focus-in restoring 16.67-ms cadence with phase retained
+  (`artifact://executions/execution-R0ldpj.log`). Comparing the focus-hook and
+  caller changes since `51cfecd9` with current source shows the hook path is
+  unchanged; its scheduler call now additionally enables event-driven repaint
+  with `RESUMED=t`. Current controlled-focus tests cover scheduling on this
+  source. Independent `/root/verify_17` reviewed this combined evidence and
+  revised its sole native-focus reservation to `VERDICT: PASS`. This is
+  prior native-event evidence plus current-source continuity, **not** a claim
+  that the latest compositor granted focus.
