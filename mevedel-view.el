@@ -1549,6 +1549,10 @@ redisplay hooks reschedule it once someone can see the result."
                    (fboundp 'mevedel-view--start-spinner-timer))
           (mevedel-view--start-spinner-timer t))))))
 
+(defun mevedel-view--resume-on-pixel-scroll (window _vscroll &rest _)
+  "Update animation scheduling when WINDOW's vertical pixel scroll changes."
+  (mevedel-view--resume-on-horizontal-scroll window 0))
+
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.
 Runs after every frame focus change; the predicate filters focus-out."

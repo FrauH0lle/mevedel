@@ -630,22 +630,51 @@ more than one distinct frame can display the buffer."
   "Return non-nil if the animated span START..END appears in WINDOW.
 Replacement display strings map every character back to their source span,
 so buffer positions alone cannot reveal which animated characters survive
-horizontal scrolling.  Skip pixel positioning in unscrolled windows."
+horizontal scrolling.  Leading glyphs use a cheap unscrolled boundary path
+unless the window is vertically pixel-scrolled."
   (and (< start end)
        (<= (window-start window) start)
        (< start (or (window-end window) (point-min)))
-       (or (zerop (window-hscroll window))
-           (let ((display (get-text-property start 'display)))
-             (if (not (stringp display))
-                 ;; The elapsed suffix is ordinary buffer text.
-                 (cl-some
-                  (lambda (position)
-                    (when-let* ((sample (posn-at-point position window))
-                                (xy (posn-x-y sample)))
-                      (and (null (posn-area sample))
-                           (<= 0 (car xy))
-                           (< (car xy) (window-body-width window t)))))
-                  (list start (1- end)))
+       (let ((display (get-text-property start 'display)))
+         (if (not (stringp display))
+             ;; The elapsed suffix is ordinary buffer text, even at hscroll 0.
+             (cl-some
+              (lambda (position)
+                (when-let* ((sample (posn-at-point position window))
+                            (xy (posn-x-y sample)))
+                  (and (null (posn-area sample))
+                       (<= 0 (car xy))
+                       (< (car xy) (window-body-width window t)))))
+              (list start (1- end)))
+           ;; Even at hscroll zero, vertical pixel scrolling can conceal a
+           ;; replacement string's leading animated prefix.  Ellipsis at the
+           ;; end can instead extend beyond the unscrolled right edge.
+           (or (and (zerop (window-hscroll window))
+                    (zerop (window-vscroll window t))
+                    (or (not (eq mevedel-view-spinner-style 'ellipsis))
+                        (get-text-property
+                         start 'mevedel-view-inline-spinner-frame)))
+               (and (zerop (window-hscroll window))
+                    (eq mevedel-view-spinner-style 'ellipsis)
+                    (when-let* ((suffix (posn-at-point end window))
+                                (xy (posn-x-y suffix))
+                                ((null (posn-area suffix)))
+                                (x (car xy))
+                                (y (cdr xy))
+                                ((<= 0 x))
+                                ((< x (window-body-width window t)))
+                                ((or (> x 0) (> y 0)))
+                                ;; END follows the replacement string, so it
+                                ;; resolves the last wrapped row.  Sample the
+                                ;; preceding glyph, not END-1 (which aliases
+                                ;; to the replacement's first source row).
+                                (previous (posn-at-x-y
+                                           (if (> x 0) (1- x)
+                                             (max 0 (1- (window-body-width
+                                                          window t))))
+                                           (if (> x 0) y (1- y)) window))
+                                (shown (posn-string previous)))
+                      (>= (cdr shown) (max 0 (- (length display) 3)))))
                (when-let* ((sample (or (posn-at-point start window)
                                        (posn-at-point (1- end) window)
                                        (posn-at-point
@@ -768,17 +797,18 @@ windows."
    (cons mevedel-view--spinner-label-target
          mevedel-view--spinner-tool-targets)))
 
-(defun mevedel-view--animation-hscrolled-p ()
-  "Return non-nil if a target is vertically in a hscrolled view window."
+(defun mevedel-view--animation-scrolled-p ()
+  "Return non-nil if a target occupies a horizontally or pixel-scrolled window."
   (cl-some
    (lambda (window)
      (and (mevedel-view--animation-window-attended-p window)
-          (> (window-hscroll window) 0)
+          (or (> (window-hscroll window) 0)
+              (> (window-vscroll window t) 0))
           (mevedel-view--animation-target-in-window-rows-p window)))
    (get-buffer-window-list (current-buffer) nil t)))
 
 (defun mevedel-view--resume-on-horizontal-redisplay (window)
-  "Rearm after automatic horizontal scrolling reveals a target in WINDOW.
+  "Rearm after automatic horizontal or pixel scrolling reveals a target in WINDOW.
 Emacs can update hscroll internally without calling `set-window-hscroll'
 or `window-scroll-functions'.  Defer the full scheduler until redisplay
 finishes; at most one probe timer belongs to this view in the meantime."
@@ -787,7 +817,8 @@ finishes; at most one probe timer belongs to this view in the meantime."
              (not (and (mevedel--ui-timer-pending-p mevedel-view--spinner-timer)
                        (not (equal mevedel-view--spinner-timer-period 1.0))))
              (mevedel-view--animation-target-in-window-rows-p window)
-             (or (zerop (window-hscroll window))
+             (or (and (zerop (window-hscroll window))
+                      (zerop (window-vscroll window t)))
                  (mevedel-view--animation-visible-p)))
     (remove-hook 'pre-redisplay-functions
                  #'mevedel-view--resume-on-horizontal-redisplay t)
@@ -995,7 +1026,7 @@ rechecked without changing the displayed animation phase."
          (periods (delq nil (list main tool metadata)))
          (period (and periods (apply #'min periods))))
     (if (and (not visible) (mevedel-view--spinner-active-p)
-             (mevedel-view--animation-hscrolled-p))
+             (mevedel-view--animation-scrolled-p))
         (add-hook 'pre-redisplay-functions
                   #'mevedel-view--resume-on-horizontal-redisplay nil t)
       (remove-hook 'pre-redisplay-functions

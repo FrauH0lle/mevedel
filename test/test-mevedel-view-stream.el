@@ -113,7 +113,24 @@
   `(save-window-excursion
      (switch-to-buffer view-buf)
      (redisplay t)
-     (with-current-buffer view-buf ,@body)))
+     ;; Batch Emacs has no glyph positions even for text well inside its
+     ;; visible window.  Supply a bounded text-area position for the ordinary
+     ;; elapsed suffix; tests of actual clipping mock positions explicitly.
+     (let ((actual-posn-at-point (symbol-function 'posn-at-point)))
+       (cl-letf (((symbol-function 'posn-at-point)
+                  (lambda (pos &optional window)
+                    (or (funcall actual-posn-at-point pos window)
+                        (when (and noninteractive (windowp window)
+                                   (eq (window-buffer window) view-buf)
+                                   (zerop (window-hscroll window))
+                                   (get-text-property
+                                    pos 'mevedel-view-spinner-status)
+                                   (save-excursion
+                                     (goto-char pos)
+                                     (< (current-column)
+                                        (window-body-width window))))
+                          (list window pos '(0 . 0)))))))
+         (with-current-buffer view-buf ,@body)))))
 
 (mevedel-deftest mevedel-view-stream-begin-turn ()
   ,test
@@ -2268,11 +2285,18 @@
                    request
                    (time-add pause-started (seconds-to-time 5)))))
               0.001))
-          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
-                     (lambda () 0.12)))
-            (mevedel-view--spinner-tick))
-          (should-not
-           (equal frame (get-text-property frame-position 'display)))
+          ;; The initial time-derived glyph can coincidentally be the one
+          ;; sampled at 0.12s.  Exercise several phases to prove motion is
+          ;; permitted throughout the semantic pause, without relying on the
+          ;; wall-clock phase at which the prompt was registered.
+          (let (changed)
+            (dolist (seconds '(0.12 0.24 0.36))
+              (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                         (lambda () seconds)))
+                (mevedel-view--spinner-tick))
+              (unless (equal frame (get-text-property frame-position 'display))
+                (setq changed t)))
+            (should changed))
           (should (equal text (buffer-substring-no-properties
                                (overlay-start region) (overlay-end region)))))
         (mevedel-view--interaction-unregister 'ask)
@@ -4808,6 +4832,10 @@
             (setq mevedel-view--spinner-last-second (floor (float-time)))
             (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
                        (lambda (_target &optional _all) :multiple))
+                      ;; This case tests frame selection, not the pixel
+                      ;; visibility unavailable in batch Emacs for ellipsis.
+                      ((symbol-function 'mevedel-view--animation-span-in-window-p)
+                       (lambda (_start _end _window) t))
                       ((symbol-function 'mevedel-view--animation-seconds)
                        (lambda () 0.48)))
               (mevedel-view--spinner-tick))
@@ -4847,6 +4875,10 @@
                    (lambda (_window) (point-max)))
                   ((symbol-function 'window-hscroll)
                    (lambda (_window) 0))
+                  ;; Fake window symbols have no redisplay positions; this
+                  ;; case checks which frame receives the dots bank.
+                  ((symbol-function 'mevedel-view--animation-span-in-window-p)
+                   (lambda (_start _end window) (eq window 'visible)))
                   ((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
                    (lambda (frame) (eq frame visible-frame))))
           (let ((frames (mevedel-view--animation-target-frame target t)))
@@ -4984,7 +5016,6 @@
             (window (selected-window)))
         (setq-local truncate-lines t)
         (mevedel-view--start-spinner "Working...")
-        (set-window-hscroll window 22)
         (let ((metadata-start
                (marker-position (car mevedel-view--spinner-metadata-target)))
               (metadata-end
@@ -4994,9 +5025,11 @@
                        (and (eq target-window window)
                             (<= metadata-start pos) (< pos metadata-end)
                             (list window 'right-fringe '(0 . 0))))))
-            (should-not (mevedel-view--spinner-metadata-visible-p))
-            (mevedel-view--start-spinner-timer)
-            (should-not mevedel-view--spinner-timer-period)))))))
+            (dolist (hscroll '(0 22))
+              (set-window-hscroll window hscroll)
+              (should-not (mevedel-view--spinner-metadata-visible-p))
+              (mevedel-view--start-spinner-timer)
+              (should-not mevedel-view--spinner-timer-period))))))))
 
 (mevedel-deftest mevedel-view--animation-span-in-window-p
   (:doc "A replacement string's visible index, not its buffer position, gates motion.")
@@ -5007,6 +5040,9 @@
            (window (selected-window))
            (left-index 47)
            (right-index 48)
+           (hscroll 60)
+           (vscroll 0)
+           (sample-xy '(0 . 0))
            (mevedel-view-spinner-style 'shimmer)
            (display (concat (propertize (substring label 0 48)
                                         'face '(:foreground "red"))
@@ -5015,13 +5051,15 @@
       (put-text-property start end 'display display)
       (cl-letf (((symbol-function 'window-start) (lambda (_window) start))
                 ((symbol-function 'window-end) (lambda (_window) (1+ end)))
-                ((symbol-function 'window-hscroll) (lambda (_window) 60))
+                ((symbol-function 'window-hscroll) (lambda (_window) hscroll))
+                ((symbol-function 'window-vscroll)
+                 (lambda (_window &optional _pixelwise) vscroll))
                 ((symbol-function 'window-body-width)
                  (lambda (_window &optional _pixelwise) 80))
                 ((symbol-function 'posn-at-point)
                  (lambda (_position &optional _window) '(sample)))
                 ((symbol-function 'posn-x-y)
-                 (lambda (_position) '(0 . 0)))
+                 (lambda (_position) sample-xy))
                 ((symbol-function 'posn-at-x-y)
                  (lambda (x _y &optional _window _whole)
                    (if (zerop x) '(left) '(right))))
@@ -5045,9 +5083,14 @@
         (setq left-index 47)
         (ert-info ("uncolored final cluster")
           (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        (setq hscroll 0 vscroll 17 left-index 46)
+        (should (mevedel-view--animation-span-in-window-p start end window))
+        (setq left-index 47)
+        (ert-info ("vertical pixel scroll hides the animated prefix")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
         ;; A glyph fallback animates only its initial indicator, not the label.
         (setq display (concat "- " label)
-              left-index 1)
+              hscroll 60 vscroll 0 left-index 1)
         (put-text-property start end 'display display)
         (should (mevedel-view--animation-span-in-window-p start end window))
         (setq left-index 2)
@@ -5060,6 +5103,17 @@
               right-index (- (length display) 4))
         (put-text-property start end 'display display)
         (ert-info ("ellipsis offscreen")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        (setq hscroll 0)
+        (ert-info ("ellipsis beyond the right edge without hscroll")
+          (should-not (mevedel-view--animation-span-in-window-p start end window)))
+        (setq sample-xy '(0 . 17)
+              right-index (- (length display) 3))
+        (ert-info ("ellipsis at end of previous wrapped row")
+          (should (mevedel-view--animation-span-in-window-p start end window)))
+        (setq sample-xy '(0 . 0)
+              right-index (- (length display) 4))
+        (ert-info ("previous wrapped row has scrolled away")
           (should-not (mevedel-view--animation-span-in-window-p start end window)))
         (setq right-index (- (length display) 3))
         (should (mevedel-view--animation-span-in-window-p start end window))))))
@@ -5119,6 +5173,31 @@
     (unless installed
       (advice-remove 'set-window-hscroll
                      #'mevedel-view--resume-on-horizontal-scroll))))
+
+(mevedel-deftest mevedel-view-animation-pixel-scroll-rearms
+  (:doc "An explicit vertical pixel scroll reaches the view scheduler.")
+  (let ((installed (advice-member-p
+                    #'mevedel-view--resume-on-pixel-scroll
+                    'set-window-vscroll)))
+    (unless installed
+      (advice-add 'set-window-vscroll :after
+                  #'mevedel-view--resume-on-pixel-scroll))
+    (unwind-protect
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((window (selected-window))
+                  (rearms 0))
+              (cl-letf (((symbol-function 'mevedel-view--start-spinner-timer)
+                         (lambda (&optional _force) (cl-incf rearms))))
+                (set-window-vscroll window 17 t)
+                (should (= rearms 1))
+                (set-window-vscroll window 0 t)
+                (should (= rearms 2))
+                (set-window-vscroll nil 0 t)
+                (should (= rearms 3))))))
+      (unless installed
+        (advice-remove 'set-window-vscroll
+                       #'mevedel-view--resume-on-pixel-scroll)))))
 
 (mevedel-deftest mevedel-view-animation-horizontal-tool-windows
   (:doc "A tool target suspends only when no displayed window shows its glyph.")

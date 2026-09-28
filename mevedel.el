@@ -253,6 +253,8 @@
 (declare-function mevedel-view--resume-attended-views "mevedel-view" (&rest _))
 (declare-function mevedel-view--resume-on-horizontal-scroll
                   "mevedel-view" (window columns))
+(declare-function mevedel-view--resume-on-pixel-scroll
+                  "mevedel-view" (window vscroll &rest _))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--refresh-animation-on-face
@@ -692,6 +694,8 @@ always prompt for the session name."
                 #'mevedel-view--resume-attended-views)
   (advice-add 'set-window-hscroll :after
               #'mevedel-view--resume-on-horizontal-scroll)
+  (advice-add 'set-window-vscroll :after
+              #'mevedel-view--resume-on-pixel-scroll)
   (advice-add 'set-face-attribute :after
               #'mevedel-view--refresh-animation-on-face)
 
@@ -784,6 +788,8 @@ always prompt for the session name."
                    #'mevedel-view--resume-attended-views)
   (advice-remove 'set-window-hscroll
                  #'mevedel-view--resume-on-horizontal-scroll)
+  (advice-remove 'set-window-vscroll
+                 #'mevedel-view--resume-on-pixel-scroll)
   (advice-remove 'set-face-attribute
                  #'mevedel-view--refresh-animation-on-face)
   (when (eq mevedel-execution-mailbox-delivery-function
