@@ -897,9 +897,18 @@ and resumes its ordinary scan; subsequent scans reuse them. The child performs
 no deletion and needs no session lease. Cancellation stops it, and late replies
 cannot revive a cancelled job. Finishing the scan yields before
 marking retained files. Pending input prevents all collection target I/O,
-including ownership checks and deletion after a completed scan. Active root requests,
-busy transport and pending publications defer work; closing the root or losing
-its lease cancels it. A changed head restarts the scan before deletion.
+including ownership checks and deletion after a completed scan. Busy
+transport and pending, queued or active publications defer work; an active
+request does not, since a Goal keeps one active for hours and deferring to it
+once left a 25-hour Goal session with 3,067 unreclaimed generations (4.9 GB).
+Closing the root or losing its lease cancels the job. Generations are
+immutable, so a moved head during the scan only adds the new generations to
+summarize. After planning, a moved head adds every manifest the plan has not
+seen to the retained set before any further listing or deletion, and pending
+deletion batches are filtered against the grown retained set. Only the lease
+owner publishes and each new generation carries its manifest, so nothing new
+is ever a deletion candidate. Each job ends with a `publication-collection`
+telemetry event.
 After a complete scan, retained manifests are validated one per idle step and
 mark their exact referenced files. All obsolete manifests are retired before
 any unreferenced payloads are removed, so interruption cannot leave discoverable

@@ -47,7 +47,7 @@
       (mevedel-session-collection-schedule session)
       (let ((job (gethash session mevedel-session-collection--jobs)))
         (should (timerp (plist-get job :timer)))
-        (should-not (plist-get job :summaries))
+        (should (= 0 (hash-table-count (plist-get job :summaries))))
         (mevedel-session-collection-schedule session)
         (should (eq job (gethash session mevedel-session-collection--jobs)))))))
 
@@ -101,7 +101,7 @@
       (let ((job (gethash session mevedel-session-collection--jobs)))
         (mevedel-session-collection--step session job)
         (should (processp (plist-get job :worker)))
-        (should-not (plist-get job :summaries))
+        (should (= 0 (hash-table-count (plist-get job :summaries))))
         (insert "A new publication during the cold scan\n")
         (mevedel-session-artifacts-save session buffer)
         (let ((deadline (+ (float-time) 15)))
@@ -149,7 +149,7 @@
       (mevedel-session-collection-schedule session)
       (let ((job (gethash session mevedel-session-collection--jobs)))
         (mevedel-session-collection--step session job)
-        (should (= 1 (length (plist-get job :summaries))))
+        (should (= 1 (hash-table-count (plist-get job :summaries))))
         (should (= (length before)
                    (length (mevedel-session-publication--generation-names directory))))
         (let ((steps 0))
@@ -162,18 +162,68 @@
       (should (string-search "Checkpoint 3"
                              (mevedel-session-artifacts-read-artifact
                               session "segment-0001.chat.org" t))))))
-  :doc "a new publication restarts the scan before deleting anything"
+  :doc "keeps collecting while the session publishes, keeping every head whole"
+  (test-mevedel-collection--with-session
+    (require 'mevedel-telemetry)
+    (let* ((mevedel-session-collection--slice-seconds 0)
+           (directory (mevedel-session-save-path session))
+           (steps 0)
+           (publications 0))
+      (dotimes (index 8)
+        (insert (format "Earlier history %d\n" index))
+        (mevedel-session-artifacts-save session buffer))
+      (let ((before (length (mevedel-session-publication--generation-names directory))))
+        (mevedel-session-collection-schedule session)
+        (let ((job (gethash session mevedel-session-collection--jobs)))
+          (while (gethash session mevedel-session-collection--jobs)
+            ;; Publish between steps in every phase, deletion included.
+            (when (zerop (% steps 3))
+              (insert (format "Published during collection %d\n" (cl-incf publications)))
+              (mevedel-session-artifacts-save session buffer))
+            (unless (plist-get job :pending)
+              (mevedel-session-collection--step session job))
+            (should (< (cl-incf steps) 600))))
+        (should (< (length (mevedel-session-publication--generation-names directory))
+                   (+ before publications))))
+      ;; Every remaining head still resolves to files that exist.
+      (dolist (generation (mevedel-session-publication--generation-names directory))
+        (let ((publication (mevedel-session-publication-read
+                            directory (plist-get generation :head))))
+          (dolist (artifact (plist-get publication :artifacts))
+            (should (file-exists-p (plist-get (cdr artifact) :published))))))
+      (should (string-search (format "Published during collection %d" publications)
+                             (mevedel-session-artifacts-read-artifact
+                              session "segment-0001.chat.org" t)))
+      (mevedel-telemetry-flush session)
+      (let ((event (with-temp-buffer
+                     (insert-file-contents (mevedel-telemetry-path session))
+                     (goto-char (point-max))
+                     (when (search-backward ":event publication-collection" nil t)
+                       (beginning-of-line)
+                       (read (current-buffer))))))
+        (should (eq 'completed (plist-get event :outcome)))
+        (should (> (plist-get event :deleted-file-count) 0))
+        (should (natnump (plist-get event :duration-ms)))
+        (should-not (plist-get event :dropped-keys)))))
+
+  :doc "a new publication adds only its generation to the scan"
   (test-mevedel-collection--with-session
     (let ((mevedel-session-collection--slice-seconds 0))
       (mevedel-session-collection-schedule session)
       (let ((job (gethash session mevedel-session-collection--jobs)))
         (mevedel-session-collection--step session job)
-        (let ((old-head (plist-get job :head)))
+        (let ((old-head (plist-get job :head))
+              (scanned (hash-table-keys (plist-get job :summaries))))
           (insert "New publication\n")
           (mevedel-session-artifacts-save session buffer)
           (mevedel-session-collection--step session job)
           (should-not (equal old-head (plist-get job :head)))
-          (should (= 1 (length (plist-get job :summaries))))))))
+          ;; Immutable generations keep their summaries; one more was read.
+          (should (= 2 (hash-table-count (plist-get job :summaries))))
+          (dolist (head scanned)
+            (should (gethash head (plist-get job :summaries))))
+          (should (equal (plist-get (mevedel-session-publication session) :head)
+                         (plist-get (car (plist-get job :names)) :head)))))))
   :doc "pending input prevents all target I/O even after scanning finishes"
   (test-mevedel-collection--with-session
     (mevedel-session-collection-schedule session)
@@ -231,13 +281,14 @@
           (plist-put job :pending t)
           (funcall continue '(error "Injected deletion failure"))
           (should-not (gethash session mevedel-session-collection--jobs))))))
-  :doc "active requests defer collection and obsolete ownership cancels it"
+  :doc "an active request does not defer collection; lost ownership cancels it"
   (test-mevedel-collection--with-session
     (mevedel-session-collection-schedule session)
     (let ((job (gethash session mevedel-session-collection--jobs)))
+      ;; A Goal keeps a request active for hours; collection must progress.
       (setq-local mevedel--current-request (mevedel-request--create :id "busy"))
       (mevedel-session-collection--step session job)
-      (should-not (plist-get job :head))
+      (should (plist-get job :head))
       (should (timerp (plist-get job :timer)))
       (setq-local mevedel--current-request nil)
       (let ((lease (mevedel-session-lease session)))

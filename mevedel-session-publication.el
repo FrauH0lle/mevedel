@@ -744,23 +744,43 @@ No files are deleted until every retained manifest has been validated."
          (head (plist-get (mevedel-session-publication session) :head))
          (pins (mevedel-journal-pins-observe directory)))
     (unless head (error "Collection requires a current publication"))
-    (list :head head :pin-proof (cdr pins)
-          :root (file-name-as-directory
-                 (mevedel-session-control-fs-physical-path directory))
-          :heads (delete-dups
+    (let ((heads (delete-dups
                   (append (list head) (car pins)
-                          (mevedel-session-publication--retained-heads summaries)))
-          :keep (make-hash-table :test #'equal)
-          :marked nil :directories nil :operations nil
-          :candidates (mapcar (lambda (summary) (plist-get summary :head)) summaries)
-          :deleted-directories 0 :deleted-files 0)))
+                          (mevedel-session-publication--retained-heads summaries))))
+          (candidates (mapcar (lambda (summary) (plist-get summary :head)) summaries))
+          (known (make-hash-table :test #'equal)))
+      (dolist (known-head (append heads candidates)) (puthash known-head t known))
+      (list :head head :pin-proof (cdr pins)
+            :root (file-name-as-directory
+                   (mevedel-session-control-fs-physical-path directory))
+            :heads heads :retained-count (length heads)
+            :keep (make-hash-table :test #'equal)
+            :known known
+            :marked nil :directories nil :operations nil
+            :candidates candidates
+            :deleted-directories 0 :deleted-files 0))))
+
+(defun mevedel-session-publication--collection-follow-head (session plan directory)
+  "Queue SESSION's heads published since PLAN for marking, from DIRECTORY.
+Only this lease owner publishes, and every generation it adds carries its
+manifest, so heads unknown to PLAN are exactly the new ones.  They are
+marked before any further listing or deletion; nothing new is ever a
+deletion candidate."
+  (dolist (generation (mevedel-session-publication--generation-names directory))
+    (let ((head (plist-get generation :head)))
+      (unless (gethash head (plist-get plan :known))
+        (puthash head t (plist-get plan :known))
+        (setf (plist-get plan :heads) (cons head (plist-get plan :heads))))))
+  (setf (plist-get plan :head)
+        (plist-get (mevedel-session-publication session) :head)))
 
 (defun mevedel-session-publication-collect-step (session plan &optional callback)
   "Advance SESSION's collection PLAN by one bounded step.
 Read one retained manifest, enumerate one generation, or delete up to eight
-files/directories.  Return non-nil while work remains.  A changed head
-aborts before any step; errors propagate to the idle collection owner, which
-reports them and discards the plan.
+files/directories.  Return non-nil while work remains.  A moved head adds
+its new manifests to the retained set before any further step, so a plan
+survives a session that keeps publishing; errors propagate to the idle
+collection owner, which reports them and discards the plan.
 
 A deleting step is one program that proves this client's lease generation,
 its unexpired deadline on the target clock, and the unchanged journal pin set
@@ -783,11 +803,23 @@ failure signals here."
                  (null (mevedel-session-publication-uncommitted-batches session))
                  (null (mevedel-session-publication-queue session))
                  (not (mevedel-session-publication-active-p session))
-                 (equal (plist-get plan :head)
-                        (plist-get (mevedel-session-publication session) :head))
+                 (plist-get (mevedel-session-publication session) :head)
                  (equal root (file-name-as-directory
                               (mevedel-session-control-fs-physical-path directory))))
       (error "Publication collection ownership or retained sources changed"))
+    (unless (equal (plist-get plan :head)
+                   (plist-get (mevedel-session-publication session) :head))
+      (mevedel-session-publication--collection-follow-head session plan directory))
+    ;; A deletion batch planned before a newly marked head must not remove
+    ;; what that head references.
+    (setf (plist-get plan :operations)
+          (seq-remove (lambda (operation)
+                        (let ((path (plist-get operation :path)))
+                          (gethash (if (eq (plist-get operation :op) 'delete-directory)
+                                       (file-name-as-directory path)
+                                     path)
+                                   keep)))
+                      (plist-get plan :operations)))
     (cond
      ((plist-get plan :heads)
       (let* ((head (car (plist-get plan :heads)))
@@ -851,7 +883,8 @@ failure signals here."
                    ;; Another owner, a lapsing lease, or a new pin: nothing
                    ;; was deleted, and the next schedule plans afresh.
                    (setf (plist-get plan :operations) nil
-                         (plist-get plan :directories) nil))
+                         (plist-get plan :directories) nil
+                         (plist-get plan :proof-failed) t))
                   (t
                    (mapc #'mevedel-session-control-fs-program-value
                          (nthcdr (length proofs) results))
