@@ -14,6 +14,26 @@
 
 (require 'mevedel-journal-evidence)
 
+(mevedel-deftest mevedel-session-artifacts--restore-segment-file ()
+  ,test
+  (test)
+  :doc "a rollback restores prior bytes, or removes a file that did not exist"
+  (let* ((root (make-temp-file "mevedel-segment-restore-" t))
+         (path (file-name-concat root "segment-0001.chat.org")))
+    (unwind-protect
+        (let ((absent (mevedel-session-artifacts--segment-file-snapshot path)))
+          (should (eq 'absent absent))
+          (write-region "created by the failed rotation" nil path nil 'silent)
+          (mevedel-session-artifacts--restore-segment-file path absent)
+          (should-not (file-exists-p path))
+          (write-region "original bytes\n" nil path nil 'silent)
+          (let ((snapshot (mevedel-session-artifacts--segment-file-snapshot path)))
+            (write-region "rotated" nil path nil 'silent)
+            (mevedel-session-artifacts--restore-segment-file path snapshot)
+            (should (equal "original bytes\n"
+                           (mevedel-session-artifacts-read-file-raw path)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-artifacts--obsolete-snapshot-artifacts ()
   ,test
   (test)
