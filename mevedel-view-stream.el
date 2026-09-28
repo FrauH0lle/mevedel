@@ -660,7 +660,7 @@ or `window-scroll-functions'.  Defer the full scheduler until redisplay
 finishes; at most one probe timer belongs to this view in the meantime."
   (when (and (eq (window-buffer window) (current-buffer))
              (mevedel-view--animation-window-attended-p window)
-             (not (and (mevedel--timer-pending-p mevedel-view--spinner-timer)
+             (not (and (mevedel--ui-timer-pending-p mevedel-view--spinner-timer)
                        (not (equal mevedel-view--spinner-timer-period 1.0))))
              (mevedel-view--animation-target-in-window-rows-p window)
              (or (zerop (window-hscroll window))
@@ -670,19 +670,21 @@ finishes; at most one probe timer belongs to this view in the meantime."
     ;; A visible elapsed suffix may already own a one-second timer.  Transfer
     ;; ownership to the deferred probe instead of leaving that timer queued.
     (when (timerp mevedel-view--spinner-timer)
-      (cancel-timer mevedel-view--spinner-timer))
+      (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
     (setq mevedel-view--spinner-timer nil
           mevedel-view--spinner-timer-period nil)
     (let ((buffer (current-buffer)) timer)
-      (setq timer
-            (run-at-time
-             0 nil
-             (lambda ()
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (when (eq timer mevedel-view--spinner-timer)
-                     (setq mevedel-view--spinner-timer nil)
-                     (mevedel-view--start-spinner-timer)))))))
+      (setq timer (timer-create))
+      (timer-set-time timer (current-time))
+      (timer-set-function
+       timer
+       (lambda ()
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (when (eq timer mevedel-view--spinner-timer)
+               (setq mevedel-view--spinner-timer nil)
+               (mevedel-view--start-spinner-timer))))))
+      (mevedel--ui-timer-activate timer)
       (setq mevedel-view--spinner-timer timer))))
 
 (defun mevedel-view--spinner-visual-period (style &optional main)
@@ -719,7 +721,7 @@ MAIN means use the actual color/glyph rendering of the request label."
   (remove-hook 'pre-redisplay-functions
                #'mevedel-view--resume-on-horizontal-redisplay t)
   (when (timerp mevedel-view--spinner-timer)
-    (cancel-timer mevedel-view--spinner-timer))
+    (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
   (setq mevedel-view--spinner-timer nil
         mevedel-view--spinner-timer-period nil)
   (mevedel-view-power-unwatch (current-buffer)))
@@ -818,44 +820,45 @@ untouched."
       (mevedel-view-power-unwatch (current-buffer)))
     (unless (and period
                  (equal period mevedel-view--spinner-timer-period)
-                 (mevedel--timer-pending-p mevedel-view--spinner-timer))
+                 (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
       (when (timerp mevedel-view--spinner-timer)
-        (cancel-timer mevedel-view--spinner-timer))
+        (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
       (setq mevedel-view--spinner-timer nil
             mevedel-view--spinner-timer-period period)
       (when period
         (let ((buffer (current-buffer)) timer)
-          (setq timer
-                (run-at-time
-                 period nil
-                 (lambda ()
-                   (if (not (buffer-live-p buffer))
-                       (cancel-timer timer)
-                     (with-current-buffer buffer
-                       (if (and (eq timer mevedel-view--spinner-timer)
-                                (or mevedel-view--spinner-status
-                                    mevedel-view--pending-tool-calls)
-                                (or (mevedel-view--animation-visible-p)
-                                    (mevedel-view--spinner-metadata-visible-p)))
-                           (condition-case nil
-                               (progn
-                                 (mevedel-view--spinner-tick)
-                                 ;; A one-shot timer cannot replay deadlines
-                                 ;; missed during a stall.  Reuse its object
-                                 ;; after each delivered tick to avoid a new
-                                 ;; allocation at the visual frame rate.
-                                 (when (eq timer mevedel-view--spinner-timer)
-                                   (timer-set-time
-                                    timer (time-add (current-time)
-                                                    (seconds-to-time period)))
-                                   (timer-activate timer)))
-                             (error (mevedel-view--stop-spinner-timer)))
-                         (cancel-timer timer)
-                         (when (eq timer mevedel-view--spinner-timer)
-                           (mevedel-view--stop-spinner-timer)
-                           (when (and (derived-mode-p 'mevedel-view-mode)
-                                      (mevedel-view--spinner-active-p))
-                             (mevedel-view--start-spinner-timer)))))))))
+          (setq timer (timer-create))
+          (timer-set-time timer (time-add nil (seconds-to-time period)))
+          (timer-set-function
+           timer
+           (lambda ()
+             (if (not (buffer-live-p buffer))
+                 (mevedel--ui-timer-cancel timer)
+               (with-current-buffer buffer
+                 (if (and (eq timer mevedel-view--spinner-timer)
+                          (or mevedel-view--spinner-status
+                              mevedel-view--pending-tool-calls)
+                          (or (mevedel-view--animation-visible-p)
+                              (mevedel-view--spinner-metadata-visible-p)))
+                     (condition-case nil
+                         (progn
+                           (mevedel-view--spinner-tick)
+                           ;; A one-shot timer cannot replay deadlines missed
+                           ;; during a stall.  Reuse its object after each
+                           ;; delivered tick to avoid frame-rate allocation.
+                           (when (eq timer mevedel-view--spinner-timer)
+                             (timer-set-time
+                              timer (time-add (current-time)
+                                              (seconds-to-time period)))
+                             (mevedel--ui-timer-activate timer)))
+                       (error (mevedel-view--stop-spinner-timer)))
+                   (mevedel--ui-timer-cancel timer)
+                   (when (eq timer mevedel-view--spinner-timer)
+                     (mevedel-view--stop-spinner-timer)
+                     (when (and (derived-mode-p 'mevedel-view-mode)
+                                (mevedel-view--spinner-active-p))
+                       (mevedel-view--start-spinner-timer))))))))
+          (mevedel--ui-timer-activate timer)
           (setq mevedel-view--spinner-timer timer))))))
 
 (defun mevedel-view--refresh-animation-options ()

@@ -413,3 +413,43 @@ independent `/root/power_timer_review`, and isolated Eask runs):
   power test passed; the full suite is **not green**. The optional skip count
   differs by one from the previous run. Genuine KDE/Wayland focus transfer
   remains unverified; the earlier deterministic focus-hook recovery passed.
+
+Per-view UI-timer TRAMP suspension resolution, 2026-09-28 (source: Goal
+completion verifier, current focused/full Eask runs, independent source-loaded
+review `/root/ui_timer_review` and verifier `/root/ui_timer_verifier`):
+
+- The Goal verifier reproduced two remaining view-owned timer defects against
+  `cd582691`: final stop *inside* `with-tramp-suspended-timers` left one queued
+  orphan spinner timer; rearming there replaced a hidden outer timer with a
+  disposable temporary one and lost motion until a separate visibility event
+  (`artifact://executions/execution-HZFWzb.log`,
+  `artifact://executions/execution-BsbWmQ.log`, `VERDICT: FAIL`).
+- The shared UI-host timer ownership primitive now lives in
+  `mevedel-utilities.el` and serves the power observer, view one-shot timer,
+  and deferred horizontal-redisplay probe. It recognizes a hidden outer timer,
+  cancels only an owned timer there, and activates a timer through Emacs's
+  sorted insertion on the top-level list. The view's one-shot callback reuses
+  its timer object and existing stale-callback guard. Regression tests exercise
+  repeated same-cadence rearming, replacement, stop and stale delivery inside
+  real TRAMP suspension, plus foreign-timer preservation and list ordering.
+- A fresh source-loaded production view and Emacs 31.1 timer/TRAMP probe
+  independently confirmed that repeated rearming retained the same timer;
+  cadence replacement removed the old timer; final stop removed the active
+  timer before restoration; and a foreign timer remained scheduled. Another
+  probe confirmed the zero-delay redisplay probe replaced a pending metadata
+  timer and was removed on stop. The independent verifier returned
+  `VERDICT: PASS`; independent review returned PASS after an additional
+  real-event-loop power probe and callback-reuse inspection. These controlled
+  checks do not cover live remote TRAMP, graphical automatic-pan delivery, or
+  real KDE/Wayland focus transfer. The running user Emacs was not reloaded.
+- After Eask bytecode cleanup, focused power/stream/utility tests passed
+  **309/309** (`.scratch/spinner-ui-timer-focused3.log`). The accepted plan's
+  eight-file view roster plus power and utilities tests passed **1074/1075
+  expected, zero unexpected, one optional skip**
+  (`.scratch/spinner-ui-timer-roster.log`). All **210 files** compiled without
+  warnings (`.scratch/spinner-ui-timer-compile.log`); `git diff --check` passed.
+  The isolated four-worker full suite ran **8745 tests, 8 unexpected, 30
+  skipped** (`.scratch/spinner-ui-timer-full-suite/summary.json`,
+  `.scratch/spinner-ui-timer-full-run.log`). All new timer tests passed; the
+  eight failures exactly match the earlier non-view cases listed above. The
+  full suite is **not green**.

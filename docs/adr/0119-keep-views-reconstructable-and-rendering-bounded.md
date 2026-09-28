@@ -97,7 +97,10 @@ automatic pan does not call that primitive, so a buffer-local redisplay hook
 is installed only during horizontal suspension and defers one resume probe
 until after redisplay, only for a window with the target in its visible rows.
 The probe cancels and replaces a pending one-second elapsed timer before taking
-the view's timer slot; otherwise cleanup loses track of an extra wakeup.
+the view's timer slot; otherwise cleanup loses track of an extra wakeup. Both
+the view's one-shot timer and its deferred probe use the Emacs UI host's
+top-level timer list. TRAMP's temporary binding must neither discard their
+rearms nor hide an already queued timer from cancellation during view stop.
 When a window replaces a view, the same buffer-local window-change hook
 reevaluates the departing view as well as resuming the arriving one: frozen
 tool-only progress has no timer callback to release its power subscription.
@@ -120,7 +123,8 @@ power. TRAMP temporarily binds Emacs's timer list to nil, so a fallback
 scheduled on that list can be discarded, while `cancel-timer` there cannot
 remove an older timer from the hidden outer list. The observer instead arms
 its single poll on the UI host's top-level list and removes it there on final
-unsubscription, even inside the temporary binding. Callback identity rejects
+unsubscription, even inside the temporary binding. The view timer uses the
+same list ownership primitive. Callback identity rejects
 stale delivery. The fallback query runs outside animation callbacks. Neither
 the observer nor the spinner enables battery mode or changes
 request execution. Reduced wakeups are an overhead reduction, not a claim

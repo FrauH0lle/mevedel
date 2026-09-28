@@ -23,6 +23,7 @@
 (require 'mevedel-tool-repair-diagnostics)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-zone)
+(eval-when-compile (require 'tramp))
 
 (defmacro mevedel-view-stream-test--with-buffers (&rest body)
   "Create paired data and view buffers, then evaluate BODY."
@@ -4375,6 +4376,49 @@
                               'ascii "Working..." (- now phase)
                               'mevedel-view-spinner (selected-frame)))))))))))
 
+(mevedel-deftest mevedel-view-animation-tramp-timer-ownership
+  (:doc "TRAMP suspension preserves one view timer and cancels it on stop.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full))
+        (mevedel-view--start-spinner "Working...")
+        (let ((original mevedel-view--spinner-timer)
+              (phase mevedel-view--spinner-phase-start))
+          (should (memq original timer-list))
+          (with-tramp-suspended-timers
+            (dotimes (_ 5) (mevedel-view--start-spinner-timer))
+            (should (eq original mevedel-view--spinner-timer))
+            (should (mevedel--ui-timer-pending-p original))
+            (should-not (memq original timer-list)))
+          (should (memq original timer-list))
+          (with-tramp-suspended-timers
+            ;; A cadence change must replace rather than strand the old poll.
+            (setq mevedel-view-spinner-style 'static)
+            (mevedel-view--start-spinner-timer)
+            (let ((replacement mevedel-view--spinner-timer))
+              (should-not (eq original replacement))
+              (should-not (memq original
+                                (default-toplevel-value 'timer-list)))
+              (should (memq replacement
+                            (default-toplevel-value 'timer-list)))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (setq mevedel-view-spinner-style 'ascii)
+              (mevedel-view--start-spinner-timer)
+              (should-not (memq replacement
+                                    (default-toplevel-value 'timer-list)))))
+          (let ((active mevedel-view--spinner-timer))
+            (should (memq active timer-list))
+            (with-tramp-suspended-timers
+              (mevedel-view-stream-stop)
+              (should-not (memq active
+                                    (default-toplevel-value 'timer-list))))
+            (should-not (memq active timer-list))
+            (should-not mevedel-view--spinner-timer)
+            ;; Stale delivery must not restart a stopped view.
+            (funcall (timer--function active))
+            (should-not mevedel-view--spinner-timer)))))))
+
 (mevedel-deftest mevedel-view-animation-auto-power-timer-suspension
   (:doc "Resuming a visible view restores the shared auto-power poll too.")
   (let* ((mevedel-view-power--watchers (make-hash-table :test #'eq))
@@ -4395,11 +4439,12 @@
         (let ((mevedel-view-spinner-style 'ascii)
               (mevedel-view-spinner-power-policy 'auto)
               (mevedel-view-spinner-battery-framerate 0))
-          ;; The view timer can be discarded by TRAMP, but the shared power
-          ;; timer is installed on the persistent top-level list.
+          ;; Both UI-host timers survive TRAMP's disposable binding.
           (let ((timer-list nil) (timer-idle-list nil))
             (mevedel-view--start-spinner "Working...")
             (should (= 1.0 mevedel-view--spinner-timer-period))
+            (should (memq mevedel-view--spinner-timer
+                          (default-toplevel-value 'timer-list)))
             (should (memq mevedel-view-power--timer
                           (default-toplevel-value 'timer-list))))
           (let ((original mevedel-view-power--timer)
@@ -4410,7 +4455,7 @@
             (should (eq original mevedel-view-power--timer))
             (should (= 0 queries))
             (should (= 1.0 mevedel-view--spinner-timer-period))
-            (mevedel-view-power--cancel-timer original)
+            (mevedel--ui-timer-cancel original)
             (mevedel-view-power--poll original)
             (should (= 1 queries))
             (should (= 60 (mevedel-view-power-framerate 60 0 'auto t)))
@@ -4499,7 +4544,7 @@
               (let ((fast mevedel-view--spinner-timer))
                 (setq now 1060.0)
                 (when mevedel-view-power--timer
-                  (mevedel-view-power--cancel-timer mevedel-view-power--timer))
+                  (mevedel--ui-timer-cancel mevedel-view-power--timer))
                 (mevedel-view-power--poll mevedel-view-power--timer)
                 (should-not (mevedel--timer-pending-p fast))
                 (should (= 1.0 mevedel-view--spinner-timer-period))))))))))
