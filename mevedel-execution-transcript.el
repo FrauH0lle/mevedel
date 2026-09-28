@@ -29,20 +29,20 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
-(declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
 (autoload 'mevedel-session-artifacts-publish-transcript-state
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
   "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p

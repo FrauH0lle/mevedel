@@ -19,6 +19,7 @@
 (require 'mevedel-view-agent)
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ptc)
@@ -155,6 +156,36 @@
                                                       :render-data)
                                            :calls)) :render-data)
                           :execution-id)))))))
+  :doc "a direct Bash keeps its terminal sandbox disclosure on the outer row"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                           :renderer #'mevedel-tool-exec--render-bash))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (with-temp-buffer
+      (let* ((data (current-buffer))
+             (summary '(:attempt-count 1 :started-count 1 :refused-count 0
+                        :sandbox direct :filesystem unrestricted
+                        :network unrestricted))
+             (call '(:name "ToolCall" :tool-use-id "outer"
+                     :result "INITIAL OUTPUT" :render-data
+                     (:kind ptc :direct-tool "Bash" :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "make test")
+                               :render-data (:execution-id "exec-1"
+                                             :state running)))))))
+        (mevedel-execution-transcript-handle-event
+         (list :type 'terminal :data-buffer data :tool-use-id "outer/1"
+               :owner "/root" :whole-output "FINAL OUTPUT"
+               :facts (list :execution-id "exec-1" :command "make test"
+                            :state 'completed :outcome 'success :exit-code 0
+                            :sandbox-summary summary)))
+        (let ((after (mevedel-view--render-tool-call call data)))
+          (should (equal summary (plist-get after :sandbox-summary)))
+          (should (string-match-p "Sandbox:.*unrestricted"
+                                  (mevedel-view--rendering-header-block after)))))))
   :doc "a live direct Bash child uses the cached progress tail and elapsed time"
   (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
     (mevedel-tool-register
@@ -283,6 +314,58 @@
               (should (string-match-p "running · 7.0s" (plist-get row :header)))
               (should (string-match-p "NEW OUTPUT" (plist-get row :body)))
               (should-not (string-match-p "OLD OUTPUT" (plist-get row :body))))))))))
+
+(mevedel-deftest mevedel-view-direct-toolcall-bash-history ()
+  ,test
+  (test)
+  :doc "expanded direct Bash keeps history access through its child execution ID"
+  (let ((data (generate-new-buffer " *direct Bash source*"))
+        opened)
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (insert (propertize "(:name \"ToolCall\")\nINITIAL OUTPUT"
+                                'gptel '(tool . "outer")))
+            (insert (mevedel-tool-render-data-format
+                     '(:kind ptc :direct-tool "Bash" :outcome completed
+                       :calls ((:id "outer/1" :tool "Bash" :status success
+                                :args (:command "make test")
+                                :render-data (:execution-id "exec-1"
+                                              :state running))))
+                     "outer")))
+          (let ((call '(:name "ToolCall" :tool-use-id "outer"
+                        :result "INITIAL OUTPUT" :render-data
+                        (:kind ptc :direct-tool "Bash" :outcome completed
+                         :calls ((:id "outer/1" :tool "Bash" :status success
+                                  :args (:command "make test")
+                                  :render-data (:execution-id "exec-1"
+                                                :state running)))))))
+            (with-temp-buffer
+              (setq-local mevedel--data-buffer data)
+              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                         (lambda () data))
+                        ((symbol-function 'mevedel-view-audit-show-history)
+                         (lambda (id) (setq opened id))))
+                (should (mevedel-view-audit--history-records "exec-1"))
+                (dolist (terminal '(nil t))
+                  (when terminal
+                    (mevedel-execution-transcript-handle-event
+                     (list :type 'terminal :data-buffer data
+                           :tool-use-id "outer/1" :owner "/root"
+                           :whole-output "FINAL OUTPUT"
+                           :facts '(:execution-id "exec-1" :command "make test"
+                                    :state completed :outcome success
+                                    :exit-code 0))))
+                  (erase-buffer)
+                  (mevedel-view--render-expanded-body
+                   (mevedel-view--render-tool-call call data)
+                   (cons 1 (with-current-buffer data (point-max))))
+                  (goto-char (point-min))
+                  (should (search-forward "[Execution history]" nil t))
+                  (funcall (get-text-property (match-beginning 0)
+                                              'mevedel-view-zone-activate))
+                  (should (equal "exec-1" opened)))))))
+      (kill-buffer data))))
 
 (mevedel-deftest mevedel-view-child-call-history ()
   ,test
@@ -481,28 +564,54 @@
   ,test
   (test)
   :doc "a later compaction still renders an archived row with its terminal facts"
-  (let ((live (generate-new-buffer " *third segment*"))
-        (middle (generate-new-buffer " *terminal middle segment*"))
-        (archive (generate-new-buffer " *first source segment*")))
+  (let* ((root (make-temp-file "mevedel-terminal-segments-" t))
+         (live (generate-new-buffer " *third segment*"))
+         (archive (generate-new-buffer " *first source segment*"))
+         (first-path (mevedel-session-artifacts-segment-path root 1))
+         (middle-path (mevedel-session-artifacts-segment-path root 2))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3)))
     (unwind-protect
         (progn
-          (with-current-buffer live (setq-local mevedel--session t))
-          (with-current-buffer middle
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
+          (with-current-buffer archive
+            (insert "# original running Bash segment\n")
+            (write-region (point-min) (point-max) first-path nil 'silent))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
             (insert (mevedel--format-hook-audit-record
                      '(:type execution-completion :tool-use-id "original"
                        :render-data (:execution-id "exec-1" :status error
                                      :outcome failure :exit-code 2
-                                     :execution-output "FINAL AFTER ROTATION")))))
+                                     :execution-output "FINAL AFTER ROTATION"))))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) middle-path nil 'silent))
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
-            (cl-letf (((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                       (lambda (_session _data)
-                         '((:number 1 :status readable :current-p nil)
-                           (:number 2 :status readable :current-p nil)
-                           (:number 3 :status readable :current-p t))))
-                      ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                       (lambda (_session descriptor)
-                         (if (= (plist-get descriptor :number) 2) middle archive))))
+            (let ((descriptors (mevedel-session-artifacts-transcript-segments
+                                session live)))
+              (should (equal '(readable readable readable)
+                             (mapcar (lambda (entry) (plist-get entry :status))
+                                     descriptors)))
+              (let ((restored (mevedel-session-artifacts-read-transcript-segment
+                               session (nth 1 descriptors))))
+                (unwind-protect
+                    (with-current-buffer restored
+                      (let ((facts (plist-get
+                                    (car (mevedel-transcript-audit-records
+                                          (buffer-string) 'execution-completion))
+                                    :render-data)))
+                        (should (equal "FINAL AFTER ROTATION"
+                                       (plist-get facts :execution-output)))
+                        (should (eq 'error (plist-get facts :status)))
+                        (should (= 2 (plist-get facts :exit-code)))))
+                  (kill-buffer restored))))
+            (let ((before (buffer-list)))
               (let ((rendering (mevedel-view--render-tool-call
                                 '(:name "Bash" :tool-use-id "original"
                                   :args (:command "sleep 10")
@@ -514,52 +623,58 @@
                 (should (string-match-p "FINAL AFTER ROTATION"
                                         (plist-get rendering :body)))
                 (should-not (string-match-p "OLD OUTPUT"
-                                            (plist-get rendering :body)))
-                (should-not (buffer-live-p middle))))))
+                                            (plist-get rendering :body))))
+              (should-not (cl-set-difference (buffer-list) before)))))
       (when (buffer-live-p live) (kill-buffer live))
-      (when (buffer-live-p middle) (kill-buffer middle))
-      (when (buffer-live-p archive) (kill-buffer archive)))))
+      (when (buffer-live-p archive) (kill-buffer archive))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-intermediate-terminal-evidence ()
   ,test
   (test)
   :doc "missing original row uses terminal evidence from an older segment"
-  (let ((live (generate-new-buffer " *latest without Bash*"))
-        (middle (generate-new-buffer " *intermediate retained Bash*")))
+  (let* ((root (make-temp-file "mevedel-terminal-evidence-" t))
+         (middle-path (mevedel-session-artifacts-segment-path root 2))
+         (live (generate-new-buffer " *latest without Bash*"))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3)))
     (unwind-protect
         (progn
-          (with-current-buffer live (setq-local mevedel--session t))
-          (with-current-buffer middle
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
             (insert (mevedel--format-hook-audit-record
                      '(:type execution-completion :tool-use-id "original"
                        :render-data (:execution-id "exec-1"
-                                     :execution-output "RETAINED FINAL S2")))))
+                                     :execution-output "RETAINED FINAL S2"))))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) middle-path nil 'silent))
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
-            (cl-letf (((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                       (lambda (_session _data)
-                         '((:number 1 :status missing :current-p nil)
-                           (:number 2 :status readable :current-p nil)
-                           (:number 3 :status readable :current-p t))))
-                      ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                       (lambda (_session _number)
-                         (let ((copy (generate-new-buffer " *read terminal*")))
-                           (with-current-buffer copy
-                             (insert (with-current-buffer middle
-                                       (buffer-string))))
-                           copy)))
-                      ((symbol-function 'display-buffer) #'identity))
-              (let ((evidence (mevedel-view-audit-show-result
-                               '(:owner "/root" :execution-id "exec-1"
-                                 :tool-use-id "original"))))
-                (with-current-buffer evidence
-                  (should (derived-mode-p 'special-mode))
-                  (should (string-match-p "RETAINED FINAL S2"
-                                          (buffer-string))))))))
-      (kill-buffer live)
-      (kill-buffer middle)
+            (should (equal '(missing readable readable)
+                           (mapcar (lambda (entry) (plist-get entry :status))
+                                   (mevedel-session-artifacts-transcript-segments
+                                    session live))))
+            (let ((before (buffer-list)))
+              (cl-letf (((symbol-function 'display-buffer) #'identity))
+                (let ((evidence (mevedel-view-audit-show-result
+                                 '(:owner "/root" :execution-id "exec-1"
+                                   :tool-use-id "original"))))
+                  (with-current-buffer evidence
+                    (should (derived-mode-p 'special-mode))
+                    (should (string-match-p "RETAINED FINAL S2"
+                                            (buffer-string))))
+                  (should-not (cl-set-difference (buffer-list)
+                                                 (cons evidence before))))))))
+      (when (buffer-live-p live) (kill-buffer live))
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
-        (kill-buffer buffer)))))
+        (kill-buffer buffer))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-agent-compact-archive-evidence ()
   ,test
@@ -968,40 +1083,45 @@
   ,test
   (test)
   :doc "compacted completion locates archived row, not the later event target"
-  (let ((live (generate-new-buffer " *breadcrumb live*"))
-        (archive (generate-new-buffer " *breadcrumb archive*"))
-        selected)
+  (let* ((root (make-temp-file "mevedel-breadcrumb-source-" t))
+         (live (generate-new-buffer " *breadcrumb live*"))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3))
+         selected)
     (unwind-protect
         (progn
-          (with-current-buffer live (setq-local mevedel--session t))
-          (with-current-buffer archive
-            (insert (propertize "(:name \"Bash\")"
-                                'gptel '(tool . "original"))))
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
           (with-temp-buffer
             (let ((mevedel--data-buffer live))
-              (cl-letf (((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                         (lambda (_session _data)
-                           '((:number 1 :status readable :current-p nil)
-                             (:number 2 :status readable :current-p t))))
-                        ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                         (lambda (_session _number) archive))
-                        ((symbol-function 'mevedel-view-go-to-segment)
-                         (lambda (number) (setq selected number))))
-                (mevedel-view-audit--select-source
-                 '(:tool-use-id "original" :source-target "/later.chat.org"))
-                (should (= 1 selected))
-                (should-not (buffer-live-p archive))
-                (setq archive (generate-new-buffer " *nested archive*"))
-                (with-current-buffer archive
-                  (insert (propertize "(:name \"ToolCall\")"
-                                      'gptel '(tool . "outer"))))
+              (dolist (case '(("original" "Bash" "original")
+                              ("outer/1/1" "ToolCall" "outer")))
+                (with-temp-buffer
+                  (org-mode)
+                  (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+                  (insert (propertize (format "(:name %S)\n" (nth 1 case))
+                                      'gptel (cons 'tool (nth 2 case))))
+                  (mevedel-session-artifacts-stabilize-gptel-bounds)
+                  (write-region (point-min) (point-max) archive nil 'silent))
+                (should (equal '(readable missing readable)
+                               (mapcar (lambda (entry) (plist-get entry :status))
+                                       (mevedel-session-artifacts-transcript-segments
+                                        session live))))
                 (setq selected nil)
-                (mevedel-view-audit--select-source
-                 '(:tool-use-id "outer/1/1" :source-target "/later.chat.org"))
-                (should (= 1 selected))
-                (should-not (buffer-live-p archive))))))
+                (let ((before (buffer-list)))
+                  (cl-letf (((symbol-function 'mevedel-view-go-to-segment)
+                             (lambda (number) (setq selected number))))
+                    (mevedel-view-audit--select-source
+                     (list :tool-use-id (car case)
+                           :source-target "/later.chat.org")))
+                  (should (= 1 selected))
+                  (should-not (cl-set-difference (buffer-list) before)))))))
       (when (buffer-live-p live) (kill-buffer live))
-      (when (buffer-live-p archive) (kill-buffer archive)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit--history-records-nested ()
   ,test
@@ -1051,50 +1171,72 @@
   ,test
   (test)
   :doc "a later mailbox retry cannot repeat an archived receiver breadcrumb"
-  (let ((data (generate-new-buffer " *next mailbox segment*"))
-        (archive (generate-new-buffer " *previous mailbox segment*")))
+  (let* ((root (make-temp-file "mevedel-mailbox-delivery-" t))
+         (data (generate-new-buffer " *next mailbox segment*"))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3)))
     (unwind-protect
         (progn
-          (with-current-buffer data (setq-local mevedel--session t))
-          (with-current-buffer archive
+          (with-current-buffer data
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
+          (with-temp-file archive
             (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
                     "<bash-execution execution_id=\"exec-1\" outcome=\"success\"/>\n"
                     "</agent-message>\n"))
           (with-temp-buffer
             (setq-local mevedel--data-buffer data)
-            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
-                       (lambda () data))
-                      ((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                       (lambda (_session _buffer)
-                         '((:number 1 :status readable :current-p nil)
-                           (:number 2 :status readable :current-p t))))
-                      ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                       (lambda (_session _number) archive)))
-              (should (mevedel-view-audit-breadcrumb-present-p
-                       '(:execution-id "exec-1" :owner "/root/child")
-                       (point-max)))
-              (should-not (buffer-live-p archive)))))
+            (should (equal '(readable missing readable)
+                           (mapcar (lambda (entry) (plist-get entry :status))
+                                   (mevedel-session-artifacts-transcript-segments
+                                    session data))))
+            (let ((before (buffer-list)))
+              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                         (lambda () data)))
+                (should (mevedel-view-audit-breadcrumb-present-p
+                         '(:execution-id "exec-1" :owner "/root/child")
+                         (point-max))))
+              (should-not (cl-set-difference (buffer-list) before)))))
       (when (buffer-live-p data) (kill-buffer data))
-      (when (buffer-live-p archive) (kill-buffer archive)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-breadcrumb-archived-projection ()
   ,test
   (test)
   :doc "historical projection consults earlier, not later, receiver segments"
-  (let ((live (generate-new-buffer " *live mailbox session*"))
-        (earlier (generate-new-buffer " *earlier mailbox*"))
-        (later (generate-new-buffer " *later mailbox*")))
+  (let* ((root (make-temp-file "mevedel-mailbox-projection-" t))
+         (live (generate-new-buffer " *live mailbox session*"))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 4))
+         earlier)
     (unwind-protect
         (progn
-          (with-current-buffer live (setq-local mevedel--session t))
-          (with-current-buffer earlier
-            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
-                    "<bash-execution execution_id=\"old\" outcome=\"success\"/>\n"
-                    "</agent-message>\n"))
-          (with-current-buffer later
-            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
-                    "<bash-execution execution_id=\"new\" outcome=\"success\"/>\n"
-                    "</agent-message>\n"))
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 4))
+            (setq-local mevedel--session session))
+          (cl-loop for number from 1 to 3
+                   do (with-temp-file
+                          (mevedel-session-artifacts-segment-path root number)
+                        (when (<= number 2)
+                          (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+                                  "<bash-execution execution_id=\"old\" outcome=\"success\"/>\n"
+                                  "</agent-message>\n"))
+                        (when (>= number 2)
+                          (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+                                  "<bash-execution execution_id=\"new\" outcome=\"success\"/>\n"
+                                  "</agent-message>\n"))))
+          (let ((descriptors (mevedel-session-artifacts-transcript-segments
+                              session live)))
+            (should (equal '(readable readable readable readable)
+                           (mapcar (lambda (entry) (plist-get entry :status))
+                                   descriptors)))
+            (setq earlier (mevedel-session-artifacts-read-transcript-segment
+                           session (nth 1 descriptors))))
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
             (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
@@ -1103,38 +1245,25 @@
                     "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
                     "<bash-execution execution_id=\"new\" outcome=\"success\"/>\n"
                     "</agent-message>\n")
-            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
-                       (lambda () earlier))
-                      ((symbol-function 'mevedel-view-segments-current-number)
-                       (lambda () 2))
-                      ((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                       (lambda (_session _buffer)
-                         '((:number 1 :status readable :current-p nil)
-                           (:number 2 :status readable :current-p nil)
-                           (:number 3 :status readable :current-p nil)
-                           (:number 4 :status readable :current-p t))))
-                      ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                       (lambda (_session descriptor)
-                         (let ((copy (generate-new-buffer " *mailbox inspection*")))
-                           (with-current-buffer copy
-                             (insert (with-current-buffer
-                                         (if (= (plist-get descriptor :number) 1)
-                                             earlier later)
-                                       (buffer-string))))
-                           copy))))
-              (mevedel-view--decorate-agent-message-blocks
-               (point-min) (point-max))
-              (should (= 1 (how-many "\\[Show result\\]"
-                                     (point-min) (point-max))))
-              (let* ((pos (text-property-any
-                           (point-min) (point-max)
-                           'mevedel-view-type 'execution-breadcrumb))
-                     (record (and pos (get-text-property
-                                       pos 'mevedel-view-execution-breadcrumb))))
-                (should (equal "new" (plist-get record :execution-id)))))))
-      (kill-buffer live)
-      (kill-buffer earlier)
-      (kill-buffer later))))
+            (let ((before (buffer-list)))
+              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                         (lambda () earlier))
+                        ((symbol-function 'mevedel-view-segments-current-number)
+                         (lambda () 2)))
+                (mevedel-view--decorate-agent-message-blocks
+                 (point-min) (point-max))
+                (should (= 1 (how-many "\\[Show result\\]"
+                                       (point-min) (point-max))))
+                (let* ((pos (text-property-any
+                             (point-min) (point-max)
+                             'mevedel-view-type 'execution-breadcrumb))
+                       (record (and pos (get-text-property
+                                         pos 'mevedel-view-execution-breadcrumb))))
+                  (should (equal "new" (plist-get record :execution-id)))))
+              (should-not (cl-set-difference (buffer-list) before)))))
+      (when (buffer-live-p live) (kill-buffer live))
+      (when (buffer-live-p earlier) (kill-buffer earlier))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit--history-records-mailbox ()
   ,test
@@ -1163,14 +1292,30 @@
   (test)
   :doc "an archived Bash row retains later input, polls and delivery in order"
   (dolist (agent-p '(nil t))
-    (let ((live (generate-new-buffer " *execution history live*"))
-          (archive (generate-new-buffer " *execution history archived*"))
-          (session (mevedel-session--create :authority-mode 'pid-lock
-                                            :name "execution history"))
-          opened)
+    (let* ((root (make-temp-file "mevedel-execution-history-" t))
+           (agents (file-name-concat root "agents"))
+           (live (generate-new-buffer " *execution history live*"))
+           (archive-path (if agent-p
+                             (file-name-concat
+                              agents "child.compact-0001.chat.org")
+                           (mevedel-session-artifacts-segment-path root 1)))
+           (later-path (when agent-p
+                         (file-name-concat
+                          agents "child.compact-0003.chat.org")))
+           (session (mevedel-session--create :save-path root
+                                             :authority-mode 'pid-lock
+                                             :current-segment 3
+                                             :name "execution history")))
       (unwind-protect
           (progn
+            (when agent-p
+              (make-directory agents)
+              (with-temp-file later-path (insert "# empty later archive\n")))
             (with-current-buffer live
+              (setq buffer-file-name
+                    (if agent-p
+                        (file-name-concat agents "child.chat.org")
+                      (mevedel-session-artifacts-segment-path root 3)))
               (setq-local mevedel--session session)
               (insert (propertize
                        "(:name \"WriteStdin\" :args (:execution_id \"exec-1\" :chars \"\"))\npolled\n"
@@ -1190,74 +1335,84 @@
                                                (mevedel-view--tool-call-parse
                                                 live (cadr segment) (caddr segment))
                                                :name)))))
-            (with-current-buffer archive
+            (with-temp-buffer
+              (org-mode)
+              (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
               (insert (propertize
                        (concat "(:name \"Bash\" :args (:command \"sleep 1\"))\n"
                                "yielded"
                                (mevedel-tool-render-data-format
                                 '(:execution-id "exec-1" :state running) "bash"))
-                       'gptel '(tool . "bash"))))
+                       'gptel '(tool . "bash")))
+              (mevedel-session-artifacts-stabilize-gptel-bounds)
+              (write-region (point-min) (point-max) archive-path nil 'silent))
             (with-temp-buffer
               (setq-local mevedel--data-buffer live)
-              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
-                         (lambda () archive))
-                        ((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                         (lambda (_session _buffer)
-                           (list (append '(:number 1 :status readable :current-p nil)
-                                         (when agent-p '(:logical "agents/child.compact-0001.chat.org")))
-                                 '(:number 2 :status missing :current-p nil)
-                                 '(:number 3 :status readable :current-p t))))
-                        ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                         (lambda (_session descriptor)
-                           (should (= 1 (plist-get descriptor :number)))
-                           (let ((copy (generate-new-buffer " *history inspection*")))
-                             (push copy opened)
-                             (with-current-buffer copy
-                               (insert-buffer-substring archive))
-                             copy))))
-                (let ((records (mevedel-view-audit--history-records "exec-1")))
-                  (should (equal '("Bash" "WriteStdin" "WriteStdin"
-                                   "Execution delivery")
-                                 (mapcar (lambda (record) (plist-get record :name))
-                                         records)))
-                  (should (equal "hi"
-                                 (plist-get (plist-get (nth 2 records) :args) :chars)))
-                  (should (string-match-p "DELIVERED"
-                                          (plist-get (nth 3 records) :result)))
-                  (should-not (cl-some #'buffer-live-p opened))
-                  (should (buffer-live-p archive))))))
-        (dolist (buffer (append opened (list archive live)))
-          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+              (let* ((descriptors
+                      (mevedel-session-artifacts-transcript-segments session live))
+                     (before (buffer-list)))
+                (should (equal (if agent-p '(1 3 nil) '(1 2 3))
+                               (mapcar (lambda (entry) (plist-get entry :number))
+                                       descriptors)))
+                (should (equal (if agent-p '(readable readable readable)
+                                 '(readable missing readable))
+                               (mapcar (lambda (entry) (plist-get entry :status))
+                                       descriptors)))
+                (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                           (lambda () live)))
+                  (let ((records (mevedel-view-audit--history-records "exec-1")))
+                    (should (equal '("Bash" "WriteStdin" "WriteStdin"
+                                     "Execution delivery")
+                                   (mapcar (lambda (record) (plist-get record :name))
+                                           records)))
+                    (should (equal "hi"
+                                   (plist-get (plist-get (nth 2 records) :args) :chars)))
+                    (should (string-match-p "DELIVERED"
+                                            (plist-get (nth 3 records) :result)))))
+                (should-not (cl-set-difference (buffer-list) before))
+                (should (buffer-live-p live)))))
+        (when (buffer-live-p live) (kill-buffer live))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-view-audit--owner-record ()
   ,test
   (test)
   :doc "forwarded child completion resolves its tool ID in an older segment"
-  (let ((live (generate-new-buffer " *child current*"))
-        (archive (generate-new-buffer " *child older*"))
-        (forwarded '(:execution-id "child-exec" :owner "/root/child")))
+  (let* ((root (make-temp-file "mevedel-owner-segments-" t))
+         (live (generate-new-buffer " *child current*"))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3))
+         (forwarded '(:execution-id "child-exec" :owner "/root/child")))
     (unwind-protect
         (progn
-          (with-current-buffer live (setq-local mevedel--session t))
-          (with-current-buffer archive
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
             (insert (mevedel--format-hook-audit-record
                      '(:type execution-breadcrumb :execution-id "child-exec"
                        :owner "/root/child" :tool-use-id "original-call"
-                       :command "echo child"))))
-          (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
-                     (lambda () live))
-                    ((symbol-function 'mevedel-session-artifacts-transcript-segments)
-                     (lambda (_session _buffer)
-                       '((:number 1 :status readable :current-p nil)
-                         (:number 2 :status readable :current-p t))))
-                    ((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
-                     (lambda (_session _number) archive)))
-            (should (equal "original-call"
-                           (plist-get (mevedel-view-audit--owner-record forwarded)
-                                      :tool-use-id)))
-            (should-not (buffer-live-p archive))))
+                       :command "echo child")))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) archive nil 'silent))
+          (should (equal '(readable missing readable)
+                         (mapcar (lambda (entry) (plist-get entry :status))
+                                 (mevedel-session-artifacts-transcript-segments
+                                  session live))))
+          (let ((before (buffer-list)))
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () live)))
+              (should (equal "original-call"
+                             (plist-get (mevedel-view-audit--owner-record forwarded)
+                                        :tool-use-id))))
+            (should-not (cl-set-difference (buffer-list) before))))
       (when (buffer-live-p live) (kill-buffer live))
-      (when (buffer-live-p archive) (kill-buffer archive)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-audit-show-result-nested-agent-owner ()
   ,test
