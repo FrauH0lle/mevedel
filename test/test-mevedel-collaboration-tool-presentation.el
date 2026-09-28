@@ -231,6 +231,82 @@
   (should (mevedel-collaboration--tool-record
            '(:name "WriteStdin" :args (:chars "hi") :result "sent") "input")))
 
+(mevedel-deftest mevedel-collaboration-tool-presentation-sandbox
+  () ,test (test)
+  :doc "guest Bash header discloses the actual sandbox without changing output"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+        (summary '(:attempt-count 1 :started-count 1 :sandbox off
+                   :filesystem unrestricted :network unrestricted
+                   :private-credential "must-not-travel")))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                          :renderer #'mevedel-tool-exec--render-bash))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                          :renderer #'mevedel-tool-ptc--render))
+    (let* ((direct (mevedel-collaboration--tool-record
+                    (list :name "Bash" :args '(:command "echo hello")
+                          :result "initial output"
+                          :render-data
+                          (list :state 'completed :status 'success :outcome 'success
+                                :execution-output "hello\n"
+                                :sandbox-summary summary)) "direct"))
+           (presentation (plist-get direct :presentation))
+           (wire (json-encode (mevedel-collaboration--json-record direct))))
+      (should (string-match-p "Sandbox:.*sandbox disabled"
+                              (plist-get presentation :header)))
+      (should (equal "hello\n" (plist-get direct :result)))
+      (should (equal "$ echo hello\n\nhello\n\n\nDetails: success"
+                     (plist-get presentation :body)))
+      (should-not (string-match-p "must-not-travel" wire)))
+    (let* ((direct-call
+            (mevedel-collaboration--tool-record
+             (list :name "ToolCall" :result "model-facing value"
+                   :render-data
+                   (list :kind 'ptc :direct-tool "Bash" :outcome 'completed
+                         :calls (list (list :id "outer/1" :tool "Bash" :status 'success
+                                            :args '(:command "echo child")
+                                            :render-data
+                                            (list :state 'completed :status 'success
+                                                  :outcome 'success
+                                                  :execution-output "child\n"
+                                                  :sandbox-summary summary)))))
+             "direct-call"))
+           (header (plist-get (plist-get direct-call :presentation) :header)))
+      (should (equal "Bash" (plist-get (plist-get direct-call :presentation) :name)))
+      (should (string-match-p "Sandbox:.*sandbox disabled" header))
+      (should (equal "model-facing value" (plist-get direct-call :result))))
+    (let* ((nested (mevedel-collaboration--tool-record
+                    (list :name "ToolCall" :result "script value"
+                          :render-data
+                          (list :kind 'ptc :outcome 'completed
+                                :calls (list (list :id "outer/1" :tool "Bash"
+                                                   :args '(:command "echo child")
+                                                   :status 'success :result "child\n"
+                                                   :render-data
+                                                   (list :state 'completed :status 'success
+                                                         :outcome 'success
+                                                         :execution-output "child\n"
+                                                         :sandbox-summary summary)))))
+                    "nested"))
+           (child (aref (plist-get (plist-get nested :presentation) :children) 0)))
+      (should (string-match-p "Sandbox:.*sandbox disabled"
+                              (plist-get child :header)))
+      (should (equal "script value" (plist-get nested :result)))))
+  :doc "default strict sandbox needs no additional guest disclosure"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                          :renderer #'mevedel-tool-exec--render-bash))
+    (let ((presentation
+           (mevedel-collaboration-tool-presentation
+            '(:name "Bash" :args (:command "true") :result ""
+              :render-data (:state completed :status success :outcome success
+                            :sandbox-summary
+                            (:attempt-count 1 :started-count 1 :sandbox bubblewrap
+                             :filesystem workspace-write :network isolated))))))
+      (should-not (string-match-p "Sandbox:" (plist-get presentation :header))))))
+
 (mevedel-deftest mevedel-collaboration--tool-segment-records-pending-terminal
   (:doc "completion before original row insertion uses durable pending terminal facts")
   (with-temp-buffer
