@@ -1468,6 +1468,15 @@ the execution boundary owns the session's single unavailable warning"
   (should (null (mevedel-tool-exec--render-bash
                  "Bash" '(:command "ls") nil nil)))
 
+  :doc "discloses a truncated cumulative preview even when polls omitted nothing"
+  (let ((row (mevedel-tool-exec--render-bash
+              "Bash" '(:command "produce-output") "bounded preview"
+              '(:status success :state completed :outcome success
+                        :omitted-output-bytes 0
+                        :output-preview-truncated-p t))))
+    (should (plist-get row :initially-collapsed-p))
+    (should (string-match-p "output truncated" (plist-get row :header))))
+
   :doc "header shows first command line and expanded body keeps the full command"
   (let* ((body "file1\nfile2\n")
          (plist (mevedel-tool-exec--render-bash

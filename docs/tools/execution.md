@@ -82,7 +82,9 @@ execution ID, working directory, output counts, routine exit facts, the full
 command, and bounded output. Output is collapsed by default, including while
 the command runs. Explicitly opened sections stay open through progress and
 settlement. Consequential sandbox warnings and truncation remain visible, and
-retained output remains accessible where available.
+retained output remains accessible where available. A collapsed row marks a
+truncated whole-execution preview even when each individual poll returned its
+entire unread chunk; observation omission counts remain unchanged.
 
 Successful empty-input WriteStdin observations are still returned to the model,
 but do not create separate transcript rows, even when they collect new output

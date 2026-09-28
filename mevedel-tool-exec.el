@@ -854,7 +854,8 @@ the full command, bounded output and execution details."
                  (when (plist-member render-data :wall-time-seconds)
                    (format " · %.1fs"
                            (or (plist-get render-data :wall-time-seconds) 0)))
-                 (when (> (or (plist-get render-data :omitted-output-bytes) 0) 0)
+                 (when (or (plist-get render-data :output-preview-truncated-p)
+                           (> (or (plist-get render-data :omitted-output-bytes) 0) 0))
                    " · output truncated"))))
             :body body
             :body-mode 'sh-mode
