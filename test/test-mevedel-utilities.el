@@ -1042,6 +1042,28 @@ rejects trailing binary operators"
       (should-not mevedel--gc-timer)
       (mevedel--gc-release 'disabled))))
 
+(mevedel-deftest mevedel--with-gc-busy ()
+  ,test
+  (test)
+  :doc "holds the busy threshold for its body and releases it on exit"
+  (let ((gc-cons-threshold 800000)
+        (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (noninteractive nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-timer nil))
+    (unwind-protect
+        (progn
+          (should (eq 'done (mevedel--with-gc-busy
+                              (should (= (* 64 1024 1024) gc-cons-threshold))
+                              'done)))
+          (should (= 800000 gc-cons-threshold))
+          (should-error (mevedel--with-gc-busy (error "Failed copy")))
+          (should (= 800000 gc-cons-threshold))
+          (should (= 0 (hash-table-count mevedel--gc-holds)))
+          (should-not mevedel--gc-timer))
+      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer)))))
+
 (mevedel-deftest mevedel--optimize-transcript-buffer ()
   ,test
   (test)

@@ -1132,7 +1132,9 @@ its idle collection and raises it only before the next command, so a
 measured unattended request on a 107 MB heap collected 94 times in ten
 minutes at about 160 ms each. Each hold carries a liveness check, so an
 aborted or replaced request cannot keep the threshold raised, and a value
-someone else set meanwhile is left in place. A batch Emacs is unaffected.
+someone else set meanwhile is left in place. Save As, fork, and rewind hold
+the same threshold for their transaction: a large Save As allocated 350 MB and
+collected 21 times. A batch Emacs is unaffected.
 
 A send that fails or is interrupted before the provider starts gets no
 terminal callback, so that boundary settles the turn itself: it keeps the
