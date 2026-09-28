@@ -485,3 +485,48 @@ completion verifier, current Eask runs, and independent `/root/power_expiry_revi
   `.scratch/spinner-notification-full-run.log`). Both new regression cases
   passed; the eight failures match previously observed non-view cases listed
   above, so the full suite is **not green**.
+
+Paused color-face change follow-up, 2026-09-28 (source: Goal verifier
+`/root/verify_12`, independent `/root/face_event_review`, current source and
+Eask checks):
+
+- A paused, zero-fps shimmer status has no animation or metadata timer, so a
+  Customize edit to the spinner face could leave its prepared display colors
+  stale. An installed `set-face-attribute` observer now invalidates prepared
+  frames and uses the theme repaint path for relevant foreground/background/
+  inheritance edits. The observer follows the spinner's resolved inheritance
+  across display frames and face aliases on either the changed or inherited
+  side; install/uninstall owns its lifecycle. Hidden views defer repaint until
+  visibility resumes. Tests cover direct and inherited colors, inherited
+  aliases, alias-as-setter input, phase/undo/point preservation, zero timers,
+  and install/remove/reinstall lifecycle.
+- Fresh graphical production-view probes using the real installer and
+  `custom-set-faces` reproduced the original defect, then confirmed that
+  direct and inherited edits now repaint, including inheritance through an
+  alias, without changing phase or scheduling a timer. A hidden paused view
+  deferred repaint until shown. Independent Emacs 31.1 review reproduced an
+  alias-as-setter gap; a subsequent source fix and fresh Eask alias-chain
+  recheck returned `VERDICT: PASS`. The graphical probe changed the canonical
+  parent through Customize; the aliased setter path was checked by Eask and
+  independent batch probes. Neither reloaded the user's active Emacs.
+- A separate fresh graphical focus-transfer probe used actual frame focus
+  events with the real installer rather than a mock or manually invoked hook:
+  focus-out removed the timer, and focus-in restored a 16.67-ms timer with the
+  original phase (`artifact://executions/execution-R0ldpj.log`). This resolves
+  the earlier uncertainty about actual focus transfer in this environment,
+  not any guarantee about focus behavior on every window manager.
+- After Eask bytecode cleanup, the plan's eight-file view roster plus power,
+  chat, hooks, and integrity tests passed **1079/1080 expected, zero unexpected,
+  one optional composer skip** (`.scratch/spinner-face-final-roster.log`). All
+  **210 files** compiled without warning matches
+  (`.scratch/spinner-face-final-compile.log`); `git diff --check` passed.
+  The final four-worker full suite discovered **8749 tests: 8 unexpected,
+  30 skipped** (`.scratch/spinner-face-final-full-suite/summary.json`,
+  `.scratch/spinner-face-final-full-run.log`). Both new face regressions passed;
+  the eight failures exactly match the recurring non-view cases listed above,
+  so the full suite is **not green**. An earlier full run during concurrent
+  edits found the eight recurring failures plus a test-file integrity mismatch
+  while the file was being changed and one remote stdin-readiness failure;
+  both extra tests passed after the source settled, in the clean focused roster
+  and final full run. The earlier run does not represent the final source
+  (`.scratch/spinner-face-lifecycle-full-suite/`).

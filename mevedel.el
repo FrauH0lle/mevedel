@@ -254,6 +254,10 @@
 (declare-function mevedel-view--resume-on-horizontal-scroll
                   "mevedel-view" (window columns))
 
+;; `mevedel-view-stream'
+(declare-function mevedel-view--refresh-animation-on-face
+                  "mevedel-view-stream" (face frame &rest attributes))
+
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
 (declare-function mevedel-worktree-uninstall-slash-command
@@ -688,6 +692,8 @@ always prompt for the session name."
                 #'mevedel-view--resume-attended-views)
   (advice-add 'set-window-hscroll :after
               #'mevedel-view--resume-on-horizontal-scroll)
+  (advice-add 'set-face-attribute :after
+              #'mevedel-view--refresh-animation-on-face)
 
   ;; Define custom tools
   (mevedel-tools-register)
@@ -778,6 +784,8 @@ always prompt for the session name."
                    #'mevedel-view--resume-attended-views)
   (advice-remove 'set-window-hscroll
                  #'mevedel-view--resume-on-horizontal-scroll)
+  (advice-remove 'set-face-attribute
+                 #'mevedel-view--refresh-animation-on-face)
   (when (eq mevedel-execution-mailbox-delivery-function
             #'mevedel-tool-exec-handle-execution-event)
     (setq mevedel-execution-mailbox-delivery-function nil))

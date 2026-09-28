@@ -898,6 +898,44 @@ hidden label retains its pending refresh until visibility rearms its view."
 (add-hook 'disable-theme-functions
           #'mevedel-view--refresh-animation-on-theme t)
 
+(defun mevedel-view--spinner-inherits-face-p (face frame)
+  "Return non-nil if the spinner inherits FACE on FRAME, directly or indirectly."
+  (let (seen)
+    (cl-labels ((includes (candidate)
+                  (cond ((eq candidate face) t)
+                        ((consp candidate) (cl-some #'includes candidate))
+                        ((and (symbolp candidate)
+                              (not (memq candidate seen))
+                              (facep candidate))
+                         (push candidate seen)
+                         (or (includes (get candidate 'face-alias))
+                             (includes (face-attribute candidate :inherit
+                                                      frame)))))))
+      (condition-case nil
+          (includes 'mevedel-view-spinner)
+        (error nil)))))
+
+(defun mevedel-view--refresh-animation-on-face (face _frame &rest attributes)
+  "Repaint color labels when FACE's resolved colors change outside a theme.
+Customize applies face specs through `set-face-attribute', even if no
+animation or elapsed timer remains to notice the new colors."
+  (when (or (plist-member attributes :foreground)
+            (plist-member attributes :background)
+            (plist-member attributes :inherit))
+    (let (seen)
+      ;; An edit through a face alias changes its target, but advice receives
+      ;; the alias name rather than the target's name.
+      (while (and (symbolp face) (get face 'face-alias)
+                  (not (memq face seen)))
+        (push face seen)
+        (setq face (get face 'face-alias)))
+      (when (or (eq face 'default)
+                (cl-some (lambda (frame)
+                           (mevedel-view--spinner-inherits-face-p face frame))
+                         (frame-list)))
+        (mevedel-view-animation-invalidate)
+        (mevedel-view--refresh-animation-on-theme)))))
+
 (defun mevedel-view--spinner-tick ()
   "Update display spans; reconcile semantic metadata at most once a second."
   (let ((second (floor (float-time))))

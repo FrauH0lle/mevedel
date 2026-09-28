@@ -67,7 +67,10 @@ offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
 pending-tool rows use compact braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; each live view
 pins at most four banks in addition to a six-bank shared reuse cache, preventing
-other views from evicting an active sample. Theme changes invalidate both.
+other views from evicting an active sample. Theme changes and edits to the
+spinner, its inherited faces, or the default face invalidate both; observing
+resolved-color dependencies matters when a paused, zero-fps view has no timer
+to discover updated Customize colors.
 Glyphs have a
 natural, slower cadence; colorless and low-color terminals use the glyph
 fallback cadence rather than waking at the color rate. Even resolvable face
@@ -107,8 +110,9 @@ tool-only progress has no timer callback to release its power subscription.
 Deleting the last window does not invoke that buffer-local hook, so the shared
 power observer briefly installs a window-state callback while subscribed views
 exist, then removes it after the last subscription ends.
-Package install/uninstall owns the global horizontal-scroll observer;
-neither path changes the broader attention gate for transcript rendering.
+Package install/uninstall owns the global horizontal-scroll and face-change
+observers; neither path changes the broader attention gate for transcript
+rendering.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
 external power permits the configured 60-fps normal ceiling, and battery,
