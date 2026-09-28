@@ -359,6 +359,9 @@ rows, parallel groups and returned output. Skill bodies render as safe
 Markdown, with delivered dependencies in separate collapsed foldouts. Missing
 historical dependency bodies are labelled unavailable rather than reread from
 current files. Raw model-facing reminder wrappers are not the display body.
+Noteworthy sandbox boundaries use the host's formatted, bounded disclosure in
+the collapsed tool header, including nested Bash rows. Raw sandbox facts and
+grant details are not sent as presentation metadata.
 Routine empty-input `WriteStdin` observations stay out of the guest transcript;
 their output and terminal status belong to the original Bash row. After
 compaction, that row appears only in **Earlier conversation**, where projection

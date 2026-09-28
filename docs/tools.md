@@ -956,6 +956,10 @@ unless the reader explicitly opened it; expansion shows the exact full command
 above the bounded output. Execution ID, working directory, output counts, and
 routine exit facts belong in expanded details, while consequential sandbox
 disclosures and truncation remain visible.
+Canonical live and terminal output is displayed verbatim, including lines that
+resemble a model-facing `<bash-execution .../>` envelope. Only a rendered tool
+result whose hidden data marks an appended model-facing envelope has that
+envelope removed from its expanded body.
 
 Managed executions publish transient progress after two seconds, at most four
 times per second. The existing Bash row receives the bounded live output tail
