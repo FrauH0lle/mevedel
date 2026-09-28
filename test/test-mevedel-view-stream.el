@@ -245,7 +245,7 @@
                     :owner "main"
                     :tool-use-id "call-live"
                     :tool-args '(:command "printf run")
-                    :output-tail "line 6\nline 7"
+                    :output-tail "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                     :facts '(:execution-id "exec-000001" :state running
                              :wall-time-seconds 2.5 :output-bytes 9
                              :output-lines 1 :omitted-output-bytes 0)))))
@@ -256,10 +256,13 @@
               (should-not (string-match-p "exec-000001" label))
               (should-not (string-match-p "line 7" label)))
             ;; The tail did reach the execution cache the row renders from.
-            (should (equal "line 6\nline 7"
+            (should (equal "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                            (plist-get (gethash "call-live"
                                                mevedel-view--execution-events)
                                       :output-tail)))
+            (should-not (plist-get (gethash "call-live"
+                                            mevedel-view--execution-events)
+                                   :output-preview-truncated-p))
             (should (equal draft
                            (buffer-substring-no-properties
                             (mevedel-view--input-start) (point-max))))
@@ -328,7 +331,7 @@
                      (mevedel-view--tool-call-parse data-buf (car bounds) (cdr bounds))
                      data-buf)))
               (should (string-prefix-p
-                       "$ printf run\n\nline 3\nline 4\nline 5\nline 6\nline 7"
+                       "$ printf run\n\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                        (plist-get rendering :body)))
               (should (string-search "Details: running · 2.5s"
                                      (plist-get rendering :body)))
@@ -337,7 +340,7 @@
               (should-not (plist-get rendering :force-expanded-p)))
             (let ((cached (gethash "call-live"
                                    mevedel-view--execution-events)))
-              (should (equal "line 3\nline 4\nline 5\nline 6\nline 7"
+              (should (equal "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                              (plist-get cached :output-tail)))
               (should (plist-get cached :output-preview-truncated-p))
               (should-not (plist-member cached :owner-context))

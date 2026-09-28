@@ -142,6 +142,33 @@
 (mevedel-deftest mevedel-view--render-tool-call/direct-terminal ()
   ,test
   (test)
+  :doc "a running Bash row retains its material sandbox summary on progress"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                           :renderer #'mevedel-tool-exec--render-bash))
+    (with-temp-buffer
+      (setq-local mevedel-view--execution-events (make-hash-table :test 'equal))
+      (puthash "direct-progress"
+               '(:type progress :facts (:state running :wall-time-seconds 2)
+                 :output-tail "1\n2\n3\n4\n5\n6\n7")
+               mevedel-view--execution-events)
+      (let ((row (mevedel-view--render-tool-call
+                  '(:name "Bash" :tool-use-id "direct-progress"
+                    :args (:command "seq 7; sleep 30") :result "initial"
+                    :render-data
+                    (:status success :state running
+                     :sandbox-summary
+                     (:attempt-count 1 :started-count 1 :sandbox unavailable
+                      :filesystem unrestricted :network unrestricted)))
+                  (current-buffer))))
+        (should (equal 'unavailable
+                       (plist-get (plist-get row :sandbox-summary) :sandbox)))
+        (should (string-match-p "1\n2\n3\n4\n5\n6\n7"
+                                (plist-get row :body)))
+        (should-not (string-match-p "output truncated" (plist-get row :header)))
+        (should (string-match-p "Sandbox:.*without confinement"
+                                (mevedel-view--rendering-header-block row))))))
   :doc "direct ToolCall Bash reconciles retained failure and output with its child ID"
   (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
     (mevedel-tool-register
@@ -268,6 +295,9 @@
                       '(:name "ToolCall" :tool-use-id "outer"
                         :result "OLD OUTPUT" :render-data
                         (:kind ptc :direct-tool "Bash" :outcome completed
+                         :sandbox-summary
+                         (:attempt-count 1 :started-count 1 :sandbox unavailable
+                          :filesystem unrestricted :network unrestricted)
                          :calls ((:id "outer/1" :tool "Bash" :status success
                                   :args (:command "make test")
                                   :render-data (:state running
@@ -275,6 +305,8 @@
                       data)))
             (should (string-match-p "running · 7.0s" (plist-get row :header)))
             (should (string-match-p "NEW OUTPUT" (plist-get row :body)))
+            (should (equal 'unavailable
+                           (plist-get (plist-get row :sandbox-summary) :sandbox)))
             (should-not (string-match-p "OLD OUTPUT" (plist-get row :body)))))))))
 
 (mevedel-deftest mevedel-view-audit-breadcrumb-present-p ()
@@ -371,9 +403,15 @@
                         '(:id "outer/1" :tool "Bash" :status success
                           :args (:command "make test") :result "OLD OUTPUT"
                           :render-data (:execution-id "exec-1" :state running
+                                        :sandbox-summary
+                                        (:attempt-count 1 :started-count 1
+                                         :sandbox unavailable :filesystem unrestricted
+                                         :network unrestricted)
                                         :wall-time-seconds 0.25)))))
               (should (string-match-p "running · 7.0s" (plist-get row :header)))
               (should (string-match-p "NEW OUTPUT" (plist-get row :body)))
+              (should (equal 'unavailable
+                             (plist-get (plist-get row :sandbox-summary) :sandbox)))
               (should-not (string-match-p "OLD OUTPUT" (plist-get row :body))))))))))
 
 (mevedel-deftest mevedel-view-child-call-rendering-retained-output ()

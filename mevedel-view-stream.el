@@ -1580,13 +1580,8 @@ projection instead of maintaining a second completion registry."
   "Apply Bash EVENT to its authoritative row and visible view.
 Always return nil; only the mailbox sink may acknowledge durable delivery."
   (mevedel-execution-transcript-handle-event event)
-  (when (eq (plist-get event :type) 'progress)
-    (setq event
-          (plist-put
-           (copy-sequence event) :output-tail
-           (string-join
-            (last (string-lines (or (plist-get event :output-tail) "")) 5)
-            "\n"))))
+  ;; The execution owner already bounds the tail and marks its own truncation.
+  ;; Do not introduce an undisclosed second, line-based output limit here.
   (mevedel-view-stream-handle-tool-progress event)
   (when (eq (plist-get event :type) 'terminal)
     (mevedel-view-stream--terminal-breadcrumb event))
