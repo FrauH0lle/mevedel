@@ -546,5 +546,49 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
     (should (= (point) (+ 4 (mevedel-view--input-start))))))
 
+(mevedel-deftest mevedel-view-segments/fileless-agent-has-no-parent-history ()
+  ,test
+  (test)
+  :doc "a resident fileless agent never navigates into parent session archives"
+  (let* ((directory (make-temp-file "mevedel-fileless-agent-" t))
+         (session (mevedel-session--create
+                   :save-path directory :authority-mode 'pid-lock
+                   :current-segment 3))
+         (data (generate-new-buffer " *fileless agent data*"))
+         (view (generate-new-buffer " *fileless agent view*")))
+    (unwind-protect
+        (progn
+          (mevedel-view-segments-test--write
+           (mevedel-session-artifacts-segment-path directory 1)
+           "Parent prompt" "Parent answer" "fork-1" 1)
+          (with-current-buffer data
+            (setq-local mevedel--session session)
+            (org-mode)
+            (insert (propertize "Agent answer\n" 'gptel 'response)))
+          (mevedel-view--setup view data
+                               '(:agent-transcript-p t :agent-path "/root/worker"))
+          (with-current-buffer view
+            (mevedel-view--full-rerender)
+            (should (equal '((readable . t))
+                           (mapcar (lambda (descriptor)
+                                     (cons (plist-get descriptor :status)
+                                           (plist-get descriptor :current-p)))
+                                   (mevedel-session-artifacts-transcript-segments
+                                    session data t))))
+            (should (= 1 (length (mevedel-view-segments--entries session))))
+            (let (notice)
+              (cl-letf (((symbol-function 'message)
+                         (lambda (format-string &rest args)
+                           (setq notice (apply #'format format-string args)))))
+                (mevedel-view-previous-segment))
+              (should (equal "mevedel: oldest segment" notice)))
+            (should-error (mevedel-view-go-to-segment 2) :type 'user-error)
+            (should-not (mevedel-view-segments-current-number))
+            (should (string-search "Agent answer" (buffer-string)))
+            (should-not (string-search "Parent answer" (buffer-string)))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (when (buffer-live-p data) (kill-buffer data))
+      (delete-directory directory t))))
+
 (provide 'test-mevedel-view-segments)
 ;;; test-mevedel-view-segments.el ends here

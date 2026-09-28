@@ -885,14 +885,19 @@ PARENT-VIEW is the session view that opened the transcript."
                                    session)))))
               (generate-new-buffer-name view-name)
             view-name))
-         (agent-view
+         agent-view)
+    ;; A cold transcript has no live session binding.  Bind its receiving
+    ;; session before view setup so older agent archives remain navigable.
+    (with-current-buffer agent-data
+      (setq-local mevedel--session session))
+    (setq agent-view
           (mevedel-view--ensure
            agent-data view-name
            (list :agent-transcript-p t
                  :agent-path agent-path
                  :parent-view parent-view
                  :preserve-data-view-buffer (or live-p retained-p)
-                 :transcript-info info))))
+                 :transcript-info info)))
     (with-current-buffer agent-data
       (when (eq major-mode 'so-long-mode)
         (org-mode))
