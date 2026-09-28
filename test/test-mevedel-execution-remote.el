@@ -855,8 +855,8 @@ connection charges for, so the program path is proved here too."
             (should (stringp output-path))
             (should-not (file-remote-p output-path))
             (should-not (string-match-p "mevedelmock" output-path))
-            (should (string-suffix-p
-                     "/tool-results/executions/exec-000001.log"
+            (should (string-match-p
+                     "/tool-results/executions/exec-[[:alnum:]]+-000001\\.log\\'"
                      output-path))))
       (when session
         (mevedel-execution-teardown-session session))
@@ -985,10 +985,9 @@ connection charges for, so the program path is proved here too."
                  (plist-get (plist-get result :facts) :output-path)))
             (should (stringp output-path))
             (should-not (file-remote-p output-path))
-            (should
-             (string-suffix-p
-              "/tool-results/executions/exec-000001.log"
-              output-path))))
+            (should (string-match-p
+                     "/tool-results/executions/exec-[[:alnum:]]+-000001\\.log\\'"
+                     output-path))))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
