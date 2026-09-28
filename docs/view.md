@@ -331,7 +331,8 @@ after a stall. Static or frozen indicators require no decorative timer,
 although a visible active request can still update elapsed text once a second
 without advancing a frozen indicator. Freezing keeps the last displayed
 sample, including an existing tool row's glyph across option changes and
-pending-tool row rebuilds; a scheduling-only rearm does not sample the next
+pending-tool row rebuilds, incremental projection, and full rerenders of the
+same transcript; a scheduling-only rearm does not sample the next
 clock phase. A subsequent resume clears the old freeze latch without
 restarting the underlying phase. Waiting for input freezes active
 elapsed time while allowing motion under the selected policy. Progress/status

@@ -4299,6 +4299,49 @@
                 (should (equal-including-properties
                          display (get-text-property position 'display)))))))))))
 
+(mevedel-deftest mevedel-view-animation-full-rerender-tool-phase
+  (:doc "A full projection retains each surviving frozen tool's displayed phase.")
+  (dolist (style '(ascii braille dots))
+    (dolist (freeze '(global battery))
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((seconds 0.36)
+                (mevedel-view-spinner-style 'static)
+                (mevedel-view-tool-spinner-style style)
+                (mevedel-view-spinner-power-policy 'full)
+                (mevedel-view-spinner-battery-framerate 0)
+                (mevedel-view-spinner-animate t)
+                (mevedel-view--pending-tool-calls
+                 '(("call-1" . "Calling Read..."))))
+            (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                       (lambda () seconds)))
+              (setq mevedel-view--in-flight-turn-start
+                    (copy-marker mevedel-view--input-marker)
+                    mevedel-view--data-turn-start
+                    (with-current-buffer data-buf (copy-marker (point-max))))
+              (mevedel-view--start-spinner "Working...")
+              (mevedel-view--refresh-pending-tool-lines)
+              (mevedel-view--spinner-tick)
+              (let ((display
+                     (get-text-property
+                      (marker-position (caar mevedel-view--spinner-tool-targets))
+                      'display)))
+                (setq seconds 0.481)
+                (if (eq freeze 'global)
+                    (setq mevedel-view-spinner-animate nil)
+                  (setq mevedel-view-spinner-power-policy 'save))
+                (mevedel-view--start-spinner-timer)
+                (mevedel-view--full-rerender)
+                (let ((position
+                       (marker-position
+                        (caar mevedel-view--spinner-tool-targets))))
+                  (should (equal-including-properties
+                           display (get-text-property position 'display)))
+                  (should (= 0.36 (mevedel-view--tool-sample-seconds position)))
+                  (mevedel-view--resume-on-window-change (selected-window))
+                  (should (equal-including-properties
+                           display (get-text-property position 'display))))))))))))
+
 (mevedel-deftest mevedel-view-animation-resume-lifecycle
   (:doc "Scroll/focus only rearm frames; mode change releases power and timers.")
   (mevedel-view-stream-test--with-buffers

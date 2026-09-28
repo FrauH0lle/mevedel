@@ -93,7 +93,8 @@ A theme change repaints visible color labels at their displayed or frozen
 phase, even when paused metadata and zero fps remove timers; hidden labels
 wait until visible again to repaint. Frozen glyphs and pending-tool spans
 also recheck their display fallbacks on theme changes or visibility resume;
-each tool keeps its own last displayed phase when motion is disabled. This is
+each surviving tool keeps its own last displayed phase through lightweight,
+incremental, and full projection when motion is disabled. This is
 event-driven rather than a decorative polling timer. A move between display
 frames likewise repaints the existing sample when the target is attended, using
 the destination frame's prepared bank or a portable multi-frame fallback; no

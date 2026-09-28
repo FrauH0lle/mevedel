@@ -1065,7 +1065,7 @@
                    (lambda (_buffer) (push 'progress calls))))
           (mevedel-view--full-rerender-finish
            data-buf data-buf (list :view-buffer view-buf) nil
-           (float-time))))
+           (float-time) nil)))
       (should (equal (nreverse calls)
                      '(input status interaction progress))))))
 

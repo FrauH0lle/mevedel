@@ -1298,9 +1298,10 @@ POSITION may be an integer or marker."
   (setq mevedel-view--in-flight-turn-start
         (copy-marker position nil)))
 
-(defun mevedel-view--refresh-pending-tool-lines ()
-  "Refresh lightweight pending-tool live-tail lines."
-  (let ((previous (mevedel-view--snapshot-tool-animation-targets)))
+(defun mevedel-view--refresh-pending-tool-lines (&optional previous)
+  "Refresh pending-tool live-tail lines, restoring surviving PREVIOUS samples.
+Without PREVIOUS, capture displayed samples before replacing the live rows."
+  (let ((previous (or previous (mevedel-view--snapshot-tool-animation-targets))))
     (mevedel-view--delete-pending-tool-live-lines)
     (when mevedel-view--pending-tool-calls
       (let* ((cap mevedel-view-pending-tools-visible-max)
