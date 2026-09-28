@@ -183,6 +183,8 @@
 (declare-function mevedel-transport-cancel-pending "mevedel-transport" (&optional key))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--gc-hold "mevedel-utilities" (key live-p))
+(declare-function mevedel--gc-release "mevedel-utilities" (key))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
@@ -391,6 +393,11 @@ directive being processed.  Return the new request struct."
                    :started-at (current-time)
                    :origin origin)))
     (setq mevedel--current-request request)
+    (let ((buffer (current-buffer)))
+      (mevedel--gc-hold
+       request (lambda ()
+                 (and (buffer-live-p buffer)
+                      (eq request (buffer-local-value 'mevedel--current-request buffer))))))
     (when (fboundp 'mevedel-collaboration-notify-request-changed)
       (mevedel-collaboration-notify-request-changed (current-buffer)))
     (when (equal origin "/root")
@@ -458,6 +465,7 @@ is returned here."
                  (mevedel-request-session request))
                 'idle))
         (setq mevedel--current-request nil)
+        (mevedel--gc-release request)
         (when (fboundp 'mevedel-collaboration-notify-request-changed)
           (mevedel-collaboration-notify-request-changed (current-buffer)))))))
 
