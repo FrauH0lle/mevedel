@@ -614,7 +614,9 @@ The resulting plist is round-trippable via
 
 Coerce unknown status values to `incomplete'.  Deduplicate agent IDs by
 keeping the entry with the newest `:updated-at'.  Unknown plist keys survive
-the round trip but are ignored when rendered."
+the round trip but are ignored when rendered, except the retired
+`:activity' history: nothing reads it, and it made up a third of a large
+session's sidecar, rewritten by every save."
   (let ((seen (make-hash-table :test #'equal))
         out)
     (dolist (entry (and (listp raw) raw))
@@ -625,6 +627,7 @@ the round trip but are ignored when rendered."
                (plist (copy-sequence (cdr entry)))
                (status (plist-get plist :status))
                (existing (gethash id seen)))
+          (cl-remf plist :activity)
           (unless (memq status '(running completed error aborted incomplete))
             (setq plist (plist-put plist :status 'incomplete)))
           (cond

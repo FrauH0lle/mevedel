@@ -3983,14 +3983,12 @@
           (mevedel-agent-conversation-refresh invocation)
           (should (= size (with-current-buffer data-buf (buffer-size))))))
       (with-current-buffer data-buf
-        (should
-         (equal '("Read a long profiler report"
-                  "Compared the adjacent interaction paths")
-                (mapcar
-                 (lambda (item) (plist-get item :summary))
-                 (plist-get
-                  (mevedel-tool-render-data-for-tool data-buf "call-agent")
-                  :activity)))))
+        ;; The handle's metadata changed in place; its activity history is
+        ;; not persisted.
+        (let ((render-data
+               (mevedel-tool-render-data-for-tool data-buf "call-agent")))
+          (should (eq 'blocked (plist-get render-data :status)))
+          (should-not (plist-member render-data :activity))))
       (with-current-buffer view-buf
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))

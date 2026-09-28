@@ -200,7 +200,11 @@ sequenceDiagram
 The diagram covers initial spawning and settlement. Follow-ups reuse the
 retained identity and configuration, run UserPromptSubmit for an idle agent's
 new task, and do not rerun SubagentStart. Tool counts, activity and response
-refresh belong to the current invocation in that retained conversation. A caller
+refresh belong to the current invocation in that retained conversation. An
+invocation keeps only its latest few activity items. Settlement drops the
+retained buffer's last request payload and audit decoding memo: an idle agent
+otherwise kept about as much Lisp data alive as its transcript, and a
+continuation builds a fresh request. A caller
 that needs the result explicitly
 invokes `WaitAgent`; a caller that does not may finish while descendants keep
 running. `/review`, `/verify`, and fork-skill workflows may keep their owning

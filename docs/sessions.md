@@ -621,7 +621,12 @@ the sidecar. A view polls that state every
 `mevedel-view-control-transfer-remote-poll-seconds` when the session lives on a
 target; each poll reads the lease head, the target clock, and the mailbox, so
 the interval trades handoff latency against time on the one target connection
-the user's own work also needs. The remote default is much longer because that
+the user's own work also needs. A local owner with no transfer in flight
+first compares a native stamp of its request mailbox with the one its last
+empty poll saw, and skips the target program while it is unchanged: a
+requester adds a file to that flat directory, and lease renewal, not this
+poll, detects a lost lease. Before that check, each open local view spawned a
+shell every five seconds. The remote default is much longer because that
 cost is real only there, and because a command in flight is also a window in
 which a foreign process sentinel can issue its own remote operation on the same
 connection — see [Transport reentrancy](#transport-reentrancy).
@@ -1534,11 +1539,16 @@ remain valid because rename changes neither the ID nor the directory.
 
 Retained-agent transcript files live under `agents/`. The sidecar's
 `:agent-transcripts` alist records presentation metadata for handles and
-terminal transcript inspection. The separate `:agent-registry` is the
-addressability source of truth; it persists canonical and parent paths, role
-and frozen configuration, activity, unread mailbox, conversation location,
-and internal storage identity, plus each retained agent's latest settled
-payload and terminal outcome when present. The `RESULT` mailbox remains a
+terminal transcript inspection: status, counts, timing, reason, and verdict.
+Per-tool activity history is not persisted; it had no reader and made up a
+third of a large session's sidecar, and loading a sidecar drops the retired
+key. The separate `:agent-registry` is the addressability source of truth; it
+persists canonical and parent paths, role and frozen configuration, activity,
+unread mailbox, conversation location, and internal storage identity, plus
+each retained agent's latest settled payload and terminal outcome when
+present. Equal frozen configurations are one shared object, so the sidecar,
+printed with `print-circle`, carries each agent type's configuration once and
+references it from every other record; decoding copies each record's own. The `RESULT` mailbox remains a
 bounded preview; history addresses use the retained transcript identity.
 
 On normal resume, a persisted active turn has no surviving provider request.
