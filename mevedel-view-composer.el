@@ -1176,10 +1176,76 @@ above the composer does not strand it in rendered transcript text."
 Async redraws may insert, delete, or reconcile view-owned text while the
 user is typing in the composer or browsing transcript history.  Preserve
 all displayed windows plus the editable composer text around THUNK."
-  (mevedel-view--preserving-window-state
-    (mevedel-view--call-preserving-input-text
-     (lambda ()
-       (mevedel-view--call-preserving-input-point thunk)))))
+  (prog1 (mevedel-view--preserving-window-state
+           (mevedel-view--call-preserving-input-text
+            (lambda ()
+              (mevedel-view--call-preserving-input-point thunk))))
+    (mevedel-view--sanitize-undo)))
+
+
+;;
+;;; Composer undo
+
+(defun mevedel-view--composer-undo-list (list boundary)
+  "Return undo LIST reduced to composer edits, in current positions.
+
+BOUNDARY is the current composer start.  Renders change the text above
+it and Emacs records those changes too: undoing one would try to rewrite
+read-only transcript, and property changes alone once kept tens of
+thousands of entries alive per view.  Walking from newest to oldest, each
+render insertion or deletion above the composer moves older positions,
+so composer entries are shifted into current positions and render entries
+dropped, as are modification-flag entries, which a never-saved view does
+not need.  An entry of unknown shape ends the history, since its positions
+can no longer be trusted."
+  (let ((delta 0) (bound boundary) result)
+    (catch 'done
+      (dolist (entry list)
+        (pcase entry
+          ('nil (when (and result (car result)) (push nil result)))
+          ((and (pred integerp) pos)
+           (when (>= pos bound) (push (+ pos delta) result)))
+          ;; The view is never saved and forces itself unmodified after
+          ;; every change, so each render would add one of these forever.
+          (`(t . ,_) nil)
+          ((and `(,(and (pred integerp) beg) . ,(and (pred integerp) end)))
+           (if (>= beg bound)
+               (push (cons (+ beg delta) (+ end delta)) result)
+             (when (> end bound) (throw 'done nil))
+             ;; A render insertion: older positions sat before it.
+             (setq delta (+ delta (- end beg))
+                   bound (- bound (- end beg)))))
+          ((and `(,(and (pred stringp) text) . ,(and (pred integerp) pos)))
+           (if (>= (abs pos) bound)
+               (push (cons text (if (< pos 0) (- pos delta) (+ pos delta))) result)
+             ;; A render deletion; the prompt keeps it strictly before
+             ;; the composer.  Older positions sat after its text.
+             (setq delta (- delta (length text))
+                   bound (+ bound (length text)))))
+          (`(nil ,prop ,value ,(and (pred integerp) beg) . ,(and (pred integerp) end))
+           (cond ((>= beg bound)
+                  (push (append (list nil prop value (+ beg delta)) (+ end delta))
+                        result))
+                 ((> end bound) (throw 'done nil))))
+          ((and `(,(and (pred markerp) marker) . ,(pred integerp)))
+           (when (and (marker-buffer marker)
+                      (>= (marker-position marker) boundary))
+             (push entry result)))
+          (_ (throw 'done nil)))))
+    (while (and result (null (car result))) (pop result))
+    (nreverse result)))
+
+(defun mevedel-view--sanitize-undo ()
+  "Keep only composer edits on the current view's undo list."
+  (when (and (derived-mode-p 'mevedel-view-mode)
+             (consp buffer-undo-list))
+    (if (or (bound-and-true-p mevedel-view--agent-transcript-p)
+            (not (and (markerp mevedel-view--input-marker)
+                      (marker-buffer mevedel-view--input-marker))))
+        (setq buffer-undo-list nil)
+      (setq buffer-undo-list
+            (mevedel-view--composer-undo-list
+             buffer-undo-list (mevedel-view--input-start))))))
 
 
 ;;
@@ -1211,7 +1277,12 @@ and other input properties remain untouched."
 
 (defun mevedel-view-composer-initialize ()
   "Initialize composer editing support in the current chat view."
+  ;; A transcript inspection view has nothing a user could undo.
+  (when mevedel-view--agent-transcript-p (buffer-disable-undo))
   (unless mevedel-view--agent-transcript-p
+    ;; Renders between commands leave their own entries; drop them before
+    ;; a command such as `undo' can see them.
+    (add-hook 'pre-command-hook #'mevedel-view--sanitize-undo nil t)
     (setq mevedel-view--composer-scope nil
           mevedel-view--composer-drafts (make-hash-table :test #'equal))
     (setq-local mevedel-mentions-agent-enabled-p
