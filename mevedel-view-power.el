@@ -89,6 +89,12 @@ automatic power state applies the conservative battery ceiling."
             (with-current-buffer (car entry) (funcall (cdr entry)))
           (error nil))))))
 
+(defun mevedel-view-power--on-window-state-change (_frame)
+  "Recheck watchers when window deletion can hide their last indicator.
+Buffer-local window-change hooks do not run for a deleted window.  Reuse
+the views' own scheduling callbacks so visibility policy stays in the view."
+  (mevedel-view-power--notify))
+
 (defun mevedel-view-power--sample (data)
   "Record battery.el DATA and notify watchers on effective state changes."
   (let ((old (mevedel-view-power--current-state)))
@@ -164,6 +170,8 @@ deferred, shared poll.  Repeated calls replace the callback, not the timer."
     (with-current-buffer view
       (add-hook 'kill-buffer-hook #'mevedel-view-power--on-kill nil t))
     (add-hook 'battery-update-functions #'mevedel-view-power--sample)
+    (add-hook 'window-state-change-functions
+              #'mevedel-view-power--on-window-state-change)
     (unless mevedel-view-power--timer
       (mevedel-view-power--schedule))))
 
@@ -175,6 +183,8 @@ deferred, shared poll.  Repeated calls replace the callback, not the timer."
       (remove-hook 'kill-buffer-hook #'mevedel-view-power--on-kill t)))
   (when (zerop (hash-table-count mevedel-view-power--watchers))
     (remove-hook 'battery-update-functions #'mevedel-view-power--sample)
+    (remove-hook 'window-state-change-functions
+                 #'mevedel-view-power--on-window-state-change)
     (when mevedel-view-power--timer
       (cancel-timer mevedel-view-power--timer)
       (setq mevedel-view-power--timer nil))))

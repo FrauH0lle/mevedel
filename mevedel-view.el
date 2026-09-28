@@ -739,7 +739,8 @@ the editable composer body.
   ;; showing this view changes size or first displays it.
   (mevedel-view--enable-markdown-realign)
   ;; A render deferred while nobody watched runs once a window shows
-  ;; the view again.  Buffer-local, so the hook dies with the buffer.
+  ;; the view again.  Also release animation observation when its last
+  ;; window stops showing it.  Buffer-local, so the hook dies with the buffer.
   (add-hook 'window-buffer-change-functions
             #'mevedel-view--resume-on-window-change nil t)
   (add-hook 'window-scroll-functions
@@ -1558,8 +1559,14 @@ Runs after every frame focus change; the predicate filters focus-out."
     (mevedel-view--resume-render-if-attended buffer)))
 
 (defun mevedel-view--resume-on-window-change (window)
-  "Resume the pending render of the view WINDOW now shows."
-  (mevedel-view--resume-render-if-attended (window-buffer window)))
+  "Update the current view when WINDOW starts or stops showing it.
+The buffer-local hook also runs with a departing view current.  Only a
+newly displayed view resumes pending rendering; the departing view must
+still release animation and power observers when it becomes invisible."
+  (if (eq (window-buffer window) (current-buffer))
+      (mevedel-view--resume-render-if-attended (current-buffer))
+    (when (fboundp 'mevedel-view--start-spinner-timer)
+      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
   "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.

@@ -85,7 +85,13 @@ windows, leaving ordinary callbacks on the cheap window-boundary path. Since
 automatic pan does not call that primitive, so a buffer-local redisplay hook
 is installed only during horizontal suspension and defers one resume probe
 until after redisplay, only for a window with the target in its visible rows.
-Package install/uninstall owns the global observer;
+When a window replaces a view, the same buffer-local window-change hook
+reevaluates the departing view as well as resuming the arriving one: frozen
+tool-only progress has no timer callback to release its power subscription.
+Deleting the last window does not invoke that buffer-local hook, so the shared
+power observer briefly installs a window-state callback while subscribed views
+exist, then removes it after the last subscription ends.
+Package install/uninstall owns the global horizontal-scroll observer;
 neither path changes the broader attention gate for transcript rendering.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
