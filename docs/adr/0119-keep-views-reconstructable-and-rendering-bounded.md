@@ -82,7 +82,10 @@ elapsed metadata; semantic redraws retain the last displayed sample, and
 unchanged tool rows are not rebuilt at their initial frame. Hidden
 and vertically or horizontally offscreen indicators suspend decorative wakeups;
 a still-visible elapsed suffix independently retains its one-second semantic
-refresh even when horizontal scrolling hides its label.
+refresh even when horizontal scrolling hides its label. Window focus and
+target visibility are checked together: a visible target in an unfocused frame
+cannot borrow attention from another frame where the target is offscreen.
+The transcript's separate buffer-wide attention gate remains unchanged.
 A theme change repaints visible color labels at their displayed or frozen
 phase, even when paused metadata and zero fps remove timers; hidden labels
 wait until visible again to repaint. Horizontal visibility checks the

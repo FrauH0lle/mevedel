@@ -306,7 +306,11 @@ decorative wakeups. If horizontal scrolling hides the label but leaves its
 elapsed suffix visible, a separate visibility check keeps the once-per-second
 metadata refresh. The per-view timer animates only a progress label or
 pending-tool indicator visible in an attended window, and updates registered
-spans instead of scanning the transcript each frame. Focus, window and scroll
+spans instead of scanning the transcript each frame. Attention and target
+visibility must hold in the *same* window: a focused frame where the label is
+offscreen cannot make a visible label in another, unfocused frame animate.
+This stricter animation gate leaves the buffer-wide transcript rendering
+attention rule unchanged. Focus, window and scroll
 changes rearm it (horizontal scroll uses a scoped `set-window-hscroll` observer
 because Emacs does not call
 `window-scroll-functions` for that change; automatic panning instead arms a
