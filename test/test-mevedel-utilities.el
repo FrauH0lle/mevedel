@@ -980,6 +980,68 @@ rejects trailing binary operators"
   (should-error (mevedel--tag-query-prefix-from-infix '(foo and)))
   (should-error (mevedel--tag-query-prefix-from-infix '(foo or))))
 
+(mevedel-deftest mevedel--gc-hold ()
+  ,test
+  (test)
+  :doc "keeps the busy threshold while a hold lives and restores it afterwards"
+  (let ((gc-cons-threshold 800000)
+        (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (noninteractive nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-timer nil))
+    (unwind-protect
+        (progn
+          (mevedel--gc-hold 'first #'always)
+          (mevedel--gc-hold 'second #'always)
+          (should (= (* 64 1024 1024) gc-cons-threshold))
+          (should (timerp mevedel--gc-timer))
+          ;; Idle tuning lowers it again; the next maintenance restores it.
+          (setq gc-cons-threshold 800000)
+          (mevedel--gc-maintain)
+          (should (= (* 64 1024 1024) gc-cons-threshold))
+          (mevedel--gc-release 'first)
+          (should (= (* 64 1024 1024) gc-cons-threshold))
+          (mevedel--gc-release 'second)
+          (should (= 800000 gc-cons-threshold))
+          (should-not mevedel--gc-timer))
+      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
+
+  :doc "drops a dead hold and leaves a value someone else chose"
+  (let ((gc-cons-threshold 800000)
+        (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (noninteractive nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-timer nil)
+        (alive t))
+    (unwind-protect
+        (progn
+          (mevedel--gc-hold 'request (lambda () alive))
+          (setq gc-cons-threshold (* 128 1024 1024))
+          (setq alive nil)
+          (mevedel--gc-maintain)
+          (should (= 0 (hash-table-count mevedel--gc-holds)))
+          (should (= (* 128 1024 1024) gc-cons-threshold))
+          (should-not mevedel--gc-timer))
+      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
+
+  :doc "changes nothing in a batch Emacs or when disabled"
+  (let ((gc-cons-threshold 800000)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-timer nil))
+    (let ((noninteractive t)
+          (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024)))
+      (mevedel--gc-hold 'batch #'always)
+      (should (= 800000 gc-cons-threshold)))
+    (let ((noninteractive nil)
+          (mevedel-gc-cons-threshold-while-busy nil))
+      (mevedel--gc-hold 'disabled #'always)
+      (should (= 800000 gc-cons-threshold))
+      (should-not mevedel--gc-timer)
+      (mevedel--gc-release 'disabled))))
+
 (mevedel-deftest mevedel--optimize-transcript-buffer ()
   ,test
   (test)
