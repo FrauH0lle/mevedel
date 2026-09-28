@@ -989,11 +989,138 @@
            (mevedel-view--pending-tool-fingerprint
             '(:name "Read" :args (:file_path "a"))))))
 
+(mevedel-deftest mevedel-view--routine-pending-poll-p ()
+  ,test
+  (test)
+  :doc "only empty-input WriteStdin observations are routine pending polls"
+  (should (mevedel-view--routine-pending-poll-p
+           '(:name "WriteStdin" :args (:execution_id "exec-1" :chars ""))))
+  (should (mevedel-view--routine-pending-poll-p
+           '(:name "WriteStdin" :args (:execution_id "exec-1"))))
+  (dolist (args '((:execution_id "" :chars "")
+                  (:chars "")
+                  (:execution_id 13 :chars "")
+                  (:execution_id "exec-1" :chars ""
+                                 :yield_time_ms "not-a-duration")
+                  (:execution_id "exec-1" :chars ""
+                                 :yield_time_ms 0)
+                  (:execution_id "exec-1" :chars "" :bogus 1)
+                  (:execution_id "exec-1" :chars "" :chars "yes")))
+    (should-not (mevedel-view--routine-pending-poll-p
+                 (list :name "WriteStdin" :args args))))
+  (should (mevedel-view--routine-pending-poll-p
+           '(:name "ToolCall"
+             :args (:expression "(WriteStdin :execution_id \"exec-1\" :chars \"\" :yield_time_ms 5000)"))))
+  (should (mevedel-view--routine-pending-poll-p
+           '(:name "ToolCall"
+             :args (:expression "(WriteStdin :execution_id \"exec-1\")"))))
+  (should-not (mevedel-view--routine-pending-poll-p
+               '(:name "ToolCall"
+                 :args (:expression "(WriteStdin :execution_id \"exec-1\" :chars \"\")"
+                        :bogus 1))))
+  (should-not (mevedel-view--routine-pending-poll-p
+               '(:name "WriteStdin"
+                 :args (:execution_id "exec-1" :chars "\C-c"))))
+  (dolist (script '("(WriteStdin :execution_id \"exec-1\" :chars \"yes\\n\")"
+                    "(WriteStdin :execution_id \"exec-1\" :chars nil)"
+                    "(WriteStdin :execution_id \"exec-1\" :chars \"\") (Read :file_path \"a\")"
+                    "(WriteStdin :execution_id \"exec-1\" :chars \"\" :chars \"\")"
+                    "(WriteStdin :execution_id \"exec-1\" :chars \"\" :yield_time_ms (identity 5000))"
+                    "(WriteStdin :execution_id \"exec-1\" :chars \"\" :yield_time_ms 0)"
+                    "(WriteStdin :execution_id \"exec-1\" :chars \"\""))
+    (should-not (mevedel-view--routine-pending-poll-p
+                 (list :name "ToolCall" :args (list :expression script)))))
+  (should-not (mevedel-view--routine-pending-poll-p
+               '(:name "StopExecution" :args (:execution_id "exec-1")))))
+
+(mevedel-deftest mevedel-view-stream-spinner-hook ()
+  ,test
+  (test)
+  :doc "routine polls do not create a Calling row before an in-flight turn"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer data-buf
+      (mevedel-view-stream-spinner-hook
+       '(:name "WriteStdin" :args (:execution_id "exec-1" :chars "")))
+      (mevedel-view-stream-spinner-hook
+       '(:name "ToolCall"
+         :args (:expression "(WriteStdin :execution_id \"exec-1\" :chars \"\")"))))
+    (with-current-buffer view-buf
+      (should-not (string-match-p "Calling WriteStdin" (buffer-string)))
+      (should-not (string-match-p "Calling ToolCall" (buffer-string))))
+    (with-current-buffer data-buf
+      (mevedel-view-stream-spinner-hook
+       '(:name "WriteStdin"
+         :args (:execution_id "exec-1" :chars "yes\n"))))
+    (with-current-buffer view-buf
+      (should (string-match-p "Calling WriteStdin" (buffer-string))))))
+
 
 (mevedel-deftest mevedel-view--pending-tool-calls
   (:doc "tracks and renders the pending-tool live tail")
   ,test
   (test)
+
+  :doc "routine polls show no pending row while input and stops stay visible"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'mevedel-view-render-live-update) #'ignore))
+        (with-current-buffer data-buf
+          (dolist (poll '((:name "WriteStdin"
+                          :args (:execution_id "exec-1" :chars ""))
+                         (:name "WriteStdin"
+                          :args (:execution_id "exec-2"))
+                         (:name "ToolCall"
+                          :args (:expression "(WriteStdin :execution_id \"exec-3\" :chars \"\")"))))
+            (mevedel-view-stream-spinner-hook poll)
+            (mevedel-view-stream-pre-tool poll))
+          (with-current-buffer view-buf
+            (should-not mevedel-view--pending-tool-calls)
+            (should-not (string-match-p "Calling WriteStdin" (buffer-string)))
+            (should-not (string-match-p "Calling ToolCall" (buffer-string)))
+            (should (mevedel-view--request-progress-visible-p)))
+          (mevedel-view-stream-pre-tool
+           '(:name "WriteStdin" :args (:execution_id "exec-1"
+                                         :chars "yes\n")))
+          (mevedel-view-stream-pre-tool
+           '(:name "StopExecution" :args (:execution_id "exec-2")))
+          (with-current-buffer view-buf
+            (should (= 2 (length mevedel-view--pending-tool-calls)))
+            (should (string-match-p "Calling WriteStdin" (buffer-string)))
+            (should (string-match-p "Calling StopExecution" (buffer-string))))
+          (mevedel-view-stream-post-tool
+           '(:name "WriteStdin" :args (:execution_id "exec-1" :chars "")))
+          (with-current-buffer view-buf
+            (should (= 2 (length mevedel-view--pending-tool-calls))))))))
+
+  :doc "invalid empty-input controls keep pending error indicators"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min)))))
+    (with-current-buffer data-buf
+      (mevedel-view-stream-pre-tool
+       '(:name "WriteStdin" :args (:execution_id "" :chars "")))
+      (mevedel-view-stream-pre-tool
+       '(:name "WriteStdin"
+         :args (:execution_id "exec-1" :chars ""
+                :yield_time_ms "not-a-duration")))
+      (mevedel-view-stream-pre-tool
+       '(:name "WriteStdin"
+         :args (:execution_id "exec-1" :chars "" :bogus 1)))
+      (mevedel-view-stream-pre-tool
+       '(:name "ToolCall"
+         :args (:expression "(WriteStdin :execution_id \"exec-1\" :chars \"\")"
+                :bogus 1))))
+    (with-current-buffer view-buf
+      (should (= 4 (length mevedel-view--pending-tool-calls)))
+      (should (string-match-p "Calling WriteStdin" (buffer-string)))))
 
   :doc "pre/post hooks add and remove entries for the arguments gptel sends"
   ;; gptel builds its tool-hook arguments from the name, the arguments,
