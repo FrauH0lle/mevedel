@@ -18,6 +18,53 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+(eval-when-compile (require 'tramp))
+
+(mevedel-deftest mevedel--ui-timer-activate
+  (:doc "schedules on the host list during TRAMP without disturbing foreign timers")
+  (let ((earlier (run-at-time 60 nil #'ignore))
+        (later (run-at-time 180 nil #'ignore))
+        (owned (timer-create)))
+    (unwind-protect
+        (progn
+          (timer-set-time owned (time-add (current-time) (seconds-to-time 120)))
+          (timer-set-function owned #'ignore)
+          (with-tramp-suspended-timers
+            (mevedel--ui-timer-activate owned)
+            (should-not (memq owned timer-list))
+            (should (equal (cl-remove-if-not
+                            (lambda (timer) (memq timer (list earlier owned later)))
+                            (default-toplevel-value 'timer-list))
+                           (list earlier owned later))))
+          (should (memq owned timer-list)))
+      (mevedel--ui-timer-cancel owned)
+      (cancel-timer earlier)
+      (cancel-timer later))))
+
+(mevedel-deftest mevedel--ui-timer-pending-p
+  (:doc "recognizes a timer hidden by nested TRAMP bindings")
+  (let ((owned (run-at-time 60 nil #'ignore)))
+    (unwind-protect
+        (with-tramp-suspended-timers
+          (let ((timer-list nil))
+            (should-not (mevedel--timer-pending-p owned))
+            (should (mevedel--ui-timer-pending-p owned))))
+      (mevedel--ui-timer-cancel owned))))
+
+(mevedel-deftest mevedel--ui-timer-cancel
+  (:doc "removes only the owned outer timer on stop inside suspension")
+  (let ((owned (run-at-time 60 nil #'ignore))
+        (foreign (run-at-time 120 nil #'ignore)))
+    (unwind-protect
+        (progn
+          (with-tramp-suspended-timers
+            (mevedel--ui-timer-cancel owned)
+            (should-not (memq owned (default-toplevel-value 'timer-list)))
+            (should (memq foreign (default-toplevel-value 'timer-list))))
+          (should-not (memq owned timer-list))
+          (should (memq foreign timer-list)))
+      (mevedel--ui-timer-cancel owned)
+      (cancel-timer foreign))))
 
 (defun test-mevedel-utilities--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."

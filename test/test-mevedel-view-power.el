@@ -31,13 +31,13 @@
                   (mevedel-view-power-unwatch view))
                 (copy-hash-table mevedel-view-power--watchers))
        (when mevedel-view-power--timer
-         (mevedel-view-power--cancel-timer mevedel-view-power--timer)))))
+         (mevedel--ui-timer-cancel mevedel-view-power--timer)))))
 
 (defun mevedel-view-power-test--fire-poll ()
   "Simulate the scheduled timer firing without leaving the old timer active."
   (when mevedel-view-power--timer
     (let ((timer mevedel-view-power--timer))
-      (mevedel-view-power--cancel-timer timer)
+      (mevedel--ui-timer-cancel timer)
       (mevedel-view-power--poll timer))))
 
 (mevedel-deftest mevedel-view-power--normalize
@@ -154,7 +154,7 @@
             (with-tramp-suspended-timers
               (mevedel-view-power-watch one (lambda () (cl-incf calls)))
               (should-not (memq mevedel-view-power--timer timer-list))
-              (should (mevedel-view-power--pending-timer-p
+              (should (mevedel--ui-timer-pending-p
                        mevedel-view-power--timer)))
             (let ((original mevedel-view-power--timer))
               (should (memq original timer-list))
@@ -180,7 +180,7 @@
         (when (buffer-live-p one) (kill-buffer one))
         (when (buffer-live-p two) (kill-buffer two))))))
 
-(mevedel-deftest mevedel-view-power--pending-timer-p
+(mevedel-deftest mevedel-view-power-unwatch
   (:doc "An outer poll remains shared under TRAMP and stops inside its binding")
   (mevedel-view-power-test--isolated
     (let* ((one (generate-new-buffer " *power-hidden-one*"))
@@ -200,7 +200,7 @@
                 (mevedel-view-power-watch two #'ignore)
                 (dotimes (_ 5) (mevedel-view-power-watch two #'ignore))
                 (should (eq outer mevedel-view-power--timer))
-                (should (mevedel-view-power--pending-timer-p outer))
+                (should (mevedel--ui-timer-pending-p outer))
                 (should-not (memq outer timer-list)))
               (should (memq outer timer-list))
               (mevedel-view-power-watch two #'ignore)

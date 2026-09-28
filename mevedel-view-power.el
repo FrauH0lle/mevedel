@@ -105,26 +105,10 @@ the views' own scheduling callbacks so visibility policy stays in the view."
       (mevedel-view-power--notify)))
   (mevedel-view-power--schedule))
 
-(defun mevedel-view-power--pending-timer-p (timer)
-  "Return whether TIMER is queued, including on TRAMP's hidden outer list."
-  (and (timerp timer)
-       (or (mevedel--timer-pending-p timer)
-           (memq timer (default-toplevel-value 'timer-list)))))
-
-(defun mevedel-view-power--cancel-timer (timer)
-  "Cancel TIMER on the current and top-level lists, even inside TRAMP.
-`cancel-timer' only edits the current dynamic binding of `timer-list'.
-The shared UI-host poll is always installed on the top-level list."
-  (when (timerp timer)
-    (cancel-timer timer)
-    (let ((outer (default-toplevel-value 'timer-list)))
-      (when (memq timer outer)
-        (set-default-toplevel-value 'timer-list (delq timer outer))))))
-
 (defun mevedel-view-power--schedule ()
   "Keep one deferred fallback check only while watchers remain."
   (when mevedel-view-power--timer
-    (mevedel-view-power--cancel-timer mevedel-view-power--timer)
+    (mevedel--ui-timer-cancel mevedel-view-power--timer)
     (setq mevedel-view-power--timer nil))
   (when (> (hash-table-count mevedel-view-power--watchers) 0)
     (let* ((now (float-time))
@@ -137,15 +121,10 @@ The shared UI-host poll is always installed on the top-level list."
                              (+ mevedel-view-power--last-query
                                 mevedel-view-power--interval)))
            (due (max (or fresh-until now) (or query-after now)))
-           (timer (timer-create))
-           (timer-list (default-toplevel-value 'timer-list)))
-      ;; `run-at-time' on TRAMP's temporary timer list would be discarded on
-      ;; return.  Activate on a copy of the outer list, then install its new
-      ;; sorted head in that binding even when the current list is suspended.
+           (timer (timer-create)))
       (timer-set-time timer (time-add nil (max 0 (- due now))))
       (timer-set-function timer #'mevedel-view-power--poll (list timer))
-      (timer-activate timer)
-      (set-default-toplevel-value 'timer-list timer-list)
+      (mevedel--ui-timer-activate timer)
       (setq mevedel-view-power--timer timer))))
 
 (defun mevedel-view-power--poll (timer)
@@ -198,7 +177,7 @@ deferred, shared poll.  Repeated calls replace the callback, not the timer."
     (add-hook 'window-state-change-functions
               #'mevedel-view-power--on-window-state-change)
     ;; The top-level poll remains pending even if TRAMP hides the current list.
-    (unless (mevedel-view-power--pending-timer-p mevedel-view-power--timer)
+    (unless (mevedel--ui-timer-pending-p mevedel-view-power--timer)
       (mevedel-view-power--schedule))))
 
 (defun mevedel-view-power-unwatch (view)
@@ -212,7 +191,7 @@ deferred, shared poll.  Repeated calls replace the callback, not the timer."
     (remove-hook 'window-state-change-functions
                  #'mevedel-view-power--on-window-state-change)
     (when mevedel-view-power--timer
-      (mevedel-view-power--cancel-timer mevedel-view-power--timer)
+      (mevedel--ui-timer-cancel mevedel-view-power--timer)
       (setq mevedel-view-power--timer nil))))
 
 (provide 'mevedel-view-power)

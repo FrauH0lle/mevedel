@@ -707,6 +707,30 @@ sets it on a repeating timer while that timer's own function runs."
            (memq timer (bound-and-true-p mevedel-transport--held-timers)))
        t))
 
+(defun mevedel--ui-timer-pending-p (timer)
+  "Return whether UI-host TIMER is queued, even during TRAMP suspension."
+  (and (timerp timer)
+       (or (mevedel--timer-pending-p timer)
+           (memq timer (default-toplevel-value 'timer-list)))))
+
+(defun mevedel--ui-timer-cancel (timer)
+  "Remove UI-host TIMER from current and top-level timer lists.
+TRAMP's temporary `timer-list' binding hides the outer list from
+`cancel-timer'.  Only remove TIMER by identity, leaving other timers alone."
+  (when (timerp timer)
+    (cancel-timer timer)
+    (let ((outer (default-toplevel-value 'timer-list)))
+      (when (memq timer outer)
+        (set-default-toplevel-value 'timer-list (delq timer outer))))))
+
+(defun mevedel--ui-timer-activate (timer)
+  "Activate UI-host TIMER on the top-level list despite TRAMP suspension.
+Use Emacs's sorted insertion on a dynamic copy, then install its result
+as the persistent timer list.  TIMER's time and function must be set."
+  (let ((timer-list (default-toplevel-value 'timer-list)))
+    (timer-activate timer)
+    (set-default-toplevel-value 'timer-list timer-list)))
+
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 
