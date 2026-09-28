@@ -77,8 +77,16 @@ semantic tick (or theme invalidation), not at every decorative frame. A global
 reduced-motion switch disables decorative updates, not semantic progress or
 elapsed metadata; semantic redraws retain the last displayed sample, and
 unchanged tool rows are not rebuilt at their initial frame. Hidden
-and offscreen views suspend animation wakeups
-without changing the broader attention gate for transcript rendering.
+and vertically or horizontally offscreen indicators suspend animation wakeups;
+horizontal visibility checks the bounded animated span only in hscrolled
+windows, leaving ordinary callbacks on the cheap window-boundary path. Since
+`window-scroll-functions` does not run for horizontal scrolling, a scoped
+`set-window-hscroll` observer rearms explicitly scrolled views; an internal
+automatic pan does not call that primitive, so a buffer-local redisplay hook
+is installed only during horizontal suspension and defers one resume probe
+until after redisplay, only for a window with the target in its visible rows.
+Package install/uninstall owns the global observer;
+neither path changes the broader attention gate for transcript rendering.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
 external power permits the configured 60-fps normal ceiling, and battery,
@@ -192,6 +200,22 @@ arbitrary frame lists and a fixed interval were removed in favor of styles,
 rendering ceilings, and explicit power policy. The view manual describes
 the current user-facing controls and fallback behavior. No battery-life
 percentage or guaranteed delivered display rate follows from timer ceilings.
+
+### September 2026: include horizontal visibility in animation scheduling
+
+An independent production-view check found that an indicator scrolled entirely
+left of a truncated line still received 60-Hz display-property writes: the
+window-start/end gate described only vertical visibility. Checking the bounded
+animated span in hscrolled windows suspends those writes without adding pixel
+positioning to ordinary unscrolled frames. A separate Emacs 31.1 probe found
+that `window-scroll-functions` does not run when `set-window-hscroll` changes
+the horizontal position; observing that primitive for view windows ensures a
+stopped timer resumes after explicit horizontal scrolling. A follow-up probe
+found that Emacs automatically pans a truncated line during redisplay without
+calling the primitive or window-scroll hook. A redisplay observer installed
+only for suspended views sees both the pan away and its return, then defers
+one scheduler rearm outside redisplay; ordinary animation frames pay no hook
+cost.
 
 ### September 2026: prompt-first deferred history
 

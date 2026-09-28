@@ -539,6 +539,22 @@ more than one distinct frame can display the buffer."
           (unless found (setq found (window-frame window))))))
     (or found :multiple)))
 
+(defun mevedel-view--animation-span-in-window-p (start end window)
+  "Return non-nil if the animated span START..END appears in WINDOW.
+Inspect at most the bounded color prefix of a long label, matching the
+bounded color animation prefix.  `window-end' alone cannot detect a
+horizontally scrolled-away span; skip pixel positioning in unscrolled
+windows, the usual high-frequency case."
+  (and (< start end)
+       (<= (window-start window) start)
+       (< start (or (window-end window) (point-min)))
+       (or (zerop (window-hscroll window))
+           (let* ((last (1- (min end (+ start mevedel-view-animation--prefix-limit))))
+                  (middle (+ start (/ (- last start) 2))))
+             (or (posn-at-point start window)
+                 (posn-at-point last window)
+                 (posn-at-point middle window))))))
+
 (defun mevedel-view--animation-target-visible-p (target property)
   "Return non-nil when TARGET is still a visible span marked PROPERTY."
   (when-let* ((start (car-safe target))
@@ -548,8 +564,8 @@ more than one distinct frame can display the buffer."
     (cl-some (lambda (window)
                (and (eq (frame-visible-p (window-frame window)) t)
                     (not (mevedel-view--unattended-p))
-                    (<= (window-start window) pos)
-                    (< pos (or (window-end window) (point-min)))))
+                    (mevedel-view--animation-span-in-window-p
+                     pos (marker-position (cdr target)) window)))
              (get-buffer-window-list (current-buffer) nil t))))
 
 (defun mevedel-view--animation-target-frame (target &optional all)
@@ -560,11 +576,11 @@ When ALL is non-nil, return the frames actually showing TARGET instead;
 glyph styles can check their display support without inspecting unrelated
 windows."
   (let ((position (marker-position (car target)))
+        (end (marker-position (cdr target)))
         found frames)
     (dolist (window (get-buffer-window-list (current-buffer) nil t))
       (when (and (eq (frame-visible-p (window-frame window)) t)
-                 (<= (window-start window) position)
-                 (< position (or (window-end window) (point-min))))
+                 (mevedel-view--animation-span-in-window-p position end window))
         (when all (cl-pushnew (window-frame window) frames))
         (if (and found (not (eq found (window-frame window))))
             (setq found :multiple)
@@ -579,6 +595,52 @@ windows."
                  (mevedel-view--animation-target-visible-p
                   target 'mevedel-view-inline-spinner-frame))
                mevedel-view--spinner-tool-targets)))
+
+(defun mevedel-view--animation-target-in-window-rows-p (window)
+  "Return non-nil if any registered target occupies WINDOW's visible rows."
+  (cl-some
+   (lambda (target)
+     (when-let* ((start (car-safe target))
+                 ((eq (marker-buffer start) (current-buffer)))
+                 (pos (marker-position start)))
+       (and (<= (window-start window) pos)
+            (< pos (or (window-end window) (point-min))))))
+   (cons mevedel-view--spinner-label-target
+         mevedel-view--spinner-tool-targets)))
+
+(defun mevedel-view--animation-hscrolled-p ()
+  "Return non-nil if a target is vertically in a hscrolled view window."
+  (cl-some
+   (lambda (window)
+     (and (eq (frame-visible-p (window-frame window)) t)
+          (> (window-hscroll window) 0)
+          (not (mevedel-view--unattended-p))
+          (mevedel-view--animation-target-in-window-rows-p window)))
+   (get-buffer-window-list (current-buffer) nil t)))
+
+(defun mevedel-view--resume-on-horizontal-redisplay (window)
+  "Rearm after automatic horizontal scrolling reveals a target in WINDOW.
+Emacs can update hscroll internally without calling `set-window-hscroll'
+or `window-scroll-functions'.  Defer the full scheduler until redisplay
+finishes; at most one probe timer belongs to this view in the meantime."
+  (when (and (eq (window-buffer window) (current-buffer))
+             (not (mevedel--timer-pending-p mevedel-view--spinner-timer))
+             (mevedel-view--animation-target-in-window-rows-p window)
+             (or (zerop (window-hscroll window))
+                 (mevedel-view--animation-visible-p)))
+    (remove-hook 'pre-redisplay-functions
+                 #'mevedel-view--resume-on-horizontal-redisplay t)
+    (let ((buffer (current-buffer)) timer)
+      (setq timer
+            (run-at-time
+             0 nil
+             (lambda ()
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (when (eq timer mevedel-view--spinner-timer)
+                     (setq mevedel-view--spinner-timer nil)
+                     (mevedel-view--start-spinner-timer)))))))
+      (setq mevedel-view--spinner-timer timer))))
 
 (defun mevedel-view--spinner-visual-period (style &optional main)
   "Return effective time between visual frames for STYLE, or nil.
@@ -611,6 +673,8 @@ MAIN means use the actual color/glyph rendering of the request label."
 
 (defun mevedel-view--stop-spinner-timer ()
   "Stop the buffer-local spinner animation timer."
+  (remove-hook 'pre-redisplay-functions
+               #'mevedel-view--resume-on-horizontal-redisplay t)
   (when (timerp mevedel-view--spinner-timer)
     (cancel-timer mevedel-view--spinner-timer))
   (setq mevedel-view--spinner-timer nil
@@ -666,6 +730,12 @@ MAIN means use the actual color/glyph rendering of the request label."
                         1.0))
          (periods (delq nil (list main tool metadata)))
          (period (and visible periods (apply #'min periods))))
+    (if (and (not visible) (mevedel-view--spinner-active-p)
+             (mevedel-view--animation-hscrolled-p))
+        (add-hook 'pre-redisplay-functions
+                  #'mevedel-view--resume-on-horizontal-redisplay nil t)
+      (remove-hook 'pre-redisplay-functions
+                   #'mevedel-view--resume-on-horizontal-redisplay t))
     (when (mevedel-view--animation-wants-power-p visible)
       (mevedel-view-power-watch (current-buffer)
                                 #'mevedel-view--start-spinner-timer))
@@ -706,7 +776,10 @@ MAIN means use the actual color/glyph rendering of the request label."
                              (error (mevedel-view--stop-spinner-timer)))
                          (cancel-timer timer)
                          (when (eq timer mevedel-view--spinner-timer)
-                           (mevedel-view--stop-spinner-timer))))))))
+                           (mevedel-view--stop-spinner-timer)
+                           (when (and (derived-mode-p 'mevedel-view-mode)
+                                      (mevedel-view--spinner-active-p))
+                             (mevedel-view--start-spinner-timer)))))))))
           (setq mevedel-view--spinner-timer timer))))))
 
 (defun mevedel-view--refresh-animation-options ()

@@ -229,12 +229,18 @@
               ((symbol-function 'mevedel-view--resume-attended-views)
                (lambda (&rest _) (cl-incf resumed))))
       (mevedel-install)
+      (should (advice-member-p #'mevedel-view--resume-on-horizontal-scroll
+                               'set-window-hscroll))
       (funcall after-focus-change-function)
       (should (= 1 resumed))
       (mevedel-uninstall)
+      (should-not (advice-member-p #'mevedel-view--resume-on-horizontal-scroll
+                                   'set-window-hscroll))
       (funcall after-focus-change-function)
       (should (= 1 resumed))
       (mevedel-install)
+      (should (advice-member-p #'mevedel-view--resume-on-horizontal-scroll
+                               'set-window-hscroll))
       (funcall after-focus-change-function)
       (should (= 2 resumed)))))
 

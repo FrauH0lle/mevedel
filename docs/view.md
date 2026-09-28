@@ -301,10 +301,15 @@ state. The rendering measurements are recorded in
 [ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history).
 
 Animation adds a stricter visibility gate without changing that rendering
-contract: a windowless or offscreen indicator has no animation wakeups. The
+contract: a windowless or vertically/horizontally offscreen indicator has no
+animation wakeups. The
 per-view timer runs only while a progress label or pending-tool indicator is
 visible in an attended window, and updates registered spans instead of scanning
-the transcript each frame. Focus, window and scroll changes rearm it; each
+the transcript each frame. Focus, window and scroll changes rearm it (horizontal
+scroll uses a scoped `set-window-hscroll` observer because Emacs does not call
+`window-scroll-functions` for that change; automatic panning instead arms a
+buffer-local redisplay observer only while a target is horizontally suspended);
+each
 one-shot callback rearms from the present rather than queuing overdue repeats
 after a stall. Static or frozen indicators require no decorative timer,
 although a visible active request can still update elapsed text once a second

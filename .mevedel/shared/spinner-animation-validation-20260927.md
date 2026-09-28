@@ -149,3 +149,38 @@ fresh real-terminal probe, independent review, and Eask runs):
   its eight names match the earlier unrelated failures recorded above
   (`.scratch/spinner-terminal-full-suite-4/`,
   `.scratch/spinner-terminal-full-run-4.log`). The full suite is not green.
+
+Horizontal-scroll completion follow-up, 2026-09-28 (source: production
+probes, independent review, clean Eask runs, and full-suite runner):
+
+- A completion verifier found that a label entirely hidden by horizontal
+  scrolling still received 60-Hz display writes. The visibility gate now
+  checks the bounded animated span's actual display position in hscrolled
+  windows, retaining the cheap row-boundary check in ordinary unscrolled
+  windows. Explicit `set-window-hscroll` calls rearm through owned advice;
+  automatic Emacs panning is observed through a temporary buffer-local
+  redisplay hook while horizontally suspended, with one owned deferred
+  recheck. A two-window regression prevents unrelated redisplay callbacks
+  from scheduling needless rechecks. The independent re-review returned
+  PASS after an Emacs 31.1 terminal probe of that case.
+- Fresh production-view probes exercised explicit scrolling, automatic pan
+  (hscroll 260 to 0), and partial visibility: fully hidden labels had no
+  frame writes or active high-frequency timer, returning to view restored
+  frames and the 16.67-ms timer, and a partly visible label kept animating
+  (`.scratch/spinner-hscroll-production-probe.log`,
+  `.scratch/spinner-hscroll-auto-production.log`,
+  `.scratch/spinner-hscroll-partial-final.log`). The final two-window
+  refinement is separately covered by the independent terminal probe and
+  regression; the earlier graphical probes did not rerun after that change.
+- Following `eask clean elc`, the named view test roster plus chat tests
+  passed **967/968 expected, zero unexpected, one optional Markdown-mode
+  skip** (`.scratch/spinner-hscroll-v2-focused.log`). All 210 files compiled
+  with no warning matches (`.scratch/spinner-hscroll-v2-compile.log`), and
+  `git diff --check` passed. The isolated four-worker full suite discovered
+  **8732 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-hscroll-v2-full-suite/`,
+  `.scratch/spinner-hscroll-v2-full-run.log`). It is **not green**; the eight
+  unexpected names match those from the earlier full-suite runs recorded
+  above. An overlapping cleanup caused three extra view cold-load/parse
+  failures in the first follow-up attempt; they did not recur when the final
+  full run was isolated from cleanup.
