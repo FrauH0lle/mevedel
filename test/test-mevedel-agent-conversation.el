@@ -263,27 +263,6 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(mevedel-deftest mevedel-agent-conversation-final-activity ()
-		 ,test
-		 (test)
-		 :doc "returns full non-status activity without sharing list structure"
-		 (let ((invocation
-			(mevedel-agent-invocation--create
-			 :activity '((:type tool-start :summary "Read")
-				     (:type status :status running)
-				     (:type tool-finish :summary "Read done")))))
-		   (let ((activity
-			  (mevedel-agent-conversation-final-activity invocation)))
-		     (should (equal '((:type tool-start :summary "Read")
-				      (:type tool-finish :summary "Read done"))
-				    activity))
-		     (setf (plist-get (car activity) :summary) "changed")
-		     (should (equal "Read"
-				    (plist-get
-				     (car (mevedel-agent-invocation-activity invocation))
-				     :summary))))))
-
-
 (mevedel-deftest mevedel-agent-conversation-insert-user-block ()
 		 ,test
 		 (test)
@@ -769,7 +748,7 @@
 		 ,test
 		 (test)
 
-		 :doc "keeps all items and calls targeted agent refresh"
+		 :doc "keeps recent items and calls targeted agent refresh"
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
 			(inv (mevedel-agent-invocation--create
@@ -823,7 +802,8 @@
 			   (dolist (type types)
 			     (mevedel-agent-conversation-record-activity
 			      inv (list :type type :summary (symbol-name type)))))
-			 (should (equal types
+			 ;; Only the newest items stay, in order.
+			 (should (equal (last types mevedel-agent-conversation--live-activity-limit)
 					(mapcar (lambda (item) (plist-get item :type))
 						(mevedel-agent-invocation-activity inv))))
 			 (should (cl-every
@@ -832,7 +812,7 @@
 		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
 
-		 :doc "syncs running activity into transcript metadata"
+		 :doc "syncs running counts without persisting activity history"
 		 (let* ((workspace
 			 (mevedel-workspace--create
 			  :type 'project
@@ -866,10 +846,14 @@
 				(cdr (assoc agent-id
 					    (mevedel-session-agent-transcripts session)))))
 			   (should (= 20 (plist-get entry :calls)))
-			   (should (= 2 (length (plist-get entry :activity))))
-			   (should (equal "Read"
-					  (plist-get (cadr (plist-get entry :activity))
-						     :tool-name)))))
+			   (should-not (plist-member entry :activity))
+			   ;; The live tail stays bounded however long the agent runs.
+			   (dotimes (_ 20)
+			     (mevedel-agent-conversation-record-activity
+			      invocation '(:type tool-start :tool-name "Read" :summary "Read")
+			      t))
+			   (should (= mevedel-agent-conversation--live-activity-limit
+				      (length (mevedel-agent-invocation-activity invocation))))))
 		     (kill-buffer parent))))
 
 (mevedel-deftest mevedel-agent-conversation-save (:quiet t)
