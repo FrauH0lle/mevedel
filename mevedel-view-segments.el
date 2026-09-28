@@ -11,21 +11,33 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-read-segment
-                  "mevedel-session-artifacts" (session number))
 (declare-function mevedel-session-artifacts-collect-prompts
                   "mevedel-session-artifacts" (buffer))
+(declare-function mevedel-session-artifacts-read-segment
+                  "mevedel-session-artifacts" (session number))
+(declare-function mevedel-session-artifacts-read-transcript-segment
+                  "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-segments
                   "mevedel-session-artifacts" (session live-buffer))
-(autoload 'mevedel-session-artifacts-read-segment "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts"
+                  (session live-buffer &optional agent-transcript-p))
 (autoload 'mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-transcript-segment
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segments "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segments
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
+
+;; `mevedel-view-agent'
+(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--jump-to-pinned-prompt
@@ -91,6 +103,23 @@
   (and (buffer-live-p mevedel--data-buffer)
        (buffer-local-value 'mevedel--session mevedel--data-buffer)))
 
+(defun mevedel-view-segments--entries (session)
+  "Return this view's segment descriptors, with a numbered current entry.
+Agent views inspect their own numbered compaction archives, never the parent
+session's root segments."
+  (if mevedel-view--agent-transcript-p
+      (let* ((entries (mevedel-session-artifacts-transcript-segments
+                       session mevedel--data-buffer t))
+             (latest (1+ (or (cl-loop for entry in entries
+                                     maximize (or (plist-get entry :number) 0))
+                             0))))
+        (mapcar (lambda (entry)
+                  (if (plist-get entry :current-p)
+                      (plist-put (copy-sequence entry) :number latest)
+                    entry))
+                entries))
+    (mevedel-session-artifacts-segments session mevedel--data-buffer)))
+
 (defun mevedel-view-segments--cleanup ()
   "Kill the archived segment buffer owned by the current view."
   (when (buffer-live-p mevedel-view-segments--buffer)
@@ -116,7 +145,8 @@
   "Return the archived segment banner for the current view."
   (let* ((session (buffer-local-value 'mevedel--session
                                       mevedel--data-buffer))
-         (current (or (mevedel-session-current-segment session) 1))
+         (current (plist-get (car (last (mevedel-view-segments--entries session)))
+                             :number))
          (latest
           (propertize
            "[Latest]"
@@ -124,7 +154,8 @@
            'mouse-face 'highlight
            'help-echo "Return to the live session segment")))
     (propertize
-     (format "Viewing archived segment %d of %d - read-only %s\n\n"
+     (format "Viewing archived %ssegment %d of %d - read-only %s\n\n"
+             (if mevedel-view--agent-transcript-p "agent " "")
              mevedel-view-segments--number current latest)
      'read-only t
      'font-lock-face 'shadow
@@ -153,11 +184,20 @@
 When SOURCE-POS is non-nil, verify its prompt before replacing the view."
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
-         (current (or (mevedel-session-current-segment session) 1)))
+         (entries (mevedel-view-segments--entries session))
+         (current (plist-get (car (last entries)) :number))
+         (entry (cl-find number entries
+                         :key (lambda (item) (plist-get item :number)))))
+    (when (and mevedel-view--agent-transcript-p
+               (not (and entry (eq (plist-get entry :status) 'readable))))
+      (user-error "Unreadable transcript segment: %s" number))
     (if (= number current)
         (mevedel-view-segments--return-now)
       (let* ((new-buffer
-              (mevedel-session-artifacts-read-segment session number))
+              (if mevedel-view--agent-transcript-p
+                  (mevedel-session-artifacts-read-transcript-segment
+                   session entry)
+                (mevedel-session-artifacts-read-segment session number)))
              (old-number mevedel-view-segments--number)
              (old-buffer mevedel-view-segments--buffer)
              (old-state (mevedel-view-render-capture-segment-state))
@@ -189,14 +229,18 @@ When SOURCE-POS is non-nil, verify its prompt before replacing the view."
           (error
            (setq mevedel-view-segments--number old-number
                  mevedel-view-segments--buffer old-buffer)
-           (when (buffer-live-p new-buffer)
-             (kill-buffer new-buffer))
-           (mevedel-view-composer-set-historical-visible t)
-           (mevedel-view-render-project-segment
-            (and old-number old-buffer) old-state nil)
-           (when (and old-number
-                      (not (mevedel-view-composer-session-fork-armed-p)))
-             (mevedel-view-composer-set-historical-visible nil))
+           (unwind-protect
+               (progn
+                 (when (buffer-live-p new-buffer)
+                   (kill-buffer new-buffer))
+                 (mevedel-view-composer-set-historical-visible t)
+                 (mevedel-view-render-project-segment
+                  (and old-number old-buffer) old-state nil)
+                 (when (and old-number
+                            (not (mevedel-view-composer-session-fork-armed-p)))
+                   (mevedel-view-composer-set-historical-visible nil)))
+             (when mevedel-view--agent-transcript-p
+               (setq buffer-read-only t)))
            (signal (car err) (cdr err))))))))
 
 (defun mevedel-view-segments--prompt-header (buffer source-pos)
@@ -279,10 +323,15 @@ An invalid prompt or unreadable archive leaves the current projection intact."
   (interactive)
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
+         (entries (mevedel-view-segments--entries session))
          (current (or mevedel-view-segments--number
-                      (mevedel-session-current-segment session)))
-         (target (1- current)))
-    (if (< target 1)
+                      (plist-get (car (last entries)) :number)))
+         (target (if mevedel-view--agent-transcript-p
+                     (cl-loop for entry in entries
+                              for number = (plist-get entry :number)
+                              when (< number current) maximize number)
+                   (1- current))))
+    (if (or (null target) (< target 1))
         (message "mevedel: oldest segment")
       (mevedel-view-segments--show target 'backward))))
 
@@ -291,10 +340,15 @@ An invalid prompt or unreadable archive leaves the current projection intact."
   (interactive)
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
-         (latest (or (mevedel-session-current-segment session) 1))
+         (entries (mevedel-view-segments--entries session))
+         (latest (plist-get (car (last entries)) :number))
          (current (or mevedel-view-segments--number latest))
-         (target (1+ current)))
-    (if (> target latest)
+         (target (if mevedel-view--agent-transcript-p
+                     (cl-loop for entry in entries
+                              for number = (plist-get entry :number)
+                              when (> number current) minimize number)
+                   (1+ current))))
+    (if (or (null target) (> target latest))
         (message "mevedel: latest segment")
       (mevedel-view-segments--show target 'forward))))
 
@@ -312,17 +366,17 @@ An invalid prompt or unreadable archive leaves the current projection intact."
             preview)))
 
 (defun mevedel-view-go-to-segment (&optional number)
-  "Choose and display session segment NUMBER.
+  "Choose and display this transcript's segment NUMBER.
 
 Interactively, offer every canonical segment, including missing and
-unreadable entries."
+unreadable entries in root transcripts.  Agent views offer their own
+readable compaction archives instead of the parent session's segments."
   (interactive)
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
-         (latest (or (mevedel-session-current-segment session) 1))
+         (segments (mevedel-view-segments--entries session))
+         (latest (plist-get (car (last segments)) :number))
          (displayed (or mevedel-view-segments--number latest))
-         (segments
-          (mevedel-session-artifacts-segments session mevedel--data-buffer))
          (choices
           (mapcar
            (lambda (segment)
@@ -335,7 +389,10 @@ unreadable entries."
                (assoc
                 (completing-read "Go to segment: " choices nil t)
                 choices)))))
-    (unless (and (integerp target) (<= 1 target) (<= target latest))
+    (unless (and (integerp target) (<= 1 target) (<= target latest)
+                 (or (not mevedel-view--agent-transcript-p)
+                     (cl-find target segments
+                              :key (lambda (entry) (plist-get entry :number)))))
       (user-error "Unknown session segment: %s" target))
     (unless (= target displayed)
       (mevedel-view-segments--show
@@ -361,14 +418,22 @@ unreadable entries."
             (mevedel-view-composer-set-historical-visible t)
             (mevedel-view-render-project-segment
              mevedel--data-buffer live-state 'forward)
+            ;; Agent inspection has no editable live composer.  The root-view
+            ;; composer unlock above is only needed while replacing its source.
+            (when mevedel-view--agent-transcript-p
+              (setq buffer-read-only t))
             (when (buffer-live-p old-buffer)
               (kill-buffer old-buffer))
             (setq mevedel-view-segments--live-state nil))
         (error
          (setq mevedel-view-segments--number old-number
                mevedel-view-segments--buffer old-buffer)
-         (mevedel-view-render-project-segment old-buffer old-state nil)
-         (mevedel-view-composer-set-historical-visible nil)
+         (unwind-protect
+             (progn
+               (mevedel-view-render-project-segment old-buffer old-state nil)
+               (mevedel-view-composer-set-historical-visible nil))
+           (when mevedel-view--agent-transcript-p
+             (setq buffer-read-only t)))
          (signal (car err) (cdr err)))))))
 
 (provide 'mevedel-view-segments)

@@ -67,7 +67,8 @@
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
+                  "mevedel-session-artifacts"
+                  (session live-buffer &optional agent-transcript-p))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
 
@@ -81,7 +82,12 @@
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-go-to-segment "mevedel-view-segments"
                   (&optional number))
+(declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
+(declare-function mevedel-view-return-to-latest-segment
+                  "mevedel-view-segments" (&optional event))
 (autoload 'mevedel-view-go-to-segment "mevedel-view-segments")
+(autoload 'mevedel-view-historical-segment-p "mevedel-view-segments")
+(autoload 'mevedel-view-return-to-latest-segment "mevedel-view-segments")
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure-data-substring
@@ -511,7 +517,7 @@ execution, so parent and child may each display their own breadcrumb."
                     (session (or (mevedel-view-segments--session)
                                  (buffer-local-value 'mevedel--session data))))
           (let* ((descriptors (mevedel-session-artifacts-transcript-segments
-                               session data))
+                               session data mevedel-view--agent-transcript-p))
                  (viewed-number
                   (or (mevedel-view-segments-current-number)
                       (plist-get (cl-find-if
@@ -671,7 +677,7 @@ the forwarded mailbox message appears only in the parent's current segment."
         (and session
              (catch 'found
                (dolist (descriptor (reverse (mevedel-session-artifacts-transcript-segments
-                                             session data)))
+                                             session data mevedel-view--agent-transcript-p)))
                  (when (and (eq (plist-get descriptor :status) 'readable)
                             (not (plist-get descriptor :current-p)))
                    (when-let* ((older
@@ -693,7 +699,8 @@ The completion's source target may be a later segment after compaction."
               (session (buffer-local-value 'mevedel--session mevedel--data-buffer)))
     (let ((parent-id tool-id)
           (descriptors (reverse (mevedel-session-artifacts-transcript-segments
-                                 session mevedel--data-buffer)))
+                                 session mevedel--data-buffer
+                                 mevedel-view--agent-transcript-p)))
           chosen)
       (while (string-match "/[0-9]+\\'" parent-id)
         (setq parent-id (substring parent-id 0 (match-beginning 0))))
@@ -719,10 +726,13 @@ The completion's source target may be a later segment after compaction."
                                         at 'gptel nil (point-max))
                                        (point-max)))))))
                 (unless current-p (kill-buffer buffer)))))))
-      ;; Agent compaction archives are read for fallback evidence, not root
-      ;; segments in the parent session's segment switcher.
-      (when (and chosen (not (plist-get chosen :logical)))
-        (mevedel-view-go-to-segment (plist-get chosen :number))))))
+      ;; The view's segment switcher follows this receiving transcript:
+      ;; root segments for the session, agent compaction archives for an agent.
+      (when chosen
+        (if (plist-get chosen :current-p)
+            (when (mevedel-view-historical-segment-p)
+              (mevedel-view-return-to-latest-segment))
+          (mevedel-view-go-to-segment (plist-get chosen :number)))))))
 
 (defun mevedel-view-audit--evidence (record)
   "Display retained read-only evidence or an explicit limitation for RECORD."
@@ -813,94 +823,121 @@ The completion's source target may be a later segment after compaction."
             (set-window-point window (point))))
       (mevedel-view-audit--evidence record))))
 
+(defun mevedel-view-audit--control-record-in-buffer (data execution-id)
+  "Find EXECUTION-ID's source identity or retained evidence in DATA.
+Return nil if this segment has neither.  Nested ToolCall Bash children have
+their own source IDs even though they share the outer view row."
+  (with-current-buffer data
+    (save-restriction
+      (widen)
+      (let* ((tool-id
+              (cl-labels
+                  ((child-id (calls)
+                     (cl-some
+                      (lambda (child)
+                        (let ((facts (plist-get child :render-data)))
+                          (or (and (equal (plist-get child :tool) "Bash")
+                                   (equal (plist-get facts :execution-id)
+                                          execution-id)
+                                   (plist-get child :id))
+                              (and (equal (plist-get child :tool) "ToolCall")
+                                   (child-id (plist-get facts :calls))))))
+                      calls)))
+                (let ((pos (point-min)) found)
+                  (while (and (< pos (point-max)) (not found))
+                    (let* ((property (get-text-property pos 'gptel))
+                           (id (and (eq (car-safe property) 'tool)
+                                    (cdr property)))
+                           (bounds (and (stringp id)
+                                        (mevedel-tool-render-data-segment-bounds
+                                         id)))
+                           (name (and bounds
+                                      (plist-get
+                                       (mevedel-view--tool-call-parse
+                                        data (car bounds) (cdr bounds))
+                                       :name)))
+                           (facts (and (stringp id)
+                                       (mevedel-tool-render-data-for-tool
+                                        data id))))
+                      (setq found
+                            (or (and (equal name "Bash")
+                                     (equal (plist-get facts :execution-id)
+                                            execution-id)
+                                     id)
+                                (and (equal name "ToolCall")
+                                     (child-id (plist-get facts :calls))))
+                            pos (or (next-single-property-change
+                                     pos 'gptel nil (point-max))
+                                    (point-max)))))
+                  found)))
+             (audits (mevedel-transcript-audit-records
+                      (buffer-substring (point-min) (point-max))))
+             (breadcrumb
+              (cl-find-if
+               (lambda (candidate)
+                 (and (eq (plist-get candidate :type) 'execution-breadcrumb)
+                      (equal (plist-get candidate :execution-id) execution-id)))
+               audits))
+             (archived
+              (unless breadcrumb
+                (cl-find-if
+                 (lambda (candidate)
+                   (and (memq (plist-get candidate :type)
+                              '(execution-archive execution-completion))
+                        (equal (plist-get (plist-get candidate :render-data)
+                                          :execution-id)
+                               execution-id)))
+                 (reverse audits))))
+             (record (or breadcrumb
+                         (and archived
+                              (list :execution-id execution-id
+                                    :tool-use-id (plist-get archived :tool-use-id)
+                                    :facts (plist-get archived :render-data))))))
+        (when (or tool-id record)
+          (if tool-id
+              (plist-put (or (copy-sequence record)
+                             (list :execution-id execution-id))
+                         :tool-use-id tool-id)
+            record))))))
+
 (defun mevedel-view-audit-show-control-result (execution-id)
   "Open EXECUTION-ID's original Bash row from an input or stop interaction.
-Use source-backed tool identities, including ToolCall children.  If the
-original row has been removed, show retained evidence or an explicit absence."
+Search the displayed transcript and readable older segments by execution ID,
+including nested ToolCall children.  When no row survives, show retained
+evidence or an explicit absence."
   (interactive)
   (let* ((data (mevedel-view-segments-display-buffer))
-         (tool-id
-          (and (buffer-live-p data)
-               (with-current-buffer data
-                 (save-restriction
-                   (widen)
-                   (cl-labels
-                       ((child-id (calls)
-                          (cl-some
-                           (lambda (child)
-                             (let ((facts (plist-get child :render-data)))
-                               (or (and (equal (plist-get child :tool) "Bash")
-                                        (equal (plist-get facts :execution-id)
-                                               execution-id)
-                                        (plist-get child :id))
-                                   (and (equal (plist-get child :tool) "ToolCall")
-                                        (child-id (plist-get facts :calls))))))
-                           calls)))
-                     (let ((pos (point-min)) found)
-                       (while (and (< pos (point-max)) (not found))
-                         (let* ((property (get-text-property pos 'gptel))
-                                (id (and (eq (car-safe property) 'tool)
-                                         (cdr property)))
-                                (bounds (and (stringp id)
-                                             (mevedel-tool-render-data-segment-bounds
-                                              id)))
-                                (name (and bounds
-                                           (plist-get
-                                            (mevedel-view--tool-call-parse
-                                             data (car bounds) (cdr bounds))
-                                            :name)))
-                                (facts (and (stringp id)
-                                            (mevedel-tool-render-data-for-tool
-                                             data id))))
-                           (setq found
-                                 (or (and (equal name "Bash")
-                                          (equal (plist-get facts :execution-id)
-                                                 execution-id)
-                                          id)
-                                     (and (equal name "ToolCall")
-                                          (child-id (plist-get facts :calls))))
-                                 pos (or (next-single-property-change
-                                          pos 'gptel nil (point-max))
-                                         (point-max)))))
-                       found))))))
-         (record (or (and (buffer-live-p data)
-                          (with-current-buffer data
-                            (let* ((audits (mevedel-transcript-audit-records
-                                            (buffer-substring (point-min)
-                                                              (point-max))))
-                                   (breadcrumb
-                                    (cl-find-if
-                                     (lambda (candidate)
-                                       (and (eq (plist-get candidate :type)
-                                                'execution-breadcrumb)
-                                            (equal (plist-get candidate
-                                                              :execution-id)
-                                                   execution-id)))
-                                     audits))
-                                   (archived
-                                    (unless breadcrumb
-                                      (cl-find-if
-                                       (lambda (candidate)
-                                         (and (memq (plist-get candidate :type)
-                                                    '(execution-archive
-                                                      execution-completion))
-                                              (equal (plist-get
-                                                      (plist-get candidate
-                                                                 :render-data)
-                                                      :execution-id)
-                                                     execution-id)))
-                                       (reverse audits)))))
-                              (or breadcrumb
-                                  (and archived
-                                       (list :execution-id execution-id
-                                             :tool-use-id
-                                             (plist-get archived :tool-use-id)
-                                             :facts (plist-get archived
-                                                               :render-data)))))))
-                     (list :execution-id execution-id :tool-use-id tool-id))))
-    (when tool-id
-      (setq record (plist-put (copy-sequence record) :tool-use-id tool-id)))
-    (mevedel-view-audit-show-result record)))
+         (record (and (buffer-live-p data)
+                      (mevedel-view-audit--control-record-in-buffer
+                       data execution-id)))
+         (live (and (buffer-live-p mevedel--data-buffer)
+                    mevedel--data-buffer))
+         (session (and live (buffer-local-value 'mevedel--session live))))
+    (unless record
+      (when (and live (not (eq data live)))
+        (setq record (mevedel-view-audit--control-record-in-buffer
+                      live execution-id))))
+    (unless record
+      (when session
+        (catch 'found
+          (dolist (descriptor (reverse (mevedel-session-artifacts-transcript-segments
+                                        session live mevedel-view--agent-transcript-p)))
+            (when (and (eq (plist-get descriptor :status) 'readable)
+                       (not (plist-get descriptor :current-p)))
+              (when-let* ((older
+                           (condition-case nil
+                               (mevedel-session-artifacts-read-transcript-segment
+                                session descriptor)
+                             (error nil))))
+                (unwind-protect
+                    (when-let* ((match
+                                 (mevedel-view-audit--control-record-in-buffer
+                                  older execution-id)))
+                      (setq record match)
+                      (throw 'found match))
+                  (kill-buffer older))))))))
+    (mevedel-view-audit-show-result
+     (or record (list :execution-id execution-id)))))
 
 (defun mevedel-view-audit-mailbox-breadcrumb (text sender)
   "Build a forwarded completion from EXECUTION mailbox TEXT and SENDER.
@@ -995,7 +1032,7 @@ terminal facts and retained bounded payload without a second output card."
                                 records)))))))))))
       (if (and session (buffer-live-p live))
           (dolist (descriptor (mevedel-session-artifacts-transcript-segments
-                               session live))
+                               session live mevedel-view--agent-transcript-p))
             (when (eq (plist-get descriptor :status) 'readable)
               (if (plist-get descriptor :current-p)
                   (collect-buffer live)
