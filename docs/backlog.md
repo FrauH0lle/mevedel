@@ -48,10 +48,14 @@ remaining limits: `.scratch/session-performance/report.md` and
 
 Production telemetry now splits pauses into collection and callback time
 and times saves, publications, and control programs. On a session with a
-260 KB sidecar and 1.5 MB live segment, a save takes about 150 ms: 40 ms
-reparsing the whole segment for the prompt index, about 70 ms in five
+260 KB sidecar and 1.5 MB live segment, a save takes about 150 ms: two
+whole-buffer structural passes of about 40 ms each (property normalization
+before `GPTEL_BOUNDS`, whose tick memo never hits because the drawer write
+changes the tick, and the prompt-index reparse), about 70 ms in five
 control programs (recovery read, reservation, discovery sidecar,
-generation, head commit), and a whole-segment rewrite. Remaining pauses
+generation, head commit), and a whole-segment rewrite. Both passes are pure
+functions of mostly appended text; resuming them from a stable boundary
+before the lowest changed position would remove most of their cost. Remaining pauses
 of 200-400 ms are such saves, sometimes with a collection. Removing them
 needs incremental segment and sidecar publication or saves off the
 foreground path, preserving ownership, recovery, and cancellation.
