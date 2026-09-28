@@ -1381,6 +1381,9 @@ value returns when the last one ends.  Nil leaves the threshold alone."
                  (natnum :tag "Bytes"))
   :group 'mevedel)
 
+(defconst mevedel--gc-settlement-grace 30
+  "Seconds an ended request keeps the busy threshold for its settlement tail.")
+
 (defvar mevedel--gc-holds (make-hash-table :test #'eq)
   "Keys holding the busy collection threshold, to their liveness predicate.")
 
