@@ -628,19 +628,72 @@ more than one distinct frame can display the buffer."
 
 (defun mevedel-view--animation-span-in-window-p (start end window)
   "Return non-nil if the animated span START..END appears in WINDOW.
-Inspect at most the bounded color prefix of a long label, matching the
-bounded color animation prefix.  `window-end' alone cannot detect a
-horizontally scrolled-away span; skip pixel positioning in unscrolled
-windows, the usual high-frequency case."
+Replacement display strings map every character back to their source span,
+so buffer positions alone cannot reveal which animated characters survive
+horizontal scrolling.  Skip pixel positioning in unscrolled windows."
   (and (< start end)
        (<= (window-start window) start)
        (< start (or (window-end window) (point-min)))
        (or (zerop (window-hscroll window))
-           (let* ((last (1- (min end (+ start mevedel-view-animation--prefix-limit))))
-                  (middle (+ start (/ (- last start) 2))))
-             (or (posn-at-point start window)
-                 (posn-at-point last window)
-                 (posn-at-point middle window))))))
+           (let ((display (get-text-property start 'display)))
+             (if (not (stringp display))
+                 ;; The elapsed suffix is ordinary buffer text.
+                 (cl-some
+                  (lambda (position)
+                    (when-let* ((sample (posn-at-point position window))
+                                (xy (posn-x-y sample)))
+                      (and (null (posn-area sample))
+                           (<= 0 (car xy))
+                           (< (car xy) (window-body-width window t)))))
+                  (list start (1- end)))
+               (when-let* ((sample (or (posn-at-point start window)
+                                       (posn-at-point (1- end) window)
+                                       (posn-at-point
+                                        (+ start (/ (- end start) 2)) window)))
+                           (xy (posn-x-y sample))
+                           (left (posn-at-x-y 0 (cdr xy) window))
+                           (point (posn-point left))
+                           ((and (integerp point) (<= start point) (< point end)))
+                           (first (posn-string left))
+                           (index (cdr first)))
+                 (let* ((style mevedel-view-spinner-style)
+                        (tool (get-text-property
+                               start 'mevedel-view-inline-spinner-frame))
+                        (animated-start
+                         (if (and (not tool) (eq style 'ellipsis))
+                             (max 0 (- (length display) 3))
+                           0))
+                        (animated-end
+                         (cond (tool (length display))
+                               ((memq style '(shimmer breathe bounce))
+                                (if (get-text-property 0 'face display)
+                                    ;; A combining mark crossing the limit
+                                    ;; leaves the final cluster uncolored.
+                                    (let ((limit (min (length display)
+                                                      mevedel-view-animation--prefix-limit)))
+                                      (while (and (> limit 0)
+                                                  (not (get-text-property
+                                                        (1- limit) 'face display)))
+                                        (setq limit (1- limit)))
+                                      limit)
+                                  2))
+                               ((eq style 'dots) 5)
+                               ((memq style '(braille ascii)) 2)
+                               ((eq style 'ellipsis) (length display))
+                               (t 0))))
+                   (and (< index animated-end)
+                        (or (zerop animated-start)
+                            (let* ((right
+                                    (posn-at-x-y
+                                     (max 0 (1- (window-body-width window t)))
+                                     (cdr xy) window))
+                                   (right-point (and right (posn-point right)))
+                                   (right-string (and right (posn-string right))))
+                              (or (and (integerp right-point)
+                                       (>= right-point end))
+                                  (and right-string
+                                       (>= (cdr right-string)
+                                           animated-start)))))))))))))
 
 (defun mevedel-view--animation-window-attended-p (window)
   "Return non-nil when WINDOW can show animation to an attentive reader.

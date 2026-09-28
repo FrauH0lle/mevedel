@@ -302,9 +302,14 @@ state. The rendering measurements are recorded in
 
 Animation adds a stricter visibility gate without changing that rendering
 contract: a windowless or vertically/horizontally offscreen indicator has no
-decorative wakeups. If horizontal scrolling hides the label but leaves its
-elapsed suffix visible, a separate visibility check keeps the once-per-second
-metadata refresh. The per-view timer animates only a progress label or
+decorative wakeups. A replacement display string maps its entire label to one
+buffer span, so horizontal visibility checks its actually displayed animated
+characters, not merely source positions. A long color label's static tail
+does not keep a high-frequency timer alive after the bounded animated prefix
+scrolls away. If horizontal scrolling hides the label but leaves its
+elapsed suffix visible in the text area, a separate visibility check keeps the
+once-per-second metadata refresh; a suffix beyond the right edge or in a fringe
+does not. The per-view timer animates only a progress label or
 pending-tool indicator visible in an attended window, and updates registered
 spans instead of scanning the transcript each frame. Attention and target
 visibility must hold in the *same* window: a focused frame where the label is

@@ -100,8 +100,11 @@ frames likewise repaints the existing sample when the target is attended, using
 the destination frame's prepared bank or a portable multi-frame fallback; no
 timer or global
 cache invalidation is needed. Horizontal visibility checks the
-bounded animated span only in hscrolled windows, leaving ordinary callbacks
-on the cheap window-boundary path. Since
+displayed animated portion only in hscrolled windows, leaving ordinary callbacks
+on the cheap window-boundary path. Replacement display strings map all their
+characters to one buffer span, so looking up buffer positions could leave a
+60-Hz timer running after a long label's bounded color prefix was offscreen;
+the hscrolled check now reads the visible display-string index instead. Since
 `window-scroll-functions` does not run for horizontal scrolling, a scoped
 `set-window-hscroll` observer rearms explicitly scrolled views; an internal
 automatic pan does not call that primitive, so a buffer-local redisplay hook
