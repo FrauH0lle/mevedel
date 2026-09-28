@@ -39,7 +39,16 @@
              :test-targets)))
     (should-not
      (mevedel-execution-telemetry-command-properties
-      "printf 'eask test ert'"))))
+      "printf 'eask test ert'"))
+    ;; Cleanup and compilation are not suites; the test script is.
+    (dolist (case '(("npx @emacs-eask/cli clean elc" . clean)
+                    ("npx @emacs-eask/cli compile" . compile)
+                    ("npx @emacs-eask/cli run script test -- --jobs 4" . full)
+                    ("npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test ert test/test-one.el" . focused)
+                    ("eask upgrade gptel" . other)))
+      (should (eq (cdr case)
+                  (plist-get (mevedel-execution-telemetry-command-properties (car case))
+                             :test-scope))))))
 
 (mevedel-deftest mevedel-execution-telemetry-context-create
   (:doc "captures one execution's summary owners behind an opaque context")
