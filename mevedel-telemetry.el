@@ -162,11 +162,13 @@ profile file larger and cost a little more per sample."
     :artifacts-local :attempt-generation :backend :baseline-marker-position
     :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
     :budget-kind :budget-status :buffer-chars-total
-    :buffers :cache-identity :cached-tokens :call-source :capture-id :captured-goal-id
+    :buffers :cache-identity :cached-tokens :call-source :candidate-count :capture-id
+    :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
     :command-class :command-hash :command-name :context :context-chars
     :context-deduplicated :continuation :conversation-scope :covered-count
     :cumulative-usage :cumulative-usage-tokens :delay-ms :dequeue-goal-id
+    :deleted-directory-count :deleted-file-count
     :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
     :effective-wait-ms :effort :emacs-version :enqueue-goal-id
     :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
@@ -197,7 +199,7 @@ profile file larger and cost a little more per sample."
     :reason-class :reasoning-bytes :remaining-count :repair-count :reply-bytes
     :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
-    :restored :result-bytes :result-chars :retained :reviewed-count :roster-chars :rounds
+    :restored :result-bytes :result-chars :retained :retained-count :reviewed-count :roster-chars :rounds
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
     :specifier-key :stage :status :step :summary-threshold

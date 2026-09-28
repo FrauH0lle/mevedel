@@ -14,8 +14,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-transport)
 
-;; `mevedel-request'
-(defvar mevedel--current-request)
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -37,6 +37,26 @@
       (with-current-buffer (plist-get job :buffer)
         (remove-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill t)))))
 
+(defun mevedel-session-collection--finish (session job outcome)
+  "End SESSION's collection JOB, recording OUTCOME with what it reclaimed.
+OUTCOME is `completed', `proof-failed' or `failed'.  Collection used to end
+silently, so a session that never reclaimed anything looked no different
+from one that did."
+  (let ((plan (plist-get job :plan)))
+    (when (fboundp 'mevedel-telemetry-record)
+      (mevedel-telemetry-record
+       session 'publication-collection
+       :outcome (if (and (eq outcome 'completed) (plist-get plan :proof-failed))
+                    'proof-failed
+                  outcome)
+       :candidate-count (length (plist-get plan :candidates))
+       :retained-count (plist-get plan :retained-count)
+       :deleted-file-count (or (plist-get plan :deleted-files) 0)
+       :deleted-directory-count (or (plist-get plan :deleted-directories) 0)
+       :duration-ms (round (* 1000 (- (float-time)
+                                      (or (plist-get job :started-at) (float-time))))))))
+  (mevedel-session-collection-cancel session))
+
 (defun mevedel-session-collection--on-kill ()
   "Cancel the current root buffer's publication collection."
   (when mevedel--session (mevedel-session-collection-cancel mevedel--session)))
@@ -56,7 +76,9 @@
              (buffer-live-p (mevedel-session-root-buffer session))
              (not (gethash session mevedel-session-collection--jobs)))
     (let ((job (list :buffer (mevedel-session-root-buffer session)
-                     :head nil :remaining nil :summaries nil :plan nil :timer nil)))
+                     :head nil :names nil :remaining nil
+                     :summaries (make-hash-table :test #'equal)
+                     :plan nil :timer nil :started-at (float-time))))
       (puthash session job mevedel-session-collection--jobs)
       (with-current-buffer (plist-get job :buffer)
         (add-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill nil t))
@@ -98,7 +120,7 @@ Cache observations only; the editor still checks authority and pins at deletion.
     (plist-put job :pending nil)
     (if (not error)
         (mevedel-session-collection--arm session job)
-      (mevedel-session-collection-cancel session)
+      (mevedel-session-collection--finish session job 'failed)
       (display-warning 'mevedel
                        (format "Could not collect published generations: %s"
                                (error-message-string error)) :warning))))
@@ -120,7 +142,6 @@ Cache observations only; the editor still checks authority and pins at deletion.
            ((or (input-pending-p)
                 (active-minibuffer-window)
                 (mevedel-transport-busy-p directory)
-                (buffer-local-value 'mevedel--current-request buffer)
                 (mevedel-session-pending-publication session)
                 (mevedel-session-publication-uncommitted-batches session)
                 (mevedel-session-publication-queue session)
@@ -135,12 +156,17 @@ Cache observations only; the editor still checks authority and pins at deletion.
               (let ((head (plist-get (mevedel-session-publication session) :head))
                     (deadline (+ (float-time) mevedel-session-collection--slice-seconds))
                     (count 0))
-                (unless (equal head (plist-get job :head))
-                  (setf (plist-get job :head) head
-                        (plist-get job :summaries) nil
-                        (plist-get job :plan) nil
-                        (plist-get job :remaining)
-                        (mevedel-session-publication--generation-names directory)))
+                ;; Generations are immutable, so a moved head only adds
+                ;; generations to summarize.  A plan follows the head itself.
+                (unless (or (equal head (plist-get job :head)) (plist-get job :plan))
+                  (let ((names (mevedel-session-publication--generation-names directory))
+                        (summaries (plist-get job :summaries)))
+                    (setf (plist-get job :names) names
+                          (plist-get job :remaining)
+                          (seq-remove (lambda (generation)
+                                        (gethash (plist-get generation :head) summaries))
+                                      names))))
+                (setf (plist-get job :head) head)
                 (when (and (not (equal head (plist-get job :worker-scanned)))
                            (not (file-remote-p directory))
                            (mevedel-session-workspace session)
@@ -163,9 +189,9 @@ Cache observations only; the editor still checks authority and pins at deletion.
                             (< count 8)
                             (or (zerop count) (< (float-time) deadline))
                             (not (input-pending-p)))
-                  (push (mevedel-session-publication-generation-summary
-                         directory (car (plist-get job :remaining)) t)
-                        (plist-get job :summaries))
+                  (let ((summary (mevedel-session-publication-generation-summary
+                                  directory (car (plist-get job :remaining)) t)))
+                    (puthash (plist-get summary :head) summary (plist-get job :summaries)))
                   (setf (plist-get job :remaining) (cdr (plist-get job :remaining)))
                   (setq count (1+ count)))
                 (if (or (plist-get job :remaining) (> count 0) (input-pending-p))
@@ -174,7 +200,12 @@ Cache observations only; the editor still checks authority and pins at deletion.
                   (unless (plist-get job :plan)
                     (setf (plist-get job :plan)
                           (mevedel-session-publication-collection-plan
-                           session (reverse (plist-get job :summaries)))))
+                           session
+                           (let ((summaries (plist-get job :summaries)))
+                             (delq nil (mapcar (lambda (generation)
+                                                 (gethash (plist-get generation :head)
+                                                          summaries))
+                                               (plist-get job :names)))))))
                   (let (failure)
                     (pcase (mevedel-session-publication-collect-step
                             session (plist-get job :plan)
@@ -186,12 +217,12 @@ Cache observations only; the editor still checks authority and pins at deletion.
                                    0 #'mevedel-session-collection--resumed session job error)
                                 (setq failure error))))
                       ('pending (plist-put job :pending t))
-                      ('nil (mevedel-session-collection-cancel session))
+                      ('nil (mevedel-session-collection--finish session job 'completed))
                       (_ (when failure (signal (car failure) (cdr failure)))
                          (mevedel-session-collection--arm session job)))))))))))
 
       (error
-       (mevedel-session-collection-cancel session)
+       (mevedel-session-collection--finish session job 'failed)
        (display-warning 'mevedel
                         (format "Could not collect published generations: %s"
                                 (error-message-string err)) :warning)))))
