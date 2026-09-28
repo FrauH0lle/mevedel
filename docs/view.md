@@ -315,6 +315,8 @@ changes rearm it (horizontal scroll uses a scoped `set-window-hscroll` observer
 because Emacs does not call
 `window-scroll-functions` for that change; automatic panning instead arms a
 buffer-local redisplay observer only while a target is horizontally suspended).
+Its deferred resume probe replaces any pending elapsed-metadata timer rather
+than leaving a second timer behind.
 The buffer-local window-change hook reevaluates a view when its window switches
 buffers; a shared window-state hook catches deletion of its last window. Both
 release power monitoring even if zero-fps tool-only progress has no animation

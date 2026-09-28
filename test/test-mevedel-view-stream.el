@@ -4831,6 +4831,58 @@
         (advice-add 'set-window-hscroll :after
                     #'mevedel-view--resume-on-horizontal-scroll)))))
 
+(mevedel-deftest mevedel-view--resume-on-horizontal-redisplay
+  (:doc "The redisplay probe replaces, rather than orphans, a suffix timer.")
+  (let ((installed (advice-member-p
+                    #'mevedel-view--resume-on-horizontal-scroll
+                    'set-window-hscroll)))
+    (when installed
+      (advice-remove 'set-window-hscroll
+                     #'mevedel-view--resume-on-horizontal-scroll))
+    (unwind-protect
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-spinner-style 'ascii)
+                  (mevedel-view-spinner-power-policy 'full)
+                  (auto-hscroll-mode nil)
+                  (window (selected-window)))
+              (setq-local truncate-lines t)
+              (mevedel-view--start-spinner "Working...")
+              (redisplay t)
+              (set-window-hscroll window 22)
+              (redisplay t)
+              (let ((start (marker-position
+                            (car mevedel-view--spinner-metadata-target)))
+                    (end (marker-position
+                          (cdr mevedel-view--spinner-metadata-target))))
+                ;; Batch redisplay cannot position the truncated suffix;
+                ;; keep the actual registered span and scheduler timers.
+                (cl-letf (((symbol-function 'posn-at-point)
+                           (lambda (pos &optional target-window)
+                             (and (eq target-window window)
+                                  (<= start pos) (< pos end)
+                                  '(visible)))))
+                  (mevedel-view--start-spinner-timer)
+                  (should (= 1.0 mevedel-view--spinner-timer-period))
+                  (should (memq #'mevedel-view--resume-on-horizontal-redisplay
+                                pre-redisplay-functions))
+                  (let ((old mevedel-view--spinner-timer))
+                    (should (mevedel--timer-pending-p old))
+                    (set-window-hscroll window 0)
+                    (run-hook-with-args 'pre-redisplay-functions window)
+                    (let ((probe mevedel-view--spinner-timer))
+                      (should (mevedel--timer-pending-p probe))
+                      (should-not (eq old probe))
+                      (should-not (mevedel--timer-pending-p old))
+                      (run-hook-with-args 'pre-redisplay-functions window)
+                      (should (eq probe mevedel-view--spinner-timer))
+                      (mevedel-view--stop-spinner-timer)
+                      (should-not (mevedel--timer-pending-p probe))
+                      (should-not (mevedel--timer-pending-p old)))))))))
+      (when installed
+        (advice-add 'set-window-hscroll :after
+                    #'mevedel-view--resume-on-horizontal-scroll)))))
+
 (mevedel-deftest mevedel-view-animation-low-color-terminal-cadence
   (:doc "A resolved 8-color terminal never schedules color-rate callbacks.")
   (let ((mevedel-view-animation--cache nil))
