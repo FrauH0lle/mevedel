@@ -420,6 +420,9 @@ call and requires rewrapping.  Re-registering the same wrapped `(category,
 name)` replaces the prior mevedel wrapper, matching native tool registration.
 The Emacs introspection and web tools are native mevedel tools. Introspection
 uses Emacs source, documentation and Info APIs, with Orderless symbol matching.
+Source lookup for C primitives and variables requires a configured
+`find-function-C-source-directory`; missing configuration returns a tool error
+instead of opening an interactive directory prompt.
 `variable_value` always asks for permission; `library_source` must resolve
 inside a local load-path directory.
 
