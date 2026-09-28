@@ -156,7 +156,8 @@ profile file larger and cost a little more per sample."
 
 (defconst mevedel-telemetry--allowed-keys
   '(:abort-plan-approval :active-work-paused :additional-read-count
-    :additional-write-count :admitted :approval-lifetime
+    :additional-write-count :admitted :allocated-kb :approval-lifetime
+    :artifact-count
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
     :artifacts-local :attempt-generation :backend :baseline-marker-position
     :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
@@ -180,7 +181,7 @@ profile file larger and cost a little more per sample."
     :max-ms :message-chars :message-hash :mode :model :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
-    :new-count :new-segment :old-segment :omitted-count :origin :outcome
+    :new-count :new-segment :old-segment :omitted-count :operation-count :origin :outcome
     :output-bytes :output-estimated-tokens :output-limit :output-tokens
     :over-1000-ms :over-200-ms :over-500-ms :overlap-count :owner
     :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode
@@ -766,6 +767,70 @@ Collection inside the callback is kept apart from its own work."
                                 :timer-gc-ms (round (* 1000 (plist-get slowest :gc-seconds)))))))))))
     (unless mevedel-telemetry--lag-windows
       (mevedel-telemetry--lag-stop))))
+
+
+;;
+;;; Measured synchronous work
+
+(defvar mevedel-telemetry--measuring-record nil
+  "Non-nil while a measurement records its event.
+A remote session appends telemetry through the same target programs a
+measurement may wrap, so nothing is measured while one is recorded.")
+
+(defun mevedel-telemetry--allocated-bytes ()
+  "Return an estimate of the bytes allocated so far in this Emacs.
+Weights `memory-use-counts' by the object sizes of a 64-bit build; the
+difference between two readings is what matters, not the absolute value."
+  (let ((counts (memory-use-counts)))
+    (+ (* 16 (nth 0 counts))            ; conses
+       (* 16 (nth 1 counts))            ; floats
+       (* 8 (nth 2 counts))             ; vector cells
+       (* 48 (nth 3 counts))            ; symbols
+       (nth 4 counts)                   ; string characters
+       (* 56 (nth 5 counts))            ; intervals
+       (* 32 (nth 6 counts)))))         ; strings
+
+(defun mevedel-telemetry-measure (session event min-ms function &rest props)
+  "Call FUNCTION and record synchronous EVENT for SESSION; return its value.
+
+The event carries PROPS plus `:duration-ms', the collections and their
+time inside the call (`:gc-count', `:gc-ms'), an estimate of the bytes it
+allocated (`:allocated-kb'), and `:outcome': the returned symbol, `ok'
+for any other value, or `error' before the error propagates.  Allocation
+matters separately from collection because `mevedel--with-gc-batched'
+defers collection past the call, into whatever runs next.
+
+A nil SESSION records into every session the event-loop lag heartbeat
+watches, and costs nothing when it watches none: sessionless work such as
+a target program is only worth attributing to a pause.  Calls shorter than
+MIN-MS milliseconds are not recorded."
+  (let ((sessions (cond (mevedel-telemetry--measuring-record nil)
+                        (session (list session))
+                        (t (mapcar #'car mevedel-telemetry--lag-windows)))))
+    (if (null sessions)
+        (funcall function)
+      (let ((start (float-time))
+            (gc-count gcs-done)
+            (gc-seconds gc-elapsed)
+            (allocated (mevedel-telemetry--allocated-bytes))
+            (outcome 'error)
+            value)
+        (unwind-protect
+            (progn
+              (setq value (funcall function)
+                    outcome (if (and value (symbolp value)) value 'ok))
+              value)
+          (let ((duration-ms (round (* 1000 (- (float-time) start)))))
+            (when (>= duration-ms min-ms)
+              (let ((mevedel-telemetry--measuring-record t)
+                    (gc-ms (round (* 1000 (- gc-elapsed gc-seconds))))
+                    (gc-done (- gcs-done gc-count))
+                    (allocated-kb
+                     (/ (- (mevedel-telemetry--allocated-bytes) allocated) 1024)))
+                (dolist (target sessions)
+                  (apply #'mevedel-telemetry-record target event
+                         :duration-ms duration-ms :gc-count gc-done :gc-ms gc-ms
+                         :allocated-kb allocated-kb :outcome outcome props))))))))))
 
 
 ;;

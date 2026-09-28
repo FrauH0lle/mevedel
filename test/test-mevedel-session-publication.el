@@ -218,6 +218,39 @@ and its segment path."
                       (mevedel-session-control-fs-read-file
                        (plist-get (mevedel-session-publication session) :sidecar))))))))
 
+(mevedel-deftest mevedel-session-publication-publish/telemetry (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-telemetry" "mevedel-publication-telemetry-" ?c
+   (lambda (session session-dir _segment)
+     (require 'mevedel-telemetry)
+     (let* ((content (mevedel-session-artifacts-printed-value
+                      (mevedel-session-artifacts-build-sidecar session (current-buffer))))
+            (mevedel-telemetry--lag-windows
+             (list (list session :request-id "request-1" :until nil :counts nil)))
+            (mevedel-session-control-fs--measure-min-ms 0)
+            (events (lambda (event)
+                      (seq-filter (lambda (entry) (eq event (plist-get entry :event)))
+                                  (mevedel-session-telemetry-pending session)))))
+       (setf (mevedel-session-telemetry-pending session) nil)
+       (mevedel-session-publication-publish
+        session (list (list :path (file-name-concat session-dir "session.meta.el")
+                            :content content :commit-marker t))
+        t)
+       ;; One publication event carrying its input size, and the target
+       ;; programs it ran attributed to the watched session.
+       (let ((publication (funcall events 'session-publication)))
+         (should (= 1 (length publication)))
+         (should (= 1 (plist-get (car publication) :artifact-count)))
+         (should (= (string-bytes content) (plist-get (car publication) :input-bytes)))
+         (should (plist-get (car publication) :duration-ms))
+         (should-not (plist-get (car publication) :dropped-keys)))
+       (let ((programs (funcall events 'control-program)))
+         (should programs)
+         (should (cl-every (lambda (entry)
+                             (and (symbolp (plist-get entry :kind))
+                                  (natnump (plist-get entry :operation-count))))
+                           programs)))))))
+
 (mevedel-deftest mevedel-session-publication-publish/transcript-copies (:quiet t)
   (test-mevedel-session-publication--with-published
    "publication-transcripts" "mevedel-transcript-copies-" ?c

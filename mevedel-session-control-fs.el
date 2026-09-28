@@ -17,6 +17,10 @@
 (require 'mevedel-transport)
 (require 'tar-mode)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-measure "mevedel-telemetry"
+                  (session event min-ms function &rest props))
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
@@ -900,6 +904,11 @@ is extracted to disk. A rejected archive requires fresh ordinary reads."
         (error "Unexpected control read archive member"))
       (nreverse results))))
 
+(defvar mevedel-session-control-fs--measure-min-ms 20
+  "Shortest synchronous program, in milliseconds, recorded as telemetry.
+Pause attribution needs only programs long enough to be seen; recording
+every five-second transfer poll would drown them.")
+
 (defun mevedel-session-control-fs-run-program (operations &optional lock-directory)
   "Run OPERATIONS as one pinned target program and return their results.
 
@@ -933,6 +942,19 @@ atomic election primitive here.  Each result carries
 `:status' from the shared vocabulary -- `ok', `conflict', `absent',
 `mismatch', `failed', `skipped' -- so a caller reproduces the nil-versus-
 signal contract of the single-operation wrappers per operation."
+  (if (fboundp 'mevedel-telemetry-measure)
+      ;; A synchronous program blocks the editor for its whole round trip,
+      ;; so a long one is worth attributing to a pause.
+      (mevedel-telemetry-measure
+       nil 'control-program mevedel-session-control-fs--measure-min-ms
+       (lambda () (mevedel-session-control-fs--run-program operations lock-directory))
+       :kind (plist-get (car operations) :op)
+       :operation-count (length operations))
+    (mevedel-session-control-fs--run-program operations lock-directory)))
+
+(defun mevedel-session-control-fs--run-program (operations &optional lock-directory)
+  "Run OPERATIONS as `mevedel-session-control-fs-run-program' documents.
+LOCK-DIRECTORY is its optional target-side lock."
   (when operations
     (mevedel-session-control-fs--assert-idle
      (plist-get (car operations) :path))
