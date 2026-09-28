@@ -1477,6 +1477,25 @@ the execution boundary owns the session's single unavailable warning"
     (should (plist-get row :initially-collapsed-p))
     (should (string-match-p "output truncated" (plist-get row :header))))
 
+  :doc "preserves launch failure diagnostics without substituting an envelope for stdout"
+  (let ((row (mevedel-tool-exec--render-bash
+              "Bash" '(:command "printf hello") "actual output"
+              '(:status error :state completed :outcome failure
+                        :termination spawn-failed
+                        :execution-error "spawning child process: no such file: bash"))))
+    (should (string-match-p "Failed to start process: spawning child process"
+                            (plist-get row :body)))
+    (should (string-match-p "actual output" (plist-get row :body))))
+  :doc "a post-launch failure does not claim the process failed to start"
+  (let ((row (mevedel-tool-exec--render-bash
+              "Bash" '(:command "remote-write") ""
+              '(:status error :state lost :termination unknown
+                        :execution-error "remote process-group identity lost"))))
+    (should (string-match-p "Execution error: remote process-group identity lost"
+                            (plist-get row :body)))
+    (should-not (string-match-p "Failed to start process"
+                                (plist-get row :body))))
+
   :doc "header shows first command line and expanded body keeps the full command"
   (let* ((body "file1\nfile2\n")
          (plist (mevedel-tool-exec--render-bash
