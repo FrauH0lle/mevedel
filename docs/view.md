@@ -521,7 +521,9 @@ to the command instead of to its successful input or poll. A terminal event
 projects its durable breadcrumb into an open current view immediately, without
 waiting for a full rerender; views opened later reconstruct it from the
 transcript. Source-backed disclosure choices and reader/composer positions
-survive progress and completion. A separate execution-history disclosure
+survive progress and completion. Folding a turn retains its projected
+breadcrumb for retry deduplication; Show result first unfolds the turn holding
+the source-backed Bash row. A separate execution-history disclosure
 preserves inspectable polling and delivery records.
 The same rules apply to execution tools nested within ToolCall. Completion
 lookup follows the receiving transcript's own history: root session segments or

@@ -13,9 +13,11 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-view-render)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-stream)
 (require 'mevedel-transcript)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
@@ -715,6 +717,109 @@
         (kill-buffer buffer))
       (kill-buffer data)
       (delete-file physical)))))
+
+(mevedel-deftest mevedel-view-audit-show-result/folded-turn ()
+  ,test
+  (test)
+  :doc "a folded turn reveals its canonical Bash row instead of retained fallback"
+  (let ((data (generate-new-buffer " *folded result source*"))
+        (view (generate-new-buffer " *folded result view*"))
+        (record '(:type execution-breadcrumb :tool-use-id "original"
+                  :owner "/root" :execution-id "exec-1"
+                  :command "printf result")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (insert (propertize "(:name \"Bash\" :args (:command \"printf result\"))\n\nRESULT"
+                                'gptel '(tool . "original"))))
+          (with-current-buffer view
+            (setq-local mevedel--data-buffer data)
+            (let ((source (cons 1 (with-current-buffer data (point-max)))))
+              (insert "Assistant\n")
+              (mevedel-view--insert-rendered-tool
+               (mevedel-tool-exec--render-bash
+                "Bash" '(:command "printf result") "RESULT"
+                '(:execution-id "exec-1" :state completed :outcome success))
+               source)
+              (mevedel-view--insert-hook-audit-block record)
+              (let ((inhibit-read-only t))
+                (add-text-properties 1 (point-max)
+                                     '(mevedel-view-turn-id 1
+                                       mevedel-view-turn-role assistant)))
+              (setq-local mevedel-view--input-marker (copy-marker (point-max)))
+              (goto-char (point-min))
+              (mevedel-view--collapse-turn)
+              (should (get-text-property 1 'mevedel-view-stash))
+              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                         (lambda () data))
+                        ((symbol-function 'mevedel-view-audit--evidence)
+                         (lambda (&rest _)
+                           (ert-fail "Folded canonical row was not revealed"))))
+                (mevedel-view-audit-show-result record))
+              (should-not (get-text-property 1 'mevedel-view-stash))
+              (should (get-text-property (point) 'mevedel-view-tool-use-id))
+              (should (equal "original"
+                             (get-text-property (point)
+                                                'mevedel-view-tool-use-id))))))
+      (kill-buffer view)
+      (kill-buffer data))))
+
+(mevedel-deftest mevedel-view-audit-breadcrumb-folded-retry ()
+  ,test
+  (test)
+  :doc "completion retry never duplicates a breadcrumb stashed by turn folding"
+  (let ((data (generate-new-buffer " *folded retry source*"))
+        (view (generate-new-buffer " *folded retry view*"))
+        (facts '(:execution-id "exec-1" :state completed :outcome success))
+        (record '(:type execution-breadcrumb :tool-use-id "original"
+                  :owner "/root" :execution-id "exec-1"
+                  :command "printf result"
+                  :facts (:execution-id "exec-1" :state completed
+                          :outcome success))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (insert (propertize "(:name \"Bash\" :args (:command \"printf result\"))\n\nRESULT"
+                                'gptel '(tool . "original")))
+            (insert (mevedel--format-hook-audit-record record)))
+          (with-current-buffer view
+            (setq-local mevedel--data-buffer data)
+            (let ((source (cons 1 (with-current-buffer data (point-max)))))
+              (insert "Assistant\n")
+              (mevedel-view--insert-rendered-tool
+               (mevedel-tool-exec--render-bash
+                "Bash" '(:command "printf result") "RESULT" facts)
+               source)
+              (mevedel-view--insert-hook-audit-block record)
+              (let ((inhibit-read-only t))
+                (add-text-properties 1 (point-max)
+                                     '(mevedel-view-turn-id 1
+                                       mevedel-view-turn-role assistant)))
+              (setq-local mevedel-view--input-marker (copy-marker (point-max)))
+              (goto-char (point-min))
+              (mevedel-view--collapse-turn)
+              (setq-local mevedel-view--status-marker (copy-marker (point-max)))
+              (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                         (lambda () data))
+                        ((symbol-function 'mevedel-view-stream--execution-view-buffer)
+                         (lambda (_) view)))
+                (should-not (mevedel-view-audit-breadcrumb-present-p
+                             '(:execution-id "exec-2" :owner "/root")
+                             (point-max)))
+                (should-not (mevedel-view-audit-breadcrumb-present-p
+                             '(:execution-id "exec-1" :owner "/root/child")
+                             (point-max)))
+                (mevedel-view-stream--terminal-breadcrumb
+                 (list :data-buffer data :tool-use-id "original" :facts facts)))
+              (goto-char (point-min))
+              (mevedel-view--expand-turn)
+              (should (= 1 (how-many "Finished: printf result"
+                                     (point-min) (point-max))))
+              (with-current-buffer data
+                (should (= 1 (length (mevedel-transcript-audit-records
+                                      (buffer-string) 'execution-breadcrumb))))))))
+      (kill-buffer view)
+      (kill-buffer data))))
 
 (mevedel-deftest mevedel-view-audit--result-position ()
   ,test
