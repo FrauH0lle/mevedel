@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'mevedel-utilities))
 (require 'cl-lib)
 
 (eval-when-compile
@@ -970,112 +971,113 @@ TYPE is `conversation' or `worktree'.  Both share admission, staging,
 publication, and cleanup.  Only a worktree fork creates a checkout and
 restores captured files; a conversation fork shares the source directory.
 Return the child data buffer without mutating the source session or lock."
-  (unless (memq type '(conversation worktree))
-    (error "Unknown session fork type: %S" type))
-  (let* ((session (buffer-local-value 'mevedel--session buffer))
-         (_ (unless session
-              (user-error "Active buffer has no mevedel session")))
-         (_ (mevedel-session-artifacts-assert-mutation-authority
-             session buffer))
-         (target
-          (mevedel-session-rewind-resolve-fork-target session target))
-         (_ (mevedel-session-rewind-assert-stable-source
-             session buffer "forking"))
-         (parent-save-path (mevedel-session-save-path session))
-         (_ (unless parent-save-path
-              (user-error "Save the session before forking")))
-         (picked-segment (plist-get target :segment))
-         (picked-cum-turn (plist-get target :cum-turn))
-         (sessions-dir
-          (mevedel-session-artifacts-sessions-dir
-           (mevedel-session-workspace session)))
-         (reservation
-          (when (eq type 'worktree)
-            (let ((reserved (or (plist-get target :worktree-reservation)
-                                (mevedel-worktree-fork-reservation session))))
-              (mevedel-worktree-fork-validate-reservation session reserved)
-              reserved)))
-         (new-id
-          (mevedel-session-persistence-allocate-session-id sessions-dir))
-         (new-save-path
-          (file-name-as-directory (file-name-concat sessions-dir new-id)))
-         (staging-path
-          (file-name-as-directory
-           (make-temp-file
-            (expand-file-name (if reservation ".mevedel-worktree-fork-"
-                                ".mevedel-fork-")
-                              sessions-dir) t)))
-         (staging-buffer
-          (generate-new-buffer (format " *mevedel-%s-fork*" type)))
-         (additional-roots
-          (buffer-local-value 'mevedel-workspace-additional-roots buffer))
-         child report worktree-created)
-    (condition-case err
-        (unwind-protect
-            (progn
-              (when reservation
-                (mevedel-worktree-fork-create reservation))
-              (let ((now (format-time-string "%FT%H-%M-%S")))
-                (setq worktree-created (and reservation t)
-                      child
-                      (mevedel-session-fork-clone-session
-                       session 'fork
-                       :save-path staging-path
-                       :session-id new-id
-                       :created-at now
-                       :updated-at now
-                       :current-segment picked-segment
-                       :forked-from-session-id
-                       (mevedel-session-session-id session)
-                       :forked-from-turn picked-cum-turn)))
-              (setf (mevedel-session-fork-type child) type
-                    (mevedel-session-forked-from-fork-point-id child)
-                    (plist-get target :fork-point-id))
-              (when reservation
-                (setf (mevedel-session-worktree-source-root child)
-                      (plist-get reservation :source-root)
-                      (mevedel-session-worktree-directory child)
-                      (plist-get reservation :directory)
-                      (mevedel-session-worktree-branch child)
-                      (plist-get reservation :branch)
-                      (mevedel-session-worktree-base-commit child)
-                      (plist-get reservation :base-commit))
-                (let* ((dropped
-                        (mevedel-session-fork--retarget-worktree-state child))
-                       (roots
-                        (mevedel-session-fork--retarget-worktree-roots
-                         child additional-roots)))
-                  (setq additional-roots (plist-get roots :roots)
-                        report (mevedel-session-fork--restore-worktree-files
-                                session child picked-cum-turn))
-                  (setq report (plist-put report :dropped
-                                          (nconc dropped (plist-get roots :dropped))))))
+  (mevedel--with-gc-busy
+    (unless (memq type '(conversation worktree))
+      (error "Unknown session fork type: %S" type))
+    (let* ((session (buffer-local-value 'mevedel--session buffer))
+           (_ (unless session
+                (user-error "Active buffer has no mevedel session")))
+           (_ (mevedel-session-artifacts-assert-mutation-authority
+               session buffer))
+           (target
+            (mevedel-session-rewind-resolve-fork-target session target))
+           (_ (mevedel-session-rewind-assert-stable-source
+               session buffer "forking"))
+           (parent-save-path (mevedel-session-save-path session))
+           (_ (unless parent-save-path
+                (user-error "Save the session before forking")))
+           (picked-segment (plist-get target :segment))
+           (picked-cum-turn (plist-get target :cum-turn))
+           (sessions-dir
+            (mevedel-session-artifacts-sessions-dir
+             (mevedel-session-workspace session)))
+           (reservation
+            (when (eq type 'worktree)
+              (let ((reserved (or (plist-get target :worktree-reservation)
+                                  (mevedel-worktree-fork-reservation session))))
+                (mevedel-worktree-fork-validate-reservation session reserved)
+                reserved)))
+           (new-id
+            (mevedel-session-persistence-allocate-session-id sessions-dir))
+           (new-save-path
+            (file-name-as-directory (file-name-concat sessions-dir new-id)))
+           (staging-path
+            (file-name-as-directory
+             (make-temp-file
+              (expand-file-name (if reservation ".mevedel-worktree-fork-"
+                                  ".mevedel-fork-")
+                                sessions-dir) t)))
+           (staging-buffer
+            (generate-new-buffer (format " *mevedel-%s-fork*" type)))
+           (additional-roots
+            (buffer-local-value 'mevedel-workspace-additional-roots buffer))
+           child report worktree-created)
+      (condition-case err
+          (unwind-protect
+              (progn
+                (when reservation
+                  (mevedel-worktree-fork-create reservation))
+                (let ((now (format-time-string "%FT%H-%M-%S")))
+                  (setq worktree-created (and reservation t)
+                        child
+                        (mevedel-session-fork-clone-session
+                         session 'fork
+                         :save-path staging-path
+                         :session-id new-id
+                         :created-at now
+                         :updated-at now
+                         :current-segment picked-segment
+                         :forked-from-session-id
+                         (mevedel-session-session-id session)
+                         :forked-from-turn picked-cum-turn)))
+                (setf (mevedel-session-fork-type child) type
+                      (mevedel-session-forked-from-fork-point-id child)
+                      (plist-get target :fork-point-id))
+                (when reservation
+                  (setf (mevedel-session-worktree-source-root child)
+                        (plist-get reservation :source-root)
+                        (mevedel-session-worktree-directory child)
+                        (plist-get reservation :directory)
+                        (mevedel-session-worktree-branch child)
+                        (plist-get reservation :branch)
+                        (mevedel-session-worktree-base-commit child)
+                        (plist-get reservation :base-commit))
+                  (let* ((dropped
+                          (mevedel-session-fork--retarget-worktree-state child))
+                         (roots
+                          (mevedel-session-fork--retarget-worktree-roots
+                           child additional-roots)))
+                    (setq additional-roots (plist-get roots :roots)
+                          report (mevedel-session-fork--restore-worktree-files
+                                  session child picked-cum-turn))
+                    (setq report (plist-put report :dropped
+                                            (nconc dropped (plist-get roots :dropped))))))
+                (with-current-buffer staging-buffer
+                  (let ((org-agenda-file-menu-enabled nil))
+                    (org-mode)))
+                (mevedel-session-rewind-load-rewind-target
+                 session staging-buffer target)
+                (when reservation
+                  ;; The FIFO is transient; durable provenance still survives
+                  ;; a restart before the child's first request.
+                  (mevedel-session-enqueue-pending-reminder
+                   child (mevedel-session-fork--worktree-restore-report-body
+                          child report)))
+                (mevedel-session-fork--publish-fork
+                 child buffer staging-buffer parent-save-path staging-path
+                 new-save-path picked-segment picked-cum-turn additional-roots))
+            (when (file-directory-p staging-path)
+              (ignore-errors (delete-directory staging-path t)))
+            (when (buffer-live-p staging-buffer)
               (with-current-buffer staging-buffer
-                (let ((org-agenda-file-menu-enabled nil))
-                  (org-mode)))
-              (mevedel-session-rewind-load-rewind-target
-               session staging-buffer target)
-              (when reservation
-                ;; The FIFO is transient; durable provenance still survives
-                ;; a restart before the child's first request.
-                (mevedel-session-enqueue-pending-reminder
-                 child (mevedel-session-fork--worktree-restore-report-body
-                        child report)))
-              (mevedel-session-fork--publish-fork
-               child buffer staging-buffer parent-save-path staging-path
-               new-save-path picked-segment picked-cum-turn additional-roots))
-          (when (file-directory-p staging-path)
-            (ignore-errors (delete-directory staging-path t)))
-          (when (buffer-live-p staging-buffer)
-            (with-current-buffer staging-buffer
-              (set-buffer-modified-p nil)
-              (setq-local kill-buffer-hook nil))
-            (kill-buffer staging-buffer)))
-      (error
-       (if worktree-created
-           (error "%s" (mevedel-session-fork--worktree-fork-retained-error
-                        session err reservation))
-         (signal (car err) (cdr err)))))))
+                (set-buffer-modified-p nil)
+                (setq-local kill-buffer-hook nil))
+              (kill-buffer staging-buffer)))
+        (error
+         (if worktree-created
+             (error "%s" (mevedel-session-fork--worktree-fork-retained-error
+                          session err reservation))
+           (signal (car err) (cdr err))))))))
 
 (provide 'mevedel-session-fork)
 
