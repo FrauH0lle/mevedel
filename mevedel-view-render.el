@@ -2372,7 +2372,9 @@ folding a run into a group does not lose the boundary it ran with."
                      (gethash child-id mevedel-view--execution-events)))
          (progress (and (eq (plist-get event :type) 'progress)
                         (append (copy-sequence (plist-get event :facts))
-                                (list :status 'success :live-execution-p t))))
+                                (list :status 'success :live-execution-p t
+                                      :output-preview-truncated-p
+                                      (plist-get event :output-preview-truncated-p)))))
          (latest (or terminal progress))
          (result (cond
                   ((plist-member latest :execution-output)
@@ -2785,7 +2787,9 @@ finish before this function invokes registered renderers or reads live events."
            (direct-progress
             (and (eq (plist-get direct-event :type) 'progress)
                  (append (copy-sequence (plist-get direct-event :facts))
-                         (list :status 'success :live-execution-p t))))
+                         (list :status 'success :live-execution-p t
+                               :output-preview-truncated-p
+                               (plist-get direct-event :output-preview-truncated-p)))))
            (direct-latest (or direct-terminal direct-progress))
            (result
             (cond
@@ -2810,7 +2814,9 @@ finish before this function invokes registered renderers or reads live events."
                   (append
                    facts
                    (list :status 'success
-                         :live-execution-p t)))
+                         :live-execution-p t
+                         :output-preview-truncated-p
+                         (plist-get event :output-preview-truncated-p))))
               (or terminal-render-data call-render-data)))
            (tool (mevedel-tool-get name))
            custom rendering)

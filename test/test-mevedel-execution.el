@@ -42,6 +42,36 @@
     (should (string-suffix-p "-000002" (mevedel-execution--next-id first)))
     (should-not (equal first-id second-id))))
 
+(mevedel-deftest mevedel-execution--terminal-event ()
+  ,test
+  (test)
+  :doc "marks preview truncation independently of observation omissions"
+  (let ((mevedel-execution-inline-output-limit 6)
+        (record (mevedel-execution--record-create)))
+    (cl-letf (((symbol-function 'mevedel-execution--event)
+               (lambda (_record _type &rest properties) properties)))
+      (mevedel-execution--retain-output record "abcdefghi")
+      (let ((event (mevedel-execution--terminal-event
+                    record 'model '(:facts (:omitted-output-bytes 0)))))
+        (should (plist-get event :whole-output-truncated-p))
+        (should (= 0 (plist-get (plist-get event :facts)
+                                :omitted-output-bytes)))))))
+
+(mevedel-deftest mevedel-execution--emit-progress ()
+  ,test
+  (test)
+  :doc "marks cumulative preview truncation on live events"
+  (let ((mevedel-execution-inline-output-limit 6)
+        (record (mevedel-execution--record-create)) event)
+    (mevedel-execution--retain-output record "abcdefghi")
+    (cl-letf (((symbol-function 'mevedel-execution--event)
+               (lambda (_record _type &rest properties) properties))
+              ((symbol-function 'mevedel-execution--emit-event)
+               (lambda (value) (setq event value)))
+              ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+      (mevedel-execution--emit-progress record))
+    (should (plist-get event :output-preview-truncated-p))))
+
 (mevedel-deftest mevedel-execution-start-one-shot ()
   ,test
   (test)

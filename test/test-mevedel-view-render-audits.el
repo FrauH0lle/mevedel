@@ -116,6 +116,29 @@
                                                  'mevedel-view-execution-breadcrumb)
                               :execution-id)))))
 
+(mevedel-deftest mevedel-view--render-tool-call/preview-truncation ()
+  ,test
+  (test)
+  :doc "the collapsed original Bash row warns when whole output exceeds its preview"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                           :renderer #'mevedel-tool-exec--render-bash))
+    (with-temp-buffer
+      (let* ((data (mevedel-execution-transcript-terminal-render-data
+                    '(:facts (:state completed :outcome success
+                              :omitted-output-bytes 0)
+                      :whole-output "head\n[mevedel: tool output truncated; omitted 1000 chars]\ntail"
+                      :whole-output-truncated-p t)))
+             (row (mevedel-view--render-tool-call
+                   (list :name "Bash" :args '(:command "produce-output")
+                         :result "" :render-data data)
+                   (current-buffer))))
+        (should (plist-get row :initially-collapsed-p))
+        (should (string-match-p "output truncated"
+                                (mevedel-view--rendering-header-block row)))
+        (should (string-match-p "omitted 1000 chars" (plist-get row :body)))))))
+
 (mevedel-deftest mevedel-view--render-tool-call/direct-terminal ()
   ,test
   (test)
