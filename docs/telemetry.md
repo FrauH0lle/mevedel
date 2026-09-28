@@ -150,6 +150,20 @@ cancellation releases the fence and leaves the machine retryable.
   with the counts above 200, 500 and 1000 ms, the maximum, and how many had
   input pending. Wait time the CPU profiler cannot see, such as a blocking
   remote command, shows up here;
+- `session-save` (`:kind full` or `agent-registry`), `session-publication`
+  (`:artifact-count`, `:input-bytes`), and `control-program` (`:kind`, the
+  first operation's verb, and `:operation-count`) for synchronous
+  persistence work. Each is one settled event recorded when the work returns,
+  with `:duration-ms`, `:gc-count` and `:gc-ms` inside it, an estimated
+  `:allocated-kb` from `memory-use-counts`, and `:outcome` (a returned
+  symbol such as `queued`, else `ok`, or `error`). Allocation is reported
+  apart from collection because persistence defers collection past its own
+  extent, into whatever runs next. A save contains its publication and
+  programs, so these durations nest. A target program has no session of its
+  own: it is recorded only into the sessions the lag heartbeat is watching,
+  and only when it blocked for 20 ms or more. Nothing is measured while a
+  measurement is being recorded, since a remote session appends telemetry
+  through the same programs;
 - `journal-capture-queued` when a checkpoint first becomes ready, carrying its
   capture identity, checkpoint trigger, and frozen input byte count; no evidence
   body is logged;
