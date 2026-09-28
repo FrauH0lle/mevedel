@@ -332,12 +332,12 @@
 (defvar mevedel-view-prepare-enabled)
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
-(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-transcript-segments
+                  "mevedel-session-artifacts" (session live-buffer))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-go-to-segment
@@ -2817,9 +2817,20 @@ finish before this function invokes registered renderers or reads live events."
       (when-let* (((eq (plist-get rendering :vtype) 'agent-handle))
                   (path (plist-get render-data :path)))
         (setq rendering (plist-put rendering :agent-path path)))
-      (when-let* ((summary (plist-get render-data :sandbox-summary)))
+      ;; A direct ToolCall renders its child as the outer row.  Its terminal
+      ;; facts can arrive after the envelope, so retain the child's disclosure
+      ;; and execution identity on that same row without changing the source ID.
+      (when-let* ((summary (or (plist-get direct-latest :sandbox-summary)
+                               (plist-get (plist-get direct-child :render-data)
+                                          :sandbox-summary)
+                               (plist-get render-data :sandbox-summary))))
         (setq rendering
               (plist-put rendering :sandbox-summary (copy-tree summary))))
+      (when (equal (plist-get direct-child :tool) "Bash")
+        (when-let* ((id (or (plist-get direct-latest :execution-id)
+                           (plist-get (plist-get direct-child :render-data)
+                                      :execution-id))))
+          (setq rendering (plist-put rendering :execution-id id))))
       (when tool-use-id
         (setq rendering
               (plist-put rendering :tool-use-id tool-use-id)))

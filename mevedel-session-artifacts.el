@@ -737,7 +737,7 @@ numbered compaction archives rather than the parent's session segments."
                                         (plist-get batch :artifacts)))))
                   (let ((directory (expand-file-name folder save-path)))
                     (when (file-directory-p directory)
-                      (mapcar (lambda (name) (concat folder name))
+                      (mapcar (lambda (name) (file-name-concat folder name))
                               (directory-files directory nil nil t))))))
                (numbers
                 (sort (delete-dups
