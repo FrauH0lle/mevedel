@@ -46,29 +46,19 @@ remaining limits: `.scratch/session-performance/report.md` and
 
 ### Bound remaining publication callbacks and legacy storage
 
-Interactive tool pipelines now yield between steps, and large control writes
-stream encoded fields. A 9 MiB portable completion still has about 245 ms
-worst input delay after the checkpoint placement and timer fixes. Follow-up
-profiling attributes the longest remaining step to synchronous lease checks and
-publication writes, sometimes including GC. Removing redundant copies and scans
-reduced completion allocation but left worst input delay unchanged. Capture
-production stalls before restructuring those transactions; split only at boundaries
-preserving ownership, recovery and cancellation.
+Production telemetry now splits pauses into collection and callback time
+and times saves, publications, and control programs. On a session with a
+260 KB sidecar and 1.5 MB live segment, a save takes about 150 ms: 40 ms
+reparsing the whole segment for the prompt index, about 70 ms in five
+control programs (recovery read, reservation, discovery sidecar,
+generation, head commit), and a whole-segment rewrite. Remaining pauses
+of 200-400 ms are such saves, sometimes with a collection. Removing them
+needs incremental segment and sidecar publication or saves off the
+foreground path, preserving ownership, recovery, and cancellation.
 
-Exact-file collection reduces the example's publications from 1.14 GB to 405 MB
-and response streaming brings its cold scan from 31.1 to 20.7 s before collection
-and to 0.95 s afterward. Individual collection callbacks can still take about
-140 ms including GC; a targeted callback replay attributed about 53 ms to GC
-and measured 75 ms input delay when typing began inside a running callback
-without GC, or 130 ms when the targeted callback included GC.
-Investigate smaller validation batches if production background pauses persist. Idle collection now progresses
-without requiring new user input; the transport timer restoration bug is fixed.
-Existing fixed file-history caches also remain: verify all consumers and recovery
-paths before reclaiming historical cache copies. New snapshot writes already
-omit them. Deferred idle-agent hydration is implemented; measure real follow-up
-workloads before adding another residency mechanism. Protocols and limits:
-`.scratch/remaining-performance/report.md` and
-`.scratch/completion-collection/report.md` and `.scratch/pause-followup/report.md`.
+Save As, fork, and rewind still copy every committed artifact through the
+editor twice: 7.9 s for a 99 MB session. On local targets, link the
+parent's immutable artifacts and reuse its manifest hashes.
 
 ### Prevent system sleep during active requests
 
