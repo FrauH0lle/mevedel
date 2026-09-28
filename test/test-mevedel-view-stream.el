@@ -4178,6 +4178,127 @@
                              (caar mevedel-view--spinner-tool-targets))
                             'display)))))))))
 
+(mevedel-deftest mevedel-view-animation-freeze-independent-tool-phase
+  (:doc "A paused tool keeps its own displayed phase on rearm and glyph fallback.")
+  (dolist (main '(none static))
+    (dolist (style '(braille dots))
+      (dolist (freeze '(global battery))
+        (let ((seconds 0.65)
+              (supported t)
+              (mevedel-view-animation--dots-cache nil))
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () seconds))
+                    ((symbol-function 'char-displayable-p)
+                     (lambda (char &optional _frame)
+                       (or supported (not (memq char '(?⠋ ?● ?·)))))))
+            (mevedel-view-stream-test--with-buffers
+              (mevedel-view-stream-test--with-visible-view
+                (let ((mevedel-view-spinner-style 'static)
+                      (mevedel-view-tool-spinner-style style)
+                      (mevedel-view-spinner-power-policy 'full)
+                      (mevedel-view-spinner-battery-framerate 0)
+                      (mevedel-view-spinner-animate t)
+                      (mevedel-view--pending-tool-calls
+                       '(("call-1" . "Calling Read..."))))
+                  (when (eq main 'static)
+                    (mevedel-view--start-spinner "Working..."))
+                  (mevedel-view--refresh-pending-tool-lines)
+                  (mevedel-view--spinner-tick)
+                  (let* ((target (car mevedel-view--spinner-tool-targets))
+                         (position (marker-position (car target)))
+                         (display (get-text-property position 'display)))
+                    (should (equal-including-properties
+                             display
+                             (mevedel-view-animation-frame
+                              style "" 0.65 'mevedel-view-ephemeral
+                              (mevedel-view--animation-target-frame
+                               target (eq style 'dots)))))
+                    (setq seconds 1.1)
+                    (if (eq freeze 'global)
+                        (setq mevedel-view-spinner-animate nil)
+                      (setq mevedel-view-spinner-power-policy 'save))
+                    (mevedel-view--start-spinner-timer)
+                    (when (eq main 'none)
+                      (should-not mevedel-view--spinner-timer))
+                    (mevedel-view--resume-on-window-change (selected-window))
+                    (should (equal-including-properties
+                             display (get-text-property position 'display)))
+                    (setq supported nil)
+                    (run-hook-with-args 'enable-theme-functions
+                                        'mevedel-test-theme)
+                    (should (equal-including-properties
+                             (mevedel-view-animation-frame
+                              style "" 0.65 'mevedel-view-ephemeral
+                              (mevedel-view--animation-target-frame
+                               target (eq style 'dots)))
+                             (get-text-property position 'display)))
+                    (setq supported t)
+                    (mevedel-view--resume-on-window-change (selected-window))
+                    (should (equal-including-properties
+                             display (get-text-property position 'display)))
+                    (setq mevedel-view--pending-tool-calls
+                          '(("call-1" . "Calling Read...")
+                            ("call-2" . "Calling Grep...")))
+                    (mevedel-view--refresh-pending-tool-lines)
+                    (let* ((first (car mevedel-view--spinner-tool-targets))
+                           (second (cadr mevedel-view--spinner-tool-targets)))
+                      (should (equal-including-properties
+                               display (get-text-property
+                                        (marker-position (car first)) 'display)))
+                      (mevedel-view--resume-on-window-change
+                       (selected-window))
+                      (should (equal-including-properties
+                               display (get-text-property
+                                        (marker-position (car first)) 'display)))
+                      (should (equal-including-properties
+                               (mevedel-view-animation-frame
+                                style "" 0 'mevedel-view-ephemeral
+                                (mevedel-view--animation-target-frame
+                                 second (eq style 'dots)))
+                               (get-text-property
+                                (marker-position (car second)) 'display))))
+                    (when (eq main 'none)
+                      (should-not mevedel-view--spinner-timer))))))))))))
+
+(mevedel-deftest mevedel-view-animation-incremental-tool-phase
+  (:doc "An incremental transcript projection retains a frozen tool sample.")
+  (dolist (style '(ascii braille dots))
+    (mevedel-view-stream-test--with-buffers
+      (mevedel-view-stream-test--with-visible-view
+        (let ((seconds 0.36)
+              (mevedel-view-spinner-style 'static)
+              (mevedel-view-tool-spinner-style style)
+              (mevedel-view-spinner-power-policy 'full)
+              (mevedel-view-spinner-battery-framerate 0)
+              (mevedel-view--pending-tool-calls
+               '(("call-1" . "Calling Read..."))))
+          (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                     (lambda () seconds)))
+            (setq mevedel-view--in-flight-turn-start
+                  (copy-marker mevedel-view--input-marker)
+                  mevedel-view--data-turn-start
+                  (with-current-buffer data-buf (copy-marker (point-max))))
+            (mevedel-view--start-spinner "Working...")
+            (mevedel-view--refresh-pending-tool-lines)
+            (mevedel-view--spinner-tick)
+            (let ((display
+                   (get-text-property
+                    (marker-position (caar mevedel-view--spinner-tool-targets))
+                    'display)))
+              (setq seconds 0.481
+                    mevedel-view-spinner-power-policy 'save)
+              (mevedel-view--start-spinner-timer)
+              (mevedel-view--render-live-region data-buf nil)
+              (let ((position
+                     (marker-position
+                      (caar mevedel-view--spinner-tool-targets))))
+                (should (equal-including-properties
+                         display (get-text-property position 'display)))
+                (should (= 0.36 (mevedel-view--tool-sample-seconds position)))
+                (mevedel-view--resume-on-window-change (selected-window))
+                (should (equal-including-properties
+                         display (get-text-property position 'display)))))))))))
+
 (mevedel-deftest mevedel-view-animation-resume-lifecycle
   (:doc "Scroll/focus only rearm frames; mode change releases power and timers.")
   (mevedel-view-stream-test--with-buffers

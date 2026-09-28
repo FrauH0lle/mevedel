@@ -353,8 +353,10 @@
 (declare-function mevedel-view--forget-request-progress-region
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--insert-pending-tool-lines
-                  "mevedel-view-stream" (entries))
+                  "mevedel-view-stream" (entries &optional previous))
 (declare-function mevedel-view--refresh-pending-tool-lines
+                  "mevedel-view-stream" ())
+(declare-function mevedel-view--snapshot-tool-animation-targets
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-animation-frame
                   "mevedel-view-animation" (style label seconds face &optional frame))
@@ -3614,7 +3616,9 @@ the render so user toggles survive streaming ticks."
         ;; is a no-op for current behavior; setting it correctly now
         ;; prevents a phase-8 regression when zone overlays land.
         (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t))
+              (inhibit-modification-hooks t)
+              (preserved-tools
+               (when pending (mevedel-view--snapshot-tool-animation-targets))))
           (when pending
             (mevedel-view--delete-pending-tool-live-lines))
           (let* (;; Permission prompts and tool callbacks can trigger a view
@@ -3705,7 +3709,8 @@ the render so user toggles survive streaming ticks."
               (when pending
                 (let* ((cap mevedel-view-pending-tools-visible-max)
                        (visible (cl-subseq pending 0 (min cap (length pending)))))
-                  (mevedel-view--insert-pending-tool-lines visible))))
+                  (mevedel-view--insert-pending-tool-lines
+                   visible preserved-tools))))
             (mevedel-view--debug-log
              'incremental-after-insert
              :state (mevedel-view--debug-state data-buf data-from data-to)))
