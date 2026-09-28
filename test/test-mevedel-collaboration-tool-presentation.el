@@ -431,7 +431,8 @@
                    (mevedel-collaboration--direct-facts data direct)))))
 
 (mevedel-deftest mevedel-collaboration--live-bash-data
-  (:doc "running execution tail belongs to original Bash projection, not poll row")
+  () ,test (test)
+  :doc "running execution tail belongs to original Bash projection, not poll row"
   (let* ((mevedel--session 'fixture)
          (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
          (_ (mevedel-tool-register
@@ -457,7 +458,64 @@
           (should (equal "$ sleep 10\n\nfresh poll output\n\nDetails: running · exec-1"
                          (plist-get (plist-get record :presentation) :body))))
         (should (equal "yielded" (plist-get live :result)))
-        (should (equal original parsed))))))
+        (should (equal original parsed)))))
+  :doc "a bounded running tail discloses cumulative loss in direct and nested guest rows"
+  (let* ((mevedel--session 'fixture)
+         (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_bash (mevedel-tool-register
+                 (mevedel-tool--create :name "Bash" :category "mevedel"
+                                      :renderer #'mevedel-tool-exec--render-bash)))
+         (_tool-call (mevedel-tool-register
+                      (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                           :renderer #'mevedel-tool-ptc--render)))
+         (direct '(:name "Bash" :result "old output"
+                   :args (:command "produce-output")
+                   :render-data (:execution-id "exec-1" :state running
+                                 :omitted-output-bytes 0)))
+         (nested '(:name "ToolCall" :result "model reply"
+                   :render-data
+                   (:kind ptc :outcome completed
+                    :calls ((:id "outer/1" :tool "Bash" :status success
+                             :args (:command "produce-output") :result "old output"
+                             :render-data (:execution-id "exec-1" :state running
+                                           :omitted-output-bytes 0)))))))
+    (cl-letf (((symbol-function 'mevedel-execution-list-user)
+               (lambda (_)
+                 '((:execution-id "exec-1" :state running
+                    :output-tail "recent output" :output-preview-truncated-p t)))))
+      (dolist (row (list (mevedel-collaboration-tool-presentation direct)
+                         (aref (plist-get
+                                (mevedel-collaboration-tool-presentation nested)
+                                :children) 0)))
+        (should (equal "running" (plist-get row :status)))
+        (should (string-match-p "output truncated" (plist-get row :header)))
+        (should (string-search "recent output" (plist-get row :body)))
+        (should-not (string-search "old output" (plist-get row :body))))))
+  :doc "owner accumulator to guest projection marks a running bounded tail"
+  (let* ((mevedel--session 'fixture)
+         (mevedel-execution-inline-output-limit 2000)
+         (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (_ (mevedel-tool-register
+             (mevedel-tool--create :name "Bash" :category "mevedel"
+                                  :renderer #'mevedel-tool-exec--render-bash)))
+         (record (mevedel-execution--record-create
+                  :execution-id "exec-1"
+                  :origin (mevedel-execution--origin-create :owner "/root"))))
+    (mevedel-execution--retain-output record (make-string 6013 ?x))
+    (cl-letf (((symbol-function 'mevedel-execution--facts)
+               (lambda (_) '(:state running :omitted-output-bytes 0)))
+              ((symbol-function 'mevedel-execution-list-user)
+               (lambda (_) (list (mevedel-execution--user-snapshot record)))))
+      (let* ((parsed
+              (mevedel-collaboration--live-bash-data
+               '(:name "Bash" :result "yielded" :args (:command "produce-output")
+                 :render-data (:execution-id "exec-1" :state running))))
+             (projected (mevedel-collaboration--tool-record parsed "tool"))
+             (presentation (plist-get projected :presentation)))
+        (should (equal "running" (plist-get presentation :status)))
+        (should (string-match-p "output truncated"
+                                (plist-get presentation :header)))
+        (should (equal (make-string 2000 ?x) (plist-get projected :result)))))))
 
 (mevedel-deftest mevedel-collaboration--suppressed-tool-landed-p
   (:doc "settled direct poll clears only its matching pending ToolCall, not a later identical one")

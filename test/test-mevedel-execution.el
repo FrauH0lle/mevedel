@@ -72,6 +72,25 @@
       (mevedel-execution--emit-progress record))
     (should (plist-get event :output-preview-truncated-p))))
 
+(mevedel-deftest mevedel-execution--user-snapshot ()
+  ,test
+  (test)
+  :doc "live guest snapshots retain cumulative tail truncation independent of poll omissions"
+  (let ((mevedel-execution-inline-output-limit 6)
+        (record (mevedel-execution--record-create
+                 :execution-id "exec-1"
+                 :origin (mevedel-execution--origin-create :owner "/root"))))
+    (cl-letf (((symbol-function 'mevedel-execution--facts)
+               (lambda (_) '(:state running :omitted-output-bytes 0))))
+      (mevedel-execution--retain-output record "abcdef")
+      (should-not (plist-get (mevedel-execution--user-snapshot record)
+                             :output-preview-truncated-p))
+      (mevedel-execution--retain-output record "ghi")
+      (let ((snapshot (mevedel-execution--user-snapshot record)))
+        (should (equal "defghi" (plist-get snapshot :output-tail)))
+        (should (plist-get snapshot :output-preview-truncated-p))
+        (should (= 0 (plist-get snapshot :omitted-output-bytes)))))))
+
 (mevedel-deftest mevedel-execution-start-one-shot ()
   ,test
   (test)

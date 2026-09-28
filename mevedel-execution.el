@@ -1964,6 +1964,9 @@ after WAIT-MS while the process remains live."
             :started-at (mevedel-execution--record-started-at record)
             :output-tail
             (or (mevedel-execution--record-output-tail record) "")
+            :output-preview-truncated-p
+            (> (or (mevedel-execution--record-output-chars record) 0)
+               mevedel-execution-inline-output-limit)
             :artifact-path (mevedel-execution--spool-path record)
             :sandbox-state (or (plist-get sandbox-facts :sandbox) 'pending)
             :sandbox-facts sandbox-facts)))))
