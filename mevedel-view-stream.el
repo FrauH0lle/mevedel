@@ -13,6 +13,7 @@
 (require 'mevedel-execution-transcript)
 (require 'mevedel-view-animation)
 (require 'mevedel-view-power)
+(require 'mevedel-ptc-interpreter)
 (require 'mevedel-view-zone)
 
 ;; `cl-extra'
@@ -1453,9 +1454,10 @@ INFO is a plist with at least :name and :args."
       ;; `mevedel-view-stream-pre-tool' owns in-flight tool status lines.
       ;; Avoid creating a second "Calling ..." line before that hook renders
       ;; the animated pending-tool live tail.
-      (unless (and (mevedel-view-stream-in-flight-turn-start-position)
-                   (markerp mevedel-view--data-turn-start)
-                   (marker-position mevedel-view--data-turn-start))
+      (unless (or (mevedel-view--routine-pending-poll-p info)
+                  (and (mevedel-view-stream-in-flight-turn-start-position)
+                       (markerp mevedel-view--data-turn-start)
+                       (marker-position mevedel-view--data-turn-start)))
         (let ((summary (mevedel-view--tool-status-string tool-name args)))
           (mevedel-view--update-spinner summary)))))
   ;; Return nil so the hook does not interfere with tool execution.
@@ -1665,6 +1667,68 @@ window share one refresh instead of rebuilding the view per token."
          'incremental data-buf mevedel-view-stream-render-delay))))
   nil)
 
+(defun mevedel-view--routine-pending-poll-p (info)
+  "Return non-nil when tool INFO is solely an empty-input WriteStdin poll.
+Read a direct ToolCall with the bounded guest reader, but do not execute it.
+Ambiguous expressions retain their pending row.  The settled result remains
+visible if the control operation fails."
+  (let ((name (plist-get info :name))
+        (args (plist-get info :args)))
+    (or (and (equal name "WriteStdin")
+             (listp args)
+             (zerop (% (length args) 2))
+             (let ((keys (cl-loop for (key _) on args by #'cddr
+                                  collect key)))
+               (and (cl-every (lambda (key)
+                                (memq key '(:execution_id :chars
+                                            :yield_time_ms)))
+                              keys)
+                    (= (length keys) (length (delete-dups keys)))))
+             (stringp (plist-get args :execution_id))
+             (not (string-empty-p (plist-get args :execution_id)))
+             (equal (or (plist-get args :chars) "") "")
+             (or (not (plist-member args :yield_time_ms))
+                 (let ((wait (plist-get args :yield_time_ms)))
+                   (and (integerp wait) (<= 250 wait 300000)))))
+        (and (equal name "ToolCall")
+             (consp args)
+             (eq (car args) :expression)
+             (null (cddr args))
+             (when-let* ((script (plist-get args :expression))
+                         ((stringp script)))
+               (condition-case nil
+                   (let* ((forms (cdr (car (mevedel-ptc--read script))))
+                          (form (car forms))
+                          (operands (cdr form)))
+                     (when (and (null (cdr forms))
+                                (consp form)
+                                (symbolp (car form))
+                                (equal (symbol-name (car form)) "WriteStdin")
+                                (zerop (% (length operands) 2)))
+                       (let* ((pairs
+                               (cl-loop for (key value) on operands by #'cddr
+                                        collect
+                                        (cons (and (symbolp key)
+                                                   (symbol-name key))
+                                              value)))
+                              (id (cdr (assoc ":execution_id" pairs)))
+                              (chars (assoc ":chars" pairs))
+                              (wait (assoc ":yield_time_ms" pairs)))
+                         (and (cl-every
+                               (lambda (pair)
+                                 (member (car pair)
+                                         '(":execution_id" ":chars"
+                                           ":yield_time_ms")))
+                               pairs)
+                              (= (length pairs)
+                                 (length (delete-dups (mapcar #'car pairs))))
+                              (stringp id) (not (string-empty-p id))
+                              (or (null chars) (equal (cdr chars) ""))
+                              (or (null wait)
+                                  (and (integerp (cdr wait))
+                                       (<= 250 (cdr wait) 300000)))))))
+                 (error nil)))))))
+
 (defun mevedel-view--pending-tool-fingerprint (info)
   "Return the pending-tool fingerprint for tool INFO.
 
@@ -1715,7 +1779,8 @@ debounced so bursts of tool boundary hooks coalesce."
                    :call-id (plist-get args :call-id)
                    :name name)
        :state (mevedel-view--debug-state data-buf))
-      (unless (equal name "Agent")
+      (unless (or (equal name "Agent")
+                  (mevedel-view--routine-pending-poll-p args))
         (let ((key (mevedel-view--pending-tool-claim-key args))
               (label (mevedel-view--tool-status-string
                       name (plist-get args :args))))
