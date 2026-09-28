@@ -737,6 +737,7 @@
          (small (file-name-concat root "small"))
          (large (file-name-concat root "large"))
          (bulk (make-string (* 4 1024) ?x))
+         (mevedel-session-control-fs--stage-local nil)
          calls)
     (unwind-protect
         (cl-letf* ((original (symbol-function 'process-file))
@@ -841,6 +842,7 @@
          (binary (concat (make-string (* 512 1024) ?x) (unibyte-string 0 128 255)))
          (text "Unicode: λ\nsecond line\0")
          (mevedel-session-control-fs--pipe-local t)
+         (mevedel-session-control-fs--stage-local nil)
          (spawns 0))
     (unwind-protect
         (cl-letf* (((symbol-function 'process-file)
@@ -871,7 +873,8 @@
   :doc "a truncated streamed field cannot replace or create a destination"
   (let* ((root (make-temp-file "mevedel-control-truncated-stream-" t))
          (path (file-name-concat root "target"))
-         (process (symbol-function 'process-file)))
+         (process (symbol-function 'process-file))
+         (mevedel-session-control-fs--stage-local nil))
     (unwind-protect
         (dolist (operation '(write create))
           (when (eq operation 'write) (with-temp-file path (insert "original")))
@@ -898,6 +901,48 @@
                 (delete-file path))
             (should-not (file-exists-p path)))
           (should-not (directory-files root nil "\\`\\.mevedel-control")))
+      (delete-directory root t)))
+
+  :doc "a local target receives large payloads as staged files, not base64"
+  (let* ((root (make-temp-file "mevedel-control-staged-" t))
+         (written (file-name-concat root "written"))
+         (created (file-name-concat root "fresh" "created"))
+         (binary (concat (make-string (* 64 1024) ?x) (unibyte-string 0 128 255)))
+         (text (concat (make-string 5000 ?a) "Unicode: \u03bb\n"))
+         calls)
+    (unwind-protect
+        (cl-letf* ((original (symbol-function 'process-file))
+                   ((symbol-function 'process-file)
+                    (lambda (&rest args) (push args calls) (apply original args))))
+          (should
+           (equal '(ok ok ok ok)
+                  (mapcar (lambda (result) (plist-get result :status))
+                          (mevedel-session-control-fs-run-program
+                           (list (list :op 'write :path written :content binary)
+                                 (list :op 'make-directory
+                                       :path (file-name-directory created))
+                                 (list :op 'create :path created :content text)
+                                 (list :op 'verify :path written :content binary))))))
+          ;; One process; the payloads never travelled as request fields.
+          (should (= 1 (length calls)))
+          (should-not (nth 1 (car calls)))
+          (should (member "write-staged" (car calls)))
+          (should (member "create-staged" (car calls)))
+          (should (equal binary (mevedel-session-control-fs-read-file written 'no-conversion)))
+          (should (equal text (mevedel-session-control-fs-read-file created)))
+          ;; An existing leaf still conflicts, and a program that stops
+          ;; early leaves no staged file behind.
+          (should (equal '(conflict)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (mevedel-session-control-fs-run-program
+                                  (list (list :op 'create :path created :content text))))))
+          (should (equal '(absent skipped)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (mevedel-session-control-fs-run-program
+                                  (list (list :op 'read :path (file-name-concat root "missing-dir" "x"))
+                                        (list :op 'write :path written :content text))))))
+          (should (equal binary (mevedel-session-control-fs-read-file written 'no-conversion)))
+          (should-not (directory-files-recursively root "\\`\\.mevedel-control" nil t)))
       (delete-directory root t)))
 
   :doc "stdin framing preserves the batched read archive path"
