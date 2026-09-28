@@ -168,6 +168,9 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-last-sample-seconds nil
   "Phase of the most recently sampled request-label display frame.")
 
+(defvar-local mevedel-view--spinner-theme-stale-p nil
+  "Non-nil when a theme change has invalidated the displayed color sample.")
+
 (defvar-local mevedel-view--spinner-rendered-tool-style nil
   "Style of the current pending-tool indicator fragments.")
 
@@ -681,8 +684,39 @@ MAIN means use the actual color/glyph rendering of the request label."
         mevedel-view--spinner-timer-period nil)
   (mevedel-view-power-unwatch (current-buffer)))
 
+(defun mevedel-view--refresh-themed-status ()
+  "Repaint a theme-invalidated label at its current or frozen phase.
+Leave hidden labels pending until they enter a visible window.  Only
+the registered display span changes; the status row and composer stay
+untouched."
+  (when (and mevedel-view--spinner-theme-stale-p
+             mevedel-view--spinner-status
+             (mevedel-view--animation-target-visible-p
+              mevedel-view--spinner-label-target
+              'mevedel-view-spinner-frame))
+    (let* ((target mevedel-view--spinner-label-target)
+           (start (marker-position (car target)))
+           (end (marker-position (cdr target)))
+           (style mevedel-view-spinner-style)
+           (seconds (mevedel-view--animation-display-seconds))
+           (label (buffer-substring-no-properties start end))
+           (frame (mevedel-view-animation-frame
+                   style label seconds 'mevedel-view-spinner
+                   (mevedel-view--animation-target-frame
+                    target (eq style 'dots)))))
+      (unless (equal-including-properties
+               frame (get-text-property start 'display))
+        (let ((inhibit-read-only t)
+              (buffer-undo-list t))
+          (with-silent-modifications
+            (put-text-property start end 'display frame))))
+      (setq mevedel-view--spinner-last-sample-seconds seconds
+            mevedel-view--spinner-theme-stale-p nil))))
+
 (defun mevedel-view--start-spinner-timer ()
   "Start one view timer at the next needed visual or metadata cadence."
+  (when mevedel-view--spinner-theme-stale-p
+    (mevedel-view--refresh-themed-status))
   (when (and (mevedel-view--spinner-active-p)
              (not mevedel-view--spinner-phase-start))
     (setq mevedel-view--spinner-phase-start (float-time)))
@@ -795,6 +829,29 @@ MAIN means use the actual color/glyph rendering of the request label."
                   mevedel-view-tool-spinner-style)
         (mevedel-view--refresh-pending-tool-lines))
       (mevedel-view--start-spinner-timer))))
+
+(defun mevedel-view--refresh-animation-on-theme (&rest _)
+  "Repaint active color labels after the theme has invalidated frame banks.
+The work is event-driven, not part of a decorative frame callback.  A
+hidden label retains its pending refresh until visibility rearms its view."
+  (dolist (buffer (buffer-list))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'mevedel-view-mode)
+                   mevedel-view--spinner-status
+                   (memq mevedel-view-spinner-style
+                         '(shimmer breathe bounce)))
+          (setq mevedel-view--spinner-theme-stale-p t)
+          (condition-case nil
+              (mevedel-view--start-spinner-timer)
+            (error nil)))))))
+
+;; Animation cache invalidation is installed first by the animation module.
+;; Prepare the new visible sample only after that cache has been discarded.
+(add-hook 'enable-theme-functions
+          #'mevedel-view--refresh-animation-on-theme t)
+(add-hook 'disable-theme-functions
+          #'mevedel-view--refresh-animation-on-theme t)
 
 (defun mevedel-view--spinner-tick ()
   "Update display spans; reconcile semantic metadata at most once a second."
@@ -971,7 +1028,8 @@ Return non-nil when the status was restored."
            mevedel-view--spinner-owner nil
            mevedel-view--spinner-phase-start nil
            mevedel-view--spinner-frozen-seconds nil
-           mevedel-view--spinner-last-sample-seconds nil)
+           mevedel-view--spinner-last-sample-seconds nil
+           mevedel-view--spinner-theme-stale-p nil)
      (unless mevedel-view--pending-tool-calls
         (unless (and (boundp 'mevedel--data-buffer)
                      mevedel--data-buffer
