@@ -754,8 +754,16 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                                (mevedel-transcript--user-prompt-start
                                 (max seg-start content-start) seg-end nil
                                 scan-state)))
-                    (let* ((text (buffer-substring-no-properties
-                                  prompt-start seg-end))
+                    ;; Only the first nonblank line is kept, so find it in
+                    ;; the buffer: copying each prompt whole cost megabytes
+                    ;; per save on a long segment.
+                    (let* ((preview
+                            (save-excursion
+                              (goto-char prompt-start)
+                              (when (re-search-forward "[^[:space:]]" seg-end t)
+                                (buffer-substring-no-properties
+                                 (match-beginning 0)
+                                 (min seg-end (line-end-position))))))
                            (directive
                             (cl-find-if
                              (lambda (range)
@@ -764,7 +772,7 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                                     (< prompt-start
                                        (plist-get range :body-end))))
                              directive-ranges)))
-                      (when (string-match "[^[:space:]].*$" text)
+                      (when preview
                         (cl-incf turn)
                         (push (append
                                (list :turn turn
@@ -772,8 +780,7 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                                               (plist-get directive :start)
                                             prompt-start)
                                      :preview
-                                     (mevedel--truncate-display (match-string 0 text)
-                                      80 "..."))
+                                     (mevedel--truncate-display preview 80 "..."))
                                (and directive
                                     (list
                                      :kind 'directive
