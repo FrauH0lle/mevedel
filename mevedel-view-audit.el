@@ -464,6 +464,22 @@ EXPANDED means insert the disclosure body expanded."
               (record (mevedel-view-audit-mailbox-breadcrumb body sender)))
     (plist-put record :delivery-body body)))
 
+(defun mevedel-view-audit--stashed-breadcrumb-p (stash record)
+  "Return non-nil if STASH contains RECORD's execution breadcrumb."
+  (let ((pos 0) (limit (length stash)) found)
+    (while (and (< pos limit) (not found))
+      (let ((prior (get-text-property
+                    pos 'mevedel-view-execution-breadcrumb stash)))
+        (setq found (and prior
+                         (equal (plist-get prior :execution-id)
+                                (plist-get record :execution-id))
+                         (equal (plist-get prior :owner)
+                                (plist-get record :owner)))
+              pos (or (next-single-property-change
+                       pos 'mevedel-view-execution-breadcrumb stash limit)
+                      limit))))
+    found))
+
 (defun mevedel-view-audit-breadcrumb-present-p (record before)
   "Return non-nil if RECORD was already projected before BEFORE.
 Identity is local to this receiving transcript, not to the global
@@ -479,6 +495,16 @@ execution, so parent and child may each display their own breadcrumb."
         (setq pos (or (next-single-property-change
                        pos 'mevedel-view-execution-breadcrumb nil before)
                       before))))
+    (unless found
+      (setq pos (point-min))
+      (while (and (< pos before) (not found))
+        (let ((stash (get-text-property pos 'mevedel-view-stash)))
+          (setq found (and (stringp stash)
+                           (mevedel-view-audit--stashed-breadcrumb-p
+                            stash record))
+                pos (or (next-single-property-change
+                         pos 'mevedel-view-stash nil before)
+                        before)))))
     (or found
         (when-let* ((data (mevedel-view-segments-display-buffer))
                     ((buffer-live-p data))
@@ -534,6 +560,40 @@ execution, so parent and child may each display their own breadcrumb."
                                 (throw 'found t)))))
                       (kill-buffer older)))))))))))
 
+(defun mevedel-view-audit--source-has-tool-p (source tool-use-id)
+  "Return non-nil if SOURCE contains a call owning TOOL-USE-ID."
+  (when (and source (buffer-live-p (mevedel-view-segments-display-buffer)))
+    (with-current-buffer (mevedel-view-segments-display-buffer)
+      (let ((at (car source)) (end (cdr source)) match)
+        (while (and (< at end) (not match))
+          (let* ((prop (get-text-property at 'gptel))
+                 (id (and (eq (car-safe prop) 'tool) (cdr prop))))
+            (setq match (and (stringp id)
+                             (or (equal id tool-use-id)
+                                 (string-prefix-p (concat id "/") tool-use-id)))
+                  at (or (next-single-property-change at 'gptel nil end)
+                         end))))
+        match))))
+
+(defun mevedel-view-audit--stashed-result-p (stash tool-use-id)
+  "Return non-nil if STASH retains TOOL-USE-ID's source-backed row."
+  (let ((pos 0) (limit (length stash)) found)
+    (while (and (< pos limit) (not found))
+      (let ((source (get-text-property pos 'mevedel-view-source stash))
+            (type (get-text-property pos 'mevedel-view-type stash))
+            (child (get-text-property pos 'mevedel-view-tool-child stash)))
+        (setq found (or (and child (equal (plist-get child :id) tool-use-id))
+                        (and (memq type '(tool-summary tool-group tool-child))
+                             (mevedel-view-audit--source-has-tool-p
+                              source tool-use-id)))
+              pos (min (or (next-single-property-change
+                            pos 'mevedel-view-source stash limit) limit)
+                       (or (next-single-property-change
+                            pos 'mevedel-view-type stash limit) limit)
+                       (or (next-single-property-change
+                            pos 'mevedel-view-tool-child stash limit) limit)))))
+    found))
+
 (defun mevedel-view-audit--result-position (tool-use-id)
   "Find TOOL-USE-ID's rendered row in the current view, including folded groups."
   (let ((pos (point-min)) found group
@@ -544,25 +604,17 @@ execution, so parent and child may each display their own breadcrumb."
       (let ((source (get-text-property pos 'mevedel-view-source))
             (type (get-text-property pos 'mevedel-view-type))
             (child (get-text-property pos 'mevedel-view-tool-child)))
+        (when (and (eq type 'turn-summary)
+                   (when-let* ((stash (get-text-property
+                                      pos 'mevedel-view-stash)))
+                     (mevedel-view-audit--stashed-result-p
+                      stash tool-use-id)))
+          (setq found pos))
         (when (and child (equal (plist-get child :id) tool-use-id))
           (setq found pos))
-        (when (and (not found) source
+        (when (and (not found)
                    (memq type '(tool-summary tool-group tool-child))
-                   (buffer-live-p (mevedel-view-segments-display-buffer))
-                   (with-current-buffer (mevedel-view-segments-display-buffer)
-                     (let ((at (car source)) (end (cdr source)) match)
-                       (while (and (< at end) (not match))
-                         (let* ((prop (get-text-property at 'gptel))
-                                (id (and (eq (car-safe prop) 'tool)
-                                         (cdr prop))))
-                           (setq match (and (stringp id)
-                                            (or (equal id tool-use-id)
-                                                (string-prefix-p
-                                                 (concat id "/") tool-use-id)))
-                                 at (or (next-single-property-change
-                                         at 'gptel nil end)
-                                        end))))
-                       match)))
+                   (mevedel-view-audit--source-has-tool-p source tool-use-id))
           (if (and parent-id
                    (or (eq type 'tool-summary)
                        (and (eq type 'tool-child)
@@ -741,8 +793,8 @@ The completion's source target may be a later segment after compaction."
   (let* ((id (plist-get record :tool-use-id))
          (pos (and id (mevedel-view-audit--result-position id))))
     (while (and pos (get-text-property pos 'mevedel-view-collapsed)
-                (or (eq (get-text-property pos 'mevedel-view-type)
-                        'tool-group)
+                (or (memq (get-text-property pos 'mevedel-view-type)
+                          '(tool-group turn-summary))
                     (and (string-match-p "/[0-9]+\\'" (or id ""))
                          (not (equal (get-text-property
                                       pos 'mevedel-view-tool-use-id) id))
