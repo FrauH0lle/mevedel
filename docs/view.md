@@ -368,10 +368,11 @@ face (including Customize) clear the color cache and repaint visible labels
 at their current or frozen phase without a periodic timer. Theme changes also
 recheck the Braille and dots fallbacks of frozen main and pending-tool glyphs;
 a visibility resume retries dots support if the display font changed without
-a theme event. Hidden labels repaint when they become visible again. Applying
-animation settings through
-Customize refreshes live views without restarting a request. Moving a paused
-view to another display frame also repaints its frozen color sample for the
+a theme event. Each pending tool retains its own last displayed phase while
+motion is disabled, including when the main label is absent or static. Hidden
+labels repaint when they become visible again. Applying animation settings
+through Customize refreshes live views without restarting a request. Moving a
+paused view to another display frame also repaints its frozen color sample for the
 destination palette (or the portable multi-frame fallback) on visibility
 resume, without starting a decorative timer or discarding reusable color banks.
 

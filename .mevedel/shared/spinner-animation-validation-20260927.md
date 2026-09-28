@@ -598,3 +598,89 @@ Frozen glyph-fallback follow-up, 2026-09-28 (source: Goal completion verifier
   are the same gptel bridge, preset transition, message injection, steering
   injection, skills layout, and three concurrent plan-handoff cases identified
   in earlier full runs; the new glyph regression passed in the focused roster.
+
+Independent-tool frozen-phase follow-up, 2026-09-28 (source: whole-Goal verifier
+`/root/verify_14`, scoped Eask run, fresh source-loaded production-view replay):
+
+- Whole-Goal review found that tool-only and static-main Braille/dots indicators
+  could advance from their last displayed noninitial sample on ordinary
+  visibility rearm after global-off or battery-zero freeze, even with unchanged
+  glyph support. The earlier main+tool fallback probe did not expose this: it
+  synchronized both phases. The view now retains each bounded pending-tool
+  zone's last displayed sample, preserves it with surviving rows on lightweight
+  reconciliation, prunes missing IDs, and starts new/directly inserted rows at
+  phase zero. A frozen glyph fallback uses the tool's own sample, not the main
+  phase or wall clock. An eight-case test also checks fallback/recovery and
+  surviving/new rows. After Eask cleanup, the stream+animation focused roster
+  passed **174/174 expected, zero unexpected**
+  (`.scratch/spinner-tool-phase-focused5.log`).
+- Independent fresh source-loaded production-view replay returned
+  `VERDICT: PASS`: all eight cases kept their displayed glyph on rearm, and
+  Braille and dots changed Unicode -> ASCII -> Unicode at the same noninitial
+  phase. It also checked hidden deferral, reorder/new rows, 20 successive ID
+  replacements, direct insertion, zero tool-only timers, allowed static-main
+  metadata timers, zero redundant display writes across 50 samples, and
+  preserved view state. This was simulated glyph support, not a physical font
+  switch. The PASS concerns the scoped phase repair, not whole-Goal completion.
+- After another Eask cleanup, the plan's eight-file view roster plus power,
+  chat, hooks, and integrity passed **1082/1083 expected, zero unexpected, one
+  optional composer skip** (`.scratch/spinner-phase-final-roster.log`). All
+  **210 files** compiled warning-free (`.scratch/spinner-phase-final-compile.log`).
+  The four-worker full suite from before the incremental-projection repair
+  discovered **8752 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-phase-final-full-suite/summary.json`); it is **not green**
+  and does not validate the later repair. The same previously recorded eight
+  unrelated cases failed.
+- A separate read-only review then reproduced a surviving tool's phase being
+  reset by the *incremental transcript projection*, which bypassed the
+  lightweight pending-row refresh. The renderer now snapshots surviving zone
+  IDs, displays, and phases before deleting the live region and restores only
+  matching rows after insertion. Direct new rows still begin at phase zero.
+  An actual `mevedel-view--render-live-region` regression covers static main,
+  ASCII/Braille/dots, noninitial zero-fps freeze, and rearm. After cleanup,
+  stream+render+animation focused tests passed **551/551**
+  (`.scratch/spinner-projection-focused.log`). The same reviewer independently
+  replayed the live-region path and returned `VERDICT: PASS`; its earlier
+  direct-insert-without-snapshot probe is intentionally not the incremental
+  projection call and still resets a new row to phase zero. On the settled
+  source, the accepted-plan view roster plus power, chat, hooks, and integrity
+  passed **1083/1084 expected, zero unexpected, one optional skip**
+  (`.scratch/spinner-projection-final-roster.log`); all **210 files** compiled
+  without warning matches (`.scratch/spinner-projection-final-compile.log`).
+  The first complete four-worker suite discovered **8753 tests: 9 unexpected,
+  30 skipped** (`.scratch/spinner-projection-final-full-suite/summary.json`).
+  The ninth, `mevedel-execution-start-one-shot/test@3`, expected its sandbox
+  preparation stub to receive `required` but saw nil. It passed in an isolated
+  42/42 execution-file Eask replay after bytecode cleanup
+  (`.scratch/spinner-projection-execution-replay.log`) and in a second complete
+  four-worker suite on unchanged production source. That retry discovered
+  **8753 tests: 8 unexpected, 30 skipped**
+  (`.scratch/spinner-projection-replay-full-suite/summary.json`); its eight
+  failing names match the previously recorded unrelated set. The full suite
+  remains **not green**. The isolated and retry passes indicate an intermittent
+  or suite-interaction failure in the ninth case, not a demonstrated animation
+  regression; its exact trigger remains undiagnosed. `git diff --check` passed.
+
+Additional isolated graphical cost/responsiveness measurements, 2026-09-28
+(source: `/root/animation_perf`, production renderer and timed event probe):
+
+- Fresh Emacs 31.1 GUI processes measured callback execution separately from a
+  synchronous redisplay after each callback and a clean redisplay control.
+  They queued 24 Emacs `self-insert-command` events per case and measured
+  queue-to-`pre-command-hook` latency. Original Braille vs current Braille in
+  one view: median callbacks **0.540 vs 0.114 ms**, redisplay after callback
+  **1.515 vs 1.500 ms**, input p95 **0.209 vs 0.232 ms**. Current one-view
+  shimmer at full/save30: callback medians **0.077/0.096 ms**, redisplay medians
+  **1.258/1.504 ms**, input p95 **0.148/0.553 ms**. With five tools, full shimmer
+  callback median was **0.314 ms**, redisplay **1.620 ms**, input p95 **0.442
+  ms**. With two views and five tools, combined callback median **0.270 ms**,
+  redisplay **2.596 ms**, input p95 **2.338 ms**. Current hidden view had no
+  callbacks; both indicators static had three metadata ticks in ~2.7 seconds,
+  and full -> save30 -> save0 -> full -> hidden -> visible suspended and
+  resumed callbacks as expected. All 24 queued commands were received in
+  each case. Old hidden Braille still had 23 callbacks. Raw traces and exact
+  methods are in `.scratch/animation-perf-20260928/` (`summary.txt`, `probe.el`,
+  `*.raw`, `sources.sha256`). Samples were short, one run per case, and the
+  compositor would not focus benchmark frames: attention was controlled within
+  fresh subprocesses. Queued Emacs events do **not** establish OS keyboard
+  delivery, physical typing, screen-response latency, or monitor scanout.

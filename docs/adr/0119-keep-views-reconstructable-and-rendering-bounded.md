@@ -93,10 +93,11 @@ A theme change repaints visible color labels at their displayed or frozen
 phase, even when paused metadata and zero fps remove timers; hidden labels
 wait until visible again to repaint. Frozen glyphs and pending-tool spans
 also recheck their display fallbacks on theme changes or visibility resume;
-this is event-driven rather than a decorative polling timer. A move between
-display frames likewise
-repaints the existing sample when the target is attended, using the destination
-frame's prepared bank or a portable multi-frame fallback; no timer or global
+each tool keeps its own last displayed phase when motion is disabled. This is
+event-driven rather than a decorative polling timer. A move between display
+frames likewise repaints the existing sample when the target is attended, using
+the destination frame's prepared bank or a portable multi-frame fallback; no
+timer or global
 cache invalidation is needed. Horizontal visibility checks the
 bounded animated span only in hscrolled windows, leaving ordinary callbacks
 on the cheap window-boundary path. Since

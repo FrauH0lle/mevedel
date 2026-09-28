@@ -165,6 +165,9 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-tool-targets nil
   "Markers for the visible pending-tool indicator properties.")
 
+(defvar-local mevedel-view--spinner-tool-samples nil
+  "Last displayed tool phases, keyed by pending-tool zone id.")
+
 (defvar-local mevedel-view--spinner-last-second nil
   "Elapsed label last rendered on a timer tick.")
 
@@ -550,7 +553,66 @@ FACE defaults to `mevedel-view-spinner'."
                 mevedel-view--spinner-tool-targets)
           (setq pos span-end))))
     (setq mevedel-view--spinner-tool-targets
-          (nreverse mevedel-view--spinner-tool-targets))))
+          (nreverse mevedel-view--spinner-tool-targets)))
+  (setq mevedel-view--spinner-tool-samples
+        (cl-remove-if-not
+         (lambda (sample)
+           (cl-some
+            (lambda (target)
+              (equal (car sample)
+                     (get-text-property (marker-position (car target))
+                                        'mevedel-view-zone-id)))
+            mevedel-view--spinner-tool-targets))
+         mevedel-view--spinner-tool-samples)))
+
+(defun mevedel-view--tool-sample-seconds (start)
+  "Return the displayed phase for the pending tool indicator at START.
+Newly inserted tool rows begin at phase zero."
+  (or (cdr (assoc (get-text-property start 'mevedel-view-zone-id)
+                  mevedel-view--spinner-tool-samples))
+      0.0))
+
+(defun mevedel-view--record-tool-sample (start seconds)
+  "Record the displayed phase SECONDS for the tool indicator at START."
+  (let* ((id (get-text-property start 'mevedel-view-zone-id))
+         (sample (assoc id mevedel-view--spinner-tool-samples)))
+    (if sample
+        (setcdr sample seconds)
+      (push (cons id seconds) mevedel-view--spinner-tool-samples))))
+
+(defun mevedel-view--snapshot-tool-animation-targets ()
+  "Return live tool (ID DISPLAY PHASE) samples before replacing their rows."
+  (when (eq mevedel-view--spinner-rendered-tool-style
+            mevedel-view-tool-spinner-style)
+    (delq nil
+          (mapcar (lambda (target)
+                    (when-let* ((start (marker-position (car target)))
+                                ((eq (marker-buffer (car target))
+                                     (current-buffer)))
+                                (id (get-text-property
+                                     start 'mevedel-view-zone-id)))
+                      (list id (get-text-property start 'display)
+                            (mevedel-view--tool-sample-seconds start))))
+                  mevedel-view--spinner-tool-targets))))
+
+(defun mevedel-view--restore-tool-animation-targets (previous)
+  "Restore surviving tool DISPLAY and PHASE entries from PREVIOUS."
+  (let ((modified (buffer-modified-p))
+        (inhibit-read-only t)
+        (inhibit-modification-hooks t)
+        (buffer-undo-list t))
+    (unwind-protect
+        (dolist (target mevedel-view--spinner-tool-targets)
+          (let* ((start (marker-position (car target)))
+                 (entry (assoc (get-text-property start 'mevedel-view-zone-id)
+                               previous)))
+            (when entry
+              (unless (equal-including-properties
+                       (cadr entry) (get-text-property start 'display))
+                (put-text-property start (marker-position (cdr target))
+                                   'display (cadr entry)))
+              (mevedel-view--record-tool-sample start (caddr entry)))))
+      (set-buffer-modified-p modified))))
 
 (defun mevedel-view--animation-buffer-frame ()
   "Return a visible display frame for this buffer, or `:multiple'.
@@ -742,6 +804,11 @@ without a theme change.  Hidden targets retain the pending refresh;
 neither the status row nor the composer is rebuilt."
   (when (or force mevedel-view--spinner-theme-stale-p)
     (let ((seconds (mevedel-view--animation-display-seconds))
+          (frozen (zerop (mevedel-view-power-framerate
+                          mevedel-view-spinner-framerate
+                          mevedel-view-spinner-battery-framerate
+                          mevedel-view-spinner-power-policy
+                          mevedel-view-spinner-animate)))
           (pending nil))
       (when (and mevedel-view--spinner-status
                  (not (eq mevedel-view-spinner-style 'static)))
@@ -776,14 +843,19 @@ neither the status row nor the composer is rebuilt."
                                      target (eq mevedel-view-tool-spinner-style
                                                 'dots)))
                      (frame (mevedel-view-animation-frame
-                             mevedel-view-tool-spinner-style "" seconds
+                             mevedel-view-tool-spinner-style ""
+                             (if frozen
+                                 (mevedel-view--tool-sample-seconds start)
+                               seconds)
                              'mevedel-view-ephemeral display-frame)))
                 (unless (equal-including-properties
                          frame (get-text-property start 'display))
                   (let ((inhibit-read-only t)
                         (buffer-undo-list t))
                     (with-silent-modifications
-                      (put-text-property start end 'display frame)))))
+                      (put-text-property start end 'display frame))))
+                (unless frozen
+                  (mevedel-view--record-tool-sample start seconds)))
             (setq pending t))))
       (setq mevedel-view--spinner-theme-stale-p pending))))
 
@@ -1057,6 +1129,7 @@ animation or elapsed timer remains to notice the new colors."
                        (frame (mevedel-view-animation-frame
                                mevedel-view-tool-spinner-style "" seconds
                                'mevedel-view-ephemeral display-frame)))
+                  (mevedel-view--record-tool-sample start seconds)
                   (unless (equal-including-properties
                            frame (get-text-property start 'display))
                     (put-text-property start (marker-position (cdr target))
@@ -1227,18 +1300,7 @@ POSITION may be an integer or marker."
 
 (defun mevedel-view--refresh-pending-tool-lines ()
   "Refresh lightweight pending-tool live-tail lines."
-  (let ((previous
-         (when (eq mevedel-view--spinner-rendered-tool-style
-                   mevedel-view-tool-spinner-style)
-           (delq nil
-                 (mapcar (lambda (target)
-                           (when-let* ((pos (marker-position (car target)))
-                                       ((eq (marker-buffer (car target))
-                                            (current-buffer)))
-                                       (id (get-text-property
-                                            pos 'mevedel-view-zone-id)))
-                             (cons id (get-text-property pos 'display))))
-                         mevedel-view--spinner-tool-targets)))))
+  (let ((previous (mevedel-view--snapshot-tool-animation-targets)))
     (mevedel-view--delete-pending-tool-live-lines)
     (when mevedel-view--pending-tool-calls
       (let* ((cap mevedel-view-pending-tools-visible-max)
@@ -1247,27 +1309,12 @@ POSITION may be an integer or marker."
                                  (min cap
                                       (length
                                        mevedel-view--pending-tool-calls)))))
-        (mevedel-view--insert-pending-tool-lines visible)))
-    (mevedel-view--capture-tool-animation-targets)
-    ;; Reconciliation replaces the whole live-tail zone.  Rows for a still
-    ;; pending call retain their displayed sample, even while motion is off.
-    (let ((modified (buffer-modified-p))
-          (inhibit-read-only t)
-          (inhibit-modification-hooks t)
-          (buffer-undo-list t))
-      (unwind-protect
-          (dolist (target mevedel-view--spinner-tool-targets)
-            (let* ((start (marker-position (car target)))
-                   (old (assoc (get-text-property start 'mevedel-view-zone-id)
-                               previous)))
-              (when (and old (not (equal-including-properties
-                                  (cdr old) (get-text-property start 'display))))
-                (put-text-property start (marker-position (cdr target))
-                                   'display (cdr old)))))
-        (set-buffer-modified-p modified))))
-  (setq mevedel-view--spinner-rendered-tool-style
-        mevedel-view-tool-spinner-style)
-  (mevedel-view--start-spinner-timer))
+        (mevedel-view--insert-pending-tool-lines visible previous)))
+    (unless mevedel-view--pending-tool-calls
+      (mevedel-view--capture-tool-animation-targets)
+      (setq mevedel-view--spinner-rendered-tool-style
+            mevedel-view-tool-spinner-style)
+      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view-stream--execution-view-buffer (data-buffer)
   "Return the visible view backed by DATA-BUFFER, or nil."
@@ -1519,9 +1566,10 @@ debounced so bursts of completed tool calls coalesce."
   (mevedel-view-zone-clear 'history-live)
   (setq mevedel-view--spinner-tool-targets nil))
 
-(defun mevedel-view--insert-pending-tool-lines (entries)
+(defun mevedel-view--insert-pending-tool-lines (entries &optional previous)
   "Render fragment-backed pending tool live-tail rows for ENTRIES.
 ENTRIES is a subset of `mevedel-view--pending-tool-calls' (head N).
+PREVIOUS holds displayed tool samples captured before any transcript deletion.
 When the full list exceeds `mevedel-view-pending-tools-visible-max',
 the caller passes only the visible head and a tail-summary row is
 appended.
@@ -1534,6 +1582,12 @@ they fall back to the history/status boundary rather than the input
      'history-live anchor anchor
      (mevedel-view--pending-tool-fragments entries)))
   (mevedel-view--capture-tool-animation-targets)
+  ;; Newly inserted rows display their initial glyph until a frame tick.  A
+  ;; surviving row retains both its display and phase across reconciliation.
+  (setq mevedel-view--spinner-tool-samples nil)
+  (mevedel-view--restore-tool-animation-targets previous)
+  (setq mevedel-view--spinner-rendered-tool-style
+        mevedel-view-tool-spinner-style)
   (mevedel-view--start-spinner-timer))
 
 (defun mevedel-view-stream-active-response-marker (info data-buffer)
