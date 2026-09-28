@@ -113,13 +113,17 @@
          (render-data
           (append
            facts
-           (list :status (mevedel-execution-transcript--status facts)
+           (list :status (if (plist-get (plist-get event :observation) :error)
+                             'error
+                           (mevedel-execution-transcript--status facts))
                  :live-execution-p nil
                  :output-preview-truncated-p
                  (plist-get event :whole-output-truncated-p)
                  :sandbox-facts
                  (copy-tree
                   (plist-get (plist-get event :observation) :sandbox-facts))
+                 :execution-error
+                 (copy-tree (plist-get (plist-get event :observation) :error))
                  :execution-output
                  (copy-sequence (or (plist-get event :whole-output) ""))))))
     (if (and summary
