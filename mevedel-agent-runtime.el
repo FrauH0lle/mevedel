@@ -30,6 +30,7 @@
 ;; `gptel-request'
 (declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(defvar gptel--fsm-last)
 (defvar gptel--request-alist)
 
 ;; `mevedel-agent-control'
@@ -44,8 +45,6 @@
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-configure
                   "mevedel-agent-conversation" (invocation &optional buffer))
-(declare-function mevedel-agent-conversation-final-activity
-                  "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-final-response
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-open
@@ -59,8 +58,6 @@
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred))
 (autoload 'mevedel-agent-conversation-configure "mevedel-agent-conversation")
-(autoload 'mevedel-agent-conversation-final-activity
-  "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-final-response
   "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-open "mevedel-agent-conversation")
@@ -189,6 +186,8 @@
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 (autoload 'mevedel--hook-prompt-rewrite-audit-record
   "mevedel-transcript-audit")
+(defvar mevedel-transcript-audit--buffer-record-bytes)
+(defvar mevedel-transcript-audit--buffer-records)
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-turn "mevedel-turn" (session))
@@ -432,14 +431,6 @@
                            :summary (symbol-name status))
           t)))
       (mevedel-agent-runtime--finalize-step
-       invocation 'transcript-activity
-       (lambda ()
-         (when session
-           (mevedel-session-persistence-update-transcript-entry
-            session (mevedel-agent-invocation-agent-id invocation)
-            (list :activity
-                  (mevedel-agent-conversation-final-activity invocation))))))
-      (mevedel-agent-runtime--finalize-step
        invocation 'tasks
        (lambda ()
          (when (and session (eq status 'completed))
@@ -554,6 +545,7 @@
       (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
             (mevedel-agent-invocation-runtime-fsm invocation) nil
             (mevedel-agent-invocation-runtime-pending-response invocation) nil)
+      (mevedel-agent-runtime--release-settled-state invocation)
       (when-let* ((timer
                    (mevedel-agent-invocation-runtime-budget-timer invocation)))
         (cancel-timer timer)
@@ -577,6 +569,21 @@
             (* 1000.0
                (float-time (time-subtract (current-time) started-at)))))))
       visible)))
+
+(defun mevedel-agent-runtime--release-settled-state (invocation)
+  "Drop memory a settled INVOCATION's buffer no longer needs.
+A retained agent can sit idle for hours.  Its last request's serialized
+payload serves only request inspection and a decoding memo is rebuilt on
+demand, yet together they kept as much Lisp data alive as the transcript
+itself, making every later garbage collection slower.  A continuation
+builds a fresh request."
+  (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (when-let* ((fsm (bound-and-true-p gptel--fsm-last)))
+        (setf (gptel-fsm-info fsm) (plist-put (gptel-fsm-info fsm) :data nil)))
+      (setq mevedel-transcript-audit--buffer-records nil
+            mevedel-transcript-audit--buffer-record-bytes 0))))
 
 (defun mevedel-agent-runtime--budget-expired (invocation seconds)
   "Interrupt INVOCATION after its completion budget of SECONDS expires."

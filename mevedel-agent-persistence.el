@@ -275,11 +275,21 @@ have no result yet, but a stored result always includes both fields."
 Invalid live registry state signals an error so a save cannot appear to
 succeed after silently losing an addressable agent."
   (let ((seen-paths (make-hash-table :test #'equal))
-        (seen-ids (make-hash-table :test #'equal)))
+        (seen-ids (make-hash-table :test #'equal))
+        (configurations (make-hash-table :test #'equal)))
     (mapcar
      (lambda (entry)
-       (mevedel-agent-persistence--serialize-record
-        entry seen-paths seen-ids))
+       (let ((encoded (mevedel-agent-persistence--serialize-record
+                       entry seen-paths seen-ids)))
+         ;; Agents of one type share a frozen configuration of many
+         ;; kilobytes.  The sidecar prints with `print-circle', so one
+         ;; shared object is written once and referenced by every other
+         ;; record; decoding copies what it keeps, so sharing is safe.
+         (let ((configuration (plist-get encoded :configuration)))
+           (plist-put encoded :configuration
+                      (or (gethash configuration configurations)
+                          (puthash configuration configuration
+                                   configurations))))))
      (mevedel-session-agent-registry session))))
 
 (defun mevedel-agent-persistence--decode-local (symbol encoded)
