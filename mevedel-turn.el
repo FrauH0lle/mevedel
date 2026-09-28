@@ -184,7 +184,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--gc-hold "mevedel-utilities" (key live-p))
-(declare-function mevedel--gc-release "mevedel-utilities" (key))
+(defvar mevedel--gc-settlement-grace)
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
@@ -465,7 +465,11 @@ is returned here."
                  (mevedel-request-session request))
                 'idle))
         (setq mevedel--current-request nil)
-        (mevedel--gc-release request)
+        ;; Settlement leaves journal publication and collection behind it,
+        ;; which allocate as much as the turn did; keep the threshold a
+        ;; little longer rather than collecting repeatedly through them.
+        (let ((until (+ (float-time) mevedel--gc-settlement-grace)))
+          (mevedel--gc-hold request (lambda () (< (float-time) until))))
         (when (fboundp 'mevedel-collaboration-notify-request-changed)
           (mevedel-collaboration-notify-request-changed (current-buffer)))))))
 
