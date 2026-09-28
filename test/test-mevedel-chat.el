@@ -231,18 +231,25 @@
       (mevedel-install)
       (should (advice-member-p #'mevedel-view--resume-on-horizontal-scroll
                                'set-window-hscroll))
+      (should (advice-member-p #'mevedel-view--refresh-animation-on-face
+                               'set-face-attribute))
       (funcall after-focus-change-function)
       (should (= 1 resumed))
       (mevedel-uninstall)
       (should-not (advice-member-p #'mevedel-view--resume-on-horizontal-scroll
                                    'set-window-hscroll))
+      (should-not (advice-member-p #'mevedel-view--refresh-animation-on-face
+                                   'set-face-attribute))
       (funcall after-focus-change-function)
       (should (= 1 resumed))
       (mevedel-install)
       (should (advice-member-p #'mevedel-view--resume-on-horizontal-scroll
                                'set-window-hscroll))
+      (should (advice-member-p #'mevedel-view--refresh-animation-on-face
+                               'set-face-attribute))
       (funcall after-focus-change-function)
-      (should (= 2 resumed)))))
+      (should (= 2 resumed))
+      (mevedel-uninstall))))
 
 (mevedel-deftest mevedel-uninstall ()
   (let ((transport-enabled mevedel-transport--enabled-p))

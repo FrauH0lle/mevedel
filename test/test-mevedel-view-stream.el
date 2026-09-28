@@ -5137,5 +5137,146 @@
               (should (= frozen mevedel-view--spinner-frozen-seconds))
               (should-not mevedel-view--spinner-timer))))))))
 
+(mevedel-deftest mevedel-view-animation-face-refreshes-frozen-status
+  (:doc "Customize and direct face edits repaint paused color without a timer.")
+  (let ((mevedel-view-animation--cache nil)
+        (original (face-attribute 'mevedel-view-spinner :foreground nil))
+        (already-installed
+         (advice-member-p #'mevedel-view--refresh-animation-on-face
+                          'set-face-attribute)))
+    (unwind-protect
+        (progn
+          (advice-add 'set-face-attribute :after
+                      #'mevedel-view--refresh-animation-on-face)
+          (set-face-attribute 'mevedel-view-spinner nil :foreground "#ff0000")
+          (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                     (lambda (_face _frame)
+                       (cons (face-foreground 'mevedel-view-spinner nil t)
+                             "#000000"))))
+            (mevedel-view-stream-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--current-request
+                            (mevedel-request--create :started-at (current-time)))
+                (mevedel-request-set-active-work-paused
+                 mevedel--current-request t))
+              (mevedel-view-stream-test--with-visible-view
+                (let ((mevedel-view-spinner-style 'shimmer)
+                      (mevedel-view-spinner-power-policy 'save)
+                      (mevedel-view-spinner-battery-framerate 0))
+                  (mevedel-view--start-spinner "Working...")
+                  (let* ((start (marker-position
+                                 (car mevedel-view--spinner-label-target)))
+                         (before (get-text-property start 'display))
+                         (phase mevedel-view--spinner-phase-start)
+                         (frozen mevedel-view--spinner-frozen-seconds)
+                         (modified (buffer-modified-p))
+                         (undo buffer-undo-list)
+                         (here (point)))
+                    (should-not mevedel-view--spinner-timer)
+                    (set-face-attribute 'mevedel-view-spinner nil
+                                        :foreground "#00ff00")
+                    (should-not (equal-including-properties
+                                 before (get-text-property start 'display)))
+                    (should (equal-including-properties
+                             (mevedel-view-animation-frame
+                              'shimmer "Waiting for input" frozen
+                              'mevedel-view-spinner (selected-frame))
+                             (get-text-property start 'display)))
+                    (should-not mevedel-view--spinner-timer)
+                    (should (= phase mevedel-view--spinner-phase-start))
+                    (should (= frozen mevedel-view--spinner-frozen-seconds))
+                    (should (eq modified (buffer-modified-p)))
+                    (should (eq undo buffer-undo-list))
+                    (should (= here (point)))
+                    (let ((visible (get-text-property start 'display)))
+                      (set-window-buffer (selected-window) data-buf)
+                      (set-face-attribute 'mevedel-view-spinner nil
+                                          :foreground "#0000ff")
+                      (should mevedel-view--spinner-theme-stale-p)
+                      (should (equal-including-properties
+                               visible (get-text-property start 'display)))
+                      (should-not mevedel-view--spinner-timer)
+                      (set-window-buffer (selected-window) view-buf)
+                      (mevedel-view--resume-on-window-change (selected-window))
+                      (should-not mevedel-view--spinner-theme-stale-p)
+                      (should-not (equal-including-properties
+                                   visible (get-text-property start 'display)))
+                      (should-not mevedel-view--spinner-timer))))))))
+      (set-face-attribute 'mevedel-view-spinner nil :foreground original)
+      (unless already-installed
+        (advice-remove 'set-face-attribute
+                       #'mevedel-view--refresh-animation-on-face)))))
+
+(mevedel-deftest mevedel-view-animation-inherited-face-refreshes-frozen-status
+  (:doc "Changing an inherited face repaints a timer-free paused label.")
+  (let ((original-spinner
+         (face-attribute 'mevedel-view-spinner :foreground nil))
+        (original-inherit
+         (face-attribute 'mevedel-view-spinner :inherit nil))
+        (original-parent
+         (face-attribute 'font-lock-comment-face :foreground nil))
+        (alias 'mevedel-view-test-spinner-comment-alias)
+        (old-alias (get 'mevedel-view-test-spinner-comment-alias 'face-alias))
+        (installed (advice-member-p #'mevedel-view--refresh-animation-on-face
+                                    'set-face-attribute)))
+    (unwind-protect
+        (progn
+          (advice-add 'set-face-attribute :after
+                      #'mevedel-view--refresh-animation-on-face)
+          (set-face-attribute 'mevedel-view-spinner nil
+                              :foreground 'unspecified)
+          (put alias 'face-alias 'font-lock-comment-face)
+          (dolist (variant (list (cons 'font-lock-comment-face
+                                       'font-lock-comment-face)
+                                 (cons alias 'font-lock-comment-face)
+                                 (cons 'font-lock-comment-face alias)))
+            (set-face-attribute 'mevedel-view-spinner nil
+                                :inherit (list 'bold (car variant)))
+            (set-face-attribute 'font-lock-comment-face nil
+                                :foreground "#ff0000")
+            (should (mevedel-view--spinner-inherits-face-p
+                     'font-lock-comment-face (selected-frame)))
+            (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                       (lambda (_face _frame)
+                         (cons (face-foreground 'mevedel-view-spinner nil t)
+                               "#000000"))))
+              (mevedel-view-stream-test--with-buffers
+                (with-current-buffer data-buf
+                  (setq-local mevedel--current-request
+                              (mevedel-request--create :started-at (current-time)))
+                  (mevedel-request-set-active-work-paused
+                   mevedel--current-request t))
+                (mevedel-view-stream-test--with-visible-view
+                  (let ((mevedel-view-spinner-style 'shimmer)
+                        (mevedel-view-spinner-power-policy 'save)
+                        (mevedel-view-spinner-battery-framerate 0))
+                    (mevedel-view--start-spinner "Working...")
+                    (let* ((start (marker-position
+                                   (car mevedel-view--spinner-label-target)))
+                           (before (get-text-property start 'display))
+                           (phase mevedel-view--spinner-phase-start)
+                           (frozen mevedel-view--spinner-frozen-seconds))
+                      (should-not mevedel-view--spinner-timer)
+                      (set-face-attribute (cdr variant) nil
+                                          :foreground "#00ff00")
+                      (should-not (equal-including-properties
+                                   before (get-text-property start 'display)))
+                      (should (equal-including-properties
+                               (mevedel-view-animation-frame
+                                'shimmer "Waiting for input" frozen
+                                'mevedel-view-spinner (selected-frame))
+                               (get-text-property start 'display)))
+                      (should (= phase mevedel-view--spinner-phase-start))
+                      (should (= frozen mevedel-view--spinner-frozen-seconds))
+                      (should-not mevedel-view--spinner-timer)))))))
+      (set-face-attribute 'font-lock-comment-face nil
+                          :foreground original-parent)
+      (set-face-attribute 'mevedel-view-spinner nil
+                          :foreground original-spinner :inherit original-inherit)
+      (put alias 'face-alias old-alias)
+      (unless installed
+        (advice-remove 'set-face-attribute
+                       #'mevedel-view--refresh-animation-on-face))))))
+
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here
