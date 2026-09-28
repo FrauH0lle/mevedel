@@ -829,6 +829,95 @@
                   '(:fork-point-id "stable"))
       (should (mevedel-view-composer-session-fork-armed-p)))))
 
+;; `mevedel-view--composer-undo-list' is exercised through the sanitizer
+;; its callers use, on a real view whose renders record undo entries.
+(mevedel-deftest mevedel-view--sanitize-undo ()
+  ,test
+  (test)
+  :doc "keeps composer edits undoable across renders above the composer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (let ((history (buffer-substring-no-properties
+                      (point-min) (mevedel-view--input-start))))
+        (goto-char (mevedel-view--input-start))
+        (insert "hello")
+        (undo-boundary)
+        ;; Renders above the composer: an insertion, a property change and
+        ;; a deletion, each recorded by Emacs with shifting positions.
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (point-min))
+            (insert "rendered row\n")
+            (put-text-property (point-min) (+ (point-min) 3) 'face 'bold)
+            (delete-region (point-min) (+ (point-min) 4))))
+        (goto-char (point-max))
+        (insert " world")
+        (undo-boundary)
+        (mevedel-view--sanitize-undo)
+        ;; Only composer positions remain.
+        (let ((start (mevedel-view--input-start)))
+          (should (cl-every (lambda (entry)
+                              (pcase entry
+                                ('nil t)
+                                ((pred integerp) (>= entry start))
+                                (`(nil ,_ ,_ ,beg . ,_) (>= beg start))
+                                (`(,(and (pred integerp) beg) . ,_) (>= beg start))))
+                            buffer-undo-list)))
+        (undo-start)
+        (undo-more 1)
+        (should (equal "hello" (mevedel-view--input-text)))
+        (undo-more 1)
+        (should (equal "" (mevedel-view--input-text)))
+        ;; The render stays; undo never touched read-only transcript.
+        (should (equal (concat "ered row\n" history)
+                       (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start)))))))
+
+  :doc "drops render-only history and multiline drafts starting with >"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond")
+      (setq buffer-undo-list nil)
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-min))
+          (insert "status\n")
+          (put-text-property (point-min) (1+ (point-min)) 'face 'bold)))
+      (mevedel-view--sanitize-undo)
+      (should-not buffer-undo-list)
+      (should (equal "> quoted\nsecond" (mevedel-view--input-text)))))
+
+  :doc "ends the history at an entry it cannot place"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (goto-char (mevedel-view--input-start))
+      (insert "old")
+      (undo-boundary)
+      (push (list 'apply #'ignore) buffer-undo-list)
+      (undo-boundary)
+      (goto-char (point-max))
+      (insert "new")
+      (let ((start (- (point-max) 3)))
+        (mevedel-view--sanitize-undo)
+        (should (equal (list (cons start (point-max))) buffer-undo-list)))))
+
+  :doc "keeps nothing for a transcript view without a composer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (buffer-enable-undo)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (insert "row\n"))
+      (setq-local mevedel-view--agent-transcript-p t)
+      (mevedel-view--sanitize-undo)
+      (should-not buffer-undo-list))))
+
 (mevedel-deftest mevedel-view-composer-set-historical-visible ()
   ,test
   (test)

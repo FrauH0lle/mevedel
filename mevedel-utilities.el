@@ -494,6 +494,9 @@ runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
         (funcall mode -1))))
   (when (boundp 'undo-tree-auto-save-history)
     (setq-local undo-tree-auto-save-history nil))
+  ;; Generated storage nobody edits: each streamed chunk and tool result
+  ;; would otherwise stay on an undo list until the buffer dies.
+  (buffer-disable-undo)
   (mevedel--forget-place))
 
 (defun mevedel--forget-place ()
