@@ -318,6 +318,36 @@
               (should (string-match-p "NEW OUTPUT" (plist-get row :body)))
               (should-not (string-match-p "OLD OUTPUT" (plist-get row :body))))))))))
 
+(mevedel-deftest mevedel-view-child-call-rendering-retained-output ()
+  ,test
+  (test)
+  :doc "a reloaded nested Bash row uses its retained output, not a stale result"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Bash" :category "mevedel"
+                           :renderer #'mevedel-tool-exec--render-bash))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (with-temp-buffer
+      (let ((data (current-buffer)))
+        (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                   (lambda () data)))
+          (let ((row (mevedel-view--child-call-rendering
+                      '(:id "outer/1" :tool "ToolCall" :status success
+                        :result "STALE MODEL RESULT"
+                        :render-data
+                        (:kind ptc :outcome completed :direct-tool "Bash"
+                         :calls ((:id "outer/1/1" :tool "Bash" :status success
+                                  :args (:command "make test")
+                                  :render-data
+                                  (:execution-id "exec-deep"
+                                   :state completed :outcome success
+                                   :execution-output "CANONICAL FINAL"))))))))
+            (should (string-match-p "CANONICAL FINAL" (plist-get row :body)))
+            (should-not (string-match-p "STALE MODEL RESULT"
+                                        (plist-get row :body)))))))))
+
 (mevedel-deftest mevedel-view-direct-toolcall-bash-history ()
   ,test
   (test)
@@ -529,6 +559,370 @@
       (kill-buffer data)
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
         (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel-view-audit-show-control-result-older-segment ()
+  ,test
+  (test)
+  :doc "input and stop result links find retained output in an older segment"
+  (let* ((root (make-temp-file "mevedel-control-older-" t))
+         (archive (mevedel-session-artifacts-segment-path root 2))
+         (live (generate-new-buffer " *control latest segment*"))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3)))
+    (unwind-protect
+        (progn
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (insert (mevedel--format-hook-audit-record
+                     '(:type execution-completion :tool-use-id "original"
+                       :render-data (:execution-id "exec-older"
+                                     :execution-output "RETAINED OLDER OUTPUT"))))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) archive nil 'silent))
+          (should (equal '(missing readable readable)
+                         (mapcar (lambda (entry) (plist-get entry :status))
+                                 (mevedel-session-artifacts-transcript-segments
+                                  session live))))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer live)
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () live))
+                      ((symbol-function 'display-buffer) #'identity))
+              (dolist (control '(("WriteStdin" (:execution_id "exec-older"
+                                                 :chars "input\n") input)
+                                 ("StopExecution" (:execution_id "exec-older")
+                                  stop)))
+                (let ((inhibit-read-only t)) (erase-buffer))
+                (insert (mevedel-view--rendering-header-line
+                         (mevedel-tool-exec--render-bash
+                          (nth 0 control) (nth 1 control) "ok"
+                          (list :execution-id "exec-older" :status 'success
+                                :execution-control (nth 2 control)))))
+                (goto-char (point-min))
+                (should (search-forward "[Show result]" nil t))
+                (let ((before (buffer-list)))
+                  (let ((evidence (funcall (get-text-property
+                                            (match-beginning 0)
+                                            'mevedel-view-zone-activate))))
+                    (with-current-buffer evidence
+                      (should (derived-mode-p 'special-mode))
+                      (should (string-match-p "RETAINED OLDER OUTPUT"
+                                              (buffer-string)))))
+                  (should-not (cl-set-difference (buffer-list)
+                                                 (cons (get-buffer
+                                                        "*mevedel execution result*")
+                                                       before)))))))
+      (when (buffer-live-p live) (kill-buffer live))
+      (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+        (kill-buffer buffer))
+      (delete-directory root t)))))
+
+(mevedel-deftest mevedel-view-audit-show-control-result-older-source ()
+  ,test
+  (test)
+  :doc "a control link identifies a nested Bash source row in an older segment"
+  (let* ((root (make-temp-file "mevedel-control-source-" t))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (live (generate-new-buffer " *control source latest*"))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 3))
+         opened)
+    (unwind-protect
+        (progn
+          (with-current-buffer live
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 3))
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (insert (propertize "(:name \"ToolCall\")\noriginal result"
+                                'gptel '(tool . "outer")))
+            (insert (mevedel-tool-render-data-format
+                     '(:kind ptc :calls
+                       ((:id "outer/1" :tool "Bash" :status success
+                         :render-data (:execution-id "exec-older"
+                                       :execution-output "ORIGINAL OUTPUT"))))
+                     "outer"))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) archive nil 'silent))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer live)
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () live))
+                      ((symbol-function 'mevedel-view-audit-show-result)
+                       (lambda (record) (setq opened record))))
+              (mevedel-view-audit-show-control-result "exec-older")
+              (should (equal "outer/1" (plist-get opened :tool-use-id)))
+              (should (equal "exec-older" (plist-get opened :execution-id))))))
+      (when (buffer-live-p live) (kill-buffer live))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-view-audit-show-control-result-agent-archive ()
+  ,test
+  (test)
+  :doc "an agent's compacted source still opens its retained Bash output"
+  (let* ((root (make-temp-file "mevedel-control-agent-" t))
+         (agent-dir (file-name-concat root "agents"))
+         (archive (file-name-concat agent-dir
+                                    "worker.compact-0001.chat.org"))
+         (later (file-name-concat agent-dir
+                                  "worker.compact-0003.chat.org"))
+         (live (generate-new-buffer " *agent control current*"))
+         (view (generate-new-buffer " *agent control view*"))
+         (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 7)))
+    (unwind-protect
+        (progn
+          (make-directory agent-dir t)
+          (with-current-buffer live
+            (setq buffer-file-name (file-name-concat agent-dir
+                                                      "worker.chat.org"))
+            (setq-local mevedel--session session)
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (insert "#+begin_tool (ToolCall)\n")
+            (insert (propertize
+                     (concat "(:name \"ToolCall\")\nMODEL-ENVELOPE"
+                             (mevedel-tool-render-data-format
+                     '(:kind ptc :direct-tool "Bash" :outcome completed
+                       :calls
+                       ((:id "outer/1" :tool "Bash" :status success
+                         :args (:command "run agent job")
+                         :render-data (:execution-id "exec-agent-old"
+                                       :state completed :outcome success
+                                       :command "run agent job"
+                                       :execution-output "AGENT-OUTPUT"))))
+                     "outer"))
+                     'gptel '(tool . "outer")))
+            (insert "\n#+end_tool\n")
+            (insert "#+begin_tool (ToolCall)\n")
+            (insert (propertize
+                     (concat "(:name \"ToolCall\")\nNESTED-MODEL-ENVELOPE"
+                             (mevedel-tool-render-data-format
+                              '(:kind ptc :outcome completed
+                                :calls
+                                ((:id "nested/1" :tool "ToolCall" :status success
+                                  :result "INNER-MODEL-ENVELOPE"
+                                  :render-data
+                                  (:kind ptc :direct-tool "Bash"
+                                   :outcome completed
+                                   :calls
+                                   ((:id "nested/1/1" :tool "Bash"
+                                     :status success
+                                     :args (:command "run deep job")
+                                     :render-data
+                                     (:execution-id "exec-agent-deep"
+                                      :state completed :outcome success
+                                      :execution-output "DEEP-CANONICAL-OUTPUT")))))))
+                              "nested"))
+                     'gptel '(tool . "nested")))
+            (insert "\n#+end_tool\n")
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) archive nil 'silent))
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (insert (propertize "SECOND-ARCHIVE\n" 'gptel 'response))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (write-region (point-min) (point-max) later nil 'silent))
+          (mevedel-view--setup view live
+                               '(:agent-transcript-p t :agent-path "/root/worker"))
+          (mevedel-tool-register
+           (mevedel-tool--create :name "Bash" :category "mevedel"
+                                 :renderer #'mevedel-tool-exec--render-bash))
+          (mevedel-tool-register
+           (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                 :renderer #'mevedel-tool-ptc--render))
+          (with-current-buffer view
+            (mevedel-view--full-rerender)
+            (let ((project (symbol-function 'mevedel-view-render-project-segment)))
+              (cl-letf (((symbol-function 'mevedel-view-render-project-segment)
+                         (lambda (source state direction)
+                           (if source
+                               (error "Archive projection failed")
+                             (funcall project source state direction)))))
+                (should-error (mevedel-view-go-to-segment 1)
+                              :type 'error)))
+            (should-not (mevedel-view-segments-current-number))
+            (should buffer-read-only)
+            (mevedel-view-go-to-segment 1)
+            (should-not (string-search "AGENT-OUTPUT" (buffer-string)))
+            (mevedel-view-return-to-latest-segment)
+            (should (equal '((readable . nil) (readable . nil) (readable . t))
+                           (mapcar (lambda (descriptor)
+                                     (cons (plist-get descriptor :status)
+                                           (plist-get descriptor :current-p)))
+                                   (mevedel-session-artifacts-transcript-segments
+                                    session live))))
+            (let ((before (buffer-list)))
+              (let* ((control
+                      (mevedel-view--rendering-header-line
+                       (mevedel-tool-exec--render-bash
+                        "WriteStdin"
+                        '(:execution_id "exec-agent-old" :chars "input\n")
+                        "ok"
+                        '(:execution-id "exec-agent-old" :status success
+                          :execution-control input :control-succeeded-p t))))
+                     (link (string-match "\\[Show result\\]" control)))
+                (should link)
+                (funcall (get-text-property
+                          link 'mevedel-view-zone-activate control)))
+              (should (= 1 (mevedel-view-segments-current-number)))
+              (should buffer-read-only)
+              (should (string-search "Bash: run agent job" (buffer-string)))
+              (should (string-match-p "AGENT-OUTPUT" (buffer-string)))
+              (should-not (string-match-p "MODEL-ENVELOPE" (buffer-string)))
+              (should-not (get-buffer "*mevedel execution result*"))
+              (should (= 1 (length (cl-set-difference (buffer-list) before))))
+              (let* ((control
+                      (mevedel-view--rendering-header-line
+                       (mevedel-tool-exec--render-bash
+                        "WriteStdin"
+                        '(:execution_id "exec-agent-deep" :chars "input\n")
+                        "ok"
+                        '(:execution-id "exec-agent-deep" :status success
+                          :execution-control input :control-succeeded-p t))))
+                     (link (string-match "\\[Show result\\]" control)))
+                (should link)
+                (funcall (get-text-property
+                          link 'mevedel-view-zone-activate control)))
+              (should (= 1 (mevedel-view-segments-current-number)))
+              (should (string-search "Bash: run deep job" (buffer-string)))
+              (should (string-search "DEEP-CANONICAL-OUTPUT" (buffer-string)))
+              (should-not (string-search "INNER-MODEL-ENVELOPE" (buffer-string)))
+              (should-not (get-buffer "*mevedel execution result*"))
+              (mevedel-view-next-segment)
+              (should (= 3 (mevedel-view-segments-current-number)))
+              (should (string-match-p "SECOND-ARCHIVE" (buffer-string)))
+              (mevedel-view-go-to-segment 1)
+              (should (= 1 (mevedel-view-segments-current-number)))
+              (cl-letf (((symbol-function 'mevedel-view-render-project-segment)
+                         (lambda (&rest _args)
+                           (error "Projection and recovery failed"))))
+                (should-error (mevedel-view-return-to-latest-segment)
+                              :type 'error))
+              (should (= 1 (mevedel-view-segments-current-number)))
+              (should buffer-read-only)
+              (with-current-buffer live
+                (insert (propertize "(:name \"ToolCall\")\n"
+                                    'gptel '(tool . "outer"))))
+              (mevedel-view-audit--select-source
+               '(:tool-use-id "outer/1"))
+              (should-not (mevedel-view-segments-current-number))
+              (should buffer-read-only)
+              (mevedel-view-previous-segment)
+              (should (= 3 (mevedel-view-segments-current-number)))
+              (mevedel-view-return-to-latest-segment)
+              (should buffer-read-only)
+              (should-not (cl-set-difference (buffer-list) before)))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (when (buffer-live-p live) (kill-buffer live))
+      (when-let* ((buffer (get-buffer "*mevedel execution result*")))
+        (kill-buffer buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-view-audit-show-result-forwarded-agent-archive ()
+  ,test
+  (test)
+  :doc "a forwarded completion opens its agent's surviving source row"
+  (save-window-excursion
+    (let* ((root (make-temp-file "mevedel-forwarded-result-" t))
+           (agent-dir (file-name-concat root "agents"))
+           (live-path (file-name-concat agent-dir "worker.chat.org"))
+           (archive (file-name-concat agent-dir
+                                      "worker.compact-0001.chat.org"))
+           (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+           (session
+            (mevedel-session--create
+             :authority-mode 'pid-lock :save-path root
+             :agent-transcripts
+             '(("worker-id" . (:agent-path "/root/worker"
+                               :path "agents/worker.chat.org")))))
+           agent-view agent-data)
+      (unwind-protect
+          (progn
+            (make-directory agent-dir t)
+            (with-temp-buffer
+              (org-mode)
+              (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+              (insert "#+begin_tool (ToolCall)\n")
+              (insert (propertize
+                       (concat "(:name \"ToolCall\")\nMODEL-ENVELOPE"
+                               (mevedel-tool-render-data-format
+                       '(:kind ptc :direct-tool "Bash" :outcome completed
+                         :calls
+                         ((:id "forwarded/1" :tool "Bash" :status success
+                           :args (:command "run forwarded job")
+                           :render-data
+                           (:execution-id "exec-forwarded" :state completed
+                            :execution-output "FORWARDED-OUTPUT"))))
+                       "forwarded"))
+                       'gptel '(tool . "forwarded")))
+              (insert "\n#+end_tool\n")
+              (mevedel-session-artifacts-stabilize-gptel-bounds)
+              (write-region (point-min) (point-max) archive nil 'silent))
+            (with-temp-file live-path
+              (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"))
+            (mevedel-tool-register
+             (mevedel-tool--create :name "Bash" :category "mevedel"
+                                   :renderer #'mevedel-tool-exec--render-bash))
+            (mevedel-tool-register
+             (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                                   :renderer #'mevedel-tool-ptc--render))
+            (mevedel-view-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session)
+                (insert (propertize "Parent transcript\n" 'gptel 'response))
+                (insert (mevedel--format-hook-audit-record
+                         '(:type execution-breadcrumb
+                           :owner "/root/worker"
+                           :execution-id "exec-forwarded"
+                           :tool-use-id "forwarded/1"
+                           :command "run forwarded job"
+                           :facts (:outcome success)))))
+              (with-current-buffer view-buf
+                (switch-to-buffer view-buf)
+                (mevedel-view--full-rerender)
+                (goto-char (point-min))
+                (should (search-forward "[Show result]" nil t))
+                (funcall (get-text-property
+                          (match-beginning 0) 'mevedel-view-zone-activate))
+                (setq agent-view (window-buffer (selected-window)))
+                (should-not (eq agent-view view-buf))
+                (with-current-buffer agent-view
+                  (setq agent-data mevedel--data-buffer)
+                  (should mevedel-view--agent-transcript-p)
+                  (should (eq session (buffer-local-value
+                                       'mevedel--session agent-data)))
+                  (should (= 1 (mevedel-view-segments-current-number)))
+                  (should buffer-read-only)
+                  (should-not (get-text-property (point)
+                                                 'mevedel-view-collapsed))
+                  (should (string-search "Bash: run forwarded job"
+                                         (buffer-string)))
+                  (should (string-search "FORWARDED-OUTPUT" (buffer-string)))
+                  (should-not (string-search "MODEL-ENVELOPE" (buffer-string)))
+                  (should-not (get-buffer "*mevedel execution result*"))))))
+        (when (buffer-live-p agent-view) (kill-buffer agent-view))
+        (when (buffer-live-p agent-data)
+          (with-current-buffer agent-data (set-buffer-modified-p nil))
+          (kill-buffer agent-data))
+        (when-let* ((evidence (get-buffer "*mevedel execution result*")))
+          (kill-buffer evidence))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-view-audit-archived-terminal-rendering ()
   ,test

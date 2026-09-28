@@ -335,7 +335,8 @@
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
+                  "mevedel-session-artifacts"
+                  (session live-buffer &optional agent-transcript-p))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
 
@@ -2377,6 +2378,15 @@ folding a run into a group does not lose the boundary it ran with."
                   ((plist-member latest :execution-output)
                    (or (plist-get latest :execution-output) ""))
                   (progress (or (plist-get event :output-tail) ""))
+                  ((plist-member (plist-get direct :render-data)
+                                 :execution-output)
+                   (or (plist-get (plist-get direct :render-data)
+                                  :execution-output) ""))
+                  ((and (equal name "Bash")
+                        (plist-member (plist-get child :render-data)
+                                      :execution-output))
+                   (or (plist-get (plist-get child :render-data)
+                                  :execution-output) ""))
                   (t (plist-get child :result))))
          (child-status (plist-get child :status))
          (render-data
@@ -2721,7 +2731,8 @@ YIELDED-ID limits older-segment inspection to yielded executions."
                               'mevedel--session mevedel--data-buffer)))
           (catch 'found
             (dolist (descriptor (reverse (mevedel-session-artifacts-transcript-segments
-                                          session mevedel--data-buffer)))
+                                          session mevedel--data-buffer
+                                          mevedel-view--agent-transcript-p)))
               (when (and (eq (plist-get descriptor :status) 'readable)
                          (not (plist-get descriptor :current-p)))
                 (when-let* ((older (condition-case nil
@@ -2786,6 +2797,10 @@ finish before this function invokes registered renderers or reads live events."
               (or (plist-get direct-latest :execution-output) ""))
              ((plist-member call-render-data :execution-output)
               (or (plist-get call-render-data :execution-output) ""))
+             ((plist-member (plist-get direct-child :render-data)
+                            :execution-output)
+              (or (plist-get (plist-get direct-child :render-data)
+                             :execution-output) ""))
              (direct-progress
               (or (plist-get direct-event :output-tail) ""))
              (t (plist-get call :result))))

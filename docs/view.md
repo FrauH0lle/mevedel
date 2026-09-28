@@ -516,7 +516,9 @@ facts belong in expanded details. Their output disclosure starts closed for
 running and completed commands. The original row owns all progress and output,
 including output returned by a hidden, successful empty-input WriteStdin poll.
 Input and stop interactions remain visible and link to the original execution;
-failed control operations do not disappear. A command's failed exit is attributed
+their result links resolve the execution ID across the current transcript and
+readable older segments, including nested ToolCall Bash children. Failed control
+operations do not disappear. A command's failed exit is attributed
 to the command instead of to its successful input or poll. A terminal event
 projects its durable breadcrumb into an open current view immediately, without
 waiting for a full rerender; views opened later reconstruct it from the
@@ -532,8 +534,11 @@ ToolCall ID. Completion lookup follows the receiving transcript's own history:
 root session segments or numbered agent compaction archives. A missing earlier
 archive does not hide available later terminal evidence. If the source row is
 gone, the result link opens retained output read-only instead of navigating
-into the parent's segments. An empty retained output is shown as an explicit no-output
-result; only absent evidence reports an unavailable result.
+into the parent's segments. An empty retained output is shown as an explicit
+no-output result; only absent evidence reports an unavailable result.
+An agent result link opens a surviving source row in its own read-only
+compaction-archive view, with Latest returning to the current agent transcript;
+agent archive navigation does not enter the parent session's segments.
 On reload, nested Bash calls whose process is gone show a lost state and error
 marker rather than inheriting the ToolCall's earlier successful call status.
 

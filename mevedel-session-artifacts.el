@@ -697,10 +697,13 @@ cannot be read."
          (user-error "Could not read segment %s: %s"
                      path (error-message-string err)))))))
 
-(defun mevedel-session-artifacts-transcript-segments (session live-buffer)
+(defun mevedel-session-artifacts-transcript-segments
+    (session live-buffer &optional agent-transcript-p)
   "Return readable history descriptors for LIVE-BUFFER's receiving transcript.
 Root transcripts use session segments; agent conversations use their own
-numbered compaction archives rather than the parent's session segments."
+numbered compaction archives rather than the parent's session segments.
+When AGENT-TRANSCRIPT-P is non-nil, a fileless resident agent has only its
+current transcript; never substitute the parent session's root segments."
   (let* ((save-path (mevedel-session-save-path session))
          (path (and (buffer-live-p live-buffer)
                     (buffer-local-value 'buffer-file-name live-buffer)))
@@ -763,7 +766,9 @@ numbered compaction archives rather than the parent's session segments."
                       archives))))
           (append (nreverse archives)
                   (list (list :status 'readable :current-p t))))
-      (mevedel-session-artifacts-segments session live-buffer))))
+      (if agent-transcript-p
+          (list (list :status 'readable :current-p t))
+        (mevedel-session-artifacts-segments session live-buffer)))))
 
 (defun mevedel-session-artifacts-read-transcript-segment (session descriptor)
   "Read DESCRIPTOR from SESSION into a disposable, read-only transcript buffer."
