@@ -176,7 +176,10 @@ A non-positive value saves immediately.  Terminal paths always save now."
   :group 'mevedel)
 
 (defconst mevedel-agent-conversation--live-activity-limit 5
-  "Maximum recent activity items mirrored into live agent metadata.")
+  "Most recent activity items an invocation keeps.
+Only the latest item is consulted, to keep waiting items sparse; the list
+is neither persisted nor rendered, so an unbounded history only cost
+memory and a quadratic rewrite of every agent's metadata.")
 
 (defvar-local mevedel--agent-invocation nil
   "Invocation that owns this retained agent conversation buffer.")
@@ -502,35 +505,6 @@ payload remains authoritative."
                    "[\n\r\t ]+" " " (format "%s" (plist-get copy key))))))))
       copy)))
 
-(defun mevedel-agent-conversation--activity-snapshot
-    (invocation &optional limit)
-  "Return INVOCATION's non-status activity, optionally bounded by LIMIT."
-  (when (mevedel-agent-invocation-p invocation)
-    (let* ((items
-            (cl-remove-if
-             (lambda (item) (eq (plist-get item :type) 'status))
-             (mevedel-agent-invocation-activity invocation)))
-           (items (if (and limit (> (length items) limit))
-                      (last items limit)
-                    items)))
-      (copy-tree items))))
-
-(defun mevedel-agent-conversation-final-activity (invocation)
-  "Return INVOCATION's full settled activity history."
-  (mevedel-agent-conversation--activity-snapshot invocation))
-
-(defun mevedel-agent-conversation--render-activity (invocation)
-  "Return activity metadata appropriate for INVOCATION's current status."
-  ;; `incomplete' is terminal to the view
-  ;; (`mevedel-view--agent-terminal-status-p'), so the closed list here
-  ;; must agree or a hydrated incomplete agent would render live
-  ;; activity for a settled transcript.
-  (if (memq (mevedel-agent-invocation-transcript-status invocation)
-            '(completed error aborted incomplete))
-      (mevedel-agent-conversation-final-activity invocation)
-    (mevedel-agent-conversation--activity-snapshot
-     invocation mevedel-agent-conversation--live-activity-limit)))
-
 (defun mevedel-agent-conversation--sync-entry (invocation)
   "Sync INVOCATION's live metadata into its historical transcript entry."
   (when-let* (((mevedel-agent-invocation-p invocation))
@@ -542,7 +516,6 @@ payload remains authoritative."
                           (time-subtract (current-time) started))))
            (reason (mevedel-agent-invocation-terminal-reason invocation))
            (verdict (mevedel-agent-invocation-verdict invocation))
-           (activity (mevedel-agent-conversation--render-activity invocation))
            (updates
             (list :status
                   (or (mevedel-agent-invocation-transcript-status invocation)
@@ -555,8 +528,6 @@ payload remains authoritative."
         (setq updates (plist-put updates :reason reason)))
       (when verdict
         (setq updates (plist-put updates :verdict verdict)))
-      (when activity
-        (setq updates (plist-put updates :activity activity)))
       (mevedel-session-persistence-update-transcript-entry
        session agent-id updates))))
 
@@ -570,8 +541,9 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
     (when-let* ((clean
                  (mevedel-agent-conversation--activity-sanitize-item item)))
       (setf (mevedel-agent-invocation-activity invocation)
-            (append (mevedel-agent-invocation-activity invocation)
-                    (list (plist-put clean :time (float-time)))))
+            (last (append (mevedel-agent-invocation-activity invocation)
+                          (list (plist-put clean :time (float-time))))
+                  mevedel-agent-conversation--live-activity-limit))
       (mevedel-agent-conversation--sync-entry invocation)
       (unless suppress-rerender
         (when-let* ((parent
@@ -651,9 +623,7 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                              (:reason . ,(mevedel-agent-invocation-terminal-reason
                                           invocation))
                              (:verdict . ,(mevedel-agent-invocation-verdict
-                                           invocation))
-                             (:activity . ,(mevedel-agent-conversation--render-activity
-                                            invocation))))
+                                           invocation))))
                     (when (cdr pair)
                       (setq updated
                             (plist-put updated (car pair) (cdr pair)))))

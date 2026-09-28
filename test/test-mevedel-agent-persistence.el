@@ -427,7 +427,35 @@
            :conversation-location "agents/broken.chat.org")))
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/broken" record)))
-    (should-error (mevedel-agent-persistence-serialize-registry session))))
+    (should-error (mevedel-agent-persistence-serialize-registry session)))
+
+  :doc "writes one shared copy of equal configurations that round-trips"
+  (let* ((session (mevedel-agent-persistence-test--session))
+         (paths '("/root/one" "/root/two" "/root/three")))
+    (setf (mevedel-session-agent-registry session)
+          (mapcar (lambda (path)
+                    (cons path (mevedel-agent-persistence-test--record
+                                path "/root" (concat "id-" (substring path 6)))))
+                  paths))
+    (let* ((raw (mevedel-agent-persistence-serialize-registry session))
+           (configurations (mapcar (lambda (entry) (plist-get entry :configuration))
+                                   raw))
+           (printed (with-temp-buffer
+                      (let ((print-circle t) (print-length nil) (print-level nil))
+                        (prin1 raw (current-buffer)))
+                      (buffer-string))))
+      ;; Distinct live configurations print once: equal values are one object.
+      (should (eq (nth 0 configurations) (nth 1 configurations)))
+      (should (eq (nth 1 configurations) (nth 2 configurations)))
+      (should (= 1 (with-temp-buffer
+                     (insert printed)
+                     (how-many ":system-prompt" (point-min) (point-max)))))
+      ;; The printed sidecar still decodes into three independent records.
+      (let ((restored (mevedel-agent-persistence-deserialize-registry
+                       (car (read-from-string printed)))))
+        (should (equal paths (mapcar #'car restored)))
+        (should-not (eq (mevedel-agent-record-configuration (cdr (nth 0 restored)))
+                        (mevedel-agent-record-configuration (cdr (nth 1 restored)))))))))
 
 (mevedel-deftest mevedel-agent-persistence-deserialize-registry ()
   ,test

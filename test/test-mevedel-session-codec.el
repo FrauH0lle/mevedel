@@ -313,7 +313,16 @@
             ("agent--one" :agent-path "/root/one" :status aborted
              :updated-at "2026-07-19T11-00-00")))))
     (should (= 1 (length out)))
-    (should (eq 'aborted (plist-get (cdar out) :status)))))
+    (should (eq 'aborted (plist-get (cdar out) :status))))
+
+  :doc "drops the retired activity history"
+  (let* ((raw '(("agent--one" :agent-path "/root/one" :status completed
+                 :activity ((:type tool-start :summary "Read")))))
+         (out (mevedel-session-codec-sanitize-agent-transcripts raw)))
+    (should-not (plist-member (cdar out) :activity))
+    (should (eq 'completed (plist-get (cdar out) :status)))
+    ;; The sidecar value read from disk is not modified.
+    (should (plist-member (cdar raw) :activity))))
 
 (mevedel-deftest mevedel-session-codec-serialize ()
   ,test

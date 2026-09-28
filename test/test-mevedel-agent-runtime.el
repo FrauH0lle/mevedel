@@ -923,7 +923,33 @@ ARTIFACT-P selects whether its sidecar counts as committed."
        (mevedel-agent-invocation-runtime-settled-p invocation))
       (should (= 1 callbacks))
       (should (= 1 publications))
-      (should (= 2 deliveries)))))
+      (should (= 2 deliveries))))
+
+  :doc "releases the settled buffer's request payload and decoding memo"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "main"))
+           (invocation (mevedel-agent-runtime-test--invocation (current-buffer)))
+           (marker (point-marker)))
+      (setq-local gptel--fsm-last
+                  (gptel-make-fsm :info (list :data '(:messages ["long"])
+                                              :position marker)))
+      (setq-local mevedel-transcript-audit--buffer-records
+                  (make-hash-table :test #'equal))
+      (setq-local mevedel-transcript-audit--buffer-record-bytes 42)
+      (setf (mevedel-agent-invocation-parent-session invocation) session
+            (mevedel-agent-invocation-parent-data-buffer invocation)
+            (current-buffer)
+            (mevedel-agent-invocation-runtime-settle-callback invocation)
+            (lambda (&rest _) nil))
+      (cl-letf (((symbol-function 'mevedel-agent-runtime--finalize) #'ignore))
+        (should (equal "finished"
+                       (mevedel-agent-runtime--settle invocation "finished"))))
+      (should (mevedel-agent-invocation-runtime-settled-p invocation))
+      ;; Markers a continuation reads survive; the payload does not.
+      (should-not (plist-get (gptel-fsm-info gptel--fsm-last) :data))
+      (should (eq marker (plist-get (gptel-fsm-info gptel--fsm-last) :position)))
+      (should-not mevedel-transcript-audit--buffer-records)
+      (should (= 0 mevedel-transcript-audit--buffer-record-bytes)))))
 
 (mevedel-deftest mevedel-agent-runtime--transcript-path
   (:doc "returns a published remote transcript's qualified logical path")
@@ -1044,9 +1070,6 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                      (lambda (&rest _) (push 'save calls)))
                     ((symbol-function 'mevedel-agent-conversation-record-activity)
                      (lambda (&rest _) (push 'activity calls)))
-                    ((symbol-function
-                      'mevedel-agent-conversation-final-activity)
-                     (lambda (&rest _) '(:status completed)))
                     ((symbol-function 'mevedel-tool-task-finalize-owner)
                      (lambda (&rest _) (push 'tasks calls) t))
                     ((symbol-function 'mevedel-tool-task-refresh-display)
@@ -1238,9 +1261,6 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                     ((symbol-function
                       'mevedel-agent-conversation-record-activity)
                      #'ignore)
-                    ((symbol-function
-                      'mevedel-agent-conversation-final-activity)
-                     (lambda (&rest _) '(:status aborted)))
                     ((symbol-function 'mevedel-agent-conversation-refresh)
                      #'ignore)
                     ((symbol-function
