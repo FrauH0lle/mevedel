@@ -143,7 +143,10 @@ cancellation releases the fence and leaves the machine retryable.
   the slowest timer callback since the previous heartbeat. `:gc-count` and
   `:gc-ms` report garbage collection anywhere since the previous heartbeat;
   `:timer-gc-count` and `:timer-gc-ms` the part inside that slowest callback,
-  so a pause can be split into collection and callback work. A closure is
+  so a pause can be split into collection and callback work. `:cpu-ms` is
+  the CPU time Emacs used since the previous heartbeat: close to the delay
+  for a busy editor, near zero for a suspended machine or a blocking wait on
+  a child process. A closure is
   labelled `closure:` plus the function it calls, preferring a `mevedel-`
   one: that names what it does, not where it was created. One that calls
   only primitives is named `anonymous`. Each settled request adds an `event-loop-lag-summary`

@@ -165,7 +165,7 @@ profile file larger and cost a little more per sample."
     :buffers :cache-identity :cached-tokens :call-source :candidate-count :capture-id
     :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
-    :command-class :command-hash :command-name :context :context-chars
+    :command-class :command-hash :command-name :context :context-chars :cpu-ms
     :context-deduplicated :continuation :conversation-scope :covered-count
     :cumulative-usage :cumulative-usage-tokens :delay-ms :dequeue-goal-id
     :deleted-directory-count :deleted-file-count
@@ -601,6 +601,14 @@ and COUNT being the collection time and count inside that callback.")
 (defvar mevedel-telemetry--lag-gc nil
   "(GCS-DONE . GC-ELAPSED) when the previous heartbeat ran.")
 
+(defvar mevedel-telemetry--lag-cpu nil
+  "Emacs CPU seconds when the previous heartbeat ran.")
+
+(defun mevedel-telemetry--cpu-seconds ()
+  "Return the CPU seconds this Emacs has used."
+  (let ((time (current-cpu-time)))
+    (/ (float (car time)) (cdr time))))
+
 (defvar mevedel-telemetry--lag-windows nil
   "Alist from watched session to its lag window.
 A window is (:request-id ID :until TIME :counts COUNTS).  UNTIL is nil
@@ -675,6 +683,7 @@ Collection inside the callback is kept apart from its own work."
     (setq mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval)
           mevedel-telemetry--lag-slowest nil
           mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
+          mevedel-telemetry--lag-cpu (mevedel-telemetry--cpu-seconds)
           mevedel-telemetry--lag-timer
           (run-at-time mevedel-telemetry--lag-interval
                        mevedel-telemetry--lag-interval
@@ -688,6 +697,7 @@ Collection inside the callback is kept apart from its own work."
     (cancel-timer mevedel-telemetry--lag-timer))
   (setq mevedel-telemetry--lag-timer nil
         mevedel-telemetry--lag-gc nil
+        mevedel-telemetry--lag-cpu nil
         mevedel-telemetry--lag-windows nil)
   (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback))
 
@@ -732,10 +742,13 @@ Collection inside the callback is kept apart from its own work."
   (let* ((now (float-time))
          (delay (- now (or mevedel-telemetry--lag-due now)))
          (slowest mevedel-telemetry--lag-slowest)
-         (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed))))
+         (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
+         (cpu (mevedel-telemetry--cpu-seconds))
+         (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
     (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
           mevedel-telemetry--lag-slowest nil
           mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
+          mevedel-telemetry--lag-cpu cpu
           mevedel-telemetry--lag-windows
           (seq-filter (lambda (entry)
                         (let ((until (plist-get (cdr entry) :until)))
@@ -762,6 +775,9 @@ Collection inside the callback is kept apart from its own work."
                      ;; timers, process output, redisplay and commands.
                      :gc-count (- gcs-done (car gc))
                      :gc-ms (round (* 1000 (- gc-elapsed (cdr gc))))
+                     ;; Near the delay for a busy editor, near zero for a
+                     ;; suspended machine or a blocking wait on a child.
+                     :cpu-ms (round (* 1000 (- cpu cpu-before)))
                      (and slowest
                           (list :timer-callback (plist-get slowest :name)
                                 :timer-ms (round (* 1000 (plist-get slowest :seconds)))
