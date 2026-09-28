@@ -360,6 +360,83 @@
     (timer-set-function timer (eval '(lambda () (car (list 1))) t))
     (should (equal "anonymous" (mevedel-telemetry--lag-callback-name timer)))))
 
+;; `mevedel-telemetry-measure' records nothing for a batch Emacs's lag
+;; windows unless a test installs one; these install theirs directly.
+(mevedel-deftest mevedel-telemetry-measure
+  ()
+  ,test
+  (test)
+  :doc "records cost and outcome, and returns the value"
+  (let* ((root (make-temp-file "mevedel-telemetry-measure-" t))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (should (equal "done"
+                         (mevedel-telemetry-measure
+                          session 'session-save 0
+                          (lambda () (garbage-collect) (make-string 200000 ?x) "done")
+                          :kind 'full)))
+          (should (eq 'queued (mevedel-telemetry-measure
+                               session 'session-publication 0 (lambda () 'queued))))
+          (let ((events (test-mevedel-telemetry--events session 'session-save)))
+            (should (= 1 (length events)))
+            (should (eq 'ok (plist-get (car events) :outcome)))
+            (should (eq 'full (plist-get (car events) :kind)))
+            (should (= 1 (plist-get (car events) :gc-count)))
+            (should (<= 0 (plist-get (car events) :gc-ms)
+                        (plist-get (car events) :duration-ms)))
+            (should (<= 190 (plist-get (car events) :allocated-kb)))
+            (should-not (plist-get (car events) :dropped-keys)))
+          (should (eq 'queued
+                      (plist-get (car (test-mevedel-telemetry--events
+                                       session 'session-publication))
+                                 :outcome))))
+      (delete-directory root t)))
+
+  :doc "records an error before it propagates"
+  (let* ((root (make-temp-file "mevedel-telemetry-measure-" t))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (should-error (mevedel-telemetry-measure
+                         session 'session-save 0 (lambda () (error "Failed save"))))
+          (should (eq 'error (plist-get (car (test-mevedel-telemetry--events
+                                              session 'session-save))
+                                        :outcome))))
+      (delete-directory root t)))
+
+  :doc "attributes sessionless work to watched sessions only"
+  (let* ((root (make-temp-file "mevedel-telemetry-measure-" t))
+         (session (test-mevedel-telemetry--session root))
+         (mevedel-telemetry--lag-windows nil))
+    (unwind-protect
+        (progn
+          ;; Nothing watched: the work runs and nothing is recorded.
+          (should (= 3 (mevedel-telemetry-measure nil 'control-program 0 (lambda () 3))))
+          (should-not (test-mevedel-telemetry--events session 'control-program))
+          (setq mevedel-telemetry--lag-windows
+                (list (list session :request-id "request-1" :until nil :counts nil)))
+          ;; Shorter than the threshold: not recorded.
+          (mevedel-telemetry-measure nil 'control-program 60000 #'ignore)
+          (should-not (test-mevedel-telemetry--events session 'control-program))
+          (mevedel-telemetry-measure nil 'control-program 0 (lambda () (list 1))
+                                     :kind 'read :operation-count 2)
+          (let ((event (car (test-mevedel-telemetry--events session 'control-program))))
+            (should (eq 'read (plist-get event :kind)))
+            (should (= 2 (plist-get event :operation-count)))
+            (should (eq 'ok (plist-get event :outcome)))))
+      (delete-directory root t)))
+
+  :doc "measures nothing while recording a measurement"
+  (let* ((root (make-temp-file "mevedel-telemetry-measure-" t))
+         (session (test-mevedel-telemetry--session root))
+         (mevedel-telemetry--measuring-record t))
+    (unwind-protect
+        (progn
+          (should (= 4 (mevedel-telemetry-measure session 'session-save 0 (lambda () 4))))
+          (should-not (test-mevedel-telemetry--events session 'session-save)))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-telemetry--queue-order
   ()
   ,test

@@ -41,6 +41,10 @@
                   "mevedel-session-codec" (session))
 (autoload 'mevedel-session-codec-portable-authority-p "mevedel-session-codec")
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-measure "mevedel-telemetry"
+                  (session event min-ms function &rest props))
+
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability--assert-no-pid-lock
                   "mevedel-session-durability" (session-dir))
@@ -1472,6 +1476,20 @@ in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
 reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
 that error so their lifecycle owner can classify it."
+  (if (fboundp 'mevedel-telemetry-measure)
+      (mevedel-telemetry-measure
+       session 'session-publication 0
+       (lambda () (mevedel-session-publication--publish session artifacts require-commit))
+       :artifact-count (length artifacts)
+       :input-bytes (apply #'+ (mapcar (lambda (artifact)
+                                         (let ((content (plist-get artifact :content)))
+                                           (if (stringp content) (string-bytes content) 0)))
+                                       artifacts)))
+    (mevedel-session-publication--publish session artifacts require-commit)))
+
+(defun mevedel-session-publication--publish (session artifacts require-commit)
+  "Publish SESSION's ARTIFACTS as `mevedel-session-publication-publish' does.
+REQUIRE-COMMIT is its commit requirement."
   ;; Admission, reservation and commit are one publication transaction.
   ;; Reuse its bounded target clock and recovery observations, including for
   ;; agent callers that do not enter through the root save wrapper.
