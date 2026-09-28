@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'mevedel-utilities))
 (require 'mevedel-report)
 
 (require 'cl-lib)
@@ -1291,29 +1292,30 @@ Return descriptions of every artifact that could not be restored."
 SESSION supplies the owned publication path.  BUFFER supplies live transcript
 state.  STATE, when non-nil, supplies the logical sidecar state without
 replacing SESSION's live lease runtime."
-  (let* ((save-path (mevedel-session-save-path session))
-         (sidecar-name "session.meta.el")
-         artifacts)
-    (dolist (path (sort (directory-files-recursively staging-path ".*")
-                        #'string<))
-      (let ((logical (file-relative-name path staging-path)))
-        (when (and (not (equal logical sidecar-name))
-                   (mevedel-session-publication-logical-path-p logical))
-          (push
-           (list :path (expand-file-name logical save-path)
-                 :content (mevedel-session-artifacts-read-file-raw path))
-           artifacts))))
-    (append
-     (nreverse artifacts)
-     (list
-      (list
-       :path (mevedel-session-artifacts-sidecar-path save-path)
-       :content
-       (mevedel-session-artifacts-printed-value
-        (mevedel-session-artifacts-build-sidecar
-         (or state session) buffer))
-       :commit-marker t
-       :replace t)))))
+  (mevedel--with-gc-busy
+    (let* ((save-path (mevedel-session-save-path session))
+           (sidecar-name "session.meta.el")
+           artifacts)
+      (dolist (path (sort (directory-files-recursively staging-path ".*")
+                          #'string<))
+        (let ((logical (file-relative-name path staging-path)))
+          (when (and (not (equal logical sidecar-name))
+                     (mevedel-session-publication-logical-path-p logical))
+            (push
+             (list :path (expand-file-name logical save-path)
+                   :content (mevedel-session-artifacts-read-file-raw path))
+             artifacts))))
+      (append
+       (nreverse artifacts)
+       (list
+        (list
+         :path (mevedel-session-artifacts-sidecar-path save-path)
+         :content
+         (mevedel-session-artifacts-printed-value
+          (mevedel-session-artifacts-build-sidecar
+           (or state session) buffer))
+         :commit-marker t
+         :replace t))))))
 
 (defun mevedel-session-rewind--failure-backtrace ()
   "Return a printable backtrace for the error currently being signaled.
