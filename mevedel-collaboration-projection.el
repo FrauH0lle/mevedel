@@ -278,8 +278,9 @@ An empty string is meaningful: a completed command may produce no output."
 
 (defun mevedel-collaboration--live-bash-data (parsed)
   "Return PARSED with the owner's live Bash tail when its process is running.
-The snapshot is bounded by the execution owner; terminal render data replaces
-it once the command settles.  No polling row becomes a second output owner."
+The snapshot includes cumulative preview truncation, distinct from per-poll
+omissions.  Terminal render data replaces it once the command settles.  No
+polling row becomes a second output owner."
   (let* ((data (plist-get parsed :render-data))
          (id (plist-get data :execution-id))
          (live (and id mevedel--session
@@ -289,12 +290,14 @@ it once the command settles.  No polling row becomes a second output owner."
                                     (plist-get record :execution-id))
                              :test #'equal))))
     (if (and live (eq (plist-get live :state) 'running))
-        (let ((copy (copy-sequence parsed)))
-          (plist-put copy :render-data
-                     (plist-put
-                      (plist-put (copy-sequence data) :status 'running)
-                      :execution-output
-                      (or (plist-get live :output-tail) ""))))
+        (let ((copy (copy-sequence parsed))
+              (data (copy-sequence data)))
+          (setq data (plist-put data :status 'running))
+          (setq data (plist-put data :execution-output
+                                (or (plist-get live :output-tail) "")))
+          (setq data (plist-put data :output-preview-truncated-p
+                                (plist-get live :output-preview-truncated-p)))
+          (plist-put copy :render-data data))
       parsed)))
 
 (defun mevedel-collaboration--missing-bash-data (data completions)
