@@ -275,7 +275,7 @@
 (declare-function mevedel-view--render-stream-update
                   "mevedel-view-stream" (data-buf))
 (declare-function mevedel-view--start-spinner-timer
-                  "mevedel-view-stream" ())
+                  "mevedel-view-stream" (&optional resumed))
 (declare-function mevedel-view-stream--schedule-execution-row-recovery
                   "mevedel-view-stream" (data-buffer))
 
@@ -1521,7 +1521,7 @@ redisplay hooks reschedule it once someone can see the result."
     (with-current-buffer view-buffer
       (when (and (derived-mode-p 'mevedel-view-mode)
                  (fboundp 'mevedel-view--start-spinner-timer))
-        (mevedel-view--start-spinner-timer))
+        (mevedel-view--start-spinner-timer t))
       (when (and (derived-mode-p 'mevedel-view-mode)
                  (not (mevedel-view--unattended-p)))
         (if mevedel-view--pending-render-kind
@@ -1538,7 +1538,7 @@ redisplay hooks reschedule it once someone can see the result."
   "Update animation scheduling after scrolling WINDOW."
   (when (and (eq (window-buffer window) (current-buffer))
              (fboundp 'mevedel-view--start-spinner-timer))
-    (mevedel-view--start-spinner-timer)))
+    (mevedel-view--start-spinner-timer t)))
 
 (defun mevedel-view--resume-on-horizontal-scroll (window _columns)
   "Update animation scheduling when WINDOW's horizontal scroll changes."
@@ -1547,7 +1547,7 @@ redisplay hooks reschedule it once someone can see the result."
       (with-current-buffer (window-buffer window)
         (when (and (derived-mode-p 'mevedel-view-mode)
                    (fboundp 'mevedel-view--start-spinner-timer))
-          (mevedel-view--start-spinner-timer))))))
+          (mevedel-view--start-spinner-timer t))))))
 
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.
@@ -1566,7 +1566,7 @@ still release animation and power observers when it becomes invisible."
   (if (eq (window-buffer window) (current-buffer))
       (mevedel-view--resume-render-if-attended (current-buffer))
     (when (fboundp 'mevedel-view--start-spinner-timer)
-      (mevedel-view--start-spinner-timer))))
+      (mevedel-view--start-spinner-timer t))))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
   "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.

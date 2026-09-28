@@ -365,8 +365,11 @@ a needless color-rate timer.
 Changes to styles, colors, and labels invalidate affected prepared frames;
 theme changes and edits to the spinner, its inherited faces, or the default
 face (including Customize) clear the color cache and repaint visible labels
-at their current or frozen phase without a periodic timer. Hidden labels
-repaint when they become visible again. Applying animation settings through
+at their current or frozen phase without a periodic timer. Theme changes also
+recheck the Braille and dots fallbacks of frozen main and pending-tool glyphs;
+a visibility resume retries dots support if the display font changed without
+a theme event. Hidden labels repaint when they become visible again. Applying
+animation settings through
 Customize refreshes live views without restarting a request. Moving a paused
 view to another display frame also repaints its frozen color sample for the
 destination palette (or the portable multi-frame fallback) on visibility
