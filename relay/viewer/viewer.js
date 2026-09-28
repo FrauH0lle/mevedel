@@ -151,17 +151,59 @@
   });
   const history = window.mevedelHistoryView.create({
     send, el, onArtifacts:refreshFilter,
-    renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(record, directiveLabel, artifacts.open),
+    renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
+      record, directiveLabel, artifacts.open, null, openExecutionResult),
   });
   const agents = window.mevedelAgentView.create({
     send, el, directiveLabel, openArtifact: artifacts.open,
-    summarize: summarizeSession,
+    summarize: summarizeSession, openExecution: openExecutionResult,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession, onVisibility: window.mevedelAppearance.editorVisible});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession});
+
+  let executionResultSequence = 0;
+  let pendingExecutionResult = null;
+  const executionDialog = el('dialog', 'execution-result-dialog');
+  const executionTitle = el('h2');
+  const executionBody = el('pre');
+  const executionNote = el('p');
+  const executionClose = el('button', '', 'Close');
+  executionClose.type = 'button';
+  executionClose.addEventListener('click', () => executionDialog.close());
+  executionDialog.append(executionTitle, executionBody, executionNote, executionClose);
+  document.body.append(executionDialog);
+
+  function openExecutionResult(facts) {
+    if (typeof facts?.owner !== 'string' || typeof facts.id !== 'string') return;
+    const reqId = ++executionResultSequence;
+    pendingExecutionResult = {reqId, owner: facts.owner, id: facts.id};
+    executionTitle.textContent = facts.command || 'Bash result';
+    executionBody.textContent = '';
+    executionNote.textContent = 'Loading retained execution result…';
+    if (!executionDialog.open) executionDialog.showModal();
+    Promise.resolve(send({t: 'execution-result-get', reqId,
+                          owner: facts.owner, executionId: facts.id}))
+      .then(ok => {
+        if (!ok && pendingExecutionResult?.reqId === reqId) {
+          executionNote.textContent = 'Result unavailable while disconnected.';
+        }
+      });
+  }
+
+  function showExecutionResult(frame) {
+    if (!pendingExecutionResult || frame.reqId !== pendingExecutionResult.reqId
+        || frame.owner !== pendingExecutionResult.owner
+        || frame.executionId !== pendingExecutionResult.id) return;
+    executionBody.textContent = typeof frame.output === 'string' ? frame.output : '';
+    executionNote.textContent = frame.error ||
+      (frame.source === 'forwarded'
+        ? 'Original child row unavailable; showing forwarded retained evidence.'
+        : 'Execution result.') +
+      (frame.truncated ? ' Output truncated for this guest view.' : '');
+  }
 
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
@@ -218,7 +260,7 @@
   function updateRecordElement(record, previous) {
     const current = state.elements.get(record.id);
     const turn = window.mevedelTranscriptRenderer.renderRecord(
-      record, directiveLabel, artifacts.open, previous || current);
+      record, directiveLabel, artifacts.open, previous || current, openExecutionResult);
     if (current) {
       turn.hidden = current.hidden;
       current.replaceWith(turn);
@@ -1019,6 +1061,8 @@
       tasks.show(frame);
     } else if (frame.t === 'agent') {
       agents.handle(frame);
+    } else if (frame.t === 'execution-result') {
+      showExecutionResult(frame);
     } else if (frame.t === 'history-index' || frame.t === 'history') {
       history.handle(frame);
     } else if (frame.t === 'artifact') {

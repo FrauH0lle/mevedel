@@ -54,8 +54,11 @@ all session owners, while model controls remain owner-scoped. Deterministic
 UTF-8, terminal, color, pager, and `MEVEDEL_EXECUTION=1` defaults make child output
 consistent without changing user-authorized command semantics.
 
-Keeping output on the original row avoids mistaking a successful collection of
-a failed process for a failed control operation. A single yield-based breadcrumb
+Keeping output on the original row, and marking accepted input or observation
+controls successful **in the view** even when they collect a failed exit, avoids
+mistaking a failed process for a failed control operation. Model-visible results
+and nested ToolCall error values keep their original status and structured
+process facts. A single yield-based breadcrumb
 replaces duplicate completion cards and terminal poll summaries without relying
 on elapsed time or on whether a view happened to be open. Distinct executions
 of the same command remain independently navigable.

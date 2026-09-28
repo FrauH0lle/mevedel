@@ -876,63 +876,84 @@ terminal facts and retained bounded payload without a second output card."
       (error nil))))
 
 (defun mevedel-view-audit--history-records (execution-id)
-  "Return retained tool interactions concerning EXECUTION-ID in source order."
-  (let ((data (mevedel-view-segments-display-buffer)) records)
-    (when (buffer-live-p data)
-      (with-current-buffer data
-        (save-restriction
-          (widen)
-          (cl-labels ((collect (call)
-                        (when (or (equal execution-id
-                                         (plist-get (plist-get call :args)
-                                                    :execution_id))
-                                  (equal execution-id
-                                         (plist-get (plist-get call :render-data)
-                                                    :execution-id)))
-                          (push call records))
-                        (dolist (child (plist-get (plist-get call :render-data)
-                                                  :calls))
-                          (collect (list :name (plist-get child :tool)
-                                         :args (plist-get child :args)
-                                         :result (plist-get child :result)
-                                         :render-data (plist-get child :render-data))))))
-            (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
-              (pcase (car segment)
-                ('tool
-                 (when-let* ((call (mevedel-view--tool-call-parse
-                                    data (cadr segment) (caddr segment))))
-                   (let ((retained (and (plist-get call :tool-use-id)
-                                        (mevedel-tool-render-data-for-tool
-                                         data (plist-get call :tool-use-id)))))
-                     (collect (if retained
-                                  (plist-put (copy-sequence call)
-                                             :render-data retained)
-                                call)))))
-                ('mailbox
-                 (let* ((text (buffer-substring-no-properties
-                               (cadr segment) (caddr segment)))
-                        (start (and (string-match "<agent-message\\([^>]*\\)>"
-                                                  text)
-                                    (match-end 0)))
-                        (attributes (and start (match-string 1 text)))
-                        (sender (and attributes
-                                     (string-match "sender=\"\\([^\"]+\\)\""
-                                                   attributes)
-                                     (match-string 1 attributes)))
-                        (finish (and start
-                                     (string-match "</agent-message>" text start)))
-                        (body (and finish (substring text start finish)))
-                        (record (and body sender
-                                     (string-match-p "type=\"EXECUTION\""
-                                                     attributes)
-                                     (mevedel-view-audit-mailbox-breadcrumb
-                                      body sender))))
-                   (when (equal (plist-get record :execution-id) execution-id)
-                     (push (list :name "Execution delivery"
-                                 :args (list :execution_id execution-id
-                                             :sender sender)
-                                 :result body)
-                           records))))))))))
+  "Return retained tool interactions concerning EXECUTION-ID in segment order."
+  (let* ((live (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
+         (display (mevedel-view-segments-display-buffer))
+         (session (and (buffer-live-p live)
+                       (buffer-local-value 'mevedel--session live)))
+         records)
+    (cl-labels
+        ((collect-buffer (data)
+           (with-current-buffer data
+             (save-restriction
+               (widen)
+               (cl-labels ((collect (call)
+                             (when (or (equal execution-id
+                                              (plist-get (plist-get call :args)
+                                                         :execution_id))
+                                       (equal execution-id
+                                              (plist-get (plist-get call :render-data)
+                                                         :execution-id)))
+                               (push call records))
+                             (dolist (child (plist-get (plist-get call :render-data)
+                                                       :calls))
+                               (collect (list :name (plist-get child :tool)
+                                              :args (plist-get child :args)
+                                              :result (plist-get child :result)
+                                              :render-data (plist-get child :render-data))))))
+                 (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
+                   (pcase (car segment)
+                     ('tool
+                      (when-let* ((call (mevedel-view--tool-call-parse
+                                         data (cadr segment) (caddr segment))))
+                        (let ((retained (and (plist-get call :tool-use-id)
+                                             (mevedel-tool-render-data-for-tool
+                                              data (plist-get call :tool-use-id)))))
+                          (collect (if retained
+                                       (plist-put (copy-sequence call)
+                                                  :render-data retained)
+                                     call)))))
+                     ('mailbox
+                      (let* ((text (buffer-substring-no-properties
+                                    (cadr segment) (caddr segment)))
+                             (start (and (string-match "<agent-message\\([^>]*\\)>"
+                                                       text)
+                                         (match-end 0)))
+                             (attributes (and start (match-string 1 text)))
+                             (sender (and attributes
+                                          (string-match "sender=\"\\([^\"]+\\)\""
+                                                        attributes)
+                                          (match-string 1 attributes)))
+                             (finish (and start
+                                          (string-match "</agent-message>" text start)))
+                             (body (and finish (substring text start finish)))
+                             (record (and body sender
+                                          (string-match-p "type=\"EXECUTION\""
+                                                          attributes)
+                                          (mevedel-view-audit-mailbox-breadcrumb
+                                           body sender))))
+                        (when (equal (plist-get record :execution-id) execution-id)
+                          (push (list :name "Execution delivery"
+                                      :args (list :execution_id execution-id
+                                                  :sender sender)
+                                      :result body)
+                                records)))))))))))
+      (if (and session (buffer-live-p live))
+          (dolist (descriptor (mevedel-session-artifacts-transcript-segments
+                               session live))
+            (when (eq (plist-get descriptor :status) 'readable)
+              (if (plist-get descriptor :current-p)
+                  (collect-buffer live)
+                (when-let* ((older
+                             (condition-case nil
+                                 (mevedel-session-artifacts-read-transcript-segment
+                                  session descriptor)
+                               (error nil))))
+                  (unwind-protect
+                      (collect-buffer older)
+                    (kill-buffer older))))))
+        (when (buffer-live-p display)
+          (collect-buffer display))))
     (nreverse records)))
 
 (defun mevedel-view-audit-show-history (execution-id)

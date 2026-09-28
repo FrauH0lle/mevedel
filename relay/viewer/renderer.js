@@ -548,7 +548,23 @@
     return details;
   }
 
-  function renderContent(record, onArtifactOpen, disclosures) {
+  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen) {
+    if (record.kind === 'execution') {
+      const facts = record.execution || {};
+      const row = el('div', 'execution-breadcrumb');
+      const label = record.status === 'cancelled' ? 'Stopped'
+        : record.status === 'failed' ? 'Failed'
+        : record.status === 'completed' ? 'Finished' : 'Unknown';
+      const code = record.status === 'failed' && Number.isInteger(facts.exitCode)
+        ? ` · exit ${facts.exitCode}` : '';
+      row.append(el('span', '', `↳ ${label}: ${facts.command || 'Bash'}${code} · ${facts.owner || 'agent'}  `));
+      const link = el('button', 'execution-result-link', 'Show result');
+      link.type = 'button';
+      link.disabled = typeof onExecutionOpen !== 'function';
+      if (!link.disabled) link.addEventListener('click', () => onExecutionOpen(facts));
+      row.append(link);
+      return row;
+    }
     if (record.kind === 'user') {
       const shared = record.shared;
       const text = record.text || '';
@@ -589,7 +605,7 @@
     }
   }
 
-  function renderRecord(record, directiveLabel, onArtifactOpen, previous) {
+  function renderRecord(record, directiveLabel, onArtifactOpen, previous, onExecutionOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
@@ -601,7 +617,7 @@
     const content = el('div', 'content');
     content.append(whoLine(record, directiveLabel));
     turn.disclosures = new Map();
-    const rendered = renderContent(record, onArtifactOpen, turn.disclosures);
+    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen);
     content.append(rendered);
     turn.append(content);
     // Rebuilding a record owns disclosure continuity. Callers supply the

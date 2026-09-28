@@ -280,7 +280,12 @@
             (should (equal "history-1-tool-bash-twice" (plist-get record :id)))
             (should (equal "failed" (plist-get record :status)))
             (should (equal "initial\nfinal" (plist-get record :result))))
-          (should-not (mevedel-collaboration--history-records room 2))
+          (let* ((records (mevedel-collaboration--history-records room 2))
+                 (record (car records)))
+            (should (= 1 (length records)))
+            (should (equal "execution" (plist-get record :kind)))
+            (should (equal "failed" (plist-get record :status)))
+            (should-not (plist-member record :result)))
           (with-current-buffer data
             (insert (mevedel--format-hook-audit-record
                      '(:type execution-completion :tool-use-id "bash-twice"
@@ -323,6 +328,154 @@
                               (list :session session :data-buffer nil) 1))))
             (should (equal "initial" (plist-get record :result)))))
       (kill-buffer data)
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-collaboration-forwarded-execution-compaction-dedup
+  (:doc "first readable mailbox owns breadcrumb across archives and current transcript")
+  (let* ((directory (make-temp-file "mevedel-history-execution-" t))
+         (session (mevedel-session--create :name "history-execution"
+                                          :save-path directory :authority-mode 'pid-lock
+                                          :current-segment 3))
+         (data (generate-new-buffer " *forwarded history live*"))
+         (child (generate-new-buffer " *forwarded history child*"))
+         (room (list :session session :data-buffer data))
+         (mailbox (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+                          "retained output\n"
+                          "<bash-execution execution_id=\"exec-duplicate\" command=\"exit 2\" "
+                          "outcome=\"failure\" exit_code=\"2\"/>\n"
+                          "</agent-message>\n"))
+         (root-breadcrumb
+          (mevedel--format-hook-audit-record
+           '(:type execution-breadcrumb :owner "/root"
+             :execution-id "exec-duplicate" :tool-use-id "outer/1"
+             :facts (:execution-id "exec-duplicate" :outcome success))))
+         (distinct (replace-regexp-in-string
+                    "exec-duplicate" "exec-distinct" mailbox t t)))
+    (unwind-protect
+        (progn
+          (dotimes (index 2)
+            (with-temp-buffer
+              (delay-mode-hooks (org-mode))
+              (insert mailbox (if (= index 1) distinct "") root-breadcrumb)
+              (mevedel-session-artifacts-stabilize-gptel-bounds)
+              (write-region (point-min) (point-max)
+                            (mevedel-session-artifacts-segment-path
+                             directory (1+ index)) nil 'silent)))
+          (with-current-buffer data
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert mailbox distinct root-breadcrumb))
+          ;; A child owns a separate receiving transcript even when its
+          ;; execution identity also appears in the parent's forwarded mail.
+          (setf (mevedel-session-agent-registry session)
+                (list (cons "/root/child"
+                            (mevedel-agent-record--create
+                             :path "/root/child" :conversation-buffer child))))
+          (with-current-buffer child
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert (mevedel--format-hook-audit-record
+                     '(:type execution-breadcrumb :owner "/root/child"
+                       :execution-id "exec-duplicate" :tool-use-id "child/1"
+                       :facts (:execution-id "exec-duplicate" :outcome failure)))))
+          (should (= 1 (length (mevedel-collaboration--canonical-records child))))
+          (let ((first (mevedel-collaboration--history-records room 1))
+                (second (mevedel-collaboration--history-records room 2))
+                (current (mevedel-collaboration--canonical-records data)))
+            (should (= 2 (cl-count "execution" first :key
+                                   (lambda (record) (plist-get record :kind)) :test #'equal)))
+            (should (= 1 (cl-count "execution" second :key
+                                   (lambda (record) (plist-get record :kind)) :test #'equal)))
+            (should-not (cl-find "execution" current :key
+                                 (lambda (record) (plist-get record :kind)) :test #'equal))
+            (should (equal "exec-duplicate"
+                           (plist-get (plist-get (car first) :execution) :id)))
+            (should (equal "exec-distinct"
+                           (plist-get (plist-get (car second) :execution) :id))))
+          ;; Missing older evidence must not erase a newer, still readable
+          ;; mailbox delivery from the guest's projection.
+          (delete-file (mevedel-session-artifacts-segment-path directory 1))
+          (let ((second (mevedel-collaboration--history-records room 2)))
+            (should (= 3 (cl-count "execution" second :key
+                                   (lambda (record) (plist-get record :kind)) :test #'equal)))))
+      (kill-buffer child)
+      (kill-buffer data)
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-collaboration-execution-dedup-lazy-archive-reads
+  (:doc "text-only publishes avoid archive I/O and source changes invalidate memoized ids")
+  (let* ((directory (make-temp-file "mevedel-dedup-reads-" t))
+         (session (mevedel-session--create :name "dedup-reads" :save-path directory
+                                          :authority-mode 'pid-lock :current-segment 2))
+         (data (generate-new-buffer " *dedup read live*"))
+         (reloaded (generate-new-buffer " *dedup read reloaded*"))
+         (path (mevedel-session-artifacts-segment-path directory 1))
+         (mailbox (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+                          "retained output\n"
+                          "<bash-execution execution_id=\"exec-dedup\" command=\"echo done\" "
+                          "outcome=\"success\" exit_code=\"0\"/>\n"
+                          "</agent-message>\n"))
+         (read-segment (symbol-function 'mevedel-session-artifacts-read-transcript-segment))
+         (reads 0))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert mailbox))
+          (with-current-buffer data
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert "ordinary streamed text\n"))
+          (with-current-buffer reloaded
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert mailbox))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
+                     (lambda (&rest args)
+                       (cl-incf reads)
+                       (apply read-segment args))))
+            (dotimes (_ 3)
+              (with-current-buffer data (insert "more text\n"))
+              (mevedel-collaboration--canonical-records data))
+            (should (= 0 reads))
+            (with-current-buffer data (insert mailbox))
+            (should-not (cl-find "execution"
+                                 (mevedel-collaboration--canonical-records data)
+                                 :key (lambda (record) (plist-get record :kind))
+                                 :test #'equal))
+            (should (= 1 reads))
+            (dotimes (_ 3)
+              (with-current-buffer data (insert "streaming continues\n"))
+              (mevedel-collaboration--canonical-records data))
+            (should (= 1 reads))
+            ;; A fresh live buffer has no derived cache: cold projection
+            ;; reconstructs its own identities from the archive.
+            (should-not (cl-find "execution"
+                                 (mevedel-collaboration--canonical-records reloaded)
+                                 :key (lambda (record) (plist-get record :kind))
+                                 :test #'equal))
+            (should (= 2 reads))
+            ;; Replaced segment evidence changes the source fingerprint; the
+            ;; live record is no longer suppressed by stale archive state.
+            (with-temp-file path (insert "no execution remains\n"))
+            (should (cl-find "execution"
+                             (mevedel-collaboration--canonical-records data)
+                             :key (lambda (record) (plist-get record :kind))
+                             :test #'equal))
+            (should (= 3 reads))
+            ;; Compaction adds a new earlier source.  It invalidates the
+            ;; memo even while the live text and execution ID stay the same.
+            (with-temp-file (mevedel-session-artifacts-segment-path
+                             directory 2)
+              (insert mailbox))
+            (setf (mevedel-session-current-segment session) 3)
+            (should-not (cl-find "execution"
+                                 (mevedel-collaboration--canonical-records data)
+                                 :key (lambda (record) (plist-get record :kind))
+                                 :test #'equal))
+            (should (= 5 reads))
+            (mevedel-collaboration--canonical-records data)
+            (should (= 5 reads))))
+      (kill-buffer data)
+      (kill-buffer reloaded)
       (delete-directory directory t))))
 
 ;;; test-mevedel-collaboration-history.el ends here

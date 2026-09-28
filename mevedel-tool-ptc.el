@@ -212,7 +212,15 @@ nested-row machinery."
            (elapsed (plist-get render-data :elapsed-seconds))
            (error-count
             (cl-count-if (lambda (call)
-                           (memq (plist-get call :status) '(error denied)))
+                           (let ((status (plist-get call :status))
+                                 (facts (plist-get call :render-data)))
+                             (or (eq status 'denied)
+                                 (and (eq status 'error)
+                                      (not (and (equal (plist-get call :tool)
+                                                       "WriteStdin")
+                                                (memq (plist-get facts :execution-control)
+                                                      '(input poll))
+                                                (plist-get facts :control-succeeded-p)))))))
                          calls))
            (returned-value
             (and (not (bound-and-true-p mevedel-tool-render-summary-only))
