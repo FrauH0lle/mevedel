@@ -1075,6 +1075,10 @@ batch whose written artifacts name local `:source' files."
             ;; A file-backed artifact is copied as bytes, never read into Lisp.
             (source-file (copy-file source-file source t))
             (t
+             ;; Raw bytes hash now, so the generation need not reread them.
+             (unless (multibyte-string-p content)
+               (setq normalized
+                     (plist-put normalized :source-sha256 (secure-hash 'sha256 content))))
              (with-temp-buffer
                (set-buffer-multibyte (multibyte-string-p content))
                (insert content)
@@ -1150,7 +1154,8 @@ was otherwise read back and copied whole on every save."
           :source-file source
           :entry (list (plist-get artifact :logical)
                        :published (file-relative-name target session-dir)
-                       :sha256 (mevedel-session-publication--file-sha256 source)))))
+                       :sha256 (or (plist-get artifact :source-sha256)
+                                   (mevedel-session-publication--file-sha256 source))))))
 
 (defun mevedel-session-publication--write-generation
     (root artifacts session-dir entries)
