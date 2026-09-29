@@ -1381,6 +1381,23 @@ value returns when the last one ends.  Nil leaves the threshold alone."
                  (natnum :tag "Bytes"))
   :group 'mevedel)
 
+(defcustom mevedel-gc-cons-threshold-while-typing (* 256 1024 1024)
+  "Lowest `gc-cons-threshold', in bytes, while typing during mevedel work.
+
+While any request or transcript rebuild holds the busy threshold and input
+arrived within the last second, collection waits for this much allocation
+instead.  A collection on a long session's heap takes about 200 ms, and a
+refresh or a busy request allocates enough to reach the busy threshold in
+the middle of typing.  Once input pauses, the busy threshold returns and
+the pending collection runs while nobody is typing.  Nil keeps the busy
+threshold throughout."
+  :type '(choice (const :tag "Keep the busy threshold" nil)
+                 (natnum :tag "Bytes"))
+  :group 'mevedel)
+
+(defconst mevedel--gc-typing-pause 1.0
+  "Seconds without input after which a pending collection may run.")
+
 (defconst mevedel--gc-settlement-grace 30
   "Seconds an ended request keeps the busy threshold for its settlement tail.")
 
@@ -1391,7 +1408,7 @@ value returns when the last one ends.  Nil leaves the threshold alone."
   "Timer keeping the busy threshold while holds exist.")
 
 (defvar mevedel--gc-restore nil
-  "(PREVIOUS . FLOOR) once mevedel raised `gc-cons-threshold'.")
+  "(PREVIOUS . APPLIED) once mevedel raised `gc-cons-threshold'.")
 
 (defun mevedel--gc-maintain ()
   "Apply or release the busy collection threshold for the current holds.
@@ -1402,23 +1419,49 @@ also outlasts tuning that lowers the threshold after an idle collection."
              (unless (ignore-errors (funcall live-p))
                (remhash key mevedel--gc-holds)))
            mevedel--gc-holds)
-  (let ((floor mevedel-gc-cons-threshold-while-busy))
+  (let ((floor (mevedel--gc-floor)))
     (if (and floor (> (hash-table-count mevedel--gc-holds) 0))
         (progn
-          (unless mevedel--gc-restore
-            (setq mevedel--gc-restore (cons gc-cons-threshold floor)))
+          (if (not mevedel--gc-restore)
+              (setq mevedel--gc-restore (cons gc-cons-threshold nil))
+            ;; Still our value: follow the floor down as well as up, so a
+            ;; pause in typing lets the deferred collection run.
+            (when (eql gc-cons-threshold (cdr mevedel--gc-restore))
+              (setq gc-cons-threshold
+                    (max floor (car mevedel--gc-restore)))))
           (when (< gc-cons-threshold floor)
             (setq gc-cons-threshold floor))
+          (setcdr mevedel--gc-restore gc-cons-threshold)
+          (add-hook 'pre-command-hook #'mevedel--gc-note-input)
           (unless (timerp mevedel--gc-timer)
             (setq mevedel--gc-timer (run-at-time 1 1 #'mevedel--gc-maintain))))
       (when (timerp mevedel--gc-timer)
         (cancel-timer mevedel--gc-timer))
       (setq mevedel--gc-timer nil)
+      (remove-hook 'pre-command-hook #'mevedel--gc-note-input)
       (when mevedel--gc-restore
         ;; Someone else chose a value meanwhile; theirs stands.
         (when (eql gc-cons-threshold (cdr mevedel--gc-restore))
           (setq gc-cons-threshold (car mevedel--gc-restore)))
         (setq mevedel--gc-restore nil)))))
+
+(defun mevedel--gc-typing-p ()
+  "Return non-nil when input arrived within `mevedel--gc-typing-pause'."
+  (let ((idle (current-idle-time)))
+    (or (null idle) (< (float-time idle) mevedel--gc-typing-pause))))
+
+(defun mevedel--gc-floor ()
+  "Return the collection threshold floor for the current input activity."
+  (when-let* ((busy mevedel-gc-cons-threshold-while-busy))
+    (if (and mevedel-gc-cons-threshold-while-typing (mevedel--gc-typing-p))
+        (max busy mevedel-gc-cons-threshold-while-typing)
+      busy)))
+
+(defun mevedel--gc-note-input ()
+  "Raise the collection floor as soon as input resumes during held work."
+  (when (and mevedel-gc-cons-threshold-while-typing
+             (< gc-cons-threshold mevedel-gc-cons-threshold-while-typing))
+    (mevedel--gc-maintain)))
 
 (defun mevedel--gc-hold (key live-p)
   "Keep the busy collection threshold while KEY holds and LIVE-P is non-nil.

@@ -219,6 +219,7 @@
 (declare-function mevedel-transport-busy-p "mevedel-transport" (target))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--gc-hold "mevedel-utilities" (key live-p))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 (declare-function mevedel--warn-once
@@ -7517,6 +7518,9 @@ turn.  SAVED-STATES restores matching disclosure state."
           :last-current-assistant-turn-data-start last-current-assistant-turn-data-start
           :last-turn-role last-turn-role)))
 
+(defconst mevedel-view-render--gc-grace 5
+  "Seconds a finished history job keeps deferring collection during typing.")
+
 (defun mevedel-view-render-cancel-batch ()
   "Cancel this view's pending full-history callbacks and release their markers."
   (when mevedel-view-render--batch
@@ -7529,6 +7533,8 @@ turn.  SAVED-STATES restores matching disclosure state."
     (dolist (entry (plist-get mevedel-view-render--batch :pending))
       (set-marker (nth 1 entry) nil)
       (set-marker (nth 2 entry) nil))
+    (setf (plist-get mevedel-view-render--batch :settled-until)
+          (+ (float-time) mevedel-view-render--gc-grace))
     (setq mevedel-view-render--batch nil)))
 
 (defun mevedel-view-render-resume-batch ()
@@ -7752,10 +7758,22 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :tools-turns nil :tools-segments nil :tool-states nil
                       :tool-cache (make-hash-table :test #'equal)
                       :plan nil :states nil :pending nil :timer nil
+                      :settled-until nil
                       :tick (with-current-buffer data (buffer-modified-tick))
                       :index (make-hash-table :test #'eq)
                       :audits (make-hash-table :test #'equal))))
       (setq mevedel-view-render--batch job)
+      ;; Collection waits for a pause in typing while the job runs and
+      ;; briefly after it: a refresh allocates tens of megabytes, and one
+      ;; collection landing in a callback was its slowest step.
+      (let ((view (current-buffer)))
+        (mevedel--gc-hold
+         job (lambda ()
+               (or (and (buffer-live-p view)
+                        (eq job (buffer-local-value
+                                 'mevedel-view-render--batch view)))
+                   (< (float-time)
+                      (or (plist-get job :settled-until) 0))))))
       (mevedel-view-render-resume-batch))))
 
 (defun mevedel-view-render--install-batch (job)
