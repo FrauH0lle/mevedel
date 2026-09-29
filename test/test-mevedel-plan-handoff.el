@@ -907,6 +907,67 @@
                   :mode ask :model-provider "OpenAI:gpt-5")
       :accepted (:path "../escape.md" :hash "h")))))
 
+(mevedel-deftest mevedel-plan-handoff--dispatch-submission
+  (:doc "releases source preparation for Here/Worktree Direct/Goal without losing drafts")
+  ,test
+  (test)
+  (dolist (execution '(direct goal))
+    (dolist (location '(here worktree))
+      (dolist (owner '(plan-preparation another-request))
+        (let* ((data (generate-new-buffer " *handoff-progress-data*"))
+               (view (generate-new-buffer " *handoff-progress-view*"))
+               (target (if (eq location 'here) data
+                         (generate-new-buffer " *handoff-progress-target*")))
+               (session (mevedel-session--create :name "handoff"))
+               (fsm (gptel-make-fsm :info nil))
+               (draft "> quoted\nsecond line")
+               dispatched)
+          (unwind-protect
+              (save-window-excursion
+                (with-current-buffer data
+                  (setq-local mevedel--session nil)
+                  (setq-local mevedel--current-request nil))
+                (mevedel-view--setup view data)
+                (set-window-buffer (selected-window) view)
+                (with-current-buffer view
+                  (goto-char (mevedel-view--input-start))
+                  (insert draft)
+                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (mevedel-view--update-spinner "Preparing implementation..." owner)
+                  (should (timerp mevedel-view--spinner-timer)))
+                (cl-letf (((symbol-function 'mevedel-plan-handoff--start-goal)
+                           (lambda (&rest _) t))
+                          ((symbol-function
+                            'mevedel-plan-handoff--clear-target-goal-reservation)
+                           #'ignore)
+                          ((symbol-function 'mevedel--implement-plan)
+                           (lambda (&rest _)
+                             (should (eq (current-buffer) target))
+                             (with-current-buffer view
+                               (should (eq mevedel-view--spinner-owner
+                                           (unless (eq owner 'plan-preparation)
+                                             owner)))
+                               (when (eq owner 'plan-preparation)
+                                 (should-not mevedel-view--spinner-timer))
+                               (should (equal draft (mevedel-view--input-text)))
+                               (should (= (point) (+ (mevedel-view--input-start) 3))))
+                             (setq dispatched t)
+                             fsm)))
+                  (mevedel-plan-handoff--dispatch-submission
+                   session data nil (list :execution execution :mode 'edits)
+                   nil session target "Implement"
+                   (mevedel-prompt-submission-create
+                    :input "Implement" :outcome '(:model-input "Implement"))))
+                (should dispatched)
+                (when (eq execution 'direct)
+                  (should (eq data (plist-get
+                                    (gptel-fsm-info fsm)
+                                    :mevedel-plan-handoff-source-buffer)))))
+            (with-current-buffer view (mevedel-view-stream-stop))
+            (kill-buffer view)
+            (unless (eq target data) (kill-buffer target))
+            (kill-buffer data)))))))
+
 (mevedel-deftest mevedel-plan-handoff--submit
   (:doc "routes the generated handoff through planned skill submission")
   ,test
