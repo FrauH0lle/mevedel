@@ -362,7 +362,9 @@ interactive. Scripts in flight are runtime state: if Emacs exits or the session
 is recovered, the ToolCall call settles as interrupted and does not resume.
 For root-session scripts, only the envelope call and its bounded ordered child
 audit are checkpointed, and the checkpoint is written durably twice: once
-before the first nested call and once at settlement. Retained-agent scripts
+before the first nested call and once at settlement. Both writes publish only
+the session sidecar; a session that has no sidecar yet is materialized by a
+full save first. Retained-agent scripts
 skip this checkpoint because their own interrupted-turn handling settles them.
 Between the root-session writes, child audit progress is journaled in memory
 only; an unrelated autosave captures it opportunistically. The performance
