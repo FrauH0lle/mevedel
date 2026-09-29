@@ -54,3 +54,79 @@
   margin: 1rem;
 }
 .artifact-body .panel-note { padding: 1rem 1.1rem; }
+/* Artifact comments: the composer and thread cards float over the frame. */
+.artifact-body { position: relative; }
+#artifact-comment[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.artifact-comment-composer,
+.artifact-comment-card {
+  position: absolute;
+  z-index: 5;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  padding: .65rem .75rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius, .6rem);
+  box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .18));
+  font-family: var(--font-ui);
+  font-size: .82rem;
+}
+.artifact-comment-composer { border-color: var(--accent); }
+.artifact-comment-target,
+.artifact-comment-head {
+  margin: 0;
+  color: var(--muted);
+  font-size: .72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-comment-head { color: var(--ink); font-weight: 700; }
+.artifact-comment-quote {
+  margin: 0;
+  padding: .2rem .5rem;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  max-height: 4.5rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.artifact-comment-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 4rem;
+  resize: vertical;
+  padding: .4rem .5rem;
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius, .4rem);
+}
+.artifact-comment-status {
+  margin: 0;
+  min-height: 1em;
+  color: var(--muted);
+  font-size: .72rem;
+}
+.artifact-comment-status:empty { display: none; }
+.artifact-comment-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.artifact-comment-reply {
+  margin: 0;
+  padding-top: .35rem;
+  border-top: 1px solid var(--line);
+  max-height: 14rem;
+  overflow: auto;
+}
+.artifact-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .35rem;
+}

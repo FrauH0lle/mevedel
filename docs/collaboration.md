@@ -444,6 +444,51 @@ the model writes, everyone gets the card. There is no guest upload
 path, and the relay is untouched -- artifact frames are sealed like
 every other frame.
 
+### Artifact comments
+
+Writable guests can comment on part of an HTML artifact in the panel.
+**Comment** turns on comment mode: hovering highlights what a click would
+pick, a word under the pointer or otherwise the element; Alt prefers the
+element, Arrow Up widens the highlight to its parent and Arrow Down narrows
+it again, and Enter picks it. Dragging across text keeps the browser's own
+selection and comments on that passage; dragging anywhere else draws a box
+and comments on the area. The box names the smallest element holding most
+of it and the children it covers. While commenting, the artifact's own
+click, pointer and keyboard handlers do not run. Escape leaves the mode.
+The separate artifact tab has no comment mode.
+
+The picker is inlined into the panel frame ahead of the artifact and only
+reports what was picked: a CSS selector, a text fingerprint of the element,
+the quoted word or passage with its offset, the box as fractions of the
+element, a label such as `Decisions at a glance › word "share"`, and a
+bounded text and HTML excerpt of the target. The composer is drawn by the
+viewer, outside the sandbox, so the artifact can neither read nor write what
+a participant types. The viewer accepts picks only from the current panel
+frame and only while comment mode is on, and bounds every field. An artifact
+can still misreport where it was clicked; the composer shows the label and
+quote it will send.
+
+**Send to assistant** sends an `artifact-comment` frame carrying the record
+id, a comment identity, the text, the anchor and the excerpt. The host
+refuses view links, unknown or deleted records and non-HTML artifacts,
+rebuilds the anchor from its known bounded fields, and queues the comment as
+an ordinary attributed follow-up in the main conversation, not a separate
+item conversation. The prompt carries the artifact name, its file path, the
+target, and the excerpts behind the shared-context heading; the room and
+Emacs view fold that context under **Artifact comment · NAME · LABEL**. A
+retry with a known comment identity succeeds without queueing it again.
+Every refusal returns to the sender as `artifact-comment` with an error.
+
+Markers are rebuilt from the conversation rather than a separate store:
+delivered comments are guest prompts carrying artifact attribution, queued
+ones come from the sender's own queue, and the next assistant turn is the
+reply. The frame places each marker by its selector when the element still
+carries the same text fingerprint, and otherwise searches for the element
+whose fingerprint differs least, so a rewritten artifact keeps markers on
+content that survived. A marker whose content is gone is not shown. Hovering
+a marker shows its thread; clicking pins it. **Show in chat** scrolls to the
+comment turn, and **Hide marker** hides it in this browser only.
+
 ## Notifications and browser storage
 
 The viewer supports installable-PWA presentation, host-synchronized theme,
