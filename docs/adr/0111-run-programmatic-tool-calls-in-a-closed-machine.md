@@ -163,6 +163,14 @@ is recovery fidelity after a crash mid-script: the child audit restores as of
 the last autosave rather than the last child, and the row still settles as
 interrupted either way.
 
+The start checkpoint was still a full root save: transcript normalization,
+the prompt index and a segment publication. A measured 2026-09-29 run on a
+1.4 MB session spent 1.9 s in its eight start saves, from 196 to 274 ms each, among the
+longest publication pauses of the run. Restore rebuilds
+the interrupted row from the checkpoint alone, so the start now publishes
+only the sidecar, as settlement already did, and falls back to the full save
+only to materialize a session that has no sidecar yet.
+
 The replacement review exposed a limit in the preflight claim: a runtime macro
 can construct a prohibited standalone call after an earlier authorized tool.
 We retain the language and its existing no-rollback semantics. Static and
