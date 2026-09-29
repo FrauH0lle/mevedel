@@ -31,6 +31,12 @@
 (defvar mevedel-memory-pass--inhibit-scheduling)
 (setq mevedel-memory-pass--inhibit-scheduling t)
 
+;; Tests that stub Markdown fontification on may enter `markdown-ts-mode'
+;; without its grammars.  Emacs 31 then offers to install them with a
+;; `y-or-n-p' that blocks a batch run whose stdin stays open.
+(defvar treesit-auto-install-grammar)
+(setq treesit-auto-install-grammar 'never)
+
 ;; `gptel'
 (declare-function gptel-make-openai "gptel")
 (defvar gptel-backend)
