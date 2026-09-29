@@ -57,6 +57,25 @@ refresh).  Skip past it so the rendered view starts at real content."
         (point)
       pos)))
 
+(defun mevedel-transcript-leading-property (name)
+  "Return property NAME's value from the current buffer's leading drawer.
+Read the top-level `:PROPERTIES:' drawer directly: `org-entry-get' at the
+buffer start builds Org element context, which took 11 ms per save on a long
+transcript to read one small value."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (when (looking-at-p ":PROPERTIES:$")
+        (let ((end (save-excursion
+                     (and (re-search-forward "^:END:[ \t]*$" nil t)
+                          (match-beginning 0)))))
+          (when (and end
+                     (re-search-forward
+                      (concat "^:" (regexp-quote name) ":[ \t]+\\(.*?\\)[ \t]*$")
+                      end t))
+            (match-string-no-properties 1)))))))
+
 (defun mevedel-transcript--skip-leading-summary-block (pos)
   "Return POS advanced past a leading compaction summary block, if any."
   (save-excursion
@@ -337,24 +356,111 @@ Index prefixes only; the existing parsers still validate each complete marker."
           (push (match-beginning 0) positions))
         (vconcat (nreverse positions))))))
 
+(defconst mevedel-transcript--control-kinds
+  '((begin-reasoning . "#\\+begin_reasoning\\b")
+    (end-reasoning . "#\\+end_reasoning")
+    (begin-tool . "#\\+begin_tool\\b")
+    (end-tool . "#\\+end_tool")
+    (reminder . "\\(?:\\*+ \\)?</?system-reminder>")
+    (mailbox . "\\(?:\\*+ \\)?<agent-\\(?:result\\|message\\)")
+    (hook-context . "</?hook-context>")
+    (task-background . "</?task-background>")
+    (render-data . "<!-- /?mevedel-render-data -->")
+    (hook-audit . "<!-- /?mevedel-hook-audit -->")
+    (prompt . ":PROMPT:")
+    (end . ":END:"))
+  "Mutually exclusive control line kinds, as line-start prefix regexps.")
+
+(defconst mevedel-transcript--control-kind-regexp
+  (let ((group 0))
+    (mapconcat (lambda (kind)
+                 (format "\\(?%d:%s\\)" (setq group (1+ group)) (cdr kind)))
+               mevedel-transcript--control-kinds "\\|"))
+  "Classify an indexed control line by the group of its kind.")
+
+(defconst mevedel-transcript--control-search-kinds
+  '(("^#\\+begin_reasoning\\b" begin-reasoning)
+    ("^#\\+end_reasoning[^\n]*\n?" end-reasoning)
+    ("^#\\+begin_tool\\b" begin-tool)
+    ("^#\\+end_tool[^\n]*\n?" end-tool)
+    ("^#\\+\\(begin_tool\\b\\|end_tool[^\n]*\n?\\)" begin-tool end-tool)
+    ("^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" reminder)
+    ("^\\(?:\\(?:\\*+ \\)?<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
+     reminder)
+    ("^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)" mailbox)
+    ("^<hook-context>[ \t]*$" hook-context)
+    ("^</hook-context>[ \t]*\n?" hook-context)
+    ("^<task-background>[ \t]*$" task-background)
+    ("^</task-background>[ \t]*\n?" task-background)
+    ("^<!-- mevedel-render-data -->[ \t]*$" render-data)
+    ("^<!-- /mevedel-render-data -->[ \t]*\\(?:\n\\(?:[ \t\r]*\n\\)*\\)?"
+     render-data)
+    ("^:PROMPT:[ \t]*$" prompt)
+    ("^:END:[ \t]*\n?" end)
+    ("^<!-- mevedel-hook-audit -->[ \t]*$" hook-audit)
+    ("^<!-- /mevedel-hook-audit -->[ \t]*\\(?:\n[ \t\r]*\\)*" hook-audit))
+  "Control searches whose every match starts a line of one of the listed kinds.
+Other searches visit every indexed line.")
+
+(defvar mevedel-transcript--control-line-kinds
+  (make-hash-table :test #'eq :weakness 'key)
+  "Control line indexes to their lines grouped by search regexp.
+Every structural scan runs each control search over the whole transcript.
+Testing each search's regexp at every indexed line cost a pass per search;
+classifying each line once lets a search visit only lines of its kinds.")
+
+(defun mevedel-transcript--control-search-lines (regexp)
+  "Return the indexed control lines REGEXP can match, in source order."
+  (if-let* ((kinds (cdr (assoc regexp mevedel-transcript--control-search-kinds))))
+      (let ((table
+             (or (gethash mevedel-transcript--control-lines
+                          mevedel-transcript--control-line-kinds)
+                 (let ((grouped (make-hash-table :test #'equal)))
+                   (save-excursion
+                     (let (by-kind)
+                       (cl-loop for position across mevedel-transcript--control-lines
+                                do (goto-char position)
+                                (when (looking-at mevedel-transcript--control-kind-regexp)
+                                  (let ((kind (cl-loop for index from 1
+                                                       for entry in mevedel-transcript--control-kinds
+                                                       when (match-beginning index)
+                                                       return (car entry))))
+                                    (push position (alist-get kind by-kind)))))
+                       (pcase-dolist (`(,kind . ,positions) by-kind)
+                         (puthash kind (vconcat (nreverse positions)) grouped))))
+                   (puthash mevedel-transcript--control-lines grouped
+                            mevedel-transcript--control-line-kinds)))))
+        (or (gethash regexp table)
+            (puthash regexp
+                     (if (cdr kinds)
+                         (vconcat (sort (apply #'append
+                                               (mapcar (lambda (kind)
+                                                         (append (gethash kind table) nil))
+                                                       kinds))
+                                        #'<))
+                       (or (gethash (car kinds) table) []))
+                     table)))
+    mevedel-transcript--control-lines))
+
 (defun mevedel-transcript--search-control-line (regexp limit)
   "Search forward for control REGEXP before LIMIT, returning its end or nil.
 Use the current structural scan's line index when available.  Preserve native
 search bounds and match data, including a match ending partway through a line."
   (if (not mevedel-transcript--control-lines)
       (re-search-forward regexp limit t)
-    (let ((origin (point))
-          (limit (or limit (point-max)))
-          (low 0) (high (length mevedel-transcript--control-lines)) found)
+    (let* ((origin (point))
+           (limit (or limit (point-max)))
+           (lines (mevedel-transcript--control-search-lines regexp))
+           (low 0) (high (length lines)) found)
       (while (< low high)
         (let ((middle (/ (+ low high) 2)))
-          (if (< (aref mevedel-transcript--control-lines middle) origin)
+          (if (< (aref lines middle) origin)
               (setq low (1+ middle))
             (setq high middle))))
-      (while (and (< low (length mevedel-transcript--control-lines))
-                  (< (aref mevedel-transcript--control-lines low) limit)
+      (while (and (< low (length lines))
+                  (< (aref lines low) limit)
                   (not found))
-        (goto-char (aref mevedel-transcript--control-lines low))
+        (goto-char (aref lines low))
         (when (looking-at-p regexp)
           (setq found (re-search-forward regexp limit t)))
         (setq low (1+ low)))
