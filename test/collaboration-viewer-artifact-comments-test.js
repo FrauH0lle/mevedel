@@ -45,8 +45,9 @@ load('relay/viewer/viewer-artifact-comments.js', context);
 load('relay/viewer/viewer-artifact.js', context);
 
 const revealed = [];
+const sentFrames = [];
 const controller = window.mevedelArtifactView.create({
-  send: () => Promise.resolve(true),
+  send: frame => { sentFrames.push(frame); return Promise.resolve(true); },
   el: (tag, className, text) => element(document, tag, className, text),
   flash: () => {}, summarize: () => {},
   reveal: id => revealed.push({id, panelHidden: nodes['artifact-panel'].hidden}),
@@ -64,10 +65,18 @@ assert.equal(nodes['artifact-comment'].hidden, false);
 const posted = [];
 frame.contentWindow = {postMessage: data => posted.push(data)};
 
+// Opening the artifact lists its stored comments; the store's broadcast
+// and the transcript's reply become one answered marker.
+assert.deepEqual({...sentFrames.at(-1)}, {t: 'artifact-comment', reqId: 1, action: 'list', id: 'tool-1'});
 const anchor = {kind: 'word', selector: '#lead', label: 'word "Hello"', quote: 'Hello', start: 0};
+controller.storedComments({artifact: 'page.html', comments: [
+  {id: 'c1', actor: 'Alice', text: 'Wave', anchor, resolved: false, replies: []},
+  {id: 'c2', actor: 'Bob', text: 'Done', anchor, resolved: true, replies: []}]});
+controller.storedComments({artifact: 'other.html', comments: []});
 controller.render([
+  {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
-   shared: {kind: 'artifact', artifact: 'page.html', questionId: 'c1', text: 'Wave', anchor}},
+   shared: {kind: 'artifact', artifact: 'page.html', questionId: 'c1', commentId: 'c1', text: 'Wave'}},
   {id: 'a1', kind: 'assistant', text: 'Waved.'},
 ]);
 const markers = posted.filter(message => message.t === 'comment-markers').at(-1);
@@ -90,5 +99,15 @@ const find = (node, text) => node.textContent === text ? node
 find(card, 'Show in chat').dispatch('click');
 assert.deepEqual(revealed, [{id: 'u1', panelHidden: true}],
                  'the panel closes before the turn is revealed');
+
+// A room message about the whole artifact goes through its latest record.
+controller.discuss('page.html', 'Tighten the intro');
+assert.deepEqual(JSON.parse(JSON.stringify(sentFrames.at(-1))),
+                 {t: 'artifact-comment', reqId: sentFrames.at(-1).reqId, action: 'ask',
+                  id: 'tool-1', questionId: sentFrames.at(-1).questionId,
+                  text: 'Tighten the intro'});
+controller.discuss('missing.html', 'Hello').then(
+  () => assert.fail('an unpublished artifact takes no messages'),
+  error => assert.match(error.message, /not published/));
 
 console.log('viewer artifact comments passed');

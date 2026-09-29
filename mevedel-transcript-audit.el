@@ -235,10 +235,13 @@ Edited or mismatched prompts remain fully visible.  This never changes TEXT."
                                  (replace-regexp-in-string
                                   "[\n\r]" " " (or value fallback)))))
                      (if (equal (plist-get shared :kind) "artifact")
-                         (format "Artifact comment · %s · %s"
-                                 (funcall flat (plist-get shared :artifact) "artifact")
-                                 (funcall flat (plist-get (plist-get shared :anchor) :label)
-                                          "Selection"))
+                         (if (plist-get shared :anchor)
+                             (format "Artifact comment · %s · %s"
+                                     (funcall flat (plist-get shared :artifact) "artifact")
+                                     (funcall flat (plist-get (plist-get shared :anchor) :label)
+                                              "Selection"))
+                           (format "Artifact · %s · Whole artifact"
+                                   (funcall flat (plist-get shared :artifact) "artifact")))
                        (format "Shared context · %s · %s · revision %s"
                                (funcall flat (plist-get shared :title) "Shared item")
                                (if (equal (plist-get shared :scope) "selection")
