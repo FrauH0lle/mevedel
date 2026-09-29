@@ -487,8 +487,9 @@ reply. The frame places each marker by its selector when the element still
 carries the same text fingerprint, and otherwise searches for the element
 whose fingerprint differs least, so a rewritten artifact keeps markers on
 content that survived. A marker whose content is gone is not shown. Hovering
-a marker shows its thread; clicking pins it. **Show in chat** scrolls to the
-comment turn, and **Hide marker** hides it in this browser only.
+a marker shows its thread; clicking pins it. **Show in chat** closes the
+artifact panel, which covers the conversation, then scrolls to the comment turn
+and highlights it. **Hide marker** hides it in this browser only.
 
 ## Notifications and browser storage
 
