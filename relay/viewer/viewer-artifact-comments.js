@@ -207,7 +207,9 @@ function mevedelArtifactCommentRuntime() {
   function wordsOf(el) {
     const label = el.getAttribute('aria-label') || el.getAttribute('alt')
       || el.getAttribute('title') || '';
-    return clip(squash(label || el.textContent).replace(/"/g, '’'), LIMITS.words);
+    // innerText follows layout, so adjacent blocks read as separate words.
+    const text = label || (typeof el.innerText === 'string' ? el.innerText : el.textContent);
+    return clip(squash(text).replace(/"/g, '’'), LIMITS.words);
   }
 
   // The nearest heading before the target in document order names the
@@ -378,11 +380,36 @@ function mevedelArtifactCommentRuntime() {
       el = covering[0];
     }
     if (el === document.documentElement) el = document.body;
-    const kids = [...el.children].filter(child => {
-      if (skipped(child) || !visible(child)) return false;
-      const rect = child.getBoundingClientRect();
-      return overlap(rect, box) >= area(rect) * 0.5;
-    });
+    // Elements at least half inside the box count as covered; one the box
+    // only crosses is searched for covered children instead, so a box over
+    // two cards of a wide row finds those cards.
+    const covered = (parent, depth = 0, found = []) => {
+      for (const child of parent.children) {
+        if (found.length >= 64) break;
+        if (skipped(child) || !visible(child)) continue;
+        const rect = child.getBoundingClientRect();
+        const shared = overlap(rect, box);
+        if (!shared) continue;
+        if (shared >= area(rect) * 0.5) found.push(child);
+        else if (depth < 6) covered(child, depth + 1, found);
+      }
+      return found;
+    };
+    // A box drawn a little past a grid still means the grid's items, not
+    // the grid as the page's one covered child.
+    let kids = covered(el);
+    for (let guard = 0; guard < 16 && kids.length === 1 && kids[0].children.length; guard++) {
+      const inner = covered(kids[0]);
+      if (!inner.length) break;
+      kids = inner;
+    }
+    if (kids.length) {
+      let common = kids[0].parentElement;
+      while (common && common !== el && !kids.every(kid => common.contains(kid))) {
+        common = common.parentElement;
+      }
+      if (common) el = common;
+    }
     const outer = el.getBoundingClientRect();
     const fraction = value => Math.round(Math.min(1, Math.max(0, value)) * 1000) / 1000;
     const region = {
@@ -990,6 +1017,28 @@ function createArtifactCommentController(options) {
 
   // Frame coordinates are the frame's own viewport; the panel body is the
   // positioned parent of the composer and the thread card.
+  // Thread cards open beside their marker rather than over the target.
+  function placeBeside(node, rect) {
+    if (!view.frame || !body) return;
+    const frameBox = view.frame.getBoundingClientRect();
+    const bodyBox = body.getBoundingClientRect();
+    const width = Math.min(340, Math.max(240, bodyBox.width - 24));
+    node.style.width = `${width}px`;
+    const originLeft = frameBox.left - bodyBox.left;
+    const originTop = frameBox.top - bodyBox.top + body.scrollTop;
+    let left = originLeft + rect.left + rect.width + 8;
+    if (left + width > bodyBox.width - 8) left = originLeft + rect.left - width - 8;
+    if (left < 8) {
+      place(node, rect);
+      return;
+    }
+    node.style.left = `${left}px`;
+    const height = node.offsetHeight || 160;
+    const top = Math.min(originTop + rect.top - 4,
+                         body.scrollTop + bodyBox.height - height - 8);
+    node.style.top = `${Math.max(body.scrollTop + 8, top)}px`;
+  }
+
   function place(node, rect) {
     if (!view.frame || !body) return;
     const frameBox = view.frame.getBoundingClientRect();
@@ -1119,8 +1168,14 @@ function createArtifactCommentController(options) {
     card.setAttribute('aria-label', 'Comment thread');
     const status = {queued: 'Queued', sent: 'Sent to assistant',
                     answered: 'Answered'}[comment.state] || '';
-    const head = el('p', 'artifact-comment-head',
-                    [comment.guest || 'You', status].filter(Boolean).join(' · '));
+    const head = el('div', 'artifact-comment-head');
+    head.append(el('span', '', [comment.guest || 'You', status].filter(Boolean).join(' · ')));
+    const close = el('button', 'artifact-comment-close', '×');
+    close.type = 'button';
+    close.title = 'Close';
+    close.setAttribute('aria-label', 'Close');
+    close.addEventListener('click', closeCard);
+    head.append(close);
     card.append(head);
     card.append(el('p', 'artifact-comment-target', comment.anchor.label || ''));
     card.append(el('p', 'artifact-comment-text', comment.text));
@@ -1148,15 +1203,12 @@ function createArtifactCommentController(options) {
       closeCard();
       publishMarkers();
     });
-    const close = el('button', 'btn quiet', 'Close');
-    close.type = 'button';
-    close.addEventListener('click', closeCard);
-    actions.append(hide, close);
+    actions.append(hide);
     card.append(actions);
     body.append(card);
     view.card = card;
     view.cardPinned = pinned === true;
-    place(card, rect);
+    placeBeside(card, rect);
   }
 
   // -- Mode and wiring --------------------------------------------------

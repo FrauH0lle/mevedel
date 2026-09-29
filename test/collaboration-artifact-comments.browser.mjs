@@ -233,6 +233,25 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
                  'The session cannot accept a comment right now');
     await page.click('.artifact-comment-composer >> text=Cancel');
 
+    // A box drawn a little past the grid and over two of its cards means
+    // those two cards, not the grid as the page's one covered child.
+    const loose = await frame.evaluate(() => {
+      const r = document.querySelector('.cards').getBoundingClientRect();
+      const second = document.querySelectorAll('.card')[1].getBoundingClientRect();
+      return {left: r.left - 14, top: r.top - 14, width: second.right + 4 - (r.left - 14),
+              height: r.height + 28};
+    });
+    const looseArea = await inPage(page, frame, loose);
+    await page.mouse.move(looseArea.x, looseArea.y);
+    await page.mouse.down();
+    await page.mouse.move(looseArea.x + looseArea.width, looseArea.y + looseArea.height,
+                          {steps: 6});
+    await page.mouse.up();
+    await page.waitForSelector('.artifact-comment-composer');
+    assert.equal(await page.textContent('.artifact-comment-target'),
+                 'Decisions at a glance \u203a area \u00b7 2 elements');
+    await page.click('.artifact-comment-composer >> text=Cancel');
+
     // Dragging across text keeps native selection and sends the quote.
     // Cancelling keeps comment mode on for another try.
     assert.equal(await page.getAttribute('#artifact-comment', 'aria-pressed'), 'true');

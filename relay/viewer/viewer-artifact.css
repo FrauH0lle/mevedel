@@ -87,7 +87,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.artifact-comment-head { color: var(--ink); font-weight: 700; }
+.artifact-comment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  color: var(--ink);
+  font-weight: 700;
+}
+.artifact-comment-close {
+  flex: none;
+  border: 0;
+  padding: 0 .25rem;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.artifact-comment-close:hover { color: var(--ink); }
 .artifact-comment-quote {
   margin: 0;
   padding: .2rem .5rem;
