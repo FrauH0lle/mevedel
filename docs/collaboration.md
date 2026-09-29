@@ -202,10 +202,23 @@ request inside the duplicate-prompt window is dropped.
 
 ## Scoped prompts and attachments
 
+Directives and shared items are the room's discussions. Records inside a
+directive turn carry its id and records inside a shared-item turn carry the
+item's id, so the filter strip lists **All**, **Main chat**, each directive
+(◆) and each whiteboard or document with turns (◇). **Main chat** hides every
+discussion. A turn's discussion chip selects that discussion too.
+
 Selecting a directive scopes ordinary guest text to discussion of that directive;
 the host rechecks its workspace identity on receipt. A missing or invalid
 directive selection falls back to ordinary chat. Explicit command/skill
 invocations use their own route instead of inheriting the directive scope.
+
+Selecting a shared item sends the composer's text into that item's own
+conversation as a whole-item question, the same way the editor asks. A room
+message has no reviewed snapshot, so the helper captures the item as currently
+committed. Commands, skills and attachments stay main-chat features; the viewer
+refuses them in an item discussion and says so. The composer placeholder and
+scope line name the discussion a message will reach.
 
 A prompt can carry up to three attachments totaling 1.25 MiB decoded: JPEG,
 PNG, WebP, PDF, plain text, Markdown, CSV, JSON, or patch text. The host generates

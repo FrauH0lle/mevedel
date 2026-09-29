@@ -95,6 +95,7 @@
                   "mevedel-view-render" (text))
 
 (require 'mevedel-collaboration-artifact-projection)
+(require 'mevedel-shared-conversation)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-utilities)
@@ -218,7 +219,7 @@ An artifact record's `:artifact-path' stays host-side: guests address
 an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive :detail :diff
+                       :truncated :guest :directive :item :detail :diff
                        :artifact :size :missing :presentation :shared
                        :execution))
       (when (plist-member record key)
@@ -643,6 +644,25 @@ RENDER-END includes a following, separately classified hidden metadata block."
                      (< position (plist-get range :end)))
            return (plist-get range :directive-id)))
 
+(defun mevedel-collaboration--scope-at (ranges items position)
+  "Return the discussion fields for a record starting at POSITION.
+RANGES are directive turn ranges and ITEMS shared-item turn ranges.  The
+result is (:directive ID), (:item ID), or nil for the main conversation,
+so a viewer can filter and reply per discussion."
+  (if-let* ((directive (mevedel-collaboration--directive-at ranges position)))
+      (list :directive directive)
+    (cl-loop for range in items
+             when (and (<= (plist-get range :start) position)
+                       (< position (plist-get range :end)))
+             return (list :item (plist-get (plist-get range :shared) :itemId)))))
+
+(defun mevedel-collaboration--scoped (record fields)
+  "Return RECORD carrying discussion FIELDS from `mevedel-collaboration--scope-at'."
+  (while fields
+    (setq record (plist-put record (car fields) (cadr fields))
+          fields (cddr fields)))
+  record)
+
 (defun mevedel-collaboration--directive-ranges ()
   "Return the current buffer's directive turn ranges, or nil.
 A malformed audit grammar degrades to untagged records instead of
@@ -863,14 +883,18 @@ mailboxes are not guest completion records."
 (defun mevedel-collaboration--canonical-records
     (data-buffer &optional completion-buffer completions)
   "Return allowlisted records reconstructed from DATA-BUFFER.
-Records inside a directive turn carry that directive's id so a viewer
-can filter the transcript to one directive client-side; user records
+Records inside a directive turn carry that directive's id, and records
+inside a shared-item turn that item's id, so a viewer can filter the
+transcript to one discussion client-side; user records
 attributed to a collaboration guest carry that guest's name.
 COMPLETION-BUFFER and COMPLETIONS supply later terminal evidence for archived
 segments."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (let ((ranges (mevedel-collaboration--directive-ranges))
+            ;; Item turns are ranges too; a malformed attribution leaves
+            ;; records in the main conversation instead of failing.
+            (items (ignore-errors (mevedel-shared-conversation-ranges)))
             (segments (mevedel-transcript-segments (point-min) (point-max)))
             (following-render-data (make-hash-table :test #'eql))
             (breadcrumbs (mevedel-transcript-audit-buffer-spans
@@ -881,7 +905,7 @@ segments."
             (prior-ready (and completions t))
             records user-starts (occurrences (make-hash-table :test #'equal)))
         (cl-labels
-            ((add-execution (completion directive)
+            ((add-execution (completion scope)
                (when-let* ((owner (plist-get completion :owner))
                            (id (plist-get completion :execution-id))
                            ((stringp owner)) ((stringp id))
@@ -913,9 +937,7 @@ segments."
                            ((not (and prior-executions
                                       (gethash key prior-executions)))))
                  (puthash key t forwarded-executions)
-                 (when directive
-                   (setq record (plist-put record :directive directive)))
-                 (push record records))))
+                 (push (mevedel-collaboration--scoped record scope) records))))
         ;; On reload gptel classifies the hidden render-data block separately
         ;; from its preceding tool row.  Include it when parsing the row, but
         ;; leave the raw model-visible result and transcript segments intact.
@@ -928,10 +950,10 @@ segments."
             (let* ((span (pop breadcrumbs))
                    (record (plist-get span :record)))
               (add-execution record
-                             (mevedel-collaboration--directive-at
-                              ranges (plist-get span :start)))))
-          (let ((directive (mevedel-collaboration--directive-at
-                            ranges (cadr segment))))
+                             (mevedel-collaboration--scope-at
+                              ranges items (plist-get span :start)))))
+          (let ((scope (mevedel-collaboration--scope-at
+                        ranges items (cadr segment))))
             (cond
              ((memq (car segment) '(user response))
               (let* ((userp (eq (car segment) 'user))
@@ -954,7 +976,7 @@ segments."
                            :text (mevedel-collaboration--truncate-bytes
                                   text
                                   mevedel-collaboration--max-record-text-bytes)
-                           (when directive (list :directive directive)))
+                           scope)
                           records)
                     (when userp
                       (push (cons (cadr segment) (car records))
@@ -980,7 +1002,7 @@ segments."
              ((eq (car segment) 'mailbox)
               (when-let* ((completion (mevedel-collaboration--forwarded-execution
                                        segment)))
-                (add-execution completion directive)))
+                (add-execution completion scope)))
              ((eq (car segment) 'tool)
               (let* ((start (cadr segment))
                      (end (caddr segment))
@@ -991,13 +1013,11 @@ segments."
                 (dolist (record (mevedel-collaboration--tool-segment-records
                                  data-buffer segment occurrence completion-buffer
                                  (gethash end following-render-data) completions))
-                  (when directive
-                    (setq record (plist-put record :directive directive)))
-                  (push record records)))))))
+                  (push (mevedel-collaboration--scoped record scope) records)))))))
         (dolist (span breadcrumbs)
           (add-execution (plist-get span :record)
-                         (mevedel-collaboration--directive-at
-                          ranges (plist-get span :start))))
+                         (mevedel-collaboration--scope-at
+                          ranges items (plist-get span :start))))
         (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))
         (nreverse records))))))
 

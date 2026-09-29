@@ -261,7 +261,11 @@ code, pre { font-family: var(--font-mono); }
   border-radius: var(--control-radius);
   background: var(--accent-soft);
   color: var(--accent);
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
 }
+.dirchip:hover { text-decoration: underline; }
 
 /* ── Prose / markdown ───────────────────────────────────────────────── */
 /* Prose and tool output share the bounded conversation column. */

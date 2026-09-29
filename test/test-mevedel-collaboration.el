@@ -154,7 +154,52 @@
             (should (equal '(nil nil nil "phone")
                            (mapcar (lambda (record) (plist-get record :guest)) records)))
             (should (equal '(nil nil nil "thread")
-                           (mapcar (lambda (record) (plist-get record :directive)) records)))))))))
+                           (mapcar (lambda (record) (plist-get record :directive)) records))))))))
+
+  :doc "tags every record of a shared-item turn with the item for room filtering"
+  (with-temp-buffer
+    (let (segments)
+      (dolist (item '((user . "room\n") (response . "room answer\n")
+                      (user . "board\n") (response . "board answer\n")))
+        (let ((start (point)))
+          (insert (cdr item))
+          (push (list (car item) start (point)) segments)))
+      (setq segments (nreverse segments))
+      (let ((board-start (cadr (nth 2 segments))))
+        (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                   (lambda (_start _end) segments))
+                  ((symbol-function 'mevedel-collaboration--directive-ranges)
+                   (lambda () nil))
+                  ((symbol-function 'mevedel-shared-conversation-ranges)
+                   (lambda ()
+                     (list (list :start board-start :end (point-max)
+                                 :shared (list :itemId "board" :questionId "q")))))
+                  ((symbol-function 'mevedel-transcript-audit-guest-prompts)
+                   (lambda () nil)))
+          (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+            (should (equal '(nil nil "board" "board")
+                           (mapcar (lambda (record) (plist-get record :item)) records)))
+            (should-not (cl-some (lambda (record) (plist-get record :directive)) records))
+            (should (equal "board"
+                           (cdr (assoc "item" (mevedel-collaboration--json-record
+                                               (nth 3 records))))))))))))
+
+(mevedel-deftest mevedel-collaboration--scope-at
+  (:doc "names the directive or shared item owning a position, directives first")
+  (let ((ranges (list (list :start 10 :end 20 :directive-id "dir-1")))
+        (items (list (list :start 15 :end 40 :shared (list :itemId "board")))))
+    (should (equal '(:directive "dir-1") (mevedel-collaboration--scope-at ranges items 12)))
+    (should (equal '(:directive "dir-1") (mevedel-collaboration--scope-at ranges items 16)))
+    (should (equal '(:item "board") (mevedel-collaboration--scope-at ranges items 25)))
+    (should-not (mevedel-collaboration--scope-at ranges items 40))
+    (should-not (mevedel-collaboration--scope-at nil nil 5))))
+
+(mevedel-deftest mevedel-collaboration--scoped
+  (:doc "adds each discussion field to a record and leaves main-chat records alone")
+  (progn
+    (should (equal '(:id "a" :item "board")
+                   (mevedel-collaboration--scoped (list :id "a") '(:item "board"))))
+    (should (equal '(:id "a") (mevedel-collaboration--scoped (list :id "a") nil)))))
 
 (mevedel-deftest mevedel-collaboration--directive-at
   (:doc "maps a position to its owning directive range")

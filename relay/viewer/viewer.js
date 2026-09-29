@@ -313,7 +313,7 @@
     const follow = atLiveEdge();
     state.records.set(record.id, record);
     // Activity outside the selected filter earns its tab an unseen dot.
-    if (!recordVisible(record)) state.unseen.add(record.directive || 'main');
+    if (!recordVisible(record)) state.unseen.add(scopeKey(record) || 'main');
     updateRecordElement(record);
     refreshFilter();
     window.mevedelTranscriptRenderer.markContinuations(transcript);
@@ -339,20 +339,71 @@
   // Records inside a directive turn carry its id; the menu is derived
   // client-side, so filtering is per-guest and costs no round-trips.
 
+  // Directives and shared items (whiteboards, documents, artifacts) are
+  // discussions: records carry their scope, the strip lists each one, and
+  // the composer replies into the one selected.
+  const scopeKey = record => window.mevedelTranscriptRenderer.scopeKey(record);
+  const itemScope = key => typeof key === 'string' && key.startsWith('item:');
+
   function recordVisible(record) {
     if (state.filter === 'all') return true;
-    if (state.filter === 'main') return !record.directive;
-    return record.directive === state.filter;
+    if (state.filter === 'main') return !scopeKey(record);
+    return scopeKey(record) === state.filter;
   }
 
+  function itemTitle(key) {
+    const id = key.slice('item:'.length);
+    for (const record of state.records.values()) {
+      const shared = record.shared;
+      if (record.item === id && shared && typeof shared.title === 'string' && shared.title) {
+        return shared.title.length > 32 ? `${shared.title.slice(0, 29)}…` : shared.title;
+      }
+    }
+    return id.startsWith('artifact:') ? id.slice('artifact:'.length) : 'Shared item';
+  }
+
+  // The chip and tab label for a discussion scope, with its kind's mark.
   function directiveLabel(id) {
+    if (itemScope(id)) return `◇ ${itemTitle(id)}`;
     for (const record of state.records.values()) {
       if (record.directive === id && record.kind === 'user' && record.text) {
         const line = record.text.split('\n', 1)[0];
-        return line.length > 32 ? `${line.slice(0, 29)}…` : line;
+        return `◆ ${line.length > 32 ? `${line.slice(0, 29)}…` : line}`;
       }
     }
-    return id.slice(0, 8);
+    return `◆ ${id.slice(0, 8)}`;
+  }
+
+  // Send TEXT into item ID's conversation; say why when that fails.
+  async function discussItem(id, text) {
+    try {
+      if (id.startsWith('artifact:')) {
+        await artifacts.discuss(id.slice('artifact:'.length), text);
+      } else {
+        await editing.ask(id, text);
+      }
+      flashNotice(`Sent to ${directiveLabel(`item:${id}`)}.`);
+      return true;
+    } catch (error) {
+      flashNotice(error && error.message ? error.message : 'The message could not be sent.');
+      return false;
+    }
+  }
+
+  function selectFilter(value) {
+    state.filter = value;
+    // Selecting a tab is looking at it; All shows everything.
+    if (value === 'all') state.unseen.clear();
+    else state.unseen.delete(value);
+    refreshFilter();
+  }
+  // A turn's discussion chip switches the room into that discussion.
+  if (transcript) {
+    transcript.addEventListener('click', event => {
+      const chip = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('.dirchip[data-scope]') : null;
+      if (chip) selectFilter(chip.dataset.scope);
+    });
   }
 
   function refreshFilter() {
@@ -362,9 +413,10 @@
       const counts = {all: 0, main: 0};
       state.records.forEach(record => {
         counts.all++;
-        if (record.directive) {
-          if (!ids.includes(record.directive)) ids.push(record.directive);
-          counts[record.directive] = (counts[record.directive] || 0) + 1;
+        const scope = scopeKey(record);
+        if (scope) {
+          if (!ids.includes(scope)) ids.push(scope);
+          counts[scope] = (counts[scope] || 0) + 1;
         } else {
           counts.main++;
         }
@@ -389,22 +441,16 @@
           'title',
           value === 'all' ? 'Show every turn'
             : value === 'main' ? 'Show only the main conversation'
-              : `Show and reply in ◆ ${directiveLabel(value)}`);
+              : `Show and reply in ${directiveLabel(value)}`);
         if (counts[value]) {
           button.append(el('span', 'cnt', String(counts[value])));
         }
-        button.addEventListener('click', () => {
-          state.filter = value;
-          // Selecting a tab is looking at it; All shows everything.
-          if (value === 'all') state.unseen.clear();
-          else state.unseen.delete(value);
-          refreshFilter();
-        });
+        button.addEventListener('click', () => selectFilter(value));
         filterNav.append(button);
       };
       add('all', 'All');
       if (ids.length) add('main', 'Main chat');
-      ids.forEach(id => add(id, `◆ ${directiveLabel(id)}`, true));
+      ids.forEach(id => add(id, directiveLabel(id), true));
     }
     state.records.forEach(record => {
       const turn = state.elements.get(record.id);
@@ -420,9 +466,12 @@
   }
 
   function placeholderForFilter() {
-    return (state.filter !== 'all' && state.filter !== 'main')
-      ? `Discuss ◆ ${directiveLabel(state.filter)}…`
-      : 'Queue a follow-up for the session…';
+    if (state.filter === 'all' || state.filter === 'main') {
+      return 'Queue a follow-up for the session…';
+    }
+    return itemScope(state.filter)
+      ? `Message ${directiveLabel(state.filter)}…`
+      : `Discuss ${directiveLabel(state.filter)}…`;
   }
 
   // One line under the composer saying what the next send will do: run
@@ -452,7 +501,9 @@
     composerScope.className = 'composer-scope';
     composerScope.hidden = !scoped;
     if (scoped) {
-      composerScope.append(`Sends to ◆ ${directiveLabel(state.filter)} · discuss`);
+      composerScope.append(itemScope(state.filter)
+        ? `Sends to ${directiveLabel(state.filter)} · its own conversation`
+        : `Sends to ${directiveLabel(state.filter)} · discuss`);
     }
   }
 
@@ -1145,6 +1196,18 @@
         if (!text.trim() && !pendingFiles.length && !armed.length) return;
         if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
           flashNotice('Prompt too large.');
+          return;
+        }
+        if (itemScope(filter)) {
+          // An item discussion is its own conversation about that item;
+          // commands and attachments belong to the main chat.
+          if (armed.length || pendingFiles.length) {
+            flashNotice('Commands and attachments go to the main chat; select Main chat to send them.');
+            return;
+          }
+          if (!text.trim()) return;
+          const sent = await discussItem(filter.slice('item:'.length), text.trim());
+          if (sent && composerInput.value === text) composerInput.value = '';
           return;
         }
         const frame = {t: 'prompt', name};
