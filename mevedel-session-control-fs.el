@@ -278,7 +278,10 @@ before the operation ran."
    ;; so the rename or link into the pinned parent stays atomic.
    "    write-staged|create-staged)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
-   "      [[ \"$payload\" =~ ^/.*/\\.mevedel-control-fs-staged-[^/]+$ ]] || exit 71\n"
+   ;; The staged name is relative to the pinned parent, so a pathname
+   ;; swapped after the proof cannot redirect it; `..' steps through the
+   ;; opened directory's real ancestors.
+   "      [[ \"$payload\" =~ ^(\\.\\./)*\\.mevedel-control-fs-staged-[^/]+$ ]] || exit 71\n"
    "      test ! -L \"$payload\" && test -f \"$payload\" || exit 66\n"
    "      if test \"$op\" = write-staged; then\n"
    "        mv -fT -- \"$payload\" \"$leaf\" || exit 67\n"
@@ -928,8 +931,10 @@ is extracted to disk. A rejected archive requires fresh ordinary reads."
         (error "Unexpected control read archive member"))
       (nreverse results))))
 
-(defconst mevedel-session-control-fs--stage-min-bytes 4096
-  "Smallest local payload written as a staged file instead of base64.")
+(defconst mevedel-session-control-fs--stage-min-bytes 0
+  "Smallest local payload written as a staged file instead of base64.
+Every local write is staged: the script's base64 path spends three
+processes on a write and four on a create, a staged one or two.")
 
 (defvar mevedel-session-control-fs--stage-local t
   "Non-nil stages large local payloads; tests bind nil to exercise carriers.")
@@ -956,7 +961,8 @@ cost a 260 KB sidecar write 31 ms, most of a save.  A local target shares
 the editor's filesystem, so the bytes are written once to a private file
 in the destination's nearest existing ancestor -- a directory the same
 program creates lives on that same filesystem -- and the program renames
-or links it after proving the destination's parent as before.  Record each
+or links it after proving the destination's parent as before.  The
+program names it relative to that pinned parent, never by pathname.  Record each
 staged file in the car of STAGED for cleanup."
   (mapcar
    (lambda (op)
@@ -973,9 +979,11 @@ staged file in the car of STAGED for cleanup."
          (let* ((parent (plist-get (mevedel-session-control-fs--descriptor
                                     (plist-get op :path))
                                    :parent))
-                (directory parent))
+                (directory parent)
+                (up ""))
            (while (not (file-directory-p directory))
-             (setq directory (file-name-directory (directory-file-name directory))))
+             (setq directory (file-name-directory (directory-file-name directory))
+                   up (concat up "../")))
            (let ((file (make-temp-file
                         (file-name-concat directory ".mevedel-control-fs-staged-")))
                  (coding-system-for-write
@@ -990,7 +998,7 @@ staged file in the car of STAGED for cleanup."
                (write-region content nil file nil 'silent))
              (list :op (if (eq (plist-get op :op) 'write) 'write-staged 'create-staged)
                    :path (plist-get op :path)
-                   :content (file-local-name file)
+                   :content (concat up (file-name-nondirectory file))
                    :optional (plist-get op :optional)))))))
    operations))
 
