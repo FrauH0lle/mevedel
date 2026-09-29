@@ -274,6 +274,15 @@ directive discussions stay read-only and item questions can still edit. A
 room message has no reviewed snapshot, so its whole-item question captures the
 committed content; editor questions keep the reviewed-snapshot check.
 
+Session artifacts are items in this sense too. Their comments first existed only
+as transcript turns in the main conversation, which gave them no people-only
+notes, no replies or resolution, and let artifact back-and-forth fill room chat.
+An artifact's messages are now item questions about `artifact:NAME` and its
+comments live in a per-artifact store beside the shared items. Unlike a
+whiteboard or document, whose small structured snapshot travels with each
+question, an artifact can be megabytes of HTML: the request names its file and
+frames it as untrusted content, and the model reads what it needs.
+
 Read and Grep of `history://root` give scoped conversations deliberate access to
 parent decisions, including unsaved turns. `history://saved` covers archived
 segments. This extends the existing resource family for directives and all other

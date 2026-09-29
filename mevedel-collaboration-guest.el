@@ -65,7 +65,7 @@
 
 ;; `mevedel-collaboration-artifact'
 (declare-function mevedel-collaboration--handle-artifact-comment
-                  "mevedel-collaboration-artifact" (room peer frame))
+                  "mevedel-collaboration-artifact-comments" (room peer frame))
 (declare-function mevedel-collaboration--handle-artifact-get
                   "mevedel-collaboration-artifact" (room peer frame))
 
@@ -1051,6 +1051,7 @@ handling stops the room instead of leaking into the session."
 ;; guest extensions.  Neither extension requires this module back.
 (require 'mevedel-collaboration-agent)
 (require 'mevedel-collaboration-artifact)
+(require 'mevedel-collaboration-artifact-comments)
 (require 'mevedel-collaboration-editing)
 
 (provide 'mevedel-collaboration-guest)

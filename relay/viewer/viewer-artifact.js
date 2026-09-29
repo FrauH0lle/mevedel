@@ -231,7 +231,9 @@
       if (typeof link.click === 'function') link.click();
     }
 
+    let published = [];
     function render(records) {
+      published = records;
       if (comments) comments.records(records);
       if (!nav) return;
       const byName = new Map();
@@ -272,7 +274,23 @@
       if (comments) comments.handle(frame);
     }
 
-    return Object.freeze({open, render, handle, close, setTheme, queue, handleComment});
+    function storedComments(frame) {
+      if (comments) comments.stored(frame);
+    }
+
+    // A room message about artifact NAME as a whole, sent into the
+    // artifact's own conversation through its latest published record.
+    function discuss(name, text) {
+      const record = published.filter(item => item && item.artifact === name && !item.missing)
+        .at(-1);
+      if (!comments || !record) {
+        return Promise.reject(new Error(`${name} is not published in this room.`));
+      }
+      return comments.discuss(record.id, text);
+    }
+
+    return Object.freeze({open, render, handle, close, setTheme, queue, handleComment,
+                          storedComments, discuss});
   }
 
   window.mevedelArtifactView = Object.freeze({create});
