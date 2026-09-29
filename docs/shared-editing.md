@@ -282,8 +282,14 @@ Comments are session annotations: native and document exports contain the conten
 not the comments or conversation. A fresh import starts without those annotations.
 
 For a whiteboard, select one or more objects and choose **Ask about selection**.
-The discussion composer offers **Selected objects** / **Whole whiteboard** or
-**Selected passage** / **Whole document**. Switching to the whole item retains
+After a box selection, the question is about the **Selected area**: it carries
+the box's board region with the objects it contains, including an area with no
+objects, so a request such as “put a legend here” names a place. Unselected
+objects the area touches accompany it as context, with image data replaced by
+a reference to the attached PNG, which shows the area with a small margin and
+is scaled up to four times so small areas stay legible.
+The discussion composer offers **Selected objects** (or **Selected area**) /
+**Whole whiteboard** or **Selected passage** / **Whole document**. Switching to the whole item retains
 the previously attached selection, so switching back does not require selecting
 it again. A private document highlight keeps the attached passage visible while
 focus is in the discussion or comment draft; closing discussion removes that
@@ -332,8 +338,9 @@ established truncation point are not consulted. Ordinary requests without
 trusted item attribution skip item-related transcript classification.
 
 Accepted questions include item identity, title, committed revision, exact selected
-text or shapes, bounded surrounding document blocks or connector endpoints, and
-a matching board PNG as a normal attachment. Questions use the ordinary queue
+text or shapes, the selected board area, bounded surrounding document blocks,
+connector endpoints or touched neighbours, and a matching board PNG as a normal
+attachment. Questions use the ordinary queue
 with guest attribution; correlation metadata is persisted as model-invisible
 transcript audit data. Provider failures appear in the conversation. If the host edits a queued question,
 the panel explicitly marks it **Edited on host** and shows the revised input; it

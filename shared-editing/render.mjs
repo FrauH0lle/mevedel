@@ -336,9 +336,8 @@ export function shapeSVG(s, shapes) {
   }
   return `<g data-shape="${escape(s.id)}"${style.opacity < 100 ? ` opacity="${style.opacity / 100}"` : ''}>${body}</g>`;
 }
-export function boardSVG(shapes, maxEdge = 2048, context = shapes) {
-  const box = bounds(shapes, context),
-    scale = Math.min(1, maxEdge / Math.max(box[2], box[3]));
+export function boardSVG(shapes, maxEdge = 2048, context = shapes, box = bounds(shapes, context), maxScale = 1) {
+  const scale = Math.min(maxScale, maxEdge / Math.max(box[2], box[3]));
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.join(' ')}"><rect x="${box[0]}" y="${box[1]}" width="${box[2]}" height="${box[3]}" fill="#ffffff"/>${shapes.map((s) => shapeSVG(s, context)).join('')}</svg>`;
 }
 export function documentHTML(json) {
