@@ -154,3 +154,50 @@ test('board areas carry their region, nearby objects without image bytes and a c
       expected:captured.snapshot}), /Content changed/);
   } finally { doc.destroy(); }
 });
+
+test('board comments anchor to objects and areas, track changes and send surviving objects', async () => {
+  let {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',content:[
+    {id:'a',type:'rect',box:[0,0,100,100],text:'A'}, {id:'b',type:'rect',box:[300,0,100,100],text:'B'}]});
+  const commit = async (edit) => {
+    const doc = load(state);
+    try {
+      edit(doc.getMap('shapes'));
+      ({state} = await handle({action:'update',opId:crypto.randomUUID(),actor:'Guest: Bob',state,
+        update:Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64')}));
+    } finally { doc.destroy(); }
+  };
+  const statuses = () => { const doc = load(state); try { return readComments(doc, state.comments); } finally { doc.destroy(); } };
+  let doc = load(state);
+  const objects = captureContext(doc, {selection:['a','b']}).snapshot;
+  const area = captureContext(doc, {region:[500,0,80,60]}).snapshot;
+  doc.destroy();
+  ({state} = await handle({action:'comment',state,opId:'objects',actor:'Guest: Alice',text:'Align these',
+    selection:['a','b'],expected:objects}));
+  ({state} = await handle({action:'comment',state,opId:'area',actor:'Guest: Alice',text:'Legend here',
+    selection:[],region:[500,0,80,60],expected:area}));
+  await assert.rejects(handle({action:'comment',state,opId:'none',actor:'Guest: Alice',text:'?',selection:[],
+    expected:objects}), /Select objects or an area/);
+  assert.deepEqual(state.comments[0].selection, ['a','b']);
+  assert.match(state.comments[0].signature, /^[0-9a-f]{16}$/);
+  assert.equal(state.comments[0].quote, '2 objects\nrect: A\nrect: B');
+  assert.deepEqual(state.comments[1].region, [500,0,80,60]);
+  assert.deepEqual(statuses().map(c => c.anchorStatus), ['current','current']);
+  await commit(shapes => shapes.get('b').set('text', 'B2'));
+  assert.deepEqual(statuses().map(c => c.anchorStatus), ['changed','current'], 'an edited object changes its thread');
+  await commit(shapes => shapes.delete('b'));
+  const [thread] = statuses();
+  assert.equal(thread.anchorStatus, 'changed');
+  assert.deepEqual(thread.liveSelection, ['a']);
+  assert.equal(thread.liveQuote, '1 object\nrect: A');
+  doc = load(state);
+  const surviving = captureContext(doc, {selection:thread.liveSelection}).snapshot;
+  doc.destroy();
+  const ask = {action:'read',state,question:true,commentId:'objects',commentVersion:'objects',
+    selection:['a'],expected:surviving};
+  const {result} = await handle(ask);
+  assert.deepEqual(result.snapshot.discussion, [{actor:'Guest: Alice',text:'Align these'}]);
+  await assert.rejects(handle({...ask,selection:['a','intruder']}), /no longer available/);
+  await assert.rejects(handle({...ask,commentId:'area',commentVersion:'area',region:[0,0,10,10]}), /no longer available/);
+  await commit(shapes => shapes.delete('a'));
+  assert.deepEqual(statuses().map(c => c.anchorStatus), ['deleted','current'], 'an area outlives its objects');
+});
