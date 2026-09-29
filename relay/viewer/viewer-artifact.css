@@ -149,3 +149,15 @@
   flex-wrap: wrap;
   gap: .35rem;
 }
+/* A turn reached from an artifact comment's "Show in chat". */
+@keyframes turn-revealed {
+  from { background: var(--accent-soft); }
+  to { background: transparent; }
+}
+.turn-revealed {
+  animation: turn-revealed 2.4s ease-out;
+  border-radius: .4rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-revealed { animation: none; outline: 2px solid var(--accent); }
+}

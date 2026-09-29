@@ -24,6 +24,7 @@ use `go build .` to rebuild the binary.
 For viewer JavaScript changes, run
 `node test/collaboration-viewer-test.js` from the repository root.
 For artifact comment changes, also run
+`node test/collaboration-viewer-artifact-comments-test.js` and
 `node --test test/collaboration-artifact-comments.browser.mjs`, which needs
 `npm ci --prefix shared-editing` and Playwright Chromium.
 For shared-editor integration changes, also use the
