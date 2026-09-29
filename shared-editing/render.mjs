@@ -74,24 +74,40 @@ function borderPoint(shape, toward) {
   return [center[0] + vx * low, center[1] + vy * low];
 }
 
-export function bounds(shapes, context = shapes) {
-  if (!shapes.length) return [-40, -40, 800, 500];
+/* Tight [x, y, w, h] around shapes. Connectors use their drawn path: a bound
+   arrow's stored box goes stale when its endpoints move. */
+export function extent(shapes, context = shapes) {
   let left = Infinity,
     top = Infinity,
     right = -Infinity,
     bottom = -Infinity;
   for (const s of shapes)
-    for (const [x, y] of [
-      [s.box[0], s.box[1]],
-      [s.box[0] + s.box[2], s.box[1] + s.box[3]],
-      ...(LINEAR.includes(s.type) ? pathPoints(s, context) : []),
-    ]) {
+    for (const [x, y] of LINEAR.includes(s.type)
+      ? pathPoints(s, context)
+      : [[s.box[0], s.box[1]], [s.box[0] + s.box[2], s.box[1] + s.box[3]]]) {
       left = Math.min(left, x);
       top = Math.min(top, y);
       right = Math.max(right, x);
       bottom = Math.max(bottom, y);
     }
-  return [left - 30, top - 30, Math.max(100, right - left + 60), Math.max(100, bottom - top + 60)];
+  return [left, top, right - left, bottom - top];
+}
+
+export function bounds(shapes, context = shapes) {
+  if (!shapes.length) return [-40, -40, 800, 500];
+  const [left, top, width, height] = extent(shapes, context);
+  return [left - 30, top - 30, Math.max(100, width + 60), Math.max(100, height + 60)];
+}
+
+/* Shapes a region [x, y, w, h] contains entirely, or touches when TOUCHING. */
+export function shapesInRegion(shapes, region, touching = false) {
+  const [rx, ry, rw, rh] = region;
+  return shapes.filter((s) => {
+    const [x, y, w, h] = extent([s], shapes);
+    return touching
+      ? x <= rx + rw && x + w >= rx && y <= ry + rh && y + h >= ry
+      : x >= rx && y >= ry && x + w <= rx + rw && y + h <= ry + rh;
+  });
 }
 
 

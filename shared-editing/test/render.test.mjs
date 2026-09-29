@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardSVG, shapeSVG, pathPoints } from '../render.mjs';
+import { boardSVG, shapeSVG, pathPoints, extent, bounds, shapesInRegion } from '../render.mjs';
 
 test('styled shapes render deterministically with bounded work', () => {
   const rough = { id: 'a', type: 'rect', box: [0, 0, 200, 120], rough: 2, fill: '#a5d8ff', pattern: 'cross' };
@@ -64,4 +64,20 @@ test('bound arrows meet silhouettes and follow moved or resized shapes', () => {
   assert.deepEqual(pathPoints({type:'pen',box:[0,0,10,10],points:[[0,0],[5,3],[10,10]]},[]),
     [[0,0],[5,3],[10,10]]);
   assert.match(boardSVG([from,to,arrow]), /<path d="M300 50L286 57L286 43Z" fill="#242424"/);
+});
+
+test('regions select contained or touched shapes, following bound connector paths', () => {
+  const a = { id: 'a', type: 'rect', box: [0, 0, 100, 100] };
+  const b = { id: 'b', type: 'rect', box: [300, 0, 100, 100] };
+  const arrow = { id: 'c', type: 'arrow', box: [0, 0, 1, 1], points: [[0, 0], [1, 1]], from: 'a', to: 'b' };
+  const shapes = [a, b, arrow];
+  assert.deepEqual(extent([a]), [0, 0, 100, 100]);
+  assert.deepEqual(bounds([a]), [-30, -30, 160, 160], 'bounds keep their padding');
+  assert.deepEqual(shapesInRegion(shapes, [-1, -1, 102, 102]).map(s => s.id), ['a']);
+  assert.deepEqual(extent([arrow], shapes), [100, 50, 200, 0]);
+  assert.deepEqual(shapesInRegion(shapes, [150, 45, 10, 10], true).map(s => s.id), ['c'],
+    'a touched region follows the drawn connector, not its stale stored box');
+  assert.deepEqual(shapesInRegion(shapes, [50, 50, 10, 10], true).map(s => s.id), ['a']);
+  assert.deepEqual(shapesInRegion(shapes, [-1, -1, 402, 102]).map(s => s.id).sort(), ['a', 'b', 'c']);
+  assert.deepEqual(shapesInRegion(shapes, [150, 200, 50, 50], true), []);
 });
