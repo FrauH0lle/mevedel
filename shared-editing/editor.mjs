@@ -1375,10 +1375,12 @@ function documentEditor() {
 }
 function captureAttachment(scope, previous) {
   const range = scope === 'selection' && editor ? previous?.range || documentSelection : undefined;
-  const selection = scope === 'selection' && !editor ? previous?.selection || [...selected] : [];
-  if (scope === 'selection' && !range && !selection.length) throw new Error('Select content first');
-  const captured = captureContext(doc, { range, selection });
-  return { ...captured, range, selection, revision };
+  const board = scope === 'selection' && !editor;
+  const selection = board ? previous?.selection || [...selected] : [];
+  const region = board ? (previous ? previous.region : selectionRegion) || undefined : undefined;
+  if (scope === 'selection' && !range && !selection.length && !region) throw new Error('Select content first');
+  const captured = captureContext(doc, { range, selection, region });
+  return { ...captured, range, selection, region, revision };
 }
 async function saveBeforeQuestion() {
   if (!online) throw new Error('Disconnected. Your question draft is kept; reconnect before sending.');

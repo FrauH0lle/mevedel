@@ -324,7 +324,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                          :image (if (equal action "ask") t :json-false) :imageMax 1024
                          :actor (concat "Guest: " (plist-get guest :name)))))
       (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range :selection
-                     :expected :text :commentId :commentVersion :resolved))
+                     :region :expected :text :commentId :commentVersion :resolved))
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
       (mevedel-shared-editing-call

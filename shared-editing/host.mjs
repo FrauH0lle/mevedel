@@ -264,7 +264,13 @@ export async function handle(request) {
           request.imageMax === undefined || [512, 1024, 2048].includes(request.imageMax),
           'Invalid snapshot size',
         );
-        result.png = await png(boardSVG(result.content, request.imageMax, before.content));
+        // An area question shows the whole board inside the area, with a margin
+        // so objects at its edge keep their surroundings.
+        const [x, y, w, h] = request.region || [], margin = Math.max(24, Math.round(Math.max(w, h) * 0.08));
+        result.png = await png(request.region
+          ? boardSVG(before.content, request.imageMax, before.content,
+            [x - margin, y - margin, w + margin * 2, h + margin * 2], 4)
+          : boardSVG(result.content, request.imageMax, before.content));
       }
       return { result };
     }
