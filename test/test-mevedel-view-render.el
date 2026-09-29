@@ -8045,6 +8045,28 @@
         (dotimes (_ 30) (mevedel-view--scaffolding-only-text-p glue))
         (should (= 1 cleans)))))
 
+  :doc "content ahead of every removed construct is judged without cleaning"
+  (with-temp-buffer
+    (let ((cleans 0))
+      (cl-letf* ((original
+                  (symbol-function 'mevedel-view--clean-reasoning-text-1))
+                 ((symbol-function 'mevedel-view--clean-reasoning-text-1)
+                  (lambda (text)
+                    (setq cleans (1+ cleans))
+                    (funcall original text))))
+        (dolist (text '("plain answer\n"
+                        "\n#+begin_reasoning x\nactual thought\n#+end_reasoning\n"))
+          (should-not (mevedel-view--scaffolding-only-text-p text))
+          (insert text)
+          (should (mevedel-view--leading-content-p
+                   (- (point) (length text)) (point))))
+        (should (= 0 cleans))
+        ;; Constructs that cleaning removes still take the full path.
+        (dolist (text '("#+begin_tool x\nbody\n#+end_tool\n"
+                        "<system-reminder>x</system-reminder>\n"))
+          (should (mevedel-view--scaffolding-only-text-p text)))
+        (should (= 2 cleans)))))
+
   :doc "the verdict cache stays bounded"
   (progn
     (clrhash mevedel-view--scaffolding-only-cache)
@@ -8097,6 +8119,20 @@
                      (current-buffer) (point-min) (point-max) raw)))
           (should (equal body (plist-get call :result)))
           (should-not (plist-get call :hook-audits)))))))
+
+(mevedel-deftest mevedel-view--render-data-only-text-p ()
+  ,test
+  (test)
+  :doc "recognizes text holding only render data, without copying other text"
+  (let ((block (mevedel-tool-render-data-format '(:kind ptc :outcome ok))))
+    (should (mevedel-view--render-data-only-text-p (concat "\n" block "\n")))
+    (should-not (mevedel-view--render-data-only-text-p (concat "answer" block)))
+    (should-not (mevedel-view--render-data-only-text-p "  \n"))
+    (should-not (mevedel-view--render-data-only-text-p nil))
+    (cl-letf (((symbol-function 'mevedel-view--strip-render-data-display-text)
+               (lambda (_) (error "Stripped text without render data"))))
+      (should-not (mevedel-view--render-data-only-text-p "plain answer")))))
+
 
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here
