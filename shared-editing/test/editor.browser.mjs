@@ -407,6 +407,89 @@ test('editor interaction regressions', async (t) => {
         'switching scopes retains the captured area');
       await page.close();
     });
+    await t.test('board comments: comment tool, numbered markers, hover card, threads and resolution', async () => {
+      const {page, frame} = await open({content:[
+        {id:'a', type:'rect', box:[0,0,100,100], text:'A'},
+        {id:'b', type:'rect', box:[300,0,100,100], text:'B'},
+      ]});
+      const offset = await page.locator('iframe').boundingBox();
+      const at = async (x, y) => {
+        const p = await frame.locator('#canvas').evaluate((canvas, [x, y]) => {
+          const p = new DOMPoint(x, y).matrixTransform(canvas.getScreenCTM());
+          return [p.x, p.y];
+        }, [x, y]);
+        return [offset.x + p[0], offset.y + p[1]];
+      };
+      await frame.locator('#canvas').focus();
+      await page.keyboard.press('m');
+      assert.equal(await frame.locator('[data-tool="comment"]').getAttribute('aria-pressed'), 'true');
+      await page.mouse.move(...await at(50, 50));
+      assert.equal(await frame.locator('#selection .comment-hover').count(), 1, 'hover outlines the target');
+      await page.mouse.down(); await page.mouse.up();
+      await frame.locator('#comment-text').waitFor();
+      assert.equal(await frame.locator('#comment-quote').textContent(), '1 object\nrect: A');
+      await frame.locator('#comment-text').fill('Make this blue');
+      await frame.locator('#comment-post').click();
+      const card = frame.locator('#comments .comment').first();
+      await card.waitFor();
+      assert.equal(await card.locator('.comment-passage').textContent(), 'Show objects');
+      const pin = frame.locator('#comment-markers .comment-pin');
+      await pin.waitFor();
+      assert.equal(await pin.textContent(), '1');
+      // An area comment from a drag in comment mode.
+      await frame.locator('#assistant-close').click();
+      const [x0, y0] = await at(150, 20), [x1, y1] = await at(250, 80);
+      await page.mouse.move(x0, y0); await page.mouse.down();
+      await page.mouse.move(x1, y1, {steps: 3}); await page.mouse.up();
+      assert.match(await frame.locator('#comment-quote').textContent(), /^Area 10\d × 6\d at 1(49|50), (19|20)\n0 objects$/);
+      await frame.locator('#comment-text').fill('Legend here');
+      await frame.locator('#comment-post').click();
+      await frame.locator('#comment-markers .comment-pin').nth(1).waitFor();
+      const posted = await page.evaluate(() => window.messages.filter(m => m.args?.action === 'comment').map(m => m.args));
+      assert.deepEqual(posted[0].selection, ['a']);
+      assert.equal(posted[1].region.length, 4);
+      // Hovering a pin shows its thread; clicking opens it in the panel.
+      await frame.locator('#assistant-close').click();
+      await pin.first().hover();
+      await frame.locator('#comment-peek:not([hidden])').waitFor();
+      assert.match(await frame.locator('#comment-peek').textContent(), /Alice.*Make this blue/s);
+      await page.mouse.move(offset.x + 5, offset.y + offset.height - 5);
+      assert.equal(await frame.locator('#comment-peek').isHidden(), true);
+      await pin.first().click();
+      assert.equal(await card.evaluate(e => e.open), true);
+      await page.keyboard.press('Escape');
+      await frame.locator('[data-tool="select"]').click();
+      await frame.locator('#ask-toggle').click();
+      await frame.locator('#comments-tab').click();
+      await card.locator('.comment-passage').click();
+      assert.deepEqual(await frame.locator('#selection [data-resize]').evaluateAll(n => n.map(e => e.dataset.resize)), ['a']);
+      // Sending the thread asks about its objects; resolving removes its marker.
+      await card.getByText('Send to assistant', {exact: true}).click();
+      await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
+      const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
+      assert.deepEqual(ask.selection, ['a']);
+      assert.equal(ask.commentId, posted[0].opId);
+      await card.getByText('Resolve', {exact: true}).click();
+      await card.waitFor({state: 'hidden'});
+      assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1);
+      assert.equal(await frame.locator('#comment-markers .comment-pin').textContent(), '1', 'open markers renumber');
+      // Deleting the objects of an object comment marks its thread removed.
+      await frame.locator('#show-resolved').check();
+      await card.getByText('Reopen', {exact: true}).click();
+      await page.evaluate(questionId => window.port.postMessage({type:'conversation', connected:true, own:[], records:[
+        {id:'q', kind:'user', guest:'Alice', shared:{questionId}, text:'Please respond to this comment thread.'},
+        {id:'r', kind:'assistant', text:'Done.'}]}), ask.questionId);
+      await page.evaluate(async () => {
+        const read = await window.apply({action:'read'});
+        const result = await window.apply({action:'patch', opId:'agent-delete',
+          changes:[{id:'a', before:read.content.find(s => s.id === 'a'), after:null}]});
+        window.port.postMessage({type:'changed', ...result});
+      });
+      await card.locator('.thread-status').getByText('Referenced objects were removed').waitFor();
+      assert.equal(await card.getByText('Send to assistant', {exact: true}).isDisabled(), true);
+      assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1, 'a removed anchor has no marker');
+      await page.close();
+    });
     await t.test('whole and selection actions stay together beside the composer', async () => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});

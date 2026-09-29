@@ -89,7 +89,10 @@ const replies = new Map();
 let documentSelection = null,
   captureDocumentSelection = () => {},
   assistant,
-  comments = [];
+  comments = [],
+  /* Comments with their live anchor status, as the discussion panel shows them. */
+  commentStates = [],
+  hoverShape = null;
 let recoveryWarning = '';
 let participant = 'You',
   textEditing = null,
@@ -344,10 +347,42 @@ function draw() {
       const gap = 4 / scale, handle = 10 / scale;
       return `<rect x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" fill="none" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><rect data-resize="${escape(s.id)}" x="${x + w - handle / 2}" y="${y + h - handle / 2}" width="${handle}" height="${handle}" fill="white" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"/>`;
     })
-    .join('') + regionSVG(drag?.mode === 'marquee' ? drag.region : selectionRegion, drag?.mode === 'marquee');
+    .join('') + regionSVG(drag?.mode === 'marquee' ? drag.region : selectionRegion, drag?.mode === 'marquee')
+    + hoverSVG(tool === 'comment' && !drag && shapes.find((s) => s.id === hoverShape), shapes, scale);
+  drawCommentMarkers(shapes, scale);
   boardPresence?.animate();
   $('selection-question').disabled = $('comment-selection').disabled = readOnly || !(selected.size || selectionRegion);
   refresh();
+}
+function hoverSVG(shape, shapes, scale) {
+  if (!shape) return '';
+  const [x, y, w, h] = extent([shape], shapes), gap = 4 / scale;
+  return `<rect class="comment-hover" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/>`;
+}
+/* The board box a comment refers to: its surviving objects and its area. */
+function commentAnchor(comment, shapes) {
+  const live = shapes.filter((s) => comment.selection?.includes(s.id));
+  const boxes = [...(live.length ? [extent(live, shapes)] : []), ...(comment.region ? [comment.region] : [])];
+  if (!boxes.length) return null;
+  const x = Math.min(...boxes.map((b) => b[0])), y = Math.min(...boxes.map((b) => b[1]));
+  return [x, y, Math.max(...boxes.map((b) => b[0] + b[2])) - x, Math.max(...boxes.map((b) => b[1] + b[3])) - y];
+}
+/* Numbered pins at the top-right corner of each open comment's anchor. */
+function drawCommentMarkers(shapes, scale) {
+  $('comment-markers').innerHTML = commentStates.filter((c) => !c.resolved).map((c, index) => {
+    const box = commentAnchor(c, shapes);
+    if (!box) return '';
+    const [x, y, w, h] = box, gap = 4 / scale;
+    return `<g class="comment-marker" data-comment-id="${escape(c.id)}" data-status="${escape(c.anchorStatus)}"><rect class="comment-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="comment-pin" role="button" aria-label="Comment ${index + 1} by ${escape(c.actor.replace(/^Guest: /, ''))}" transform="translate(${x + w} ${y}) scale(${1 / scale})"><circle r="11"/><text>${index + 1}</text></g></g>`;
+  }).join('');
+}
+function revealObjects(comment) {
+  const shapes = shapeList(), box = commentAnchor(comment, shapes);
+  if (!box) throw new Error('The commented objects were removed');
+  selected = new Set(shapes.filter((s) => comment.selection?.includes(s.id)).map((s) => s.id));
+  selectionRegion = comment.region || null;
+  view = bounds([{ id: '', type: 'rect', box }]);
+  selectTool('select');
 }
 function regionSVG(region, active) {
   if (!region) return '';
@@ -436,6 +471,7 @@ function selectTool(value) {
   stopPointing();
   $('menu').open = false;
   tool = value;
+  hoverShape = null;
   document
     .querySelectorAll('[data-tool]')
     .forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === value)));
@@ -624,6 +660,7 @@ function board() {
     ['text', 'Text', 'T'],
     ['erase', 'Eraser', 'E'],
     ['laser', 'Laser pointer', 'K'],
+    ['comment', 'Comment', 'M'],
   ];
   const icons = {
     pan: 'M8 13V6a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v9c0 5-3 7-7 7-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 2',
@@ -639,6 +676,7 @@ function board() {
     text: 'M4 5h16M12 5v15M8 20h8',
     erase: 'm3 15 12-12 7 7-12 12H9Zm6-6 7 7M10 22h12',
     laser: 'm3 21 10-10 3 3L6 24ZM17 7l3-3M14 5V2M21 10h3',
+    comment: 'M4 4h16v12H10l-5 4v-4H4Z',
   };
   const commands = document.createElement('div');
   commands.className = 'board-commands';
@@ -657,7 +695,7 @@ function board() {
     if (readOnly && !['select', 'pan'].includes(value)) continue;
     const b = button(strip, '', () => selectTool(value));
     b.dataset.tool = value;
-    if (['rect', 'arrow', 'erase'].includes(value)) b.classList.add('tool-group-start');
+    if (['rect', 'arrow', 'erase', 'comment'].includes(value)) b.classList.add('tool-group-start');
     b.title = `${label} (${key})`;
     b.setAttribute('aria-label', label);
     b.setAttribute('aria-keyshortcuts', key);
@@ -885,6 +923,7 @@ function board() {
     arrow: 'Drag between objects to connect them. Connections follow the objects.',
     erase: 'Click an object to erase it. Undo restores it.',
     laser: 'Drag to point. The trail fades without changing the board.',
+    comment: 'Click an object or drag across an area to comment on it.',
   };
   const refreshStyle = refresh;
   refresh = () => {
@@ -920,7 +959,7 @@ function board() {
     <section><h3>Working on the canvas</h3><dl>
     <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
     <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Middle-button drag</dd></div><div><dt>Zoom at pointer</dt><dd>Scroll</dd></div>
-    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div>'}
+    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Comment on the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
     </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
   document.body.append(shortcuts);
   button($('tools'), 'Shortcuts', () => shortcuts.showModal()).className = 'board-help';
@@ -946,6 +985,12 @@ function board() {
     document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
   canvas.onpointerdown = (event) => {
     if (event.button !== 0 && event.button !== 1) return;
+    const pin = event.target.closest?.('.comment-pin');
+    if (pin && event.button === 0) {
+      event.preventDefault();
+      assistant?.openComment(pin.parentNode.dataset.commentId);
+      return;
+    }
     event.preventDefault();
     canvas.focus();
     canvas.setPointerCapture(event.pointerId);
@@ -964,6 +1009,15 @@ function board() {
         start: [event.clientX, event.clientY],
         view: view.slice(),
       };
+      return;
+    }
+    if (tool === 'comment' && !readOnly) {
+      // A click comments on an object; a drag comments on an area and its objects.
+      selectionRegion = null;
+      selected = id ? new Set([id]) : new Set();
+      drag = { mode: 'marquee', comment: true, target: id, start: point,
+        screen: [event.clientX, event.clientY], additive: false, base: new Set(selected), region: null };
+      draw();
       return;
     }
     if (tool === 'select') {
@@ -1018,6 +1072,10 @@ function board() {
     }
     if (event.pointerType !== 'touch' || drag)
       presence(point, tool === 'laser' ? 'laser' : 'cursor');
+    if (!drag && tool === 'comment' && event.pointerType !== 'touch') {
+      const hover = hitAt(event) || null;
+      if (hover !== hoverShape) { hoverShape = hover; draw(); }
+    }
     if (!drag) return;
     if (drag.mode === 'marquee') {
       if (Math.hypot(event.clientX - drag.screen[0], event.clientY - drag.screen[1]) < 4 && !drag.region) return;
@@ -1074,6 +1132,7 @@ function board() {
         selectionRegion = d.region;
       }
       draw();
+      if (d.comment && (d.region || d.target)) assistant.begin('selection', 'comment');
       return;
     }
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
@@ -1113,7 +1172,26 @@ function board() {
   };
   canvas.onpointerleave = () => {
     if (!drag) stopPointing();
+    if (hoverShape) { hoverShape = null; draw(); }
   };
+  const peek = $('comment-peek');
+  canvas.addEventListener('pointerover', (event) => {
+    const marker = event.target.closest?.('.comment-pin')?.parentNode;
+    const comment = marker && commentStates.find((c) => c.id === marker.dataset.commentId);
+    if (!comment) return;
+    const line = (tag, text) => { const node = document.createElement(tag); node.textContent = text; return node; };
+    const replies = comment.replies?.length || 0;
+    peek.replaceChildren(line('small', comment.actor.replace(/^Guest: /, '')), line('p', comment.text),
+      line('small', [replies ? `${replies} repl${replies === 1 ? 'y' : 'ies'}` : '',
+        comment.anchorStatus === 'changed' ? 'Objects changed since posting' : ''].filter(Boolean).join(' · ')));
+    peek.hidden = false;
+    const pin = marker.querySelector('.comment-pin').getBoundingClientRect(), host = $('board').getBoundingClientRect();
+    peek.style.left = `${Math.max(8, Math.min(pin.right + 6 - host.left, host.width - peek.offsetWidth - 8))}px`;
+    peek.style.top = `${Math.max(8, Math.min(pin.top - host.top, host.height - peek.offsetHeight - 8))}px`;
+  });
+  canvas.addEventListener('pointerout', (event) => {
+    if (event.target.closest?.('.comment-pin')) peek.hidden = true;
+  });
   canvas.onpointercancel = () => {
     outgoingPreview = null;
     stopPointing();
@@ -1160,6 +1238,7 @@ function board() {
       s: 'sticky',
       e: 'erase',
       k: 'laser',
+      m: 'comment',
       1: 'select',
       2: 'rect',
       3: 'diamond',
@@ -1376,7 +1455,8 @@ function documentEditor() {
 function captureAttachment(scope, previous) {
   const range = scope === 'selection' && editor ? previous?.range || documentSelection : undefined;
   const board = scope === 'selection' && !editor;
-  const selection = board ? previous?.selection || [...selected] : [];
+  // A comment resends the objects of its anchor that still exist.
+  const selection = board ? previous?.liveSelection || previous?.selection || [...selected] : [];
   const region = board ? (previous ? previous.region : selectionRegion) || undefined : undefined;
   if (scope === 'selection' && !range && !selection.length && !region) throw new Error('Select content first');
   const captured = captureContext(doc, { range, selection, region });
@@ -1393,8 +1473,10 @@ async function saveBeforeQuestion() {
 }
 function setComments(value) {
   comments = value;
-  assistant?.setComments(editor ? readComments(doc, comments) : []);
+  commentStates = readComments(doc, comments);
+  assistant?.setComments(commentStates);
   if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+  else draw();
 }
 function revealPassage(range) {
   const [from, to] = selectionPositions(doc, range);
@@ -1611,7 +1693,7 @@ async function start(event) {
           .setMeta(discussionHighlight, attachment?.range || null));
       }
     },
-    reveal: revealPassage, state: () => ({ readOnly, online }), restored: recovery?.assistant,
+    reveal: comment => editor ? revealPassage(comment.range) : revealObjects(comment), state: () => ({ readOnly, online }), restored: recovery?.assistant,
   });
   assistant.renderDraft();
   if (editor && matchMedia('(min-width:1100px)').matches) {
@@ -1620,16 +1702,15 @@ async function start(event) {
     document.activeElement?.blur();
   } else if (!editor) requestAnimationFrame(() => { view = bounds(shapeList()); draw(); });
   setComments(item.comments || []);
-  $('comment-selection').hidden = readOnly || !editor;
+  $('comment-selection').hidden = readOnly;
   $('selection-question').hidden = readOnly;
-  $('comments-tab').hidden = !editor;
   $('ask-toggle').textContent = editor ? 'Discussion' : 'Assistant';
   if (editor) {
     $('document').after($('selection-actions'));
     $('selection-actions').classList.add('document-selection-actions');
     $('selection-actions').hidden = true;
   }
-  $('hint').textContent = editor ? 'Select text to comment or ask the assistant.' : 'Select objects to attach them to a question.';
+  $('hint').textContent = editor ? 'Select text to comment or ask the assistant.' : 'Select objects or drag across an area to comment or ask the assistant.';
   $('comment-selection').onclick = () => assistant.begin('selection', 'comment');
   $('selection-question').onclick = () => assistant.begin('selection');
   $('document').addEventListener('click', event => {
@@ -1638,8 +1719,8 @@ async function start(event) {
     assistant.openComment(id);
   });
   document.addEventListener('keydown', event => {
-    if (editor && (event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'm') {
-      event.preventDefault(); captureDocumentSelection(); assistant.begin('selection', 'comment');
+    if (!readOnly && (event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'm') {
+      event.preventDefault(); if (editor) captureDocumentSelection(); assistant.begin('selection', 'comment');
     }
   });
   history(item.transactions);

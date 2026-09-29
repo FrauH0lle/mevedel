@@ -267,6 +267,7 @@ header {
   gap: 3px;
 }
 #board {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -310,6 +311,55 @@ header {
   stroke-width: 1;
   stroke-dasharray: 5 4;
 }
+#selection .comment-hover {
+  fill: none;
+  stroke: var(--board-selection);
+  stroke-width: 2;
+}
+#comment-markers .comment-pin { cursor: pointer; pointer-events: all; }
+#comment-markers .comment-pin circle {
+  fill: var(--board-selection);
+  stroke: #fff;
+  stroke-width: 2;
+}
+#comment-markers .comment-pin text {
+  fill: #fff;
+  font: 600 11px system-ui, sans-serif;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+#comment-markers [data-status='changed'] .comment-pin circle {
+  fill: #fff;
+  stroke: var(--board-selection);
+  stroke-dasharray: 3 2;
+}
+#comment-markers [data-status='changed'] .comment-pin text { fill: var(--board-selection); }
+#comment-markers .comment-outline {
+  fill: color-mix(in srgb, var(--board-selection) 6%, transparent);
+  stroke: var(--board-selection);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+  visibility: hidden;
+}
+#comment-markers .comment-marker:hover .comment-outline,
+#comment-markers .comment-marker[data-active='true'] .comment-outline { visibility: visible; }
+#comment-peek {
+  position: absolute;
+  z-index: 5;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: var(--paper, #fff);
+  color: inherit;
+  border: 1px solid var(--line, #d7dbe0);
+  border-radius: 8px;
+  box-shadow: var(--shadow, 0 4px 14px #0002);
+  font-size: 13px;
+  pointer-events: none;
+}
+#comment-peek small { display: block; opacity: .75; }
+#comment-peek p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 #selection .selection-region[data-active='true'] {
   fill: color-mix(in srgb, var(--board-selection) 12%, transparent);
   stroke-dasharray: none;

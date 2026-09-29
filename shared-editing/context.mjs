@@ -16,6 +16,22 @@ function nearby(all, region, selection) {
     .map(({ src, imageEdit, ...shape }) => src ? { ...shape, image: 'shown in the attached PNG' } : shape);
 }
 
+function boardQuote(shapes, region) {
+  return `${region ? `Area ${region[2]} × ${region[3]} at ${region[0]}, ${region[1]}\n` : ''}${shapes.length} object${shapes.length === 1 ? '' : 's'}${shapes.map(shape => `\n${shape.type}${shape.text ? ': ' + shape.text : ''}`).join('')}`;
+}
+
+/* A compact fingerprint of anchored shapes. Image bytes contribute only their
+   length, so a comment on a large image stays cheap to check on every change. */
+export function anchorSignature(shapes) {
+  const json = JSON.stringify(shapes.map(({ src, imageEdit, ...shape }) => ({ ...shape,
+    ...(src ? { src: src.length } : {}),
+    ...(imageEdit ? { imageEdit: { ...imageEdit, src: imageEdit.src?.length } } : {}) })));
+  let hash = 0xcbf29ce484222325n;
+  for (let i = 0; i < json.length; i++)
+    hash = BigInt.asUintN(64, (hash ^ BigInt(json.charCodeAt(i))) * 0x100000001b3n);
+  return hash.toString(16).padStart(16, '0');
+}
+
 export function captureContext(doc, { selection = [], range, region } = {}) {
   const { kind, title, content: all } = inspect(doc);
   let content = all, context = [], quote, scope = 'whole';
@@ -42,7 +58,7 @@ export function captureContext(doc, { selection = [], range, region } = {}) {
     scope = 'selection';
   }
   if (!quote) quote = kind === 'whiteboard'
-    ? `${region ? `Area ${region[2]} × ${region[3]} at ${region[0]}, ${region[1]}\n` : ''}${content.length} object${content.length === 1 ? '' : 's'}${content.map(shape => `\n${shape.type}${shape.text ? ': ' + shape.text : ''}`).join('')}`
+    ? boardQuote(content, region)
     : all.content.map(node => {
       const text = n => n.text || (n.content || []).map(text).join('');
       return text(node);
@@ -60,7 +76,20 @@ export function checkContext(doc, request) {
   return captured;
 }
 
+/* A board comment is changed once its objects move, restyle or disappear, and
+   removed when neither objects nor an area remain to show. */
+function readBoardComment(shapes, comment) {
+  const live = shapes.filter(shape => comment.selection.includes(shape.id));
+  const anchorStatus = !live.length && !comment.region ? 'deleted'
+    : live.length === comment.selection.length && anchorSignature(live) === comment.signature ? 'current' : 'changed';
+  return { ...comment, liveSelection: live.map(shape => shape.id),
+    liveQuote: boardQuote(live, comment.region), anchorStatus };
+}
+
 export function readComments(doc, comments = []) {
+  if (!comments.length) return [];
+  const { kind, content } = inspect(doc);
+  if (kind === 'whiteboard') return comments.map(comment => readBoardComment(content, comment));
   return comments.map(comment => {
     try {
       const { text } = selectedText(doc, comment.range);
