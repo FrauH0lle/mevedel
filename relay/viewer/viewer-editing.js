@@ -640,6 +640,12 @@ window.mevedelEditingView = {
           point: null,
         });
     };
-    return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance };
+    // A room message in an item's discussion asks about the whole item as
+    // currently committed; the reply lands in that item's conversation.
+    function ask(id, text) {
+      const questionId = crypto.randomUUID();
+      return request({ action: 'ask', id, opId: questionId, questionId, text, whole: true });
+    }
+    return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance, ask };
   },
 };

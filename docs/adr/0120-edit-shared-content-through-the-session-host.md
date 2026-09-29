@@ -261,6 +261,19 @@ that selection fail requests visibly. The editor shows available live discussion
 content editing remains usable. No placeholder directive is created: its lifecycle
 and read-only discussion capability would be wrong for requests that edit an item.
 
+The room routes into item conversations the way it routes into directive
+discussions. Separate contexts with one shared display had a trap: a guest
+restyling a whiteboard through its comment thread saw the exchange in the room
+stream, replied there, and reached the room's model, which had never seen the
+whiteboard turns and attached the correction to an unrelated artifact comment.
+Records therefore carry their item as they carry a directive, the room filter
+lists items beside directives, and a room message with an item selected is a
+whole-item question in that item's conversation. Only the routing layer is
+shared: each discussion kind keeps its own handler and context policy, so
+directive discussions stay read-only and item questions can still edit. A
+room message has no reviewed snapshot, so its whole-item question captures the
+committed content; editor questions keep the reviewed-snapshot check.
+
 Read and Grep of `history://root` give scoped conversations deliberate access to
 parent decisions, including unsaved turns. `history://saved` covers archived
 segments. This extends the existing resource family for directives and all other

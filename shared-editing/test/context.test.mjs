@@ -201,3 +201,17 @@ test('board comments anchor to objects and areas, track changes and send survivi
   await commit(shapes => shapes.delete('a'));
   assert.deepEqual(statuses().map(c => c.anchorStatus), ['deleted','current'], 'an area outlives its objects');
 });
+
+test('room questions about a whole item capture current content without a reviewed snapshot', async () => {
+  let {state} = await handle({action:'create',id:'board',opId:'create',actor:'Guest: Alice',kind:'whiteboard',
+    content:[{id:'a',type:'rect',box:[0,0,100,100],text:'A'},{id:'b',type:'ellipse',box:[200,0,100,100],text:'B'}]});
+  const asked = await handle({action:'read',question:true,whole:true,state});
+  assert.equal(asked.result.snapshot.scope, 'whole');
+  assert.deepEqual(asked.result.snapshot.content.map(shape => shape.id), ['a','b']);
+  assert.match(asked.result.quote, /^2 objects/);
+  // Without the whole-item flag a question still needs the snapshot its
+  // sender reviewed, and the flag never combines with a selection.
+  await assert.rejects(handle({action:'read',question:true,state}), /Content changed/);
+  await assert.rejects(handle({action:'read',question:true,whole:true,selection:['a'],state}),
+                       /whole-item question takes no selection/);
+});
