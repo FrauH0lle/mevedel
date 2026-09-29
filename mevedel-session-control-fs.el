@@ -934,6 +934,20 @@ is extracted to disk. A rejected archive requires fresh ordinary reads."
 (defvar mevedel-session-control-fs--stage-local t
   "Non-nil stages large local payloads; tests bind nil to exercise carriers.")
 
+(defun mevedel-session-control-fs--inline-source (op)
+  "Return OP with a `:source-file' payload read into raw `:content'.
+Remote targets and small payloads travel as base64 fields."
+  (if-let* ((source (plist-get op :source-file)))
+      (let ((copy (copy-sequence op)))
+        (cl-remf copy :source-file)
+        (plist-put (plist-put copy :content
+                              (with-temp-buffer
+                                (set-buffer-multibyte nil)
+                                (insert-file-contents-literally source)
+                                (buffer-string)))
+                   :coding 'no-conversion))
+    op))
+
 (defun mevedel-session-control-fs--stage-payloads (operations staged)
   "Return local OPERATIONS with large writes carried by staged files.
 
@@ -946,11 +960,16 @@ or links it after proving the destination's parent as before.  Record each
 staged file in the car of STAGED for cleanup."
   (mapcar
    (lambda (op)
-     (let ((content (plist-get op :content)))
+     (let ((content (plist-get op :content))
+           (source (plist-get op :source-file)))
        (if (not (and (memq (plist-get op :op) '(write create))
-                     (stringp content)
-                     (>= (string-bytes content) mevedel-session-control-fs--stage-min-bytes)))
-           op
+                     (if source
+                         (>= (file-attribute-size (file-attributes source))
+                             mevedel-session-control-fs--stage-min-bytes)
+                       (and (stringp content)
+                            (>= (string-bytes content)
+                                mevedel-session-control-fs--stage-min-bytes)))))
+           (mevedel-session-control-fs--inline-source op)
          (let* ((parent (plist-get (mevedel-session-control-fs--descriptor
                                     (plist-get op :path))
                                    :parent))
@@ -964,7 +983,11 @@ staged file in the car of STAGED for cleanup."
                       (or (plist-get op :coding) 'utf-8-unix)
                     'no-conversion)))
              (push file (car staged))
-             (write-region content nil file nil 'silent)
+             (if source
+                 ;; A file-backed payload is copied by the kernel; its bytes
+                 ;; never become a Lisp string.
+                 (copy-file source file t)
+               (write-region content nil file nil 'silent))
              (list :op (if (eq (plist-get op :op) 'write) 'write-staged 'create-staged)
                    :path (plist-get op :path)
                    :content (file-local-name file)
@@ -1050,7 +1073,8 @@ LOCK-DIRECTORY is its optional target-side lock."
              ;; payload a second time for the request file.
              (fields (mapcar #'mevedel-session-control-fs--program-fields
                              (if (or remote (not mevedel-session-control-fs--stage-local))
-                                 operations
+                                 (mapcar #'mevedel-session-control-fs--inline-source
+                                         operations)
                                (mevedel-session-control-fs--stage-payloads
                                 operations staged))))
              (archive-p (and (<= 2 (length operations) 32)
@@ -1254,7 +1278,10 @@ target: callers serialize the ones that touch the same files."
                         "\0"))
                (with-temp-buffer
                  (mevedel-session-control-fs--insert-program-request
-                  (mapcar #'mevedel-session-control-fs--program-fields operations))
+                  (mapcar (lambda (op)
+                            (mevedel-session-control-fs--program-fields
+                             (mevedel-session-control-fs--inline-source op)))
+                          operations))
                  (process-send-region process (point-min) (point-max)))
                (process-send-eof process)
                process))
