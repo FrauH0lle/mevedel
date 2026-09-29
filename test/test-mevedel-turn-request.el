@@ -716,7 +716,10 @@
             (mevedel--gc-maintain)
             (should (= 800000 gc-cons-threshold))
             (should-not mevedel--gc-timer))
-        (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer)))))
+        (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))
+        ;; An interactive request also starts telemetry's lag heartbeat.
+        (when (fboundp 'mevedel-telemetry--lag-stop)
+          (mevedel-telemetry--lag-stop)))))
 
   :doc "drains every registered canceller on end"
   (with-temp-buffer
