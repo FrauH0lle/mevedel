@@ -722,6 +722,24 @@ gain came mostly from where a collection landed rather than from less work,
 and it left a window moved onto a pending response with the previous prompt
 pinned until the callbacks caught up.
 
+### 2026-09-29: allocation of a settled refresh
+
+Every compiled replay of a scheduled refresh contained exactly one collection
+of 57-72 ms, and wherever it landed was the worst key delay; without it the
+slowest step took 56-59 ms. A batched root refresh of the 2 MB capture
+allocated 49.7 MB, so at the editor's 64 MB idle-tuned threshold most
+refreshes collected. Exclusive allocation attribution found repeated whole
+transcript work: each prompt rescanned every audit payload for guest
+attribution, each audit lookup copied its payload out of the buffer to key
+the decode memo, each decode created a temporary buffer, and every content
+segment was cleaned in full only to prove it was not glue. Guest attributions
+are now reused per modification tick, payload decodes are found by position
+within a tick, decoding reads from the string, and a segment that visibly
+begins with content skips the glue test. Batched refresh allocation fell to
+40.0 MB for root, from 29.7 to 24.2 MB for the agent capture and from 21.8
+to 19.1 MB for control. The replay still collects once per root refresh at
+its 32 MB threshold.
+
 ### September 2026: avoid copying first-arrival payloads before reading them
 
 A profile of the unchanged archived 9.6 MB tool span showed repeated copies
