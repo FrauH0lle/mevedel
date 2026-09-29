@@ -148,8 +148,8 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
-(declare-function mevedel-session-publication--file-sha256
-                  "mevedel-session-publication" (file))
+(declare-function mevedel-session-publication--files-sha256
+                  "mevedel-session-publication" (paths))
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-generation-summaries
                   "mevedel-session-publication" (session-dir &optional limit))
@@ -1134,36 +1134,47 @@ candidate's surviving turn count."
 Only the publication's logical artifacts are copied.  Lease, publication,
 recovery, and other control paths are never materialized.
 
-STAGING-PATH is created when absent: `file-in-directory-p' answers nil for
-a directory that does not exist, so the containment check below needs the
-staging root present before the first artifact is written."
+STAGING-PATH is created when absent."
   (unless publication
     (error "Portable project operation requires a committed session publication"))
   (make-directory staging-path t)
-  (dolist (entry (plist-get publication :artifacts))
-    (let* ((logical (car entry))
-           (destination (expand-file-name logical staging-path))
-           (published (plist-get (cdr entry) :published))
-           ;; A live owner's newer staged bytes win over the manifest in
-           ;; the ordinary reader, so the direct copy needs none pending.
-           (local-p (and (stringp published) (not (file-remote-p published))
-                         (not (file-remote-p staging-path))
-                         (null (mevedel-session-publication-uncommitted-batches session))
-                         (not (mevedel-session-pending-publication session)))))
-      (unless (file-in-directory-p destination staging-path)
-        (error "Session artifact escapes staging: %s" logical))
-      (make-directory (file-name-directory destination) t)
-      (if local-p
-          ;; Immutable local bytes are copied by the kernel and verified
-          ;; against the manifest, instead of passing through Lisp.
-          (progn
-            (copy-file published destination t)
-            (unless (equal (plist-get (cdr entry) :sha256)
-                           (mevedel-session-publication--file-sha256 destination))
-              (error "Session artifact does not match its manifest: %s" logical)))
-        (let ((content (mevedel-session-artifacts-read-artifact session logical t))
-              (coding-system-for-write 'no-conversion))
-          (write-region content nil destination nil 'silent))))))
+  (let ((root (file-name-as-directory (expand-file-name staging-path)))
+        copied)
+    (dolist (entry (plist-get publication :artifacts))
+      (let* ((logical (car entry))
+             (destination (expand-file-name logical root))
+             (published (plist-get (cdr entry) :published))
+             ;; A live owner's newer staged bytes win over the manifest in
+             ;; the ordinary reader, so the direct copy needs none pending.
+             (local-p (and (stringp published) (not (file-remote-p published))
+                           (not (file-remote-p staging-path))
+                           (null (mevedel-session-publication-uncommitted-batches session))
+                           (not (mevedel-session-pending-publication session)))))
+        ;; Staging is a fresh directory this operation created, so a lexical
+        ;; check after `expand-file-name' resolved any `..' is containment;
+        ;; resolving true names cost a tenth of a large Save As.
+        (unless (string-prefix-p root destination)
+          (error "Session artifact escapes staging: %s" logical))
+        (make-directory (file-name-directory destination) t)
+        (if local-p
+            ;; Immutable local bytes are copied by the kernel and verified
+            ;; against the manifest, instead of passing through Lisp.
+            (progn
+              (copy-file published destination t)
+              (push (list logical destination (plist-get (cdr entry) :sha256))
+                    copied))
+          (let ((content (mevedel-session-artifacts-read-artifact session logical t))
+                (coding-system-for-write 'no-conversion))
+            (write-region content nil destination nil 'silent)))))
+    ;; One verification pass hashes every copy together.
+    (setq copied (nreverse copied))
+    (cl-mapc (lambda (copy digest)
+               (unless (equal (nth 2 copy) digest)
+                 (error "Session artifact does not match its manifest: %s"
+                        (car copy))))
+             copied
+             (mevedel-session-publication--files-sha256
+              (mapcar #'cadr copied)))))
 
 (defun mevedel-session-rewind--prune-remote-rewind-staging
     (candidate target staging-path)
