@@ -233,6 +233,8 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript--user-prompt-start
                   "mevedel-transcript" (pos next prop &optional state))
+(declare-function mevedel-transcript-leading-property
+                  "mevedel-transcript" (name))
 (declare-function mevedel-transcript-normalize-properties
                   "mevedel-transcript" ())
 (declare-function mevedel-transcript-prompt-scan-state
@@ -240,6 +242,7 @@
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript--user-prompt-start "mevedel-transcript")
+(autoload 'mevedel-transcript-leading-property "mevedel-transcript")
 (autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
 (autoload 'mevedel-transcript-prompt-scan-state "mevedel-transcript")
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
@@ -814,8 +817,8 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
   "Return the copied-tail prompt count recorded on the current segment."
   (if (derived-mode-p 'org-mode)
       (max 0 (string-to-number
-              (or (org-entry-get (point-min)
-                                 "MEVEDEL_SEGMENT_TAIL_PROMPTS")
+              (or (mevedel-transcript-leading-property
+                   "MEVEDEL_SEGMENT_TAIL_PROMPTS")
                   "0")))
     0))
 
