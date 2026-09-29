@@ -254,7 +254,8 @@ stays fixed when focus or the document selection moves elsewhere.
 
 **Send to assistant** inside a comment actually submits the posted human thread
 and its passage, without changing the assistant composer or including unposted
-reply text. Queue and delivery status appear alongside the discussion. Canonical
+reply text. The thread's latest human message is the visible request in the
+room and to the model; the whole thread travels in the shared context. Queue and delivery status appear alongside the discussion. Canonical
 AI replies render in that thread beneath the human message that prompted them;
 ordinary questions remain in the Assistant view. Another AI request requires
 another explicit send. The host checks the reviewed thread version as well as
