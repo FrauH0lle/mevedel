@@ -1107,6 +1107,54 @@ still my prompt
 ")
     (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning")))))
 
+(mevedel-deftest mevedel-transcript--control-search-lines ()
+  ,test
+  (test)
+  :doc "finds with the kind index exactly what a plain search finds"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:X: 1\n:END:\n*** prompt\n:PROMPT:\nbody\n:END:\n"
+            "#+begin_reasoning\nthink\n#+END_REASONING\n"
+            "#+begin_tool (:name \"Read\")\nx\n#+end_tool\n"
+            "* <system-reminder>\nr\n</system-reminder>\n"
+            "<agent-result id=\"a\">\nres\n</agent-result>\n"
+            "<hook-context>\nh\n</hook-context>\n"
+            "<task-background>\nt\n</task-background>\n"
+            "<!-- mevedel-render-data -->\nd\n<!-- /mevedel-render-data -->\n"
+            "<!-- mevedel-hook-audit -->\na\n<!-- /mevedel-hook-audit -->\n"
+            "#+begin_reasoning inline #+end_tool\n")
+    (let ((index (mevedel-transcript--control-line-positions)))
+      (dolist (entry mevedel-transcript--control-search-kinds)
+        (let ((regexp (car entry)) plain indexed)
+          (goto-char (point-min))
+          (while (mevedel-transcript--search-control-line regexp nil)
+            (push (list (match-beginning 0) (match-end 0)) plain))
+          (let ((mevedel-transcript--control-lines index))
+            (goto-char (point-min))
+            (while (mevedel-transcript--search-control-line regexp nil)
+              (push (list (match-beginning 0) (match-end 0)) indexed)))
+          (should plain)
+          (should (equal plain indexed)))))))
+
+(mevedel-deftest mevedel-transcript-leading-property ()
+  ,test
+  (test)
+  :doc "reads the leading drawer as `org-entry-get' does, and nothing later"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: ((response (1 2)))\n"
+            ":MEVEDEL_SEGMENT_TAIL_PROMPTS: 3  \n:END:\n"
+            "*** Prompt\n:PROPERTIES:\n:LATER: no\n:END:\n")
+    (dolist (name '("MEVEDEL_SEGMENT_TAIL_PROMPTS" "GPTEL_BOUNDS" "MISSING"))
+      (should (equal (org-entry-get (point-min) name)
+                     (mevedel-transcript-leading-property name))))
+    (should (equal "3" (mevedel-transcript-leading-property
+                        "MEVEDEL_SEGMENT_TAIL_PROMPTS")))
+    (should-not (mevedel-transcript-leading-property "LATER")))
+  :doc "returns nil without a leading drawer"
+  (with-temp-buffer
+    (insert "text\n:PROPERTIES:\n:X: 1\n:END:\n")
+    (should-not (mevedel-transcript-leading-property "X"))))
+
 (mevedel-deftest mevedel-transcript--skip-leading-properties-drawer ()
   ,test
   (test)
