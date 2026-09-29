@@ -1,5 +1,8 @@
 /* Item conversation UI; the host owns submissions, comments and transcript truth. */
 const $ = id => document.getElementById(id);
+// A board quote spans lines (area, count, objects); a thread header shows
+// it on one line, so the parts stay apart once whitespace collapses.
+const headline = (quote) => String(quote || '').split('\n').filter(Boolean).join(' · ');
 const el = (tag, text, className) => {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
@@ -318,7 +321,7 @@ export class AssistantPanel {
       if (!card) {
         card = el('details', undefined, 'comment');
         card.dataset.commentId = comment.id;
-        const summary = el('summary', comment.quote);
+        const summary = el('summary', headline(comment.quote));
         const passage = el('button', anchorTerms().show, 'comment-passage');
         passage.type = 'button';
         passage.onclick = () => {
@@ -362,7 +365,7 @@ export class AssistantPanel {
       previous.delete(comment.id);
       card.classList.toggle('resolved', comment.resolved);
       card.hidden = comment.resolved && !$('show-resolved').checked;
-      card.querySelector('summary').textContent = `${comment.resolved ? 'Resolved · ' : ''}${comment.quote}`;
+      card.querySelector('summary').textContent = `${comment.resolved ? 'Resolved · ' : ''}${headline(comment.quote)}`;
       const messages = card.querySelector('.thread-messages');
       const oldMessages = new Map([...messages.children].map(n => [n.dataset.messageId,n]));
       for (const message of [comment,...(comment.replies || [])]) {

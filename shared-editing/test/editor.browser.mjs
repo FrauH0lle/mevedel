@@ -445,6 +445,8 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#comment-text').fill('Legend here');
       await frame.locator('#comment-post').click();
       await frame.locator('#comment-markers .comment-pin').nth(1).waitFor();
+      assert.match(await frame.locator('#comments .comment summary').nth(1).textContent(),
+                   /^Area 10\d × 6\d at 1(49|50), (19|20) · 0 objects$/, 'thread headers keep quote lines apart');
       const posted = await page.evaluate(() => window.messages.filter(m => m.args?.action === 'comment').map(m => m.args));
       assert.deepEqual(posted[0].selection, ['a']);
       assert.equal(posted[1].region.length, 4);
