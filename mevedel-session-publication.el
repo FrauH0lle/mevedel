@@ -327,12 +327,52 @@ elsewhere on the same execution target receive nil."
               normalized (plist-put normalized :logical logical))
         normalized))))
 
+(defun mevedel-session-publication--files-sha256 (paths)
+  "Return the SHA-256 digests of files PATHS' literal bytes, in order.
+Local files are hashed by `sha256sum', a few hundred per process: reading
+each file into a buffer and hashing a copy of its text allocated twice its
+size, and a large Save As spent a third of its time hashing and another
+third collecting.  Remote files, and all files without `sha256sum', are
+hashed in Lisp."
+  (let ((digests (make-hash-table :test #'equal))
+        (local (and (executable-find "sha256sum")
+                    (delete-dups
+                     (seq-remove #'file-remote-p
+                                 (mapcar #'expand-file-name paths))))))
+    (while local
+      (let ((chunk (seq-take local 200)))
+        (setq local (nthcdr 200 local))
+        (with-temp-buffer
+          (set-buffer-multibyte nil)
+          (when (eq 0 (let ((coding-system-for-read 'no-conversion))
+                        (apply #'call-process "sha256sum" nil t nil
+                               "--binary" "--zero" "--" chunk)))
+            (goto-char (point-min))
+            (dolist (path chunk)
+              ;; Each record is DIGEST, space, `*', the name, then NUL.
+              (when (looking-at "\\([0-9a-f]\\{64\\}\\) \\*")
+                (let ((digest (match-string 1))
+                      (name-start (match-end 0)))
+                  (goto-char name-start)
+                  (when (and (search-forward "\0" nil t)
+                             (equal (encode-coding-string
+                                     path (or file-name-coding-system
+                                              default-file-name-coding-system))
+                                    (buffer-substring-no-properties
+                                     name-start (1- (point)))))
+                    ;; Recorded only when the name echoes exactly.
+                    (puthash path digest digests)))))))))
+    (mapcar (lambda (path)
+              (or (gethash (expand-file-name path) digests)
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally path)
+                    (secure-hash 'sha256 (current-buffer)))))
+            paths)))
+
 (defun mevedel-session-publication--file-sha256 (path)
   "Return the SHA-256 digest of file PATH's literal bytes."
-  (with-temp-buffer
-    (set-buffer-multibyte nil)
-    (insert-file-contents-literally path)
-    (secure-hash 'sha256 (current-buffer))))
+  (car (mevedel-session-publication--files-sha256 (list path))))
 
 (defun mevedel-session-publication--content-sha256 (artifact)
   "Return the digest ARTIFACT's staged bytes will have once written.
@@ -1174,12 +1214,29 @@ collision simply picks another name."
               (file-name-as-directory
                (file-name-concat
                 root (mevedel-session-publication--generation-name))))
+             (digests
+              (let* ((pending (cl-loop for artifact in artifacts
+                                       unless (or (plist-get artifact :delete)
+                                                  (plist-get artifact :source-sha256))
+                                       collect (plist-get artifact :source)))
+                     (table (make-hash-table :test #'equal)))
+                (cl-mapc (lambda (source digest) (puthash source digest table))
+                         pending
+                         (mevedel-session-publication--files-sha256 pending))
+                table))
              (payloads
               (cl-loop for artifact in artifacts
                        for index from 1
                        unless (plist-get artifact :delete)
                        collect (mevedel-session-publication--immutable-entry
-                                directory artifact index session-dir)))
+                                directory
+                                (if (plist-get artifact :source-sha256)
+                                    artifact
+                                  (append (list :source-sha256
+                                                (gethash (plist-get artifact :source)
+                                                         digests))
+                                          artifact))
+                                index session-dir)))
              (changed (make-hash-table :test #'equal))
              overlaid
              manifest manifest-path operations results)
@@ -1336,12 +1393,14 @@ component and retries once."
 (defun mevedel-session-publication--fixed-artifact-p (artifact)
   "Return non-nil when ARTIFACT is also written to its fixed target file.
 
-Transcripts and file history are read through the immutable publication (or
-owned staging before its marker), never fixed files.  The small discovery
-sidecar and ordinary artifact files keep their fixed path."
+Transcripts, file history and instruction snapshots are read through the
+immutable publication (or owned staging before its marker), never fixed
+files.  The small discovery sidecar and ordinary artifact files keep their
+fixed path."
   (not (or (plist-get artifact :delete)
            (when-let* ((logical (plist-get artifact :logical)))
              (or (string-prefix-p "file-history/" logical)
+                 (string-prefix-p "instructions/" logical)
                  (and (string-match-p
                        "\\`\\(?:segment-[0-9]+\\|agents/.+\\)\\.chat\\.org\\'"
                        logical)
