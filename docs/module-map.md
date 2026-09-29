@@ -130,7 +130,7 @@ Chat / view
   mevedel-collaboration-owner.el owner-link permission and session authorities
   mevedel-collaboration-agent.el  browser agent roster and transcript fetch
   mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
-  mevedel-collaboration-artifact.el browser artifact fetch and notifications
+  mevedel-collaboration-artifact.el browser artifact fetch, comments, and notifications
   mevedel-collaboration-history.el archived browser segments and artifact metadata
   mevedel-collaboration-editing.el browser shared editing and selection questions
   mevedel-shared-conversation.el item-scoped request history from canonical live/archive turns

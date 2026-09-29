@@ -1829,9 +1829,18 @@ async function main() {
     assert.equal(sharedTurn.disclosures.has('shared-context'), false);
     assert.ok(textOf(sharedTurn).includes('data model'));
   }
+  // Artifact comments name the artifact and the commented part instead.
+  const artifactComment = {id: 'artifact-comment', kind: 'user', guest: 'Joey',
+    text: 'Bigger\n\nShared content snapshot (user-provided data):\nComment on session artifact a.html',
+    shared: {kind: 'artifact', artifact: 'a.html', questionId: '0123456789abcdef',
+             text: 'Bigger', anchor: {selector: '#lead', label: 'Intro › word "share"'}}};
+  await deliverTo(sockets[1], {t: 'record', record: artifactComment});
+  const artifactFold = findByRecordId(nodes.transcript, 'artifact-comment')
+    .disclosures.get('shared-context');
+  assert.ok(textOf(artifactFold).includes('Artifact comment · a.html · Intro › word "share"'));
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
-  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question']});
+  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-comment']});
   assert.equal(nodes['empty-state'].hidden, false, 'removing the final turn restores the empty state');
   await deliverTo(sockets[1], {t:'record',record:{id:'first-message',kind:'assistant',text:'Ready'}});
   assert.equal(nodes['empty-state'].hidden, true, 'the first turn replaces the empty state');

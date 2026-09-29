@@ -442,7 +442,8 @@ func TestHealthzAndViewer(t *testing.T) {
 	for _, path := range []string{
 		"/manifest.json", "/icon.svg", "/icon.png", "/notifications.js",
 		"/renderer.js", "/transport.js", "/viewer-agent.js",
-		"/viewer-artifact.js", "/viewer-task.js", "/viewer-session.js",
+		"/viewer-artifact.js", "/viewer-artifact-comments.js",
+		"/viewer-task.js", "/viewer-session.js",
 		"/viewer-panel.css", "/viewer-theme.css", "/viewer-room.css",
 		"/viewer-appearance.js", "/viewer-history.js", "/shared-editor-layout.css",
 		"/viewer-agent.css", "/viewer-artifact.css", "/viewer-session.css",

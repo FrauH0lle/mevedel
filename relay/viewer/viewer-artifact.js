@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize}) {
+  function create({send, el, flash, summarize, reveal, canComment}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
     const boxSummary = document.getElementById('artifacts-summary');
@@ -45,21 +45,31 @@
     const download = document.getElementById('artifact-download');
     const closeButton = document.getElementById('artifact-close');
     const body = document.getElementById('artifact-body');
+    const commentToggle = document.getElementById('artifact-comment');
     const view = {id: null, name: null, reqId: 0, staging: null,
                   meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
     let theme = null;
+    const commentKit = window.mevedelArtifactComments;
+    const comments = commentKit && body ? commentKit.create({
+      send, el, body, toggle: commentToggle, flash,
+      renderMarkdown: text => window.mevedelTranscriptRenderer.renderMarkdown(text),
+      reveal, canComment: typeof canComment === 'function' ? canComment : () => false,
+    }) : null;
 
     function note(text) {
       if (!body) return;
       body.replaceChildren(el('p', 'panel-note', text));
     }
 
-    function sandboxedFrame(doc, html) {
+    // Only the panel frame carries the comment picker: its parent is this
+    // viewer. A separate tab's frame answers to a shell with no room.
+    function sandboxedFrame(doc, html, commentable) {
       const frame = doc.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
       frame.className = 'artifact-frame';
-      frame.srcdoc = CSP + themePrelude(theme) + html;
+      frame.srcdoc = CSP + themePrelude(theme)
+        + (commentable && comments ? commentKit.script() : '') + html;
       view.frames.push(frame);
       return frame;
     }
@@ -88,6 +98,7 @@
       view.bytes = null;
       view.urls.splice(0).forEach(url => URL.revokeObjectURL(url));
       view.frames = [];
+      if (comments) comments.detach();
       if (panel) panel.hidden = true;
       if (body) body.replaceChildren();
       if (tab) tab.hidden = true;
@@ -122,7 +133,9 @@
       if (download) download.hidden = false;
       if (mime === 'text/html') {
         if (tab) tab.hidden = false;
-        body.append(sandboxedFrame(document, text()));
+        const frame = sandboxedFrame(document, text(), true);
+        body.append(frame);
+        if (comments) comments.attach(frame, view.id, view.name);
       } else if (mime === 'text/markdown') {
         const prose = renderMarkdown(text());
         prose.className = 'prose artifact-prose';
@@ -213,6 +226,7 @@
     }
 
     function render(records) {
+      if (comments) comments.records(records);
       if (!nav) return;
       const byName = new Map();
       records.forEach(record => {
@@ -244,7 +258,15 @@
     if (closeButton) closeButton.addEventListener('click', close);
     if (tab) tab.addEventListener('click', openTab);
     if (download) download.addEventListener('click', downloadFile);
-    return Object.freeze({open, render, handle, close, setTheme});
+    function queue(entries) {
+      if (comments) comments.queue(entries);
+    }
+
+    function handleComment(frame) {
+      if (comments) comments.handle(frame);
+    }
+
+    return Object.freeze({open, render, handle, close, setTheme, queue, handleComment});
   }
 
   window.mevedelArtifactView = Object.freeze({create});

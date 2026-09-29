@@ -519,8 +519,10 @@
 (provide 'test-mevedel-transcript-audit)
 
 
-(mevedel-deftest mevedel-transcript-audit-shared-context
-  (:doc "Only attributed generated suffixes fold; edited and ordinary quoted prompts stay visible")
+(mevedel-deftest mevedel-transcript-audit-shared-context ()
+  ,test
+  (test)
+  :doc "Only attributed generated suffixes fold; edited and ordinary quoted prompts stay visible"
   (let* ((question "What does this mean?\nShared content snapshot (user-provided data):\nI quoted that heading.")
          (context "Shared content snapshot (user-provided data):\n{\"content\":\"data model\"}\n[[file:/tmp/board.png]]")
          (text (concat question "\n\n" context))
@@ -532,6 +534,14 @@
     (should-not (mevedel-transcript-audit-shared-context text nil))
     (should-not (mevedel-transcript-audit-shared-context text (plist-put (copy-sequence shared) :edited t)))
     (should-not (mevedel-transcript-audit-shared-context (concat "A host rewrite\n" text) shared))
-    (should-not (mevedel-transcript-audit-shared-context "An ordinary question" shared))))
+    (should-not (mevedel-transcript-audit-shared-context "An ordinary question" shared)))
+  :doc "Artifact comments label the artifact and the commented part, single-line"
+  (let* ((display (mevedel-transcript-audit-shared-context
+                   "Bigger\n\nShared content snapshot (user-provided data):\nComment on a.html"
+                   (list :kind "artifact" :artifact "a\nb.html" :text "Bigger"
+                         :anchor (list :label "Intro › word \"share\"")))))
+    (should (equal (plist-get display :text) "Bigger"))
+    (should (equal (plist-get display :label)
+                   "Artifact comment · a b.html · Intro › word \"share\""))))
 
 ;;; test-mevedel-transcript-audit.el ends here
