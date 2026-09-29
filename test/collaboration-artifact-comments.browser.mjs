@@ -62,8 +62,38 @@ async function setup(page) {
       if (typeof text === 'string') node.textContent = text;
       return node;
     };
+    // A small stand-in for the host's comment store: it answers each
+    // action and broadcasts the stored list, as the host does.
+    window.store = [];
+    window.failNext = null;
+    const answer = frame => {
+      const reply = {t: 'artifact-comment', reqId: frame.reqId};
+      if (window.failNext) {
+        reply.error = window.failNext;
+        window.failNext = null;
+      } else if (frame.action === 'list') {
+        reply.comments = window.store;
+      } else if (frame.action === 'post') {
+        window.store.push({id: frame.commentId, actor: 'Alice', text: frame.text,
+                           anchor: frame.anchor, resolved: false, replies: []});
+      } else if (frame.action === 'reply') {
+        window.store.find(c => c.id === frame.commentId).replies
+          .push({id: frame.replyId, actor: 'Alice', text: frame.text});
+      } else if (frame.action === 'resolve') {
+        window.store.find(c => c.id === frame.commentId).resolved = frame.resolved;
+      }
+      if (!reply.error && frame.action !== 'list' && frame.action !== 'ask') {
+        window.controller.stored({artifact: 'schema.html',
+                                  comments: JSON.parse(JSON.stringify(window.store))});
+      }
+      window.controller.handle(reply);
+    };
     window.controller = window.mevedelArtifactComments.create({
-      send: frame => { window.sent.push(frame); return Promise.resolve(true); },
+      send: frame => {
+        window.sent.push(frame);
+        setTimeout(() => answer(frame), 0);
+        return Promise.resolve(true);
+      },
       el, body: document.getElementById('artifact-body'),
       toggle: document.getElementById('artifact-comment'),
       flash: () => {}, renderMarkdown: text => el('div', '', text),
@@ -117,6 +147,9 @@ async function wordRect(frame, word) {
   }, word);
 }
 
+const actions = (page, action) => page.evaluate(
+  name => window.sent.filter(frame => frame.action === name), action);
+
 async function commentMode(page) {
   await page.click('#artifact-comment');
   await page.waitForFunction(() =>
@@ -166,40 +199,57 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await page.waitForSelector('.artifact-comment-composer');
     const label = await page.textContent('.artifact-comment-target');
     assert.equal(label, 'Decisions at a glance › word "share"');
+    // Posting sends to the assistant by default: one action.
+    assert.equal(await page.isChecked('.artifact-comment-composer input[type=checkbox]'), true);
     await page.fill('.artifact-comment-input', 'Say who shares them');
     await page.keyboard.press('Control+Enter');
-    await page.waitForFunction(() => window.sent.length === 1);
-    const sent = await page.evaluate(() => window.sent[0]);
+    await page.waitForSelector('.artifact-comment-composer', {state: 'detached'});
+    const [sent] = await actions(page, 'post');
     assert.equal(sent.t, 'artifact-comment');
     assert.equal(sent.id, 'tool-1');
     assert.equal(sent.text, 'Say who shares them');
+    assert.equal(sent.toAssistant, true);
     assert.equal(sent.anchor.kind, 'word');
     assert.equal(sent.anchor.quote, 'share');
     assert.equal(sent.anchor.selector, '#lead');
     assert.match(sent.anchor.sig.h, /^[0-9a-f]{16}$/);
     assert.match(sent.context.text, /countries share the same tables/);
     assert.match(sent.context.html, /^<p id="lead">/);
-    await page.evaluate(reqId => window.controller.handle(
-      {t: 'artifact-comment', reqId, queued: true}), sent.reqId);
-    await page.waitForSelector('.artifact-comment-composer', {state: 'detached'});
     assert.equal(await page.getAttribute('#artifact-comment', 'aria-pressed'), 'false');
     await frame.click('#go');
     assert.equal(await frame.evaluate(() => document.title), 'clicked');
 
-    // Once delivered and answered, the marker opens its thread.
-    await page.evaluate(({id, anchor}) => window.controller.records([
+    // The stored comment is a marker; once the assistant answered in the
+    // transcript, hovering it shows the thread and the reply.
+    await page.evaluate(id => window.controller.records([
       {id: 'u1', kind: 'user', guest: 'Alice',
-       shared: {kind: 'artifact', artifact: 'schema.html', questionId: id,
-                text: 'Say who shares them', anchor}},
+       shared: {kind: 'artifact', artifact: 'schema.html', questionId: id, commentId: id,
+                itemId: 'artifact:schema.html', text: 'Say who shares them'}},
       {id: 'a1', kind: 'assistant', text: 'Named the country teams.'},
-    ]), {id: sent.commentId, anchor: sent.anchor});
+    ]), sent.commentId);
     await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
                                sent.commentId);
     await page.mouse.move(share.x + 6, share.y - 12);
     await page.waitForSelector('.artifact-comment-card');
     const card = await page.textContent('.artifact-comment-card');
     assert.match(card, /Alice · Answered/);
+    assert.match(card, /Alice: Say who shares them/);
     assert.match(card, /Named the country teams\./);
+    assert.equal(await page.$('.artifact-comment-card .artifact-comment-reply-form'), null,
+                 'a hover card only shows the thread');
+
+    // Clicking pins it with a reply form; an unticked reply is for people.
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForSelector('.artifact-comment-card .artifact-comment-reply-form');
+    await page.fill('.artifact-comment-reply-form textarea', 'Only the regional teams');
+    await page.uncheck('.artifact-comment-reply-form input[type=checkbox]');
+    await page.click('.artifact-comment-reply-form >> text=Post reply');
+    await page.waitForFunction(() =>
+      /Alice: Only the regional teams/.test(document.querySelector('.artifact-comment-card')?.textContent));
+    const [reply] = await actions(page, 'reply');
+    assert.equal(reply.commentId, sent.commentId);
+    assert.equal(reply.toAssistant, false);
     await page.click('.artifact-comment-card >> text=Show in chat');
     assert.equal(await page.evaluate(() => window.revealed), 'u1');
 
@@ -219,18 +269,16 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     assert.equal(await page.textContent('.artifact-comment-target'),
                  'Decisions at a glance › area · 3 elements');
     await page.fill('.artifact-comment-input', 'Make these a row of four');
-    await page.click('.artifact-comment-composer >> text=Send to assistant');
-    await page.waitForFunction(() => window.sent.length === 2);
-    const boxed = await page.evaluate(() => window.sent[1]);
+    await page.evaluate(() => { window.failNext = 'The session cannot accept a message right now'; });
+    await page.click('.artifact-comment-composer >> text=Post');
+    await page.waitForFunction(() =>
+      document.querySelector('.artifact-comment-status')?.textContent
+        === 'The session cannot accept a message right now');
+    const [boxed] = await actions(page, 'post').then(list => list.slice(-1));
     assert.equal(boxed.anchor.kind, 'box');
     assert.equal(boxed.anchor.count, 3);
     assert.ok(boxed.anchor.region.x1 > boxed.anchor.region.x0);
     assert.match(boxed.context.text, /213,150 rows.*42 columns.*637 simulations/);
-    await page.evaluate(reqId => window.controller.handle(
-      {t: 'artifact-comment', reqId, error: 'The session cannot accept a comment right now'}),
-                        boxed.reqId);
-    assert.equal(await page.textContent('.artifact-comment-status'),
-                 'The session cannot accept a comment right now');
     await page.click('.artifact-comment-composer >> text=Cancel');
 
     // A box drawn a little past the grid and over two of its cards means
@@ -295,6 +343,21 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await artifactFrame(page);
     await page.waitForFunction(id => window.located.some(entry => entry.missing.includes(id)),
                                sent.commentId);
+    // Resolving takes the marker away for everyone.
+    await page.evaluate(html => window.show(html, 'tool-4'), ARTIFACT);
+    await artifactFrame(page);
+    await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
+                               sent.commentId);
+    await page.evaluate(() => { window.located = []; });
+    const again = await inPage(page, await artifactFrame(page),
+                               await wordRect(await artifactFrame(page), 'share'));
+    await page.mouse.move(again.x + 6, again.y - 12);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.click('.artifact-comment-card >> text=Resolve');
+    await page.waitForSelector('.artifact-comment-card', {state: 'detached'});
+    assert.equal((await actions(page, 'resolve'))[0].resolved, true);
+    assert.equal(await page.textContent('#artifact-comment'), 'Comment');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

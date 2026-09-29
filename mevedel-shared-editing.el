@@ -91,7 +91,10 @@ Observers cannot change whether the preceding commit succeeded.")
                           (directory-files directory nil "\\.json\\'"))))))
            result)
       (dolist (name names (nreverse result))
+        ;; Items are the folder's direct entries; nested folders hold
+        ;; annotations such as artifact comments, not items.
         (when (and (string-prefix-p prefix name)
+                   (not (string-search "/" (substring name (length prefix))))
                    (string-match-p "\\.json\\'" name))
           (let* ((id (file-name-base name))
                  (state (mevedel-shared-editing--read session id)))
@@ -101,11 +104,19 @@ Observers cannot change whether the preceding commit succeeded.")
 
 (defun mevedel-shared-editing--commit (session state)
   "Durably commit candidate STATE while SESSION still owns authority."
+  (mevedel-shared-editing-commit-file
+   session (mevedel-shared-editing--logical (plist-get state :id))
+   (mevedel-shared-editing--json state)))
+
+(defun mevedel-shared-editing-commit-file (session logical content)
+  "Durably write CONTENT to session-relative LOGICAL in SESSION.
+Run in SESSION's data buffer.  Portable sessions publish it with a fresh
+sidecar; PID-lock sessions write it atomically.  Collaboration annotations
+that live beside shared items use this so Resume, Save As and Fork carry
+them the same way."
   (mevedel-session-artifacts-assert-new-mutation-authority session)
   (when buffer-read-only (user-error "Session is read-only"))
-  (let* ((logical (mevedel-shared-editing--logical (plist-get state :id)))
-         (path (file-name-concat (mevedel-session-save-path session) logical))
-         (content (mevedel-shared-editing--json state)))
+  (let ((path (file-name-concat (mevedel-session-save-path session) logical)))
     (if (mevedel-session-codec-portable-authority-p session)
         (mevedel-session-publication-publish
          session

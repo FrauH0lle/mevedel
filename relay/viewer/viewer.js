@@ -1138,6 +1138,8 @@
       artifacts.handle(frame);
     } else if (frame.t === 'artifact-comment') {
       artifacts.handleComment(frame);
+    } else if (frame.t === 'artifact-comments') {
+      artifacts.storedComments(frame);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
       // The host re-sends the same request id on every head redraw and

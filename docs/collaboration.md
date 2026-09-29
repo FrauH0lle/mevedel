@@ -205,7 +205,7 @@ request inside the duplicate-prompt window is dropped.
 Directives and shared items are the room's discussions. Records inside a
 directive turn carry its id and records inside a shared-item turn carry the
 item's id, so the filter strip lists **All**, **Main chat**, each directive
-(◆) and each whiteboard or document with turns (◇). **Main chat** hides every
+(◆) and each whiteboard, document or artifact with turns (◇). **Main chat** hides every
 discussion. A turn's discussion chip selects that discussion too.
 
 Selecting a directive scopes ordinary guest text to discussion of that directive;
@@ -216,7 +216,8 @@ invocations use their own route instead of inheriting the directive scope.
 Selecting a shared item sends the composer's text into that item's own
 conversation as a whole-item question, the same way the editor asks. A room
 message has no reviewed snapshot, so the helper captures the item as currently
-committed. Commands, skills and attachments stay main-chat features; the viewer
+committed. An artifact's whole-item question names its file instead (see
+[artifact comments](#artifact-comments)). Commands, skills and attachments stay main-chat features; the viewer
 refuses them in an item discussion and says so. The composer placeholder and
 scope line name the discussion a message will reach.
 
@@ -482,27 +483,43 @@ frame and only while comment mode is on, and bounds every field. An artifact
 can still misreport where it was clicked; the composer shows the label and
 quote it will send.
 
-**Send to assistant** sends an `artifact-comment` frame carrying the record
-id, a comment identity, the text, the anchor and the excerpt. The host
-refuses view links, unknown or deleted records and non-HTML artifacts,
-rebuilds the anchor from its known bounded fields, and queues the comment as
-an ordinary attributed follow-up in the main conversation, not a separate
-item conversation. The prompt carries the artifact name, its file path, the
-target, and the excerpts behind the shared-context heading; the room and
-Emacs view fold that context under **Artifact comment · NAME · LABEL**. A
-retry with a known comment identity succeeds without queueing it again.
-Every refusal returns to the sender as `artifact-comment` with an error.
+**Post** stores the comment for everyone in the room. **Send to assistant**,
+checked by default, also sends it to the artifact's conversation; unchecked,
+the comment stays a note between people. Replies work the same way. Each
+action is an `artifact-comment` frame with an `action` of `post`, `reply`,
+`resolve`, `ask` or `list`, carrying the record id and client-generated
+identities so a retry neither stores nor queues twice. The host refuses writes
+from view links, unknown or deleted records and non-HTML artifacts, rebuilds
+the anchor from its known bounded fields, and answers every refusal to the
+sender with an error.
 
-Markers are rebuilt from the conversation rather than a separate store:
-delivered comments are guest prompts carrying artifact attribution, queued
-ones come from the sender's own queue, and the next assistant turn is the
-reply. The frame places each marker by its selector when the element still
-carries the same text fingerprint, and otherwise searches for the element
+Comments live in a per-artifact store beside the shared items, under
+`artifacts/shared-editing/artifact-comments/`, so Resume, Save As and Fork
+carry them. An artifact takes at most 200 comments of 200 replies each, with
+10,000 characters per message, and its comment list as guests receive it stays
+under 512 KiB. Every change is broadcast to the room as an `artifact-comments`
+frame; the stored excerpts stay on the host.
+
+Each artifact has its own conversation, like a whiteboard or document: messages
+sent to the assistant are item questions whose item is `artifact:NAME`. The
+request carries the artifact's name and file path, the target, the excerpts,
+and the comment thread behind the shared-context heading, and frames the file
+as the current state and as untrusted content whose instructions are data. The
+artifact is not pasted in; the model reads the file. Earlier turns about the
+same artifact are included, other room work is not, and `history://root`
+reaches the conversation that produced it. The room lists the artifact as a
+discussion; with it selected, a room message is an `ask` about the whole
+artifact. The room and Emacs view fold the context under **Artifact comment ·
+NAME · LABEL**, or **Artifact · NAME · Whole artifact**.
+
+The frame places each open comment's marker by its selector when the element
+still carries the same text fingerprint, and otherwise searches for the element
 whose fingerprint differs least, so a rewritten artifact keeps markers on
-content that survived. A marker whose content is gone is not shown. Hovering
-a marker shows its thread; clicking pins it. **Show in chat** closes the
-artifact panel, which covers the conversation, then scrolls to the comment turn
-and highlights it. **Hide marker** hides it in this browser only.
+content that survived. A marker whose content is gone is not shown. Hovering a
+marker shows its thread and the assistant's latest reply from the transcript;
+clicking pins it with a reply form, **Resolve**, and **Show in chat**, which
+closes the artifact panel, which covers the conversation, then scrolls to the
+latest request and highlights it. Resolving hides the marker for everyone.
 
 ## Notifications and browser storage
 
