@@ -241,8 +241,9 @@ Layout:
 
 Project sessions use the portable authority profile on both local and TRAMP
 targets: `.lease/` and immutable `.publications/` are authoritative, while
-the fixed sidecar is a discovery cache. Root and canonical agent transcripts
-exist as logical manifest entries without an additional fixed copy. Old fixed
+the fixed sidecar is a discovery cache. Root and canonical agent transcripts,
+file history, and instruction snapshots exist as logical manifest entries
+without an additional fixed copy. Old fixed
 transcripts are ignored, including their modification times; this change does
 not delete them. Numbered agent compaction archives still receive a physical
 recovery copy before the live buffer is rewritten. File-workspace

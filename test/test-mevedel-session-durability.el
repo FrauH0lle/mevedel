@@ -4243,7 +4243,11 @@
               (should (mevedel-session-artifacts-artifact-present-p
                        session "segment-0001.chat.org" t))
               (should (file-exists-p sidecar))
-              (should (file-exists-p current))
+              ;; Instruction snapshots, like transcripts, live only in the
+              ;; publication.
+              (should-not (file-exists-p current))
+              (should (mevedel-session-artifacts-artifact-present-p
+                       session "instructions/current.el" t))
               (should (equal "remote transcript"
                              (with-temp-buffer
                                (insert (mevedel-session-artifacts-read-artifact
@@ -4328,23 +4332,23 @@
               (insert "Before rotation\n")
               (mevedel-session-artifacts-save session (current-buffer))
               (let* ((save-path (mevedel-session-save-path session))
-                     (instructions
-                      (file-name-concat save-path "instructions"))
+                     ;; No new generation can be created while the
+                     ;; publications root refuses writes.
+                     (publications
+                      (file-name-concat save-path ".publications"))
                      (new (file-name-concat
                            save-path "segment-0002.chat.org")))
-                (delete-directory instructions t)
-                (with-temp-file instructions (insert "blocker"))
-                (mevedel-test--with-captured-diagnostics nil
-                  (should-error
-                   (mevedel-session-artifacts-rotate-segment
-                    session (current-buffer) "Pending handoff.")
-                   :type 'file-error))
+                (set-file-modes publications #o555)
+                (unwind-protect
+                    (mevedel-test--with-captured-diagnostics nil
+                      (should-error
+                       (mevedel-session-artifacts-rotate-segment
+                        session (current-buffer) "Pending handoff.")))
+                  (set-file-modes publications #o755))
                 (should (mevedel-session-pending-publication session))
                 (should (= 2 (mevedel-session-current-segment session)))
                 (should (equal new buffer-file-name))
                 (should (string-match-p "Pending handoff" (buffer-string)))
-                (delete-file instructions)
-                (make-directory instructions)
                 (should
                  (mevedel-session-publication-retry session))
                 (should-not

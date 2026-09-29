@@ -13,6 +13,58 @@
           "mevedel-session-test-support"))
 (require 'mevedel-journal-pins)
 
+(mevedel-deftest mevedel-session-publication--files-sha256 ()
+  ,test
+  (test)
+  :doc "hashes local files in one process exactly as Lisp does, in order"
+  (let* ((directory (make-temp-file "mevedel-sha-" t))
+         (files (mapcar (lambda (spec)
+                          (let ((file (file-name-concat directory (car spec)))
+                                (coding-system-for-write 'no-conversion))
+                            (write-region (cdr spec) nil file nil 'silent)
+                            file))
+                        (list (cons "plain.txt" "bytes \377\000\n")
+                              (cons "spaced name.txt" (make-string 4096 ?x))
+                              (cons "caf\u00e9.txt" "")))))
+    (unwind-protect
+        (let ((expected (mapcar (lambda (file)
+                                  (with-temp-buffer
+                                    (set-buffer-multibyte nil)
+                                    (insert-file-contents-literally file)
+                                    (secure-hash 'sha256 (current-buffer))))
+                                files))
+              (processes 0))
+          (skip-unless (executable-find "sha256sum"))
+          (let ((call (symbol-function 'call-process)))
+            (cl-letf (((symbol-function 'call-process)
+                       (lambda (&rest args) (cl-incf processes) (apply call args)))
+                      ((symbol-function 'secure-hash)
+                       (lambda (&rest _) (error "Hashed in Lisp"))))
+              (should (equal expected
+                             (mevedel-session-publication--files-sha256 files)))
+              (should (= 1 processes))))
+          ;; Without the tool every file still hashes, in Lisp.
+          (cl-letf (((symbol-function 'executable-find) #'ignore))
+            (should (equal expected
+                           (mevedel-session-publication--files-sha256 files)))))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-session-publication--fixed-artifact-p ()
+  ,test
+  (test)
+  :doc "keeps fixed copies only for artifacts read from their fixed path"
+  (dolist (logical '("session.meta.el" "tool-results/ToolCall-a.txt"
+                     "agents/registry.el" "agents/a.compact-1.chat.org"))
+    (should (mevedel-session-publication--fixed-artifact-p
+             (list :logical logical))))
+  (dolist (logical '("segment-0001.chat.org" "agents/a.chat.org"
+                     "file-history/1" "instructions/current.el"
+                     "instructions/turn-000003.el"))
+    (should-not (mevedel-session-publication--fixed-artifact-p
+                 (list :logical logical))))
+  (should-not (mevedel-session-publication--fixed-artifact-p
+               (list :logical "tool-results/x" :delete t))))
+
 (mevedel-deftest mevedel-session-publication--immutable-entry ()
   (let* ((root (make-temp-file "mevedel-entry-" t))
          (source (file-name-concat root "source"))
@@ -33,8 +85,9 @@
                   (mevedel-session-publication--immutable-entry
                    directory (list :source source :logical "tool-results/result")
                    1 root)))
-          ;; One read, for the digest; the bytes stay in the source file.
-          (should (= reads 1))
+          ;; At most one read, for the digest, and none where `sha256sum'
+          ;; hashes the file; the bytes stay in the source file.
+          (should (= reads (if (executable-find "sha256sum") 0 1)))
           (should-not (plist-member entry :content))
           (should (equal source (plist-get entry :source-file)))
           (should (equal (secure-hash 'sha256 bytes)
