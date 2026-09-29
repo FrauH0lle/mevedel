@@ -945,6 +945,33 @@
           (should-not (directory-files-recursively root "\\`\\.mevedel-control" nil t)))
       (delete-directory root t)))
 
+  :doc "carries a file-backed payload staged locally and inline otherwise"
+  (let* ((root (make-temp-file "mevedel-control-source-" t))
+         (source (file-name-concat root "source"))
+         (small (file-name-concat root "small-source"))
+         (large-target (file-name-concat root "large"))
+         (small-target (file-name-concat root "small"))
+         (bytes (concat (make-string (* 16 1024) ?q) (unibyte-string 0 255))))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent)
+            (write-region "tiny" nil small nil 'silent))
+          (dolist (stage '(t nil))
+            (let ((mevedel-session-control-fs--stage-local stage))
+              (should (equal '(ok ok)
+                             (mapcar (lambda (result) (plist-get result :status))
+                                     (mevedel-session-control-fs-run-program
+                                      (list (list :op 'write :path large-target :source-file source)
+                                            (list :op 'create :path small-target :source-file small))))))
+              (should (equal bytes (mevedel-session-control-fs-read-file large-target 'no-conversion)))
+              (should (equal "tiny" (mevedel-session-control-fs-read-file small-target)))
+              (delete-file small-target)))
+          ;; The source stays where it was; staging copied it.
+          (should (file-exists-p source))
+          (should-not (directory-files root nil "\\`\\.mevedel-control")))
+      (delete-directory root t)))
+
   :doc "stdin framing preserves the batched read archive path"
   (let* ((root (make-temp-file "mevedel-control-stdin-archive-" t))
          (first (file-name-concat root "first"))

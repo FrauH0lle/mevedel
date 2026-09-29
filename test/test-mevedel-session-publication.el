@@ -33,8 +33,10 @@
                   (mevedel-session-publication--immutable-entry
                    directory (list :source source :logical "tool-results/result")
                    1 root)))
+          ;; One read, for the digest; the bytes stay in the source file.
           (should (= reads 1))
-          (should (equal bytes (plist-get entry :content)))
+          (should-not (plist-member entry :content))
+          (should (equal source (plist-get entry :source-file)))
           (should (equal (secure-hash 'sha256 bytes)
                          (plist-get (cdr (plist-get entry :entry)) :sha256)))
           (should (equal ".publications/generation-test/000001.data"
@@ -299,6 +301,40 @@ and its segment path."
          (mevedel-session-publication-publish
           session (list (list :path path :content "authored") marker) t)
          (should (equal "authored" (mevedel-session-control-fs-read-file path))))))))
+
+(mevedel-deftest mevedel-session-publication--stage-artifacts ()
+  ,test
+  (test)
+  :doc "stages string and file-backed artifacts as local byte files"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-stage-" t)))
+         (session (mevedel-session--create :name "stage" :save-path root))
+         (source (file-name-concat root "outside-source"))
+         (bytes (concat (make-string 5000 ?b) (unibyte-string 0 255)))
+         batch)
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent))
+          (setq batch (mevedel-session-publication--stage-artifacts
+                       session
+                       (list (list :path (file-name-concat root "segment-0001.chat.org")
+                                   :content "Unicode \u03bb")
+                             (list :path (file-name-concat root "agents/a.chat.org")
+                                   :source-file source))))
+          (let ((artifacts (plist-get batch :artifacts)))
+            (should (equal "Unicode \u03bb"
+                           (decode-coding-string
+                            (mevedel-session-artifacts-read-file-raw
+                             (plist-get (nth 0 artifacts) :source))
+                            'utf-8-unix)))
+            (should (equal bytes (mevedel-session-artifacts-read-file-raw
+                                  (plist-get (nth 1 artifacts) :source))))
+            ;; Neither the string nor the original file path is retained.
+            (should-not (plist-member (nth 0 artifacts) :content))
+            (should-not (plist-member (nth 1 artifacts) :source-file))
+            (should (file-exists-p source))))
+      (when batch (delete-directory (plist-get batch :directory) t))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-publication-publish/staging-only (:quiet t)
   (test-mevedel-session-publication--with-published
