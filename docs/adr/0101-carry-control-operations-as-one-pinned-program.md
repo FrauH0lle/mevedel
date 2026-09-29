@@ -34,14 +34,17 @@ directories remain untouched. Domain collectors choose retention and references.
 
 Requests use five fields per operation and NUL framing. Arbitrary content and
 response bytes use base64; numeric limits, modes, and deadlines use validated
-digit strings. On a local target, a `write` or `create` payload of 4 KiB or
-more travels instead as a private staged file the editor writes in the
-destination's nearest existing ancestor, a directory on the same filesystem
-as anything the program creates below it. The `write-staged` and
-`create-staged` verbs prove the destination's parent exactly as their base64
-counterparts do, then rename or link the staged file into it; staged files a
-stopped program did not consume are removed afterwards. Remote targets keep
-the base64 carriers. Diagnostic bytes are encoded through a separate pipe and returned
+digit strings. On a local target, every `write` and `create` payload travels
+instead as a private staged file the editor writes, or copies from a
+file-backed payload, in the destination's nearest existing ancestor: a
+directory on the same filesystem as anything the program creates below it.
+The `write-staged` and `create-staged` verbs prove the destination's parent
+exactly as their base64 counterparts do, then rename or link the staged file
+into it. The program names that file relative to the pinned parent, with one
+`../` per missing level, so it resolves through the opened directory's real
+ancestors: a parent pathname swapped after the proof cannot redirect it.
+Staged files a stopped program did not consume are removed afterwards.
+Remote targets keep the base64 carriers. Diagnostic bytes are encoded through a separate pipe and returned
 in a distinct trailing record. A killed process without that record reports
 its raw captured failure output.
 
@@ -109,7 +112,12 @@ protocol, extraction directory, or generic resolver cache is needed.
   difference being base64 in the editor, the request file, and `base64 -d`
   on the target. Staged local payloads took that write to 8.8 ms and a
   1.5 MB transcript write to 8.5 ms. Parent proof, early stop, and result
-  semantics are unchanged; only the local payload transport moved.
+  semantics are unchanged; only the local payload transport moved. Staging
+  every local write, not only large ones, also took a write from three
+  processes to one and a create from four to two. The first version named
+  staged files by absolute path; the parent-swap regressions showed that a
+  pathname swapped after the proof redirected the rename, so the name became
+  relative to the pinned parent.
 
 - **Every lease generation claim took two programs after its observation.**
   The fencing create read the predecessors back, and activation was a second
