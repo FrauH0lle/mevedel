@@ -89,8 +89,11 @@
         <blockquote id="comment-quote" tabindex="0" aria-label="Comment passage"></blockquote>
         <button id="comment-refresh" type="button">Refresh passage</button>
         <textarea id="comment-text" placeholder="Start a discussion…" maxlength="10000" rows="3" required></textarea>
-        <button id="comment-post" type="submit">Post comment</button>
-        <small class="shared-notice">Comments are shared with everyone. Posting does not ask the assistant.</small>
+        <div class="comment-post-row">
+          <label class="assistant-choice"><input id="comment-assistant" type="checkbox" checked> Send to assistant</label>
+          <button id="comment-post" type="submit">Post</button>
+        </div>
+        <small class="shared-notice">Comments are shared with everyone. With Send to assistant, the assistant also answers in the thread.</small>
       </form>
       <div id="assistant-notice" role="status"></div>
     </aside>

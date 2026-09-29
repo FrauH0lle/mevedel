@@ -241,9 +241,12 @@ All submitted questions, comments, replies, and assistant answers are shared wit
 in the current browser's recovery storage. View participants can read them.
 
 Selecting document text shows **Add comment** and **Ask about selection** beside
-the passage. **Add comment** (Ctrl+Alt+M) opens a separate draft; **Post comment**
-publishes an anchored discussion. **Post reply** adds an attributed human reply.
-Neither action submits a model turn. Questions and comment/reply drafts remain
+the passage. **Add comment** (Ctrl+Alt+M) opens a separate draft; **Post**
+publishes an anchored discussion and **Post reply** adds an attributed human
+reply. Each has a **Send to assistant** choice, checked by default: posting then
+also sends the thread to the assistant, which answers in it. Unchecked, the
+message stays a note between people and submits no model turn. The same choice
+applies to artifact comments in the room. Questions and comment/reply drafts remain
 independent when switching views, receiving updates, or reopening the editor.
 An unrecognized saved discussion-draft format is reported and reset without
 blocking recovery of document content or posted discussions.
@@ -252,13 +255,15 @@ blocking recovery of document content or posted discussions.
 attached. **Use whole document** explicitly changes its scope. The attached quote
 stays fixed when focus or the document selection moves elsewhere.
 
-**Send to assistant** inside a comment actually submits the posted human thread
-and its passage, without changing the assistant composer or including unposted
-reply text. The thread's latest human message is the visible request in the
-room and to the model; the whole thread travels in the shared context. Queue and delivery status appear alongside the discussion. Canonical
+A request submits the posted human thread and its passage, without changing the
+assistant composer or including unposted reply text. The thread's latest human
+message is the visible request in the room and to the model; the whole thread
+travels in the shared context. **Send thread to assistant** sends the thread as
+it stands without a new message, and confirms a reviewed context or retries an
+unconfirmed request. Queue and delivery status appear alongside the discussion. Canonical
 AI replies render in that thread beneath the human message that prompted them;
 ordinary questions remain in the Assistant view. Another AI request requires
-another explicit send. The host checks the reviewed thread version as well as
+another message sent to the assistant or an explicit thread send. The host checks the reviewed thread version as well as
 the passage; concurrent replies require reviewing the updated discussion before
 resubmission. Failed delivery retains its request identity for retry.
 
@@ -301,7 +306,7 @@ A board comment records its object IDs, optional area, quote, and a fingerprint
 of those objects; image data contributes only its length. The thread is
 **changed** once an object moves, restyles, changes text or is deleted, and
 **removed** when none of its objects remain and it has no area. An area
-outlives its objects. **Send to assistant** attaches the anchor's surviving
+outlives its objects. A request to the assistant attaches the anchor's surviving
 objects and its area, subject to the same review of changed context; the host
 accepts only objects from the comment's own anchor and its exact area.
 The same 200-comment and 200-reply limits apply to whiteboards.
