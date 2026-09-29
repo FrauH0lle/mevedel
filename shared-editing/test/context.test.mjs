@@ -120,3 +120,37 @@ test('thread replies are attributed, retry-safe and included in explicit questio
     assert.doesNotMatch(exported.result.text,/Please include|And a diagram/);
   } finally { doc.destroy(); }
 });
+
+test('board areas carry their region, nearby objects without image bytes and a cropped PNG', async () => {
+  const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',content:[
+    {id:'a',type:'rect',box:[0,0,100,100],text:'A'}, {id:'far',type:'ellipse',box:[2000,2000,100,100],text:'Far'},
+    {id:'pic',type:'image',box:[150,0,100,100],src:image}]});
+  const doc = load(state);
+  const size = png => { const b = Buffer.from(png, 'base64'); return [b.readUInt32BE(16), b.readUInt32BE(20)]; };
+  try {
+    const region = [-10,-10,200,120];
+    const captured = captureContext(doc, {selection:['a'], region});
+    assert.deepEqual(captured.snapshot.region, region);
+    assert.equal(captured.snapshot.scope, 'selection');
+    assert.deepEqual(captured.snapshot.content.map(s => s.id), ['a']);
+    assert.deepEqual(captured.snapshot.context.map(s => s.id), ['pic'], 'touched neighbours, not distant objects');
+    assert.equal(captured.snapshot.context[0].src, undefined);
+    assert.match(captured.snapshot.context[0].image, /PNG/);
+    assert.match(captured.quote, /^Area 200 × 120 at -10, -10\n1 object\nrect: A$/);
+    const empty = captureContext(doc, {region:[500,500,50,40]});
+    assert.deepEqual([empty.snapshot.content, empty.snapshot.context], [[], []]);
+    assert.match(empty.quote, /^Area 50 × 40 at 500, 500\n0 objects$/);
+    for (const bad of [[0,0,0,10], [0.5,0,10,10], [0,0,10], 'area'])
+      assert.throws(() => captureContext(doc, {region:bad}), /Invalid board area/);
+    const {result} = await handle({action:'read',state,question:true,selection:['a'],region,
+      expected:captured.snapshot,image:true,imageMax:1024});
+    assert.deepEqual(result.snapshot.region, region);
+    assert.deepEqual(size(result.png), [992, 672], 'area plus margin, upscaled to stay legible');
+    const whole = await handle({action:'read',state,question:true,selection:['a'],
+      expected:captureContext(doc, {selection:['a']}).snapshot,image:true});
+    assert.deepEqual(size(whole.result.png), [160, 160], 'object questions keep their own framing');
+    await assert.rejects(handle({action:'read',state,question:true,selection:['a'],region:[0,0,10,10],
+      expected:captured.snapshot}), /Content changed/);
+  } finally { doc.destroy(); }
+});

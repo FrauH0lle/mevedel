@@ -176,14 +176,15 @@ export class AssistantPanel {
       : 'Select text and choose Add comment to start a discussion.';
     const a = this.draft.attachment;
     $('context-title').textContent = a
-      ? `${a.snapshot.scope === 'whole' ? 'Whole ' + a.snapshot.kind : 'Selected content'} · ${a.snapshot.title}`
+      ? `${a.snapshot.scope === 'whole' ? 'Whole ' + a.snapshot.kind : a.snapshot.region ? 'Selected area' : 'Selected content'} · ${a.snapshot.title}`
       : 'Choose content to discuss';
     $('attached-context').open = a?.snapshot.scope === 'selection';
     $('context-quote').textContent = a?.quote || '';
     $('context-detail').textContent = a ? JSON.stringify(a.snapshot, null, 2) : '';
     const documentItem = document.body.dataset.kind === 'document';
     $('whole-question').textContent = documentItem ? 'Whole document' : 'Whole whiteboard';
-    $('selected-question').textContent = documentItem ? 'Selected passage' : 'Selected objects';
+    const area = (a?.snapshot.scope === 'selection' ? a : this.draft.selectionAttachment)?.snapshot.region;
+    $('selected-question').textContent = documentItem ? 'Selected passage' : area ? 'Selected area' : 'Selected objects';
     $('whole-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'whole'));
     $('selected-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'selection'));
     $('selected-question').disabled = !this.draft.selectionAttachment && a?.snapshot.scope !== 'selection';
@@ -205,7 +206,7 @@ export class AssistantPanel {
       this.notice('Saving edits and submitting…');
       await this.save();
       const result = await this.request({action:'ask', opId:draft.opId, questionId:draft.opId,
-        text:draft.text, expected:a.snapshot, range:a.range, selection:a.selection});
+        text:draft.text, expected:a.snapshot, range:a.range, selection:a.selection, region:a.region});
       this.receipt = { ...result, questionId: draft.opId };
       this.notice(result.delivered ? 'This question is already in the conversation.' : 'Question queued. Your answer will appear here.');
       if (this.draft.opId === draft.opId) {

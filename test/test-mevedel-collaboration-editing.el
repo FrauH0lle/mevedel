@@ -253,5 +253,29 @@
         (should (plist-get (mevedel-collaboration-editing--ask room guest args result) :delivered))
         (should-not (mevedel-session-pending-follow-ups session))))))
 
+(mevedel-deftest mevedel-collaboration-editing--dispatch
+  (:doc "Guest requests forward only closed keys, including a board area, with host attribution")
+  (let* ((guests (make-hash-table :test #'eql))
+         (guest (list :name "Alice" :writable t))
+         (session 'session)
+         (room (list :session session :guests guests))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+         requests)
+    (puthash 1 guest guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
+              ((symbol-function 'mevedel-collaboration--guest) (lambda (_room _peer) guest))
+              ((symbol-function 'mevedel-shared-editing-call)
+               (lambda (_session request &rest _) (push request requests))))
+      (mevedel-collaboration-editing--dispatch
+       room 1 guest 7 '(:action "comment" :id "board" :opId "op" :text "Here" :selection ["a"]
+                                :region [0 0 40 30] :expected (:scope "selection")
+                                :actor "Agent: forged" :state (:revision 99)))
+      (let ((request (car requests)))
+        (should (equal (plist-get request :region) [0 0 40 30]))
+        (should (equal (plist-get request :selection) ["a"]))
+        (should (equal (plist-get request :actor) "Guest: Alice"))
+        (should-not (plist-member request :state))
+        (should (equal (plist-get request :action) "comment"))))))
+
 (provide 'test-mevedel-collaboration-editing)
 ;;; test-mevedel-collaboration-editing.el ends here
