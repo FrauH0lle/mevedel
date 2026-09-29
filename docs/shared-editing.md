@@ -20,7 +20,8 @@ replacing its document or question draft. The whiteboard keeps a light drawing
 surface so authored colors remain unchanged.
 
 **Discussion** (documents) or **Assistant** (whiteboards) opens a sidebar on
-desktop and a full-width overlay on phones. Document discussion starts open on
+desktop and a full-width overlay on phones; both have **Comments** and
+**Assistant** views. Document discussion starts open on
 wide screens. Drag its divider to widen it, up to half the viewport; Left/Right
 arrow keys also resize it, Home/End select the limits, and double-click resets
 its width. The width is retained with the item's private drafts. Closing the
@@ -225,10 +226,10 @@ invalidate an otherwise valid patch. Tools use normal permissions, Plan and
 read-only ceilings, cancellation, and result/media persistence. They work
 with every browser closed and never silently start a share.
 
-### Questions and document comments
+### Questions and comments
 
-The document's **Discussion** panel has **Comments** and **Assistant** views.
-Whiteboards keep their **Assistant** panel. The assistant shows questions about
+The document's **Discussion** panel and the whiteboard's **Assistant** panel have
+**Comments** and **Assistant** views. The assistant shows questions about
 that item and their canonical replies, with the session's queued, paused,
 working, disconnected, or provider-failure state.
 While the session is working, a spinner accompanies the status and the panel's
@@ -278,8 +279,31 @@ authored text visible and collapse the snapshot under **Shared context** by
 default. Expand it to inspect the full sent context and attachment links; the
 summary names the item, scope, and revision. This affects display only, not what
 the model receives. Prompts edited on the host remain fully visible.
-Comments are session annotations: native and document exports contain the content,
-not the comments or conversation. A fresh import starts without those annotations.
+Comments are session annotations: native, document and board exports contain the
+content, not the comments or conversation. A fresh import starts without those
+annotations.
+
+Whiteboard comments anchor to objects, to a board area, or to both. Select
+objects or box-select an area and choose **Add comment** (Ctrl/Command+Alt+M),
+or use the **Comment** tool (M): it outlines the object under the pointer,
+comments on a clicked object, and comments on a dragged area together with the
+objects it contains. The tool stays active for further comments; Escape returns
+to selection. Every open comment shows a numbered pin at the top-right corner
+of its anchor, following moves live. Hovering a pin outlines its anchor and
+shows the author, text, reply count, and whether its objects changed; clicking
+it opens the thread. Resolved comments have no pin, and pins renumber in order
+of the open comments. **Show objects** selects the thread's surviving objects
+and area and frames them. Pins, hover cards and threads are visible to view
+participants, who cannot post.
+
+A board comment records its object IDs, optional area, quote, and a fingerprint
+of those objects; image data contributes only its length. The thread is
+**changed** once an object moves, restyles, changes text or is deleted, and
+**removed** when none of its objects remain and it has no area. An area
+outlives its objects. **Send to assistant** attaches the anchor's surviving
+objects and its area, subject to the same review of changed context; the host
+accepts only objects from the comment's own anchor and its exact area.
+The same 200-comment and 200-reply limits apply to whiteboards.
 
 For a whiteboard, select one or more objects and choose **Ask about selection**.
 After a box selection, the question is about the **Selected area**: it carries
@@ -431,7 +455,8 @@ MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 The focused editor checks reproduce interior selection, inline text, cursor
 replacement, local/remote laser trails, grouped contributions, export-neutral
 assistant highlights, frozen context, stale/offline refusal, explicit comments,
-reply rendering, disclosure continuity, and a small keyboard-sized viewport.
+reply rendering, disclosure continuity, box selection, area questions, board
+comment pins and threads, and a small keyboard-sized viewport.
 The room scenario also checks question-draft recovery across repeated reloads. Set
 `MEVEDEL_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
 preview screenshots under `.scratch/shared-collaborative-editing/`.

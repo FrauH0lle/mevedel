@@ -1,6 +1,6 @@
 /* Private JSON request handler. Emacs alone owns files, authority, and commits. */
 import * as Y from 'yjs';
-import { checkContext, readComments } from './context.mjs';
+import { anchorSignature, checkContext, readComments } from './context.mjs';
 import { readFile } from 'node:fs/promises';
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
 import {
@@ -219,7 +219,11 @@ export async function handle(request) {
       if (request.question) {
         if (request.commentId) {
           const comment = (state.comments || []).find(c => c.id === request.commentId);
-          check(comment && same(request.range, comment.range), 'Comment selection is no longer available');
+          // A board thread sends the objects of its anchor that still exist.
+          check(comment && (before.kind === 'whiteboard'
+            ? Array.isArray(request.selection) && request.selection.every(id => comment.selection.includes(id))
+              && same(request.region ?? null, comment.region ?? null)
+            : same(request.range, comment.range)), 'Comment selection is no longer available');
           check(!comment.resolved, 'Reopen this discussion before asking the assistant');
           check(request.commentVersion === (comment.replies?.at(-1)?.id || comment.id),
             'Discussion changed. Review the thread before sending again.');
@@ -291,12 +295,19 @@ export async function handle(request) {
     );
     let comments = state.comments || [];
     if (action === 'comment') {
-      check(before.kind === 'document' && request.range, 'Select a document passage first');
-      check(comments.length < 200, 'This document has reached its 200 comment limit');
+      const board = before.kind === 'whiteboard';
+      check(board ? request.selection?.length || request.region : request.range,
+        board ? 'Select objects or an area first' : 'Select a document passage first');
+      check(comments.length < 200, `This ${before.kind === 'whiteboard' ? 'whiteboard' : 'document'} has reached its 200 comment limit`);
       check(typeof request.text === 'string' && request.text.trim() && request.text.length <= 10000, 'A comment is required (at most 10000 characters)');
-      const captured = checkContext(doc, request);
+      const captured = checkContext(doc, board ? { ...request, range: undefined, selection: request.selection ?? [] } : request);
+      const anchor = board
+        ? { selection: captured.snapshot.content.map(shape => shape.id),
+            ...(request.region ? { region: request.region } : {}),
+            signature: anchorSignature(captured.snapshot.content) }
+        : { range: request.range };
       comments = [...comments, { id: request.opId, actor: request.actor, text: request.text,
-        range: request.range, quote: captured.quote, created: Date.now(), resolved: false }];
+        ...anchor, quote: captured.quote, created: Date.now(), resolved: false }];
     } else if (action === 'reply-comment') {
       const comment = comments.find(c => c.id === request.commentId);
       check(comment, 'Comment is no longer available');
