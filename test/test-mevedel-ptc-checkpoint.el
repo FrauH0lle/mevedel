@@ -44,7 +44,28 @@
   (let ((session (test-mevedel-ptc-checkpoint--session)))
     (should-not
      (mevedel-ptc-checkpoint-start session nil "p" "(+ 1 2)"))
-    (should-not (mevedel-session-ptc-checkpoints session))))
+    (should-not (mevedel-session-ptc-checkpoints session)))
+  :doc "records into an existing sidecar without a full save"
+  (let ((session (test-mevedel-ptc-checkpoint--session))
+        written)
+    (cl-letf (((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+               (lambda (s _buffer)
+                 (setq written (mevedel-session-ptc-checkpoints s))
+                 t))
+              ((symbol-function 'mevedel-session-artifacts-save)
+               (lambda (&rest _) (error "Full save for an existing sidecar"))))
+      (should (mevedel-ptc-checkpoint-start session nil "p" "(+ 1 2)"))
+      (should (equal '("p") (mapcar (lambda (c) (plist-get c :id)) written)))))
+  :doc "materializes a fresh session through the full save"
+  (let ((session (test-mevedel-ptc-checkpoint--session))
+        saved)
+    (cl-letf (((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+               (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-session-artifacts-save)
+               (lambda (&rest args) (setq saved args) t)))
+      (should (mevedel-ptc-checkpoint-start session nil "p" "(+ 1 2)"))
+      (should (equal (list session nil nil t) saved))
+      (should (mevedel-session-ptc-checkpoints session)))))
 
 (mevedel-deftest mevedel-ptc-checkpoint-update ()
   ,test

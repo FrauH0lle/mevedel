@@ -64,9 +64,13 @@
              (list :id id :args (list :expression script) :state 'running
                    :render-data
                    (list :kind 'ptc :outcome 'running :calls nil)))
-            ;; The first save both materializes a fresh session and records
-            ;; the checkpoint before any nested tool can run.
-            (or (mevedel-session-artifacts-save session buffer nil t)
+            ;; Record the checkpoint before any nested tool can run.  Restore
+            ;; rebuilds the row from the checkpoint alone, so an existing
+            ;; sidecar is enough; only a fresh session needs the full save
+            ;; that materializes it.  That save cost a quarter second per
+            ;; call on a long session.
+            (or (mevedel-session-persistence-write-sidecar-now session buffer)
+                (mevedel-session-artifacts-save session buffer nil t)
                 (progn
                   (setf (mevedel-session-ptc-checkpoints session) before)
                   nil)))
