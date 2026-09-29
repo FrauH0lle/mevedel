@@ -7,6 +7,16 @@ const el = (tag, text, className) => {
   return node;
 };
 const newDraft = () => ({text:'', attachment:null, opId:crypto.randomUUID()});
+/* Wording for what a comment refers to on this item. */
+const anchorTerms = () => document.body.dataset.kind === 'whiteboard'
+  ? {show:'Show objects', empty:'Select objects or drag across an area, then choose Add comment. The comment tool (M) does both in one step.',
+      removed:'Referenced objects were removed', changed:'Referenced objects have changed',
+      review:'The objects have changed. Review their current state before sending.',
+      refreshed:'Current objects and discussion attached. Press Send to assistant when ready.'}
+  : {show:'Show passage', empty:'Select text and choose Add comment to start a discussion.',
+      removed:'Referenced passage was removed', changed:'Referenced passage has changed',
+      review:'The passage has changed. Review its current text before sending.',
+      refreshed:'Current passage and discussion attached. Press Send to assistant when ready.'};
 export class AssistantPanel {
   constructor({ capture, save, request, changed, reveal, state, restored }) {
     Object.assign(this, { capture, save, request, changed, reveal, state });
@@ -173,7 +183,7 @@ export class AssistantPanel {
   renderDraft() {
     $('comments-empty').textContent = this.drafts.comment.attachment
       ? 'Your comment will appear here after you post it.'
-      : 'Select text and choose Add comment to start a discussion.';
+      : anchorTerms().empty;
     const a = this.draft.attachment;
     $('context-title').textContent = a
       ? `${a.snapshot.scope === 'whole' ? 'Whole ' + a.snapshot.kind : a.snapshot.region ? 'Selected area' : 'Selected content'} · ${a.snapshot.title}`
@@ -183,6 +193,7 @@ export class AssistantPanel {
     $('context-detail').textContent = a ? JSON.stringify(a.snapshot, null, 2) : '';
     const documentItem = document.body.dataset.kind === 'document';
     $('whole-question').textContent = documentItem ? 'Whole document' : 'Whole whiteboard';
+    $('comment-refresh').textContent = documentItem ? 'Refresh passage' : 'Refresh objects';
     const area = (a?.snapshot.scope === 'selection' ? a : this.draft.selectionAttachment)?.snapshot.region;
     $('selected-question').textContent = documentItem ? 'Selected passage' : area ? 'Selected area' : 'Selected objects';
     $('whole-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'whole'));
@@ -235,7 +246,8 @@ export class AssistantPanel {
       await this.save();
       const result = await this.request({action:commentId ? 'reply-comment' : 'comment',
         opId:draft.opId, commentId, text:draft.text,
-        ...(commentId ? {} : {range:draft.attachment.range, expected:draft.attachment.snapshot})});
+        ...(commentId ? {} : {range:draft.attachment.range, selection:draft.attachment.selection,
+          region:draft.attachment.region, expected:draft.attachment.snapshot})});
       if (source.opId === draft.opId) {
         Object.assign(source, newDraft());
         if (!commentId) $('comment-text').value = '';
@@ -270,8 +282,7 @@ export class AssistantPanel {
         if (refresh || comment.anchorStatus === 'changed') {
           pending.review = !refresh;
           this.setComments(this.comments);
-          this.notice(refresh ? 'Current passage and discussion attached. Press Send to assistant when ready.'
-            : 'The passage has changed. Review its current text before sending.');
+          this.notice(refresh ? anchorTerms().refreshed : anchorTerms().review);
           return;
         }
       }
@@ -283,7 +294,7 @@ export class AssistantPanel {
       const a = pending.attachment;
       const result = await this.request({action:'ask', opId:pending.opId, questionId:pending.opId,
         commentId:id, commentVersion:pending.version, text:'Please respond to this comment thread.',
-        expected:a.snapshot, range:a.range});
+        expected:a.snapshot, range:a.range, selection:a.selection, region:a.region});
       const delivered = this.conversation.records.some(r => r.shared?.questionId === pending.opId);
       pending.receipt = !delivered;
       this.notice(delivered || result.delivered ? 'Discussion sent. The assistant answers in this thread.' : 'Discussion queued. The assistant will answer in this thread.');
@@ -308,10 +319,10 @@ export class AssistantPanel {
         card = el('details', undefined, 'comment');
         card.dataset.commentId = comment.id;
         const summary = el('summary', comment.quote);
-        const passage = el('button', 'Show passage', 'comment-passage');
+        const passage = el('button', anchorTerms().show, 'comment-passage');
         passage.type = 'button';
         passage.onclick = () => {
-          try { this.reveal(this.comments.find(c => c.id === comment.id).range); if (innerWidth < 800) this.toggle(false); }
+          try { this.reveal(this.comments.find(c => c.id === comment.id)); if (innerWidth < 800) this.toggle(false); }
           catch (error) { this.notice(error.message, true); }
         };
         const messages = el('div', undefined, 'thread-messages');
@@ -376,8 +387,8 @@ export class AssistantPanel {
       card.querySelector('.thread-status').textContent = this.sendingComments.has(comment.id) ? 'Sending…'
         : pending?.receipt ? 'Queued for the assistant'
         : pending?.failed ? 'Not confirmed. Retry sends the same request.'
-        : comment.anchorStatus === 'deleted' ? 'Referenced passage was removed'
-        : comment.anchorStatus === 'changed' ? 'Referenced passage has changed' : '';
+        : comment.anchorStatus === 'deleted' ? anchorTerms().removed
+        : comment.anchorStatus === 'changed' ? anchorTerms().changed : '';
     }
     for (const node of previous.values()) node.remove();
     this.renderConversation();

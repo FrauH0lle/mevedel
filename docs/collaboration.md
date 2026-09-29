@@ -567,7 +567,7 @@ existing pending-input queue. Each item has separate model context, selected
 from the live transcript and archived segments without a second transcript store.
 Room chat can retrieve those turns through the same history resources.
 Canonical provider-failure summaries also appear in browser conversations.
-See [shared editing](shared-editing.md#questions-and-document-comments).
+See [shared editing](shared-editing.md#questions-and-comments).
 
 Shared editing is optional: missing Node or helper resources on the Emacs host
 disable editing actions with a reason while chat, static artifacts, and the saved
