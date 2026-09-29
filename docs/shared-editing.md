@@ -328,8 +328,11 @@ Each document and whiteboard has its own model conversation. A question receives
 its reviewed content snapshot and recent turns about the same item, including
 questions sent from its comment threads. Other items and ordinary room chat are
 excluded. Ordinary room requests and room compaction summaries likewise exclude
-item discussion turns. The room transcript still shows their shared chronology;
-this is context selection, not a privacy boundary or a separate execution agent.
+item discussion turns. The room transcript still shows their shared chronology,
+and lists each item as a discussion of its own: selecting it in the room shows
+its turns and sends room messages into its conversation as whole-item questions
+about the committed content (see [scoped prompts](collaboration.md#scoped-prompts-and-attachments)).
+This is context selection, not a privacy boundary or a separate execution agent.
 Questions keep the session's permissions, tools, queue, and checkpoints, so they
 can edit content. Directive discussions retain their separate read-only contract.
 

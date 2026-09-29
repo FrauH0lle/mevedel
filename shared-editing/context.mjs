@@ -69,9 +69,15 @@ export function captureContext(doc, { selection = [], range, region } = {}) {
   return { snapshot, quote };
 }
 
+/* An editor question carries the snapshot its sender reviewed and fails when
+   content moved on. A room message about the whole item has no reviewed
+   snapshot; it asks about the item as currently committed. */
 export function checkContext(doc, request) {
-  const captured = captureContext(doc, request);
-  check(request.expected && same(request.expected, captured.snapshot),
+  const whole = request.whole === true;
+  check(!whole || (!request.range && !request.selection?.length && !request.region),
+    'A whole-item question takes no selection');
+  const captured = captureContext(doc, whole ? {} : request);
+  check(whole || (request.expected && same(request.expected, captured.snapshot)),
     'Content changed. Review and refresh the attached context before sending.');
   return captured;
 }

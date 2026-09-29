@@ -275,7 +275,19 @@
         (should (equal (plist-get request :selection) ["a"]))
         (should (equal (plist-get request :actor) "Guest: Alice"))
         (should-not (plist-member request :state))
-        (should (equal (plist-get request :action) "comment"))))))
+        (should (equal (plist-get request :action) "comment")))
+      ;; A room message about a whole item reaches the helper as a
+      ;; question read carrying the whole-item flag.
+      (setq requests nil)
+      (cl-letf (((symbol-function 'mevedel-collaboration-editing--find-question) #'ignore))
+        (mevedel-collaboration-editing--dispatch
+         room 1 guest 8 '(:action "ask" :id "board" :questionId "q" :text "Make it pretty"
+                                  :whole t)))
+      (let ((request (car requests)))
+        (should (equal (plist-get request :action) "read"))
+        (should (eq (plist-get request :question) t))
+        (should (eq (plist-get request :whole) t))
+        (should (equal (plist-get request :text) "Make it pretty"))))))
 
 (provide 'test-mevedel-collaboration-editing)
 ;;; test-mevedel-collaboration-editing.el ends here
