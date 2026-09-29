@@ -471,6 +471,7 @@ test('editor interaction regressions', async (t) => {
       const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
       assert.deepEqual(ask.selection, ['a']);
       assert.equal(ask.commentId, posted[0].opId);
+      assert.equal(ask.text, 'Make this blue', 'the comment itself is the request');
       await card.getByText('Resolve', {exact: true}).click();
       await card.waitFor({state: 'hidden'});
       assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1);
@@ -479,7 +480,7 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#show-resolved').check();
       await card.getByText('Reopen', {exact: true}).click();
       await page.evaluate(questionId => window.port.postMessage({type:'conversation', connected:true, own:[], records:[
-        {id:'q', kind:'user', guest:'Alice', shared:{questionId}, text:'Please respond to this comment thread.'},
+        {id:'q', kind:'user', guest:'Alice', shared:{questionId}, text:'Make this blue'},
         {id:'r', kind:'assistant', text:'Done.'}]}), ask.questionId);
       await page.evaluate(async () => {
         const read = await window.apply({action:'read'});
@@ -858,6 +859,7 @@ test('editor interaction regressions', async (t) => {
       const attempts = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').map(m=>m.args));
       assert.equal(attempts[0].questionId,attempts[1].questionId);
       assert.equal(attempts[1].expected.content.text,'useful');
+      assert.equal(attempts[1].text,'Please include an example','a thread asks with its latest human message');
       const shared = {questionId:attempts[1].questionId,commentId:attempts[1].commentId,
         commentVersion:attempts[1].commentVersion,itemId:'test',scope:'selection',revision:3,quote:'useful',text:attempts[1].text};
       const showAnswer = text => page.evaluate(({shared,text})=>window.port.postMessage({type:'conversation',connected:true,own:[],records:[
