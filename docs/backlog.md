@@ -19,51 +19,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Request lifecycle
 
-### Bound remaining large transcript redraws
-
-Prepared historical tools now update their containing turn. Three paired stress
-replays reduced median completion from 806 to 539 ms; worst typing delay remained
-about 118 ms. Scheduled settled-history refreshes now stage full-context
-segmentation, grouping, Markdown and tool preparation. A 27-case frozen replay
-reduced median maximum terminal input delay from 180.9 to 77.8 ms for a cold
-root refresh and from 180.5 to 39.4 ms for a cold agent refresh, but doubled
-scheduled settlement time; warm root still reached 101.6 ms. Synchronous cold
-renders remain around 265 ms root / 247 ms agent. Bound remaining atomic tool
-group/turn insertion, scanner repair and allocation-driven GC; investigate
-display-only synchronous callers without losing live text. Consider independently
-trusted summary/payload storage for old hidden metadata only if evidence
-warrants the cost; the current producer emits bounded direct-call metadata.
-Preserve failure classification, source ownership and expansion behavior. The
-paired raw-result hashes and caveats are in
-`work://shared/transcript-redraw-2026-09-27/report.md`.
-
-Subprocess experiments isolated GC but added startup, snapshot/export costs and
-about 196 MiB worker RSS. Revisit immutable offload only where those costs are
-amortized. Use original captures: measurements based on `second-bounded.org` are
-withdrawn because its serialization changed unrelated history. Protocols and
-remaining limits: `.scratch/session-performance/report.md` and
-`.scratch/bounded-responsiveness/report.md`.
-
-### Bound remaining publication callbacks and legacy storage
-
-Production telemetry now splits pauses into collection and callback time
-and times saves, publications, and control programs. On a session with a
-260 KB sidecar and 1.5 MB live segment, a save takes about 150 ms: two
-whole-buffer structural passes of about 40 ms each (property normalization
-before `GPTEL_BOUNDS`, whose tick memo never hits because the drawer write
-changes the tick, and the prompt-index reparse), about 70 ms in five
-control programs (recovery read, reservation, discovery sidecar,
-generation, head commit), and a whole-segment rewrite. Both passes are pure
-functions of mostly appended text; resuming them from a stable boundary
-before the lowest changed position would remove most of their cost. Remaining pauses
-of 200-400 ms are such saves, sometimes with a collection. Removing them
-needs incremental segment and sidecar publication or saves off the
-foreground path, preserving ownership, recovery, and cancellation.
-
-Save As, fork, and rewind still copy every committed artifact through the
-editor twice: 7.9 s for a 99 MB session. On local targets, link the
-parent's immutable artifacts and reuse its manifest hashes.
-
 ### Prevent system sleep during active requests
 
 Hold an OS sleep inhibitor while root or agent requests run, releasing it on
