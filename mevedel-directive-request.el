@@ -251,7 +251,7 @@
 				hook-context no-spinner))
 
 ;; `mevedel-view-render'
-(declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace"
@@ -1022,8 +1022,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                    mevedel--directive-read-only-request-p nil)
              (when-let* ((view-buffer mevedel--view-buffer)
                          ((buffer-live-p view-buffer)))
-               (with-current-buffer view-buffer
-                 (mevedel-view--full-rerender))))))
+               (mevedel-view-rerender view-buffer)))))
        (when (and cleanup-mode-applied-p
                   (buffer-live-p cleanup-chat-buffer))
          (with-current-buffer cleanup-chat-buffer

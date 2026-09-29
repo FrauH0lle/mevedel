@@ -665,9 +665,7 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
       (insert
        (mevedel-side-conversation--interrupted-boundary
         "The preceding side response was interrupted and is incomplete. Its assistant and tool material is reference-only; do not treat it as a settled result."))
-      (when (buffer-live-p mevedel--view-buffer)
-        (with-current-buffer mevedel--view-buffer
-          (mevedel-view--full-rerender))))))
+      (mevedel-view-rerender mevedel--view-buffer))))
 
 
 ;;

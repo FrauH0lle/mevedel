@@ -43,8 +43,13 @@ This gives a window moved onto a pending response the correct pinned prompt
 and a real prompt header to reveal on click, before its response is rendered.
 Each callback preserves fresh reader/composer state and validates its source
 generation. Losing focus pauses the job; source changes replace it and release
-retained private preparation buffers. In-flight reconciliation, explicit immediate
-refreshes, and other writers' correctness fallbacks remain synchronous. A large
+retained private preparation buffers. Session-level history replacements
+(resume, rewind, segment rollover, control-transfer acquire and follow),
+directive-request setup rollback, an interrupted side answer, and Source's
+refresh after a Session Fork use this scheduler: they only change what is displayed, and nothing after them reads
+view positions. In-flight reconciliation, explicit immediate refreshes, callers
+that read rendered positions, and other writers' correctness fallbacks remain
+synchronous. A large
 individual line, final scanner repair, prompt-first publication, grouped tool
 insertion, and GC can still make a callback exceed its cooperative target. Large
 collapsed tool parsing also has its separate staged preparation lifecycle.
@@ -696,6 +701,26 @@ on the archived stress capture and from 325 to 255 ms on the example session's
 final root history. Elapsed work increased from 618 to 655 ms and from 325 to
 343 ms respectively. Final history hashes matched for each capture. These
 modest gains on long individual turns motivate dividing work below turn size.
+
+### 2026-09-29: schedule display-only history replacements
+
+Resume, rewind, segment rollover, control-transfer acquire and follow,
+directive-request setup rollback, an interrupted side answer, and Source's
+refresh after a Session Fork called the synchronous full render although no caller read view positions
+afterwards. The compiled replay put a synchronous rebuild of the large root
+capture at a 284 ms median worst key delay against 71 ms for the scheduled
+job (agent capture: 326 versus 109 ms; small control capture: 141 versus
+44 ms). These callers now request the coalesced scheduled render. The old
+projection stays visible until the job's reader-anchored turns install, and
+tests that inspect the view after these operations flush the scheduled
+render synchronously.
+
+A trial that moved chat prompts out of publication into the first callbacks
+lowered the warm root replay's worst key delay from 139 to about 100 ms. It
+was rejected: the root capture has eight prompts at roughly 3 ms each, so the
+gain came mostly from where a collection landed rather than from less work,
+and it left a window moved onto a pending response with the previous prompt
+pinned until the callbacks caught up.
 
 ### September 2026: avoid copying first-arrival payloads before reading them
 

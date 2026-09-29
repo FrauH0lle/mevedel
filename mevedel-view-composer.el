@@ -451,7 +451,7 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view--append-request-summary
                   "mevedel-view-render" (data-buf search-start &optional extra))
-(declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (declare-function mevedel-view--history-insertion-marker
                   "mevedel-view-render" ())
 (declare-function mevedel-view--hook-context-events-from-text
@@ -2239,8 +2239,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
           (buffer-local-value 'mevedel--session child-data)))
     (unless (buffer-live-p child-view)
       (error "Session Fork has no live view"))
-    (with-current-buffer source-view
-      (mevedel-view--full-rerender))
+    (mevedel-view-rerender source-view)
     (setq snapshot (copy-tree snapshot t))
     (when (eq fork-type 'worktree)
       (setq input
