@@ -452,8 +452,9 @@ pick, a word under the pointer or otherwise the element; Alt prefers the
 element, Arrow Up widens the highlight to its parent and Arrow Down narrows
 it again, and Enter picks it. Dragging across text keeps the browser's own
 selection and comments on that passage; dragging anywhere else draws a box
-and comments on the area. The box names the smallest element holding most
-of it and the children it covers. While commenting, the artifact's own
+and comments on the area. The box names the elements at least half inside
+it, searching inside larger elements it only crosses, and anchors to their
+nearest common parent. While commenting, the artifact's own
 click, pointer and keyboard handlers do not run. Escape leaves the mode.
 The separate artifact tab has no comment mode.
 
