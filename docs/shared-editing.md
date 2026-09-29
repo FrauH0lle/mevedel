@@ -76,7 +76,13 @@ The drawing menu follows the selected `af756034` reference: hand, selection,
 rectangle, diamond, ellipse, database, sticky note, arrow, line, freehand,
 text, and eraser, followed by the laser tool. Buttons expose tool names and
 keyboard shortcuts. Selection supports Shift multi-selection, arrow-key
-movement, Delete, and resizing.
+movement, Delete, and resizing. Dragging across empty canvas with the
+selection tool, including by touch, draws a selection box: releasing selects
+the objects it fully contains, Alt selects every object it touches, and Shift
+adds them to the current selection. Connectors are tested by their drawn path.
+A press without movement clears the selection. The box stays outlined as the
+selected area, even when it contains no objects, until the selection changes
+or an object moves; box selection never edits content.
 Moving and resizing show a preview while the pointer is held, including
 selection handles and bound connectors. Geometry previews also travel over the
 existing presence channel, so other participants see movement before the save

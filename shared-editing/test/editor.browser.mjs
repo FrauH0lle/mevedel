@@ -331,6 +331,50 @@ test('editor interaction regressions', async (t) => {
         });
       await page.close();
     });
+    await t.test('box selection contains, touches with Alt, adds with Shift and keeps its area', async () => {
+      const {page, frame} = await open({content:[
+        {id:'a', type:'rect', box:[0,0,100,100], text:'A'},
+        {id:'b', type:'rect', box:[300,0,100,100], text:'B'},
+        {id:'c', type:'ellipse', box:[0,300,100,100], text:'C'},
+      ]});
+      const at = (x, y) => frame.locator('#canvas').evaluate((canvas, [x, y]) => {
+        const p = new DOMPoint(x, y).matrixTransform(canvas.getScreenCTM());
+        return [p.x, p.y];
+      }, [x, y]);
+      const offset = await page.locator('iframe').boundingBox();
+      const drag = async (from, to, modifier) => {
+        const [x0, y0] = await at(...from), [x1, y1] = await at(...to);
+        if (modifier) await page.keyboard.down(modifier);
+        await page.mouse.move(offset.x + x0, offset.y + y0);
+        await page.mouse.down();
+        await page.mouse.move(offset.x + (x0 + x1) / 2, offset.y + (y0 + y1) / 2);
+        await page.mouse.move(offset.x + x1, offset.y + y1);
+        await page.mouse.up();
+        if (modifier) await page.keyboard.up(modifier);
+      };
+      const chosen = () => frame.locator('#selection [data-resize]').evaluateAll(n => n.map(e => e.dataset.resize).sort());
+      await drag([-20,-20], [200,150]);
+      assert.deepEqual(await chosen(), ['a']);
+      assert.equal(await frame.locator('#selection .selection-region').count(), 1);
+      assert.equal(await frame.locator('#selection-question').isDisabled(), false);
+      await drag([-20,-20], [320,150], 'Alt');
+      assert.deepEqual(await chosen(), ['a','b']);
+      await drag([-20,280], [150,450], 'Shift');
+      assert.deepEqual(await chosen(), ['a','b','c']);
+      await drag([140,140], [260,260]);
+      assert.deepEqual(await chosen(), []);
+      assert.equal(await frame.locator('#selection .selection-region').count(), 1,
+        'an empty area remains selected for questions');
+      assert.equal(await frame.locator('#selection-question').isDisabled(), false);
+      const [x, y] = await at(200, 200);
+      await page.mouse.click(offset.x + x, offset.y + y);
+      assert.equal(await frame.locator('#selection .selection-region').count(), 0);
+      assert.equal(await frame.locator('#selection-question').isDisabled(), true);
+      const content = await page.evaluate(async () => (await window.apply({action:'read'})).content);
+      assert.deepEqual(content.map(s => s.box), [[0,0,100,100],[300,0,100,100],[0,300,100,100]],
+        'box selection never edits content');
+      await page.close();
+    });
     await t.test('whole and selection actions stay together beside the composer', async () => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
