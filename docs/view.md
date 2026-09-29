@@ -104,6 +104,10 @@ settlement may retry.
 Opening a live transcript performs the synchronous full render needed to attach
 the stream tail. A settled retained or saved transcript opens with scheduled
 canonical projection, keeping the previous display until preparation completes.
+Resuming a session, rewinding it, starting a new segment, taking or following
+control, rolling back a failed directive request, and refreshing Source after a
+Session Fork schedule the same projection rather than blocking on a complete
+rebuild.
 Subsequent live events use the main incremental renderer, except that retained-agent metadata
 replacements fully rerender because delete-and-insert invalidates their source
 endpoints. Missing or stale source anchors use the same full-rerender
