@@ -986,6 +986,7 @@ rejects trailing binary operators"
   :doc "keeps the busy threshold while a hold lives and restores it afterwards"
   (let ((gc-cons-threshold 800000)
         (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (mevedel-gc-cons-threshold-while-typing nil)
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
@@ -1010,6 +1011,7 @@ rejects trailing binary operators"
   :doc "drops a dead hold and leaves a value someone else chose"
   (let ((gc-cons-threshold 800000)
         (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (mevedel-gc-cons-threshold-while-typing nil)
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
@@ -1024,6 +1026,36 @@ rejects trailing binary operators"
           (should (= 0 (hash-table-count mevedel--gc-holds)))
           (should (= (* 128 1024 1024) gc-cons-threshold))
           (should-not mevedel--gc-timer))
+      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
+
+  :doc "defers collection while typing and lets it run once input pauses"
+  (let ((gc-cons-threshold 800000)
+        (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (mevedel-gc-cons-threshold-while-typing (* 256 1024 1024))
+        (noninteractive nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-timer nil)
+        (idle nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'current-idle-time)
+                   (lambda () (and idle (seconds-to-time idle)))))
+          ;; A command is running: input is current.
+          (mevedel--gc-hold 'work #'always)
+          (should (= (* 256 1024 1024) gc-cons-threshold))
+          (should (memq #'mevedel--gc-note-input pre-command-hook))
+          ;; A pause returns the busy floor so the collection can run.
+          (setq idle 2.0)
+          (mevedel--gc-maintain)
+          (should (= (* 64 1024 1024) gc-cons-threshold))
+          ;; Recent input raises it again at the next command.
+          (setq idle 0.2)
+          (mevedel--gc-note-input)
+          (should (= (* 256 1024 1024) gc-cons-threshold))
+          (mevedel--gc-release 'work)
+          (should (= 800000 gc-cons-threshold))
+          (should-not (memq #'mevedel--gc-note-input pre-command-hook)))
+      (remove-hook 'pre-command-hook #'mevedel--gc-note-input)
       (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
 
   :doc "changes nothing in a batch Emacs or when disabled"
@@ -1048,6 +1080,7 @@ rejects trailing binary operators"
   :doc "holds the busy threshold for its body and releases it on exit"
   (let ((gc-cons-threshold 800000)
         (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (mevedel-gc-cons-threshold-while-typing nil)
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)

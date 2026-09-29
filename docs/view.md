@@ -1142,6 +1142,18 @@ someone else set meanwhile is left in place. Save As, fork, and rewind hold
 the same threshold for their transaction: a large Save As allocated 350 MB and
 collected 21 times. A batch Emacs is unaffected.
 
+The busy threshold still let a collection land in the middle of typing: a
+settled root refresh allocates about 40 MB, and on a long session's heap one
+collection takes about 200 ms. While any hold exists and input arrived within
+the last second, `mevedel-gc-cons-threshold-while-typing` (256 MB by default,
+nil to disable) raises the floor further; the first command after a pause
+raises it at once. When input pauses, the busy floor returns and the pending
+collection runs while nobody types. Scheduled history rebuilds hold the
+threshold for their whole job and five seconds after it. In the compiled
+replay, with a key every 10 ms, this removed the one 57-72 ms collection every
+scheduled refresh had contained: median worst key delays fell from 125 to
+43 ms for a warm root refresh and from 102 to 43 ms for a cold agent refresh.
+
 A send that fails or is interrupted before the provider starts gets no
 terminal callback, so that boundary settles the turn itself: it keeps the
 committed user turn, records a retryable failure summary while the request

@@ -696,6 +696,7 @@
            (session (mevedel-session-create "main" ws))
            (gc-cons-threshold 800000)
            (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+           (mevedel-gc-cons-threshold-while-typing nil)
            (noninteractive nil)
            (mevedel--gc-holds (make-hash-table :test #'eq))
            (mevedel--gc-restore nil)
