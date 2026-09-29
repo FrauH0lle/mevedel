@@ -151,8 +151,18 @@
     canComment: () => state.connected && !state.readOnly,
     reveal: id => {
       const turn = state.elements.get(id);
-      if (turn && typeof turn.scrollIntoView === 'function') {
+      if (!turn) {
+        flashNotice('That comment is no longer in the loaded conversation.');
+        return;
+      }
+      if (typeof turn.scrollIntoView === 'function') {
         turn.scrollIntoView({block: 'center', behavior: 'smooth'});
+      }
+      if (turn.classList) {
+        turn.classList.remove('turn-revealed');
+        void turn.offsetWidth;
+        turn.classList.add('turn-revealed');
+        setTimeout(() => turn.classList.remove('turn-revealed'), 2400);
       }
     },
   });
