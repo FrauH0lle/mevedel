@@ -88,8 +88,11 @@ function readBoardComment(shapes, comment) {
 
 export function readComments(doc, comments = []) {
   if (!comments.length) return [];
-  const { kind, content } = inspect(doc);
-  if (kind === 'whiteboard') return comments.map(comment => readBoardComment(content, comment));
+  // Only boards need their shapes; a document resolves each anchor directly.
+  if (doc.getMap('meta').get('kind') === 'whiteboard') {
+    const { content } = inspect(doc);
+    return comments.map(comment => readBoardComment(content, comment));
+  }
   return comments.map(comment => {
     try {
       const { text } = selectedText(doc, comment.range);
