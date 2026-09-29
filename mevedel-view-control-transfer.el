@@ -92,12 +92,13 @@
 (autoload 'mevedel-view-history-load "mevedel-view-history")
 (autoload 'mevedel-view-history-save "mevedel-view-history")
 
+;; `mevedel-view'
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+(autoload 'mevedel-view-rerender "mevedel-view")
+
 ;; `mevedel-view-render'
-(declare-function mevedel-view--full-rerender "mevedel-view-render"
-                  (&optional transcript-buffer source-changed-p))
 (declare-function mevedel-view--rebase-data-sources "mevedel-view-render"
                   (mapping))
-(autoload 'mevedel-view--full-rerender "mevedel-view-render")
 (autoload 'mevedel-view--rebase-data-sources "mevedel-view-render")
 
 (require 'mevedel-interaction-prompt)
@@ -229,7 +230,7 @@ transfer in flight wants a cadence the idle session does not."
         ('load-history
          (mevedel-view-history-load (car args)))
         ('rerender
-         (mevedel-view--full-rerender))
+         (mevedel-view-rerender))
         ('rebase-data-sources
          (mevedel-view--rebase-data-sources (car args)))
         ('reset-agent-ephemeral-state
@@ -274,7 +275,7 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
                        (ignore-errors
                          (mevedel-session-control-transfer-poll
                           session data t)))
-              (mevedel-view--full-rerender))
+              (mevedel-view-rerender))
             (when (not read-only-p)
               (ignore-errors
                 (mevedel-session-control-transfer-poll
@@ -348,7 +349,7 @@ releases, so control arrives without anyone sitting at the other machine."
              (mevedel-session-save-path session)))
       (mevedel-view-control-transfer-request)
       (mevedel-session-control-transfer-acquire session data)
-      (mevedel-view--full-rerender)
+      (mevedel-view-rerender)
       (mevedel-view--control-transfer-rebuild))))
 
 ;;;###autoload
@@ -397,7 +398,7 @@ this view follows."
       (user-error "This session is writable here; there is nothing to follow"))
     (if (mevedel-session-control-transfer--follow-published session data t)
         (progn
-          (mevedel-view--full-rerender)
+          (mevedel-view-rerender)
           (mevedel-view--control-transfer-rebuild)
           (message "mevedel: advanced to the owner's newest published state"))
       (message "mevedel: already at the owner's newest published state"))))

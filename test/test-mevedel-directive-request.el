@@ -892,7 +892,7 @@
                                  (make-temp-file "mevedel-directive-startup-" t)))
                         (file (file-name-concat tmpdir "sample.txt"))
                         (buf (find-file-noselect file))
-                        captured-chat)
+                        captured-chat scheduled-views)
                    (unwind-protect
                        (with-current-buffer buf
                          (insert "source\n")
@@ -914,7 +914,10 @@
                                       (lambda (_prompt &rest args)
                                         (setq captured-chat
                                               (plist-get args :buffer))
-                                        (error "Synchronous startup failure"))))
+                                        (error "Synchronous startup failure")))
+                                     ((symbol-function 'mevedel-view-rerender)
+                                      (lambda (&optional view)
+                                        (push view scheduled-views))))
                              (should-error
                               (mevedel--process-directive
                                directive '(:system "test")
@@ -924,6 +927,9 @@
                                (should-not mevedel--current-request)
                                (should-not mevedel--current-directive-uuid)
                                (should-not mevedel--directive-read-only-request-p)
+                               ;; The cleanup schedules the view's rebuild
+                               ;; instead of blocking on it.
+                               (should (memq mevedel--view-buffer scheduled-views))
                                (should-not
                                 (mevedel-transcript-audit-records
                                  (buffer-string)

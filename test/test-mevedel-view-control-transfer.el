@@ -217,7 +217,8 @@
   (let ((session (mevedel-session--create :name "control"))
         (state 'available)
         (acquired 0)
-        (requested 0))
+        (requested 0)
+        (scheduled 0))
     (setf (mevedel-session-save-path session) "/session/")
     (cl-letf (((symbol-function 'mevedel-session-durability-lease-state)
                (lambda (&rest _) state))
@@ -225,7 +226,10 @@
                (lambda (&rest _) (cl-incf acquired)))
               ((symbol-function 'mevedel-view-control-transfer-request)
                (lambda (&rest _) (cl-incf requested)))
-              ((symbol-function 'mevedel-view--full-rerender) #'ignore))
+              ((symbol-function 'mevedel-view--full-rerender)
+               (lambda (&rest _) (error "Taking control renders synchronously")))
+              ((symbol-function 'mevedel-view-rerender)
+               (lambda (&rest _) (cl-incf scheduled))))
       (test-mevedel-view-control-transfer--with-pair session t
         (mevedel-take-control)
         (setq state 'expired)
@@ -234,6 +238,8 @@
         (mevedel-take-control))
       (should (= 2 acquired))
       (should (= 1 requested))
+      ;; Each acquisition schedules the view's rebuild rather than blocking.
+      (should (= 2 scheduled))
       (test-mevedel-view-control-transfer--with-pair session nil
         (should-error (mevedel-take-control) :type 'user-error)))))
 
