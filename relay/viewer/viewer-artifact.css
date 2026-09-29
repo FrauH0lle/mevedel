@@ -161,3 +161,26 @@
 @media (prefers-reduced-motion: reduce) {
   .turn-revealed { animation: none; outline: 2px solid var(--accent); }
 }
+.artifact-comment-thread {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  max-height: 12rem;
+  overflow: auto;
+}
+.artifact-comment-reply-form {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  margin: 0;
+}
+.artifact-comment-reply-form .artifact-comment-input { min-height: 2.6rem; }
+.artifact-comment-assistant {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: .76rem;
+  cursor: pointer;
+}

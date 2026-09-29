@@ -880,24 +880,22 @@ function mevedelArtifactCommentRuntime() {
 // -- Viewer-side controller ------------------------------------------------
 
 // Owns comment mode, the composer and the marker threads for the artifact
-// shown in the panel. Frame messages are untrusted: only the current frame's
-// window is heard, and every field is bounded before it is used or sent.
+// shown in the panel. Comments live in the host's per-artifact store; the
+// transcript supplies what the assistant made of those sent to it. Frame
+// messages are untrusted: only the current frame's window is heard, and
+// every field is bounded before it is used or sent.
 function createArtifactCommentController(options) {
   const {send, el, body, toggle, flash, renderMarkdown, reveal, canComment} = options;
   const MAX_COMMENT_BYTES = 10000;
-  const HIDDEN_KEY = 'mevedel.artifactComments.hidden';
   const view = {frame: null, id: null, name: null, mode: false,
                 draft: null, composer: null, card: null, cardPinned: false};
   let records = [];
   let queued = [];
-  const pending = new Map();  // commentId -> local comment awaiting the host
+  let stored = [];            // the host store's comments for view.name
+  const pending = new Map();  // commentId -> local comment awaiting the store
+  const replyDrafts = new Map();
   let requestSequence = 0;
-  const inflight = new Map(); // reqId -> {commentId, done}
-  let hidden = new Set();
-  try {
-    const saved = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
-    if (Array.isArray(saved)) hidden = new Set(saved.filter(id => typeof id === 'string'));
-  } catch (_error) { hidden = new Set(); }
+  const inflight = new Map(); // reqId -> {resolve, reject}
 
   const bounded = (value, limit) => typeof value === 'string' && value.length <= limit;
   const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -954,57 +952,71 @@ function createArtifactCommentController(options) {
     return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
   }
 
-  // -- Comments from the transcript -------------------------------------
+  // One artifact-comment request; resolves with the host's reply fields.
+  async function request(fields) {
+    const reqId = ++requestSequence;
+    const answer = new Promise((resolve, reject) => inflight.set(reqId, {resolve, reject}));
+    const ok = await send(Object.assign({t: 'artifact-comment', reqId}, fields));
+    if (!ok) {
+      inflight.delete(reqId);
+      throw new Error('Connection lost; try again.');
+    }
+    return answer;
+  }
 
-  // Delivered comments are guest prompts carrying artifact attribution; the
-  // assistant turn that follows is the reply. Queued ones come from this
-  // guest's queue, and just-sent ones from the local pending list.
+  // -- Threads ----------------------------------------------------------
+
+  // What the assistant made of a comment's thread: its latest request in
+  // the transcript or this guest's queue, and the reply that followed.
+  function assistantState(id) {
+    let state = '';
+    let recordId = null;
+    let reply = '';
+    for (let index = 0; index < records.length; index++) {
+      const record = records[index];
+      const shared = record && record.shared;
+      if (!record || record.kind !== 'user' || !shared || shared.kind !== 'artifact'
+          || shared.commentId !== id) continue;
+      state = 'sent';
+      recordId = record.id;
+      reply = '';
+      for (let next = index + 1; next < records.length; next++) {
+        const later = records[next];
+        if (!later) continue;
+        if (later.kind === 'user') break;
+        if (later.kind === 'assistant' && typeof later.text === 'string' && later.text.trim()) {
+          reply = later.text;
+          state = 'answered';
+          break;
+        }
+      }
+    }
+    if (queued.some(entry => entry && entry.shared && entry.shared.kind === 'artifact'
+                    && entry.shared.commentId === id)) state = 'queued';
+    return {state, recordId, reply};
+  }
+
   function comments() {
     if (!view.name) return [];
     const list = [];
     const seen = new Set();
-    const all = records;
-    for (let index = 0; index < all.length; index++) {
-      const record = all[index];
-      const shared = record && record.shared;
-      if (!record || record.kind !== 'user' || !shared || shared.kind !== 'artifact'
-          || shared.artifact !== view.name || typeof shared.questionId !== 'string'
-          || seen.has(shared.questionId)) continue;
-      const anchor = cleanAnchor(shared.anchor);
-      if (!anchor) continue;
-      seen.add(shared.questionId);
-      let reply = null;
-      for (let next = index + 1; next < all.length; next++) {
-        const later = all[next];
-        if (!later) continue;
-        if (later.kind === 'user') break;
-        if (later.kind === 'assistant' && typeof later.text === 'string' && later.text.trim()) {
-          reply = later;
-          break;
-        }
+    for (const comment of stored) {
+      if (!comment || typeof comment.id !== 'string' || seen.has(comment.id)) continue;
+      seen.add(comment.id);
+      pending.delete(comment.id);
+      const anchor = cleanAnchor(comment.anchor);
+      if (!anchor || comment.resolved === true) continue;
+      list.push(Object.assign({id: comment.id, anchor, text: String(comment.text || ''),
+                               actor: String(comment.actor || ''),
+                               replies: Array.isArray(comment.replies) ? comment.replies : []},
+                              assistantState(comment.id)));
+    }
+    for (const local of pending.values()) {
+      if (local.name === view.name && !seen.has(local.id)) {
+        list.push(Object.assign({}, local, assistantState(local.id)));
       }
-      list.push({id: shared.questionId, anchor, text: shared.text || '',
-                 guest: record.guest || '', recordId: record.id,
-                 reply: reply ? reply.text : '', state: reply ? 'answered' : 'sent'});
     }
-    for (const entry of queued) {
-      const shared = entry && entry.shared;
-      if (!shared || shared.kind !== 'artifact' || shared.artifact !== view.name
-          || typeof shared.questionId !== 'string' || seen.has(shared.questionId)) continue;
-      const anchor = cleanAnchor(shared.anchor);
-      if (!anchor) continue;
-      seen.add(shared.questionId);
-      list.push({id: shared.questionId, anchor, text: shared.text || '', guest: '',
-                 queueId: entry.id, reply: '', state: 'queued'});
-    }
-    for (const [id, local] of pending) {
-      if (seen.has(id)) {
-        pending.delete(id);
-        continue;
-      }
-      if (local.name === view.name) list.push(local);
-    }
-    return list.filter(comment => !hidden.has(comment.id));
+    return list;
   }
 
   // Streaming redraws call this for every record update; the frame only
@@ -1015,14 +1027,16 @@ function createArtifactCommentController(options) {
     const list = comments();
     const markers = list.map((comment, index) => ({id: comment.id, n: index + 1,
                                                    anchor: comment.anchor,
-                                                   state: comment.state}));
+                                                   state: comment.state || 'posted'}));
     const encoded = JSON.stringify(markers);
     if (force === true || encoded !== lastMarkers) {
       lastMarkers = encoded;
       post({t: 'comment-markers', markers});
     }
-    if (view.card && !list.some(comment => comment.id === view.card.dataset.comment)) {
-      closeCard();
+    if (view.card) {
+      const shown = list.find(comment => comment.id === view.card.dataset.comment);
+      if (!shown) closeCard();
+      else if (view.card.dataset.version !== cardVersion(shown)) refreshCard(shown);
     }
     updateToggle(list.length);
   }
@@ -1082,6 +1096,49 @@ function createArtifactCommentController(options) {
     node.style.top = `${placedTop}px`;
   }
 
+  // -- Message forms ----------------------------------------------------
+
+  // A textarea with a "Send to assistant" checkbox, on by default, and one
+  // submit button: posting is one action, and a people-only note is one
+  // untick away.
+  function messageForm(className, placeholder, submitLabel, draft) {
+    const form = el('form', className);
+    const input = el('textarea', 'artifact-comment-input');
+    input.placeholder = placeholder;
+    input.rows = 3;
+    input.setAttribute('aria-label', placeholder);
+    if (draft) input.value = draft;
+    const status = el('p', 'artifact-comment-status', '');
+    status.setAttribute('role', 'status');
+    const actions = el('div', 'artifact-comment-actions');
+    const option = el('label', 'artifact-comment-assistant');
+    const assistant = el('input');
+    assistant.type = 'checkbox';
+    assistant.checked = true;
+    option.append(assistant, ' Send to assistant');
+    const submit = el('button', 'btn', submitLabel);
+    submit.type = 'submit';
+    actions.append(option, submit);
+    form.append(input, status, actions);
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit'));
+      }
+    });
+    return {form, input, status, actions, assistant, submit};
+  }
+
+  function checkedText(parts) {
+    const text = parts.input.value.trim();
+    if (!text) return null;
+    if (new TextEncoder().encode(text).length > MAX_COMMENT_BYTES) {
+      parts.status.textContent = 'Message too long.';
+      return null;
+    }
+    return text;
+  }
+
   // -- Composer ---------------------------------------------------------
 
   function closeComposer() {
@@ -1095,40 +1152,50 @@ function createArtifactCommentController(options) {
     closeCard();
     if (view.composer) view.composer.remove();
     view.draft = {anchor, rect, context};
-    const form = el('form', 'artifact-comment-composer');
+    const parts = messageForm('artifact-comment-composer', 'What should change here?', 'Post');
+    const {form, input, status, actions, assistant, submit} = parts;
     form.setAttribute('role', 'dialog');
     form.setAttribute('aria-label', 'Comment on this part of the artifact');
-    const target = el('p', 'artifact-comment-target', anchor.label || 'Selected part');
-    const input = el('textarea', 'artifact-comment-input');
-    input.placeholder = 'What should change here?';
-    input.rows = 3;
-    input.setAttribute('aria-label', 'Comment');
-    const status = el('p', 'artifact-comment-status', '');
-    status.setAttribute('role', 'status');
-    const actions = el('div', 'artifact-comment-actions');
+    form.prepend(el('p', 'artifact-comment-target', anchor.label || 'Selected part'));
+    if (anchor.quote && anchor.kind !== 'word') {
+      form.insertBefore(el('blockquote', 'artifact-comment-quote', anchor.quote), input);
+    }
     const cancel = el('button', 'btn quiet', 'Cancel');
     cancel.type = 'button';
-    const submit = el('button', 'btn', 'Send to assistant');
-    submit.type = 'submit';
-    actions.append(cancel, submit);
-    form.append(target);
-    if (anchor.quote && anchor.kind !== 'word') {
-      form.append(el('blockquote', 'artifact-comment-quote', anchor.quote));
-    }
-    form.append(input, status, actions);
     cancel.addEventListener('click', closeComposer);
+    actions.insertBefore(cancel, submit);
     input.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
         event.preventDefault();
         closeComposer();
-      } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit'));
       }
     });
-    form.addEventListener('submit', event => {
+    form.addEventListener('submit', async event => {
       event.preventDefault();
-      submitComment(form, input, status, submit);
+      const text = checkedText(parts);
+      if (!text || !view.draft || !view.id) return;
+      const draft = view.draft;
+      const commentId = newId();
+      submit.disabled = true;
+      status.textContent = assistant.checked ? 'Posting and sending…' : 'Posting…';
+      try {
+        await request({action: 'post', id: view.id, commentId, text, anchor: draft.anchor,
+                       context: draft.context, toAssistant: assistant.checked});
+        if (!stored.some(comment => comment && comment.id === commentId)) {
+          pending.set(commentId, {id: commentId, name: view.name, anchor: draft.anchor, text,
+                                  actor: 'You', replies: []});
+        }
+        if (form === view.composer) {
+          closeComposer();
+          setMode(false);
+        }
+        publishMarkers();
+      } catch (error) {
+        if (form === view.composer) {
+          submit.disabled = false;
+          status.textContent = error.message;
+        }
+      }
     });
     body.append(form);
     view.composer = form;
@@ -1136,41 +1203,10 @@ function createArtifactCommentController(options) {
     input.focus();
   }
 
-  async function submitComment(form, input, status, submit) {
-    const text = input.value.trim();
-    if (!text || !view.draft || !view.id) return;
-    if (new TextEncoder().encode(text).length > MAX_COMMENT_BYTES) {
-      status.textContent = 'Comment too long.';
-      return;
-    }
-    const reqId = ++requestSequence;
-    const commentId = newId();
-    const draft = view.draft;
-    submit.disabled = true;
-    status.textContent = 'Sending…';
-    const done = result => {
-      if (form !== view.composer) return;
-      submit.disabled = false;
-      if (result.error) {
-        status.textContent = result.error;
-        return;
-      }
-      pending.set(commentId, {id: commentId, name: view.name, anchor: draft.anchor, text,
-                              guest: '', reply: '', state: 'queued'});
-      closeComposer();
-      setMode(false);
-      publishMarkers();
-    };
-    inflight.set(reqId, {commentId, done});
-    const ok = await send({t: 'artifact-comment', reqId, id: view.id, commentId, text,
-                           anchor: draft.anchor, context: draft.context});
-    if (!ok) {
-      inflight.delete(reqId);
-      done({error: 'Connection lost; the comment is kept here.'});
-    }
-  }
-
   // -- Thread card ------------------------------------------------------
+
+  const cardVersion = comment => JSON.stringify(
+    [comment.text, comment.replies.map(reply => reply.id), comment.state, comment.reply]);
 
   function closeCard() {
     if (view.card) view.card.remove();
@@ -1178,11 +1214,96 @@ function createArtifactCommentController(options) {
     view.cardPinned = false;
   }
 
+  function fillCard(card, comment) {
+    const reply = view.card === card && card.querySelector
+      ? card.querySelector('.artifact-comment-input') : null;
+    if (reply) replyDrafts.set(comment.id, reply.value);
+    card.replaceChildren();
+    card.dataset.version = cardVersion(comment);
+    const status = {queued: 'Queued for the assistant', sent: 'Sent to assistant',
+                    answered: 'Answered'}[comment.state] || 'Posted';
+    const head = el('div', 'artifact-comment-head');
+    head.append(el('span', '', [comment.actor || 'Guest', status].join(' · ')));
+    const close = el('button', 'artifact-comment-close', '×');
+    close.type = 'button';
+    close.title = 'Close';
+    close.setAttribute('aria-label', 'Close');
+    close.addEventListener('click', closeCard);
+    head.append(close);
+    card.append(head, el('p', 'artifact-comment-target', comment.anchor.label || ''));
+    const thread = el('div', 'artifact-comment-thread');
+    for (const message of [comment, ...comment.replies]) {
+      const item = el('p', 'artifact-comment-text');
+      item.append(el('strong', '', `${message.actor || 'Guest'}: `), String(message.text || ''));
+      thread.append(item);
+    }
+    card.append(thread);
+    if (comment.reply) {
+      const excerpt = comment.reply.length > 1200
+        ? comment.reply.slice(0, 1200).trimEnd() + '…' : comment.reply;
+      const answer = renderMarkdown(excerpt);
+      answer.className = 'prose artifact-comment-reply';
+      card.append(answer);
+    }
+    if (!view.cardPinned) return;
+    const actions = el('div', 'artifact-comment-actions');
+    if (comment.recordId && typeof reveal === 'function') {
+      const show = el('button', 'btn quiet', 'Show in chat');
+      show.type = 'button';
+      show.addEventListener('click', () => reveal(comment.recordId));
+      actions.append(show);
+    }
+    if (canComment() && stored.some(item => item && item.id === comment.id)) {
+      const resolve = el('button', 'btn quiet', 'Resolve');
+      resolve.type = 'button';
+      resolve.title = 'Mark this comment done for everyone; its marker goes away';
+      resolve.addEventListener('click', async () => {
+        resolve.disabled = true;
+        try {
+          await request({action: 'resolve', id: view.id, commentId: comment.id, resolved: true});
+        } catch (error) {
+          resolve.disabled = false;
+          if (flash) flash(error.message);
+        }
+      });
+      actions.append(resolve);
+      const parts = messageForm('artifact-comment-reply-form', 'Reply…', 'Post reply',
+                                replyDrafts.get(comment.id));
+      parts.form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const text = checkedText(parts);
+        if (!text) return;
+        parts.submit.disabled = true;
+        parts.status.textContent = parts.assistant.checked ? 'Posting and sending…' : 'Posting…';
+        try {
+          await request({action: 'reply', id: view.id, commentId: comment.id, replyId: newId(),
+                         text, toAssistant: parts.assistant.checked});
+          replyDrafts.delete(comment.id);
+          parts.input.value = '';
+          parts.status.textContent = '';
+        } catch (error) {
+          parts.status.textContent = error.message;
+        } finally {
+          parts.submit.disabled = false;
+        }
+      });
+      card.append(parts.form);
+    }
+    card.append(actions);
+  }
+
+  function refreshCard(comment) {
+    if (view.card) fillCard(view.card, comment);
+  }
+
   function openCard(id, rect, pinned) {
     const comment = comments().find(item => item.id === id);
     if (!comment) return;
     if (view.card && view.card.dataset.comment === id) {
-      if (pinned) view.cardPinned = true;
+      if (pinned && !view.cardPinned) {
+        view.cardPinned = true;
+        fillCard(view.card, comment);
+      }
       return;
     }
     if (view.cardPinned && !pinned) return;
@@ -1191,48 +1312,10 @@ function createArtifactCommentController(options) {
     card.dataset.comment = id;
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-label', 'Comment thread');
-    const status = {queued: 'Queued', sent: 'Sent to assistant',
-                    answered: 'Answered'}[comment.state] || '';
-    const head = el('div', 'artifact-comment-head');
-    head.append(el('span', '', [comment.guest || 'You', status].filter(Boolean).join(' · ')));
-    const close = el('button', 'artifact-comment-close', '×');
-    close.type = 'button';
-    close.title = 'Close';
-    close.setAttribute('aria-label', 'Close');
-    close.addEventListener('click', closeCard);
-    head.append(close);
-    card.append(head);
-    card.append(el('p', 'artifact-comment-target', comment.anchor.label || ''));
-    card.append(el('p', 'artifact-comment-text', comment.text));
-    if (comment.reply) {
-      const excerpt = comment.reply.length > 1200
-        ? comment.reply.slice(0, 1200).trimEnd() + '…' : comment.reply;
-      const reply = renderMarkdown(excerpt);
-      reply.className = 'prose artifact-comment-reply';
-      card.append(reply);
-    }
-    const actions = el('div', 'artifact-comment-actions');
-    if (comment.recordId && typeof reveal === 'function') {
-      const show = el('button', 'btn quiet', 'Show in chat');
-      show.type = 'button';
-      show.addEventListener('click', () => reveal(comment.recordId));
-      actions.append(show);
-    }
-    const hide = el('button', 'btn quiet', 'Hide marker');
-    hide.type = 'button';
-    hide.title = 'Hide this marker in this browser; the conversation keeps the comment';
-    hide.addEventListener('click', () => {
-      hidden.add(id);
-      try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden].slice(-500))); }
-      catch (_error) { /* storage is a convenience */ }
-      closeCard();
-      publishMarkers();
-    });
-    actions.append(hide);
-    card.append(actions);
-    body.append(card);
     view.card = card;
     view.cardPinned = pinned === true;
+    fillCard(card, comment);
+    body.append(card);
     placeBeside(card, rect);
   }
 
@@ -1275,6 +1358,15 @@ function createArtifactCommentController(options) {
   if (typeof addEventListener === 'function') addEventListener('message', onMessage);
   if (toggle) toggle.addEventListener('click', () => setMode(!view.mode));
 
+  function load(name) {
+    request({action: 'list', id: view.id}).then(reply => {
+      if (view.name === name) {
+        stored = Array.isArray(reply.comments) ? reply.comments : [];
+        publishMarkers();
+      }
+    }).catch(() => {});
+  }
+
   return Object.freeze({
     // A newly rendered HTML frame for record ID named NAME.
     attach(frame, id, name) {
@@ -1284,9 +1376,11 @@ function createArtifactCommentController(options) {
       view.id = id;
       view.name = name;
       view.mode = false;
+      stored = [];
       lastMarkers = '';
       frame.addEventListener('load', () => publishMarkers(true));
-      updateToggle(comments().length);
+      updateToggle(0);
+      load(name);
     },
     detach() {
       closeComposer();
@@ -1295,6 +1389,7 @@ function createArtifactCommentController(options) {
       view.id = null;
       view.name = null;
       view.mode = false;
+      stored = [];
       updateToggle(0);
     },
     records(next) {
@@ -1305,13 +1400,25 @@ function createArtifactCommentController(options) {
       queued = Array.isArray(entries) ? entries : [];
       publishMarkers();
     },
+    // The host store changed for artifact NAME.
+    stored(frame) {
+      if (frame && frame.artifact === view.name && Array.isArray(frame.comments)) {
+        stored = frame.comments;
+        publishMarkers();
+      }
+    },
+    // A room message about the whole artifact record ID, into its
+    // conversation.
+    discuss(id, text) {
+      return request({action: 'ask', id, questionId: newId(), text});
+    },
     // The host's answer to an artifact-comment frame.
     handle(frame) {
       const entry = inflight.get(frame.reqId);
       if (!entry) return;
       inflight.delete(frame.reqId);
-      entry.done(typeof frame.error === 'string' ? {error: frame.error} : {});
-      if (typeof frame.error === 'string' && flash) flash(frame.error);
+      if (typeof frame.error === 'string') entry.reject(new Error(frame.error));
+      else entry.resolve(frame);
     },
     onMessage,
     comments,
