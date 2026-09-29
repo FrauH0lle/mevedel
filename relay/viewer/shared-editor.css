@@ -711,3 +711,7 @@ dialog {
 }
 
 .conversation-context { margin: 0; padding: 8px 20px; color: var(--muted); font-size: 12px; line-height: 1.5; border-bottom: 1px solid var(--line); }
+/* Posting is one action; the choice beside it decides whether the assistant
+   is asked too. */
+.comment-post-row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.assistant-choice { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; color: var(--muted); font-size: 13px; cursor: pointer; }
