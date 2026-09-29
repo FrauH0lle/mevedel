@@ -22,7 +22,7 @@ import {
 import { extensions, schema, seedEmptyText, selectionPositions, validateDocument } from './document.mjs';
 import { restore, encode, inspect, putShape, validateShape, validate } from './model.mjs';
 import { validateImage } from './image.mjs';
-import { shapeSVG, escape, bounds, styleOf, FILLABLE, LINEAR } from './render.mjs';
+import { shapeSVG, escape, bounds, extent, shapesInRegion, styleOf, FILLABLE, LINEAR } from './render.mjs';
 const $ = (id) => document.getElementById(id),
   remote = Symbol('remote'),
   local = Symbol('local');
@@ -51,6 +51,8 @@ let port,
   initialized = false;
 let tool = 'select',
   selected = new Set(),
+  /* Board area [x, y, w, h] from the last box selection, kept with that selection. */
+  selectionRegion = null,
   view = [-40, -40, 1000, 650],
   drag = null,
   lastPresence = 0,
@@ -342,10 +344,25 @@ function draw() {
       const gap = 4 / scale, handle = 10 / scale;
       return `<rect x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" fill="none" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><rect data-resize="${escape(s.id)}" x="${x + w - handle / 2}" y="${y + h - handle / 2}" width="${handle}" height="${handle}" fill="white" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"/>`;
     })
-    .join('');
+    .join('') + regionSVG(drag?.mode === 'marquee' ? drag.region : selectionRegion, drag?.mode === 'marquee');
   boardPresence?.animate();
-  $('selection-question').disabled = readOnly || !selected.size;
+  $('selection-question').disabled = $('comment-selection').disabled = readOnly || !(selected.size || selectionRegion);
   refresh();
+}
+function regionSVG(region, active) {
+  if (!region) return '';
+  const [x, y, w, h] = region;
+  return `<rect class="selection-region" data-active="${active}" x="${x}" y="${y}" width="${w}" height="${h}" vector-effect="non-scaling-stroke"/>`;
+}
+/* Normalized, integer region between two board points. */
+function regionBetween(a, b) {
+  const x = Math.floor(Math.min(a[0], b[0])), y = Math.floor(Math.min(a[1], b[1]));
+  return [x, y, Math.ceil(Math.max(a[0], b[0])) - x, Math.ceil(Math.max(a[1], b[1])) - y];
+}
+/* A box selection selects the shapes it contains, or touches with Alt. */
+function marqueeSelection(d) {
+  const hits = shapesInRegion(shapeList(), d.region, d.touching).map((s) => s.id);
+  return new Set(d.additive ? [...d.base, ...hits] : hits);
 }
 function world(event) {
   const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(
@@ -424,7 +441,7 @@ function selectTool(value) {
     .forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === value)));
   $('canvas').style.cursor =
     value === 'pan' ? 'grab' : value === 'select' ? 'default' : 'crosshair';
-  if (drawable.includes(value)) selected.clear();
+  if (drawable.includes(value)) { selected.clear(); selectionRegion = null; }
   draw();
 }
 function button(parent, label, action) {
@@ -818,9 +835,10 @@ function board() {
   properties.hidden = readOnly;
   const canvas = $('canvas');
   const actions = [];
-  const all = () => { selected = new Set(shapeList().map(s => s.id)); selectTool('select'); };
-  const clear = () => { selected.clear(); selectTool('select'); };
+  const all = () => { selected = new Set(shapeList().map(s => s.id)); selectionRegion = null; selectTool('select'); };
+  const clear = () => { selected.clear(); selectionRegion = null; selectTool('select'); };
   const move = (dx, dy, step = 1) => doc.transact(() => {
+    selectionRegion = null;
     for (const id of selected) {
       const shape = doc.getMap('shapes').get(id), geometry = shape.get('geometry'), box = geometry.box;
       shape.set('geometry', transformGeometry(geometry, [box[0] + dx * step, box[1] + dy * step, ...box.slice(2)]));
@@ -860,7 +878,7 @@ function board() {
     action(objectBody, 'Delete', remove, () => selected.size > 0, 'Del').classList.add('danger');
   }
   const hints = {
-    select: 'Shift-click to select multiple objects. Double-click to edit text.',
+    select: 'Drag across empty canvas to box-select (Alt: touched objects). Shift adds. Double-click edits text.',
     pan: 'Drag to move around the canvas. Scroll to zoom.',
     text: 'Click to place text. Ctrl / ⌘ Enter to finish.',
     sticky: 'Click to place a note. Ctrl / ⌘ Enter to finish.',
@@ -901,7 +919,7 @@ function board() {
     <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}</dl></section>
     <section><h3>Working on the canvas</h3><dl>
     <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
-    <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Pan</dt><dd>Middle-button drag</dd></div><div><dt>Zoom at pointer</dt><dd>Scroll</dd></div>
+    <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Middle-button drag</dd></div><div><dt>Zoom at pointer</dt><dd>Scroll</dd></div>
     ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div>'}
     </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
   document.body.append(shortcuts);
@@ -958,13 +976,20 @@ function board() {
         };
         return;
       }
-      if (id) {
-        if (event.shiftKey) {
-          selected.has(id) ? selected.delete(id) : selected.add(id);
-        } else if (!selected.has(id)) selected = new Set([id]);
-      } else selected.clear();
+      selectionRegion = null;
+      if (!id) {
+        // Empty canvas starts a box selection; a click without movement clears.
+        drag = { mode: 'marquee', start: point, screen: [event.clientX, event.clientY],
+          additive: event.shiftKey, base: new Set(selected), region: null };
+        if (!event.shiftKey) selected.clear();
+        draw();
+        return;
+      }
+      if (event.shiftKey) {
+        selected.has(id) ? selected.delete(id) : selected.add(id);
+      } else if (!selected.has(id)) selected = new Set([id]);
       draw();
-      if (id && !readOnly)
+      if (!readOnly)
         drag = {
           mode: 'move',
           start: point,
@@ -994,6 +1019,14 @@ function board() {
     if (event.pointerType !== 'touch' || drag)
       presence(point, tool === 'laser' ? 'laser' : 'cursor');
     if (!drag) return;
+    if (drag.mode === 'marquee') {
+      if (Math.hypot(event.clientX - drag.screen[0], event.clientY - drag.screen[1]) < 4 && !drag.region) return;
+      drag.region = regionBetween(drag.start, point);
+      drag.touching = event.altKey;
+      selected = marqueeSelection(drag);
+      draw();
+      return;
+    }
     if (drag.mode === 'pan') {
       const scale = canvas.getScreenCTM().a;
       view = [
@@ -1034,6 +1067,15 @@ function board() {
     const d = drag;
     drag = null;
     if (event.pointerType === 'touch') stopPointing();
+    if (d.mode === 'marquee') {
+      if (d.region) {
+        d.touching = event.altKey;
+        selected = marqueeSelection(d);
+        selectionRegion = d.region;
+      }
+      draw();
+      return;
+    }
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
     if (d.mode === 'draw') {
       const s = d.shape;
@@ -1075,6 +1117,7 @@ function board() {
   canvas.onpointercancel = () => {
     outgoingPreview = null;
     stopPointing();
+    if (drag?.mode === 'marquee') selected = drag.base;
     drag = null;
     draw();
   };

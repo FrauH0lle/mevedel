@@ -304,6 +304,16 @@ header {
 #selection [data-resize] {
   pointer-events: all;
 }
+#selection .selection-region {
+  fill: color-mix(in srgb, var(--board-selection) 7%, transparent);
+  stroke: var(--board-selection);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+#selection .selection-region[data-active='true'] {
+  fill: color-mix(in srgb, var(--board-selection) 12%, transparent);
+  stroke-dasharray: none;
+}
 #scene [data-editing='true'] text { visibility: hidden; }
 #shape-text {
   position: fixed;
