@@ -148,6 +148,8 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
+(declare-function mevedel-session-publication--file-sha256
+                  "mevedel-session-publication" (file))
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-generation-summaries
                   "mevedel-session-publication" (session-dir &optional limit))
@@ -1141,13 +1143,27 @@ staging root present before the first artifact is written."
   (dolist (entry (plist-get publication :artifacts))
     (let* ((logical (car entry))
            (destination (expand-file-name logical staging-path))
-           (content
-            (mevedel-session-artifacts-read-artifact session logical t)))
+           (published (plist-get (cdr entry) :published))
+           ;; A live owner's newer staged bytes win over the manifest in
+           ;; the ordinary reader, so the direct copy needs none pending.
+           (local-p (and (stringp published) (not (file-remote-p published))
+                         (not (file-remote-p staging-path))
+                         (null (mevedel-session-publication-uncommitted-batches session))
+                         (not (mevedel-session-pending-publication session)))))
       (unless (file-in-directory-p destination staging-path)
         (error "Session artifact escapes staging: %s" logical))
       (make-directory (file-name-directory destination) t)
-      (let ((coding-system-for-write 'no-conversion))
-        (write-region content nil destination nil 'silent)))))
+      (if local-p
+          ;; Immutable local bytes are copied by the kernel and verified
+          ;; against the manifest, instead of passing through Lisp.
+          (progn
+            (copy-file published destination t)
+            (unless (equal (plist-get (cdr entry) :sha256)
+                           (mevedel-session-publication--file-sha256 destination))
+              (error "Session artifact does not match its manifest: %s" logical)))
+        (let ((content (mevedel-session-artifacts-read-artifact session logical t))
+              (coding-system-for-write 'no-conversion))
+          (write-region content nil destination nil 'silent))))))
 
 (defun mevedel-session-rewind--prune-remote-rewind-staging
     (candidate target staging-path)
@@ -1301,9 +1317,11 @@ replacing SESSION's live lease runtime."
         (let ((logical (file-relative-name path staging-path)))
           (when (and (not (equal logical sidecar-name))
                      (mevedel-session-publication-logical-path-p logical))
+            ;; The staged file is handed over whole: reading every artifact
+            ;; into a string doubled a large Save As's allocation.
             (push
              (list :path (expand-file-name logical save-path)
-                   :content (mevedel-session-artifacts-read-file-raw path))
+                   :source-file path)
              artifacts))))
       (append
        (nreverse artifacts)

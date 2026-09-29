@@ -1045,7 +1045,8 @@ when they read those artifacts."
   "Copy SESSION publication ARTIFACTS into one local recovery batch.
 
 Each input artifact is a plist containing `:path', `:content', and optional
-`:coding', or `:path' and `:delete t'.  Other metadata is preserved.  Return a
+`:coding'; `:path' and a `:source-file' holding its raw bytes; or `:path' and
+`:delete t'.  Other metadata is preserved.  Return a
 batch whose written artifacts name local `:source' files."
   (let ((directory (make-temp-file "mevedel-publication-" t))
         staged
@@ -1059,15 +1060,21 @@ batch whose written artifacts name local `:source' files."
            (mevedel-session-publication--artifact-for-session session artifact)
            for target = (plist-get normalized :path)
            for content = (plist-get normalized :content)
+           for source-file = (plist-get normalized :source-file)
            for source = (file-name-concat directory (format "%06d" index))
            do
            (unless (and (stringp target)
                         (or (plist-get normalized :delete)
-                            (stringp content)))
+                            (stringp content)
+                            (and (stringp source-file) (file-regular-p source-file))))
              (error "Publication artifact requires string path and content"))
            (when (plist-get normalized :commit-marker)
              (cl-incf marker-count))
-           (unless (plist-get normalized :delete)
+           (cond
+            ((plist-get normalized :delete))
+            ;; A file-backed artifact is copied as bytes, never read into Lisp.
+            (source-file (copy-file source-file source t))
+            (t
              (with-temp-buffer
                (set-buffer-multibyte (multibyte-string-p content))
                (insert content)
@@ -1075,10 +1082,10 @@ batch whose written artifacts name local `:source' files."
                       (if (multibyte-string-p content)
                           (or (plist-get normalized :coding) 'utf-8-unix)
                         'no-conversion)))
-                 (write-region (point-min) (point-max) source nil 'silent))))
+                 (write-region (point-min) (point-max) source nil 'silent)))))
            (setq normalized
                  (cl-loop for (key value) on normalized by #'cddr
-                          unless (eq key :content)
+                          unless (memq key '(:content :source-file))
                           append (list key value))
                  normalized (if (plist-get normalized :delete)
                                 normalized
@@ -1134,18 +1141,16 @@ batch whose written artifacts name local `:source' files."
   "Return ARTIFACT number INDEX's manifest entry and bytes below DIRECTORY.
 
 The digest is taken from the staged source, which is what the manifest
-records, and the bytes are returned for the caller to write."
-  (let* ((source (plist-get artifact :source))
-         (target (file-name-concat directory (format "%06d.data" index)))
-         (content (with-temp-buffer
-                    (set-buffer-multibyte nil)
-                    (insert-file-contents-literally source)
-                    (buffer-string))))
+records, and the source file is returned for the caller to write.  Neither
+becomes a Lisp string: a local target copies the file, and a live segment
+was otherwise read back and copied whole on every save."
+  (let ((source (plist-get artifact :source))
+        (target (file-name-concat directory (format "%06d.data" index))))
     (list :path target
-          :content content
+          :source-file source
           :entry (list (plist-get artifact :logical)
                        :published (file-relative-name target session-dir)
-                       :sha256 (secure-hash 'sha256 content)))))
+                       :sha256 (mevedel-session-publication--file-sha256 source)))))
 
 (defun mevedel-session-publication--write-generation
     (root artifacts session-dir entries)
@@ -1195,8 +1200,7 @@ collision simply picks another name."
                (mapcar (lambda (payload)
                          (list :op 'create
                                :path (plist-get payload :path)
-                               :content (plist-get payload :content)
-                               :coding 'no-conversion))
+                               :source-file (plist-get payload :source-file)))
                        payloads)
                (list (list :op 'create :path manifest-path
                            :content
@@ -1299,15 +1303,10 @@ component and retries once."
          (directory (file-name-directory (expand-file-name path)))
          (ensure (not (member directory
                               (car mevedel-session-publication--ensured-directories))))
-         (content (with-temp-buffer
-                    (set-buffer-multibyte nil)
-                    (insert-file-contents-literally source)
-                    (buffer-string)))
          (write-operation
           (list :op 'write
                 :path (mevedel-session-control-fs-physical-path path)
-                :content content
-                :coding 'no-conversion))
+                :source-file source))
          result)
     (mevedel-session-control-fs-physical-path directory)
     (setq result
