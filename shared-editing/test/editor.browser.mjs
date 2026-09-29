@@ -375,6 +375,38 @@ test('editor interaction regressions', async (t) => {
         'box selection never edits content');
       await page.close();
     });
+    await t.test('asking about a boxed area sends its region with the contained objects', async () => {
+      const {page, frame} = await open({content:[
+        {id:'a', type:'rect', box:[0,0,100,100], text:'A'},
+        {id:'b', type:'rect', box:[300,0,100,100], text:'B'},
+      ]});
+      const [x0, y0, x1, y1] = await frame.locator('#canvas').evaluate(canvas => {
+        const at = (x, y) => new DOMPoint(x, y).matrixTransform(canvas.getScreenCTM());
+        const a = at(-20, -20), b = at(220, 140);
+        return [a.x, a.y, b.x, b.y];
+      });
+      const offset = await page.locator('iframe').boundingBox();
+      await page.mouse.move(offset.x + x0, offset.y + y0);
+      await page.mouse.down();
+      await page.mouse.move(offset.x + x1, offset.y + y1, {steps: 4});
+      await page.mouse.up();
+      await frame.locator('#selection-question').click();
+      assert.match(await frame.locator('#context-title').innerText(), /Selected area/);
+      assert.equal(await frame.locator('#selected-question').innerText(), 'Selected area');
+      assert.match(await frame.locator('#context-quote').textContent(), /^Area \d+ × \d+ at -2\d, -2\d\n1 object\nrect: A$/);
+      await frame.locator('#question').fill('Put a legend here');
+      await frame.locator('#question-send').click();
+      await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
+      const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
+      assert.deepEqual(ask.selection, ['a']);
+      assert.equal(ask.region.length, 4);
+      assert.deepEqual(ask.expected.region, ask.region);
+      await frame.locator('#whole-question').click();
+      await frame.locator('#selected-question').click();
+      assert.match(await frame.locator('#context-title').innerText(), /Selected area/,
+        'switching scopes retains the captured area');
+      await page.close();
+    });
     await t.test('whole and selection actions stay together beside the composer', async () => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
