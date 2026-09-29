@@ -476,6 +476,19 @@
       (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
     (should-not mevedel-view-render--batch)
     (should (equal "> draft\nsecond line latest edit" (mevedel-view--input-text))))
+  :doc "defers collection during the job and a short grace after it"
+  (mevedel-batch-test--with-history
+    (let (live-p)
+      (cl-letf (((symbol-function 'mevedel--gc-hold)
+                 (lambda (_key predicate) (setq live-p predicate))))
+        (mevedel-view-render-batched-full))
+      (should (funcall live-p))
+      (let ((job mevedel-view-render--batch))
+        (mevedel-view-render-cancel-batch)
+        ;; The finished job keeps its hold through the grace period.
+        (should (funcall live-p))
+        (setf (plist-get job :settled-until) (1- (float-time)))
+        (should-not (funcall live-p)))))
   :doc "a queued writer after batch installation sees complete history"
   (mevedel-batch-test--with-history
     (mevedel-view-render-mutate
