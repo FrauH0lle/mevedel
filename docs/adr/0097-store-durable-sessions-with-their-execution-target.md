@@ -36,8 +36,11 @@ Explicit forced saves still publish a marker. Pending recovery or retained
 batches prevent comparison from bypassing their required transaction.
 
 The fixed sidecar and ordinary session artifacts retain non-authoritative cache
-copies. Root and canonical agent transcripts skip duplicate fixed writes; their
-logical paths resolve through publications or owned staging. Old fixed transcript
+copies. Root and canonical agent transcripts, file history, and instruction
+snapshots skip duplicate fixed writes; their logical paths resolve through
+publications or owned staging. Each fixed write costs an ownership proof and a
+write program: the fixed copies of 60 instruction snapshots that no reader
+opened took 0.9 s of a large Save As's 4.3 s. Old fixed transcript
 files are ignored, including their timestamps, and are not deleted automatically.
 Numbered agent compaction archives retain physical recovery copies before live
 rewrites. A sidecar-marked transaction

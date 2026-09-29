@@ -1529,6 +1529,24 @@
                            (insert-file-contents
                             (file-name-concat staging logical))
                            (buffer-string)))))
+      (delete-directory tempdir t)))
+  :doc "refuses an artifact whose logical path leaves the staging root"
+  (let* ((tempdir (make-temp-file "mevedel-materialize-escape-" t))
+         (staging (file-name-concat tempdir "staging"))
+         (publication
+          (list :head ".publications/0001/manifest.el"
+                :artifacts (list (cons "../outside.txt"
+                                       (list :published (file-name-concat tempdir "x")
+                                             :sha256 "0")))))
+         (session (mevedel-session--create
+                   :authority-mode 'portable
+                   :save-path (file-name-as-directory tempdir)
+                   :publication publication)))
+    (unwind-protect
+        (progn
+          (should-error (mevedel-session-rewind-materialize-publication
+                         session publication staging))
+          (should-not (file-exists-p (file-name-concat tempdir "outside.txt"))))
       (delete-directory tempdir t))))
 
 (mevedel-deftest mevedel-session-rewind--commit-remote-rewind ()
