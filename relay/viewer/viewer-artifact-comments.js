@@ -346,10 +346,12 @@ function mevedelArtifactCommentRuntime() {
       anchor.region = target.region;
       anchor.count = target.kids.length;
       els = target.kids.length ? target.kids : [el];
-      const place = placeOf(el);
-      label = target.kids.length === 1
-        ? fitLabel({place, kind: kindOf(target.kids[0]), words: wordsOf(target.kids[0])})
-        : fitLabel({place, kind: `area · ${target.kids.length} elements`});
+      // One covered element is named as a click on it would name it.
+      const only = target.kids.length === 1 ? target.kids[0] : null;
+      label = only
+        ? fitLabel({place: kindOf(only) === 'heading' ? '' : placeOf(only),
+                    kind: kindOf(only), words: wordsOf(only)})
+        : fitLabel({place: placeOf(el), kind: `area · ${target.kids.length} elements`});
     } else {
       label = fitLabel({place: kindOf(el) === 'heading' ? '' : placeOf(el),
                         kind: kindOf(el), words: wordsOf(el)});
@@ -383,11 +385,28 @@ function mevedelArtifactCommentRuntime() {
     // Elements at least half inside the box count as covered; one the box
     // only crosses is searched for covered children instead, so a box over
     // two cards of a wide row finds those cards.
+    // A heading or paragraph spans its column while its text may fill a
+    // fraction of it; measure what is drawn, so a box around the words
+    // covers the element.
+    const drawn = child => {
+      const outer = child.getBoundingClientRect();
+      if (child instanceof SVGElement || !child.firstChild) return outer;
+      const range = document.createRange();
+      range.selectNodeContents(child);
+      const inner = range.getBoundingClientRect();
+      if (area(inner) <= 0) return outer;
+      const left = Math.max(outer.left, inner.left);
+      const top = Math.max(outer.top, inner.top);
+      const right = Math.min(outer.right, inner.right);
+      const bottom = Math.min(outer.bottom, inner.bottom);
+      return right > left && bottom > top
+        ? {left, top, width: right - left, height: bottom - top} : outer;
+    };
     const covered = (parent, depth = 0, found = []) => {
       for (const child of parent.children) {
         if (found.length >= 64) break;
         if (skipped(child) || !visible(child)) continue;
-        const rect = child.getBoundingClientRect();
+        const rect = drawn(child);
         const shared = overlap(rect, box);
         if (!shared) continue;
         if (shared >= area(rect) * 0.5) found.push(child);
@@ -403,7 +422,13 @@ function mevedelArtifactCommentRuntime() {
       if (!inner.length) break;
       kids = inner;
     }
-    if (kids.length) {
+    // A box inside one element that covers its drawn content, such as the
+    // words of a wide heading, is about that element itself.
+    if (!kids.length && el !== document.body && !skipped(el)) {
+      const own = drawn(el);
+      if (overlap(own, box) >= area(own) * 0.5) kids = [el];
+    }
+    if (kids.length && kids[0] !== el) {
       let common = kids[0].parentElement;
       while (common && common !== el && !kids.every(kid => common.contains(kid))) {
         common = common.parentElement;

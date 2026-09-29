@@ -54,7 +54,13 @@
     const comments = commentKit && body ? commentKit.create({
       send, el, body, toggle: commentToggle, flash,
       renderMarkdown: text => window.mevedelTranscriptRenderer.renderMarkdown(text),
-      reveal, canComment: typeof canComment === 'function' ? canComment : () => false,
+      // The panel covers the conversation, so showing a comment's turn
+      // closes the artifact first.
+      reveal: typeof reveal === 'function' ? id => {
+        close();
+        reveal(id);
+      } : null,
+      canComment: typeof canComment === 'function' ? canComment : () => false,
     }) : null;
 
     function note(text) {

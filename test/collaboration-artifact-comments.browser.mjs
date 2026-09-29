@@ -252,6 +252,23 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
                  'Decisions at a glance \u203a area \u00b7 2 elements');
     await page.click('.artifact-comment-composer >> text=Cancel');
 
+    // A tight box around a wide heading's words names that heading.
+    const title = await frame.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('h1'));
+      const r = range.getBoundingClientRect();
+      return {left: r.left - 4, top: r.top - 4, width: r.width + 8, height: r.height + 8};
+    });
+    const titleArea = await inPage(page, frame, title);
+    await page.mouse.move(titleArea.x, titleArea.y);
+    await page.mouse.down();
+    await page.mouse.move(titleArea.x + titleArea.width, titleArea.y + titleArea.height,
+                          {steps: 6});
+    await page.mouse.up();
+    await page.waitForSelector('.artifact-comment-composer');
+    assert.equal(await page.textContent('.artifact-comment-target'), 'heading "SNT Schema v2"');
+    await page.click('.artifact-comment-composer >> text=Cancel');
+
     // Dragging across text keeps native selection and sends the quote.
     // Cancelling keeps comment mode on for another try.
     assert.equal(await page.getAttribute('#artifact-comment', 'aria-pressed'), 'true');
