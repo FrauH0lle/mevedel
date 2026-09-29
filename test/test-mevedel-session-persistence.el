@@ -5106,6 +5106,27 @@
 (mevedel-deftest mevedel-session-persistence-write-sidecar-now ()
   ,test
   (test)
+  :doc "admits and publishes a portable sidecar in one durable transaction"
+  (let ((session (mevedel-session--create :name "sidecar"))
+        admitted published)
+    (setf (mevedel-session-save-path session) "/session/")
+    (cl-letf (((symbol-function 'mevedel-session-codec-portable-authority-p)
+               #'always)
+              ((symbol-function 'mevedel-session-artifacts-artifact-present-p)
+               #'always)
+              ((symbol-function 'mevedel-session-artifacts-build-sidecar)
+               (lambda (&rest _) '(:session-id "s")))
+              ((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+               (lambda (&rest _)
+                 (setq admitted mevedel-session-durability--transaction-clock)))
+              ((symbol-function 'mevedel-session-publication-publish)
+               (lambda (&rest _)
+                 (setq published mevedel-session-durability--transaction-clock)
+                 t)))
+      (should (mevedel-session-persistence-write-sidecar-now session nil))
+      ;; One transaction: publication reuses admission's observations.
+      (should admitted)
+      (should (eq admitted published))))
   :doc "commits a remote sidecar when its fixed cache is missing"
   (let* ((host "write-sidecar-publication")
          (local-root
