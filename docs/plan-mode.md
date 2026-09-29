@@ -244,6 +244,11 @@ owning target session is known; remote consumers read verified publication
 bytes for that logical artifact. Absolute source or publication paths are not
 part of Plan metadata or retry records.
 
+When the prepared submission is ready, the source view releases its
+`Preparing implementation...` row before kickoff. Implementation progress
+belongs to the target view; a Worktree handoff does not leave the source
+animating while work runs elsewhere.
+
 After any valid location/context preparation, Direct submits its ordinary
 one-turn instruction. Goal instead constructs a Goal in the prepared
 target session, using the target-owned immutable accepted-plan path and the

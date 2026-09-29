@@ -179,8 +179,11 @@
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" nil)
+(declare-function mevedel-view--stop-spinner
+                  "mevedel-view-stream" nil)
 (declare-function mevedel-view--update-spinner
                   "mevedel-view-stream" (status &optional owner))
+(defvar mevedel-view--spinner-owner)
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-session-directory
@@ -822,6 +825,17 @@ the durable retry was retained"
         request-fsm)
     (condition-case err
         (progn
+          ;; Preparation belongs to the source view, whereas request progress
+          ;; may start in a different Worktree view.  Release only our status
+          ;; before transferring ownership to the implementation request.
+          (when-let* ((view-buffer (buffer-local-value 'mevedel--view-buffer
+                                                       chat-buffer))
+                      ((buffer-live-p view-buffer)))
+            (with-current-buffer view-buffer
+              ;; Only a loaded stream module can own a spinner at all.
+              (when (eq (bound-and-true-p mevedel-view--spinner-owner)
+                        'plan-preparation)
+                (mevedel-view--stop-spinner))))
           (when goal-p
             (setq goal-started
                   (mevedel-plan-handoff--start-goal
