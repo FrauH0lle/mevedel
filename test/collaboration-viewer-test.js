@@ -81,6 +81,16 @@ function textOf(node) {
   return (node.textContent || '') + node.children.map(textOf).join('');
 }
 
+function findByClass(root, className) {
+  if (typeof root === 'string') return null;
+  if (String(root.className).split(' ').includes(className)) return root;
+  for (const child of root.children) {
+    const found = findByClass(child, className);
+    if (found) return found;
+  }
+  return null;
+}
+
 function findByRecordId(root, id) {
   return root.children.find(c => typeof c !== 'string'
                             && c.dataset && c.dataset.recordId === id);
@@ -425,10 +435,47 @@ async function testEditingAvailability() {
   assert.equal(node('editing-items').children[0].disabled,true);
 }
 
+// A room message in an item's discussion asks about the whole item, with a
+// fresh question identity, and resolves with the host's receipt.
+async function testItemDiscussionAsk() {
+  const nodes = new Map(), asked = [];
+  let api;
+  const state = {records:new Map(),ownQueue:[],readOnly:false};
+  const context = {
+    URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
+    crypto: require('node:crypto').webcrypto,
+    localStorage:{length:0,getItem:()=>null},
+    document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
+    window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
+  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+    send:async frame=>{
+      const args=JSON.parse(atob(frame.data));
+      if (args.action==='ask') asked.push(args);
+      const result=args.action==='list' ? [{id:'board',kind:'whiteboard',title:'Board'}]
+        : args.action==='ask' ? {queued:true} : {available:true};
+      const data=btoa(JSON.stringify({result}));
+      api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
+      return true;
+    }});
+  await api.welcome();
+  const receipt = await api.ask('board', 'Make it pretty');
+  assert.equal(receipt.queued, true);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].id, 'board');
+  assert.equal(asked[0].text, 'Make it pretty');
+  assert.equal(asked[0].whole, true);
+  assert.match(asked[0].questionId, /^[0-9a-f-]{36}$/);
+  assert.equal(asked[0].opId, asked[0].questionId);
+  assert.equal(asked[0].expected, undefined);
+}
+
 async function main() {
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();
+  await testItemDiscussionAsk();
   await testTransportLifecycle();
   await testTransportGiveUp();
   // Shared known-answer vector, mirrored by the ERT crypto suite: 32
@@ -1838,9 +1885,33 @@ async function main() {
   const artifactFold = findByRecordId(nodes.transcript, 'artifact-comment')
     .disclosures.get('shared-context');
   assert.ok(textOf(artifactFold).includes('Artifact comment · a.html · Intro › word "share"'));
+
+  // Shared-item turns are a discussion of their own: the strip lists the
+  // item, Main chat hides its turns, and the turn's chip switches the room
+  // into it with a composer that says where a message goes.
+  await deliverTo(sockets[1], {t: 'record', record: {
+    id: 'board-question', kind: 'user', guest: 'Joey', item: 'board-1',
+    text: 'Make it pretty', shared: {itemId: 'board-1', questionId: 'q-board',
+                                     title: 'Pipeline', scope: 'whole', text: 'Make it pretty'}}});
+  await deliverTo(sockets[1], {t: 'record', record: {
+    id: 'board-answer', kind: 'assistant', item: 'board-1', text: 'Styled it.'}});
+  const boardTab = () => nodes.filter.children.find(b => /◇ Pipeline/.test(textOf(b)));
+  assert.ok(boardTab(), 'the item has a tab');
+  assert.match(textOf(boardTab()), /2$/);
+  nodes.filter.children.find(b => /^Main chat/.test(textOf(b))).dispatch('click');
+  assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, true);
+  const boardChip = findByClass(findByRecordId(nodes.transcript, 'board-question'), 'dirchip');
+  assert.equal(textOf(boardChip), '◇ Pipeline');
+  nodes.transcript.dispatch('click', {target: {closest: () => boardChip}});
+  assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, false);
+  assert.equal(findByRecordId(nodes.transcript, 'artifact-comment').hidden, true);
+  assert.equal(nodes['composer-input'].placeholder, 'Message ◇ Pipeline…');
+  assert.match(textOf(nodes['composer-scope']), /its own conversation/);
+  nodes.filter.children[0].dispatch('click'); // All
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
-  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-comment']});
+  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-comment',
+                                            'board-question','board-answer']});
   assert.equal(nodes['empty-state'].hidden, false, 'removing the final turn restores the empty state');
   await deliverTo(sockets[1], {t:'record',record:{id:'first-message',kind:'assistant',text:'Ready'}});
   assert.equal(nodes['empty-state'].hidden, true, 'the first turn replaces the empty state');

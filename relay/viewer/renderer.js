@@ -426,6 +426,13 @@
     return 'ai';
   }
 
+  // The discussion a record belongs to: a directive id, `item:ID` for a
+  // shared item or artifact conversation, or null for the main chat.
+  function scopeKey(record) {
+    if (record.directive) return record.directive;
+    return typeof record.item === 'string' && record.item ? `item:${record.item}` : null;
+  }
+
   function whoLine(record, directiveLabel) {
     const who = el('div', 'who');
     if (record.kind === 'user') {
@@ -438,8 +445,15 @@
     } else {
       who.append(el('span', 'name', 'Tool'));
     }
-    if (record.directive) {
-      who.append(el('span', 'dirchip', `◆ ${directiveLabel(record.directive)}`));
+    // A turn in a directive or item discussion names it; the chip is also
+    // the way to switch the room into that discussion to reply there.
+    const scope = scopeKey(record);
+    if (scope) {
+      const chip = el('button', 'dirchip', directiveLabel(scope));
+      chip.type = 'button';
+      chip.dataset.scope = scope;
+      chip.setAttribute('title', `Show and reply in ${directiveLabel(scope)}`);
+      who.append(chip);
     }
     return who;
   }
@@ -633,5 +647,5 @@
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, markContinuations, renderDiff, renderMarkdown, formatBytes});
+    {renderRecord, markContinuations, renderDiff, renderMarkdown, formatBytes, scopeKey});
 })();
