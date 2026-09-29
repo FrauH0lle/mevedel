@@ -665,7 +665,10 @@ or root autosave."
       (when present-p
         (condition-case err
             (if portable-p
-                (progn
+                ;; Admission and publication share one transaction's
+                ;; recovery and clock observations rather than each
+                ;; running its own target programs.
+                (mevedel-session-durability-with-transaction
                   (mevedel-session-artifacts-assert-mutation-authority
                    session buffer)
                   (mevedel-session-publication-publish
