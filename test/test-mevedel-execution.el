@@ -84,29 +84,35 @@
       (should (= 7 (plist-get result :exit-code)))
       (should (equal "recovered" (plist-get result :output)))))
   :doc "passes the session sandbox policy to the child boundary"
+  ;; A private directory: protected-path discovery walks the workdir, and
+  ;; parallel test workers churn the shared temporary directory under it.
   (let ((session (mevedel-session--create :sandbox-mode 'required))
         (mevedel-sandbox-mode 'off)
+        (workdir (file-name-as-directory
+                  (make-temp-file "mevedel-one-shot-mode-" t)))
         captured-mode done)
-    (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
-               (lambda (command _workdir _roots
-                                &optional _additional _permissions mode
-                                _temporary-root _candidates)
-                 (setq captured-mode mode)
-                 (list :state 'unrestricted
-                       :command command
-                       :facts '(:sandbox off
-                                :filesystem unrestricted
-                                :network unrestricted)))))
-      (mevedel-execution-start-one-shot
-       (lambda (_child-result) (setq done t))
-       :name "mevedel-test-session-sandbox-mode"
-       :command '("true")
-       :workdir temporary-file-directory
-       :writable-roots (list temporary-file-directory)
-       :session session)
-      (with-timeout (2 (error "Process did not exit"))
-        (while (not done)
-          (accept-process-output nil 0.01))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
+                   (lambda (command _workdir _roots
+                                    &optional _additional _permissions mode
+                                    _temporary-root _candidates)
+                     (setq captured-mode mode)
+                     (list :state 'unrestricted
+                           :command command
+                           :facts '(:sandbox off
+                                    :filesystem unrestricted
+                                    :network unrestricted)))))
+          (mevedel-execution-start-one-shot
+           (lambda (_child-result) (setq done t))
+           :name "mevedel-test-session-sandbox-mode"
+           :command '("true")
+           :workdir workdir
+           :writable-roots (list workdir)
+           :session session)
+          (with-timeout (2 (error "Process did not exit"))
+            (while (not done)
+              (accept-process-output nil 0.01))))
+      (delete-directory workdir t))
     (should (eq 'required captured-mode)))
   :doc "shares one terminal contract for direct and confined child attempts"
   (skip-unless (plist-get (mevedel-sandbox-probe) :available))
