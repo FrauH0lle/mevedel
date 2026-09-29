@@ -18,11 +18,11 @@ const anchorTerms = () => document.body.dataset.kind === 'whiteboard'
   ? {show:'Show objects', empty:'Select objects or drag across an area, then choose Add comment. The comment tool (M) does both in one step.',
       removed:'Referenced objects were removed', changed:'Referenced objects have changed',
       review:'The objects have changed. Review their current state before sending.',
-      refreshed:'Current objects and discussion attached. Press Send to assistant when ready.'}
+      refreshed:'Current objects and discussion attached. Press Send thread to assistant when ready.'}
   : {show:'Show passage', empty:'Select text and choose Add comment to start a discussion.',
       removed:'Referenced passage was removed', changed:'Referenced passage has changed',
       review:'The passage has changed. Review its current text before sending.',
-      refreshed:'Current passage and discussion attached. Press Send to assistant when ready.'};
+      refreshed:'Current passage and discussion attached. Press Send thread to assistant when ready.'};
 export class AssistantPanel {
   constructor({ capture, save, request, changed, reveal, state, restored }) {
     Object.assign(this, { capture, save, request, changed, reveal, state });
@@ -135,7 +135,10 @@ export class AssistantPanel {
       };
     }
     $('ask').onsubmit = event => { event.preventDefault(); this.submit(); };
-    $('comment-form').onsubmit = event => { event.preventDefault(); this.postComment(); };
+    $('comment-form').onsubmit = event => {
+      event.preventDefault();
+      this.postComment(undefined, $('comment-assistant').checked);
+    };
     $('assistant').addEventListener('keydown', event => {
       if (event.key === 'Escape') { event.preventDefault(); this.toggle(false); }
       if (event.key === 'Tab' && innerWidth < 800) {
@@ -240,10 +243,13 @@ export class AssistantPanel {
       $('question').readOnly = false;
     }
   }
-  async postComment(commentId) {
+  // Posting shares the message with everyone; with TOASSISTANT the thread is
+  // then sent to the assistant, which answers in it.
+  async postComment(commentId, toAssistant = false) {
     const source = commentId ? this.drafts.replies[commentId] : this.drafts.comment;
     if (!source?.text.trim() || this.state().readOnly || this.sendingComments.has(commentId || 'new')) return;
     const draft = structuredClone(source);
+    let posted = null;
     this.sendingComments.add(commentId || 'new');
     this.renderDraft();
     this.setComments(this.comments);
@@ -262,8 +268,15 @@ export class AssistantPanel {
       this.renderDraft();
       this.openComment(commentId || draft.opId);
       this.notice(commentId ? 'Reply posted for everyone.' : 'Comment posted for everyone.');
+      posted = commentId || draft.opId;
     } catch (error) { this.notice(error.message, true); }
     finally { this.sendingComments.delete(commentId || 'new'); this.renderDraft(); this.setComments(this.comments); }
+    // A new message is a new request: drop an earlier thread request so the
+    // assistant sees the thread as it now stands.
+    if (posted && toAssistant) {
+      delete this.drafts.requests[posted];
+      await this.sendComment(posted);
+    }
   }
   openComment(id) {
     this.toggle(true, 'comments');
@@ -335,7 +348,7 @@ export class AssistantPanel {
         const status = el('p', undefined, 'thread-status'); status.setAttribute('role','status');
         const preview = el('blockquote', undefined, 'thread-context');
         const actions = el('div', undefined, 'comment-actions');
-        const ask = el('button', 'Send to assistant', 'thread-send'); ask.type = 'button';
+        const ask = el('button', 'Send thread to assistant', 'thread-send'); ask.type = 'button';
         ask.onclick = () => this.sendComment(comment.id);
         const refresh = el('button', 'Review updated context', 'thread-refresh'); refresh.type = 'button';
         refresh.onclick = () => this.sendComment(comment.id, true);
@@ -359,9 +372,15 @@ export class AssistantPanel {
         input.onkeydown = event => {
           if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); form.requestSubmit(); }
         };
+        const choice = el('label', undefined, 'assistant-choice');
+        const assistant = el('input'); assistant.type = 'checkbox'; assistant.checked = true;
+        assistant.className = 'reply-assistant';
+        choice.append(assistant, ' Send to assistant');
         const post = el('button','Post reply'); post.type = 'submit';
-        form.onsubmit = event => { event.preventDefault(); this.postComment(comment.id); };
-        form.append(input,post);
+        form.onsubmit = event => { event.preventDefault(); this.postComment(comment.id, assistant.checked); };
+        const row = el('div', undefined, 'comment-post-row');
+        row.append(choice, post);
+        form.append(input,row);
         card.append(summary,passage,messages,status,preview,form,actions);
         list.append(card);
       }

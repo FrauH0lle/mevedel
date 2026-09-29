@@ -493,12 +493,14 @@ test(
       );
       await frame(pages[1]).locator('#comment-selection').click();
       await frame(pages[1]).locator('#comment-text').fill('Explain the selected opening');
+      await frame(pages[1]).locator('#comment-assistant').uncheck();
       await frame(pages[1]).locator('#comment-post').click();
       await frame(pages[1]).locator('#comments .comment').waitFor();
       assert.equal((await agent('InspectTest')).queue.length, 1, 'posting a comment does not queue a model turn');
       await frame(pages[0]).locator('#comments-tab').click();
       await frame(pages[0]).locator('#comments .comment > summary').click();
       await frame(pages[0]).locator('.reply-form textarea').fill('Include a concrete example.');
+      await frame(pages[0]).locator('.reply-assistant').uncheck();
       await frame(pages[0]).getByText('Post reply', {exact:true}).click();
       await frame(pages[1]).locator('.thread-message').getByText('Include a concrete example.', {exact:true}).waitFor();
       assert.equal((await agent('InspectTest')).queue.length, 1, 'human replies do not queue a model turn');
