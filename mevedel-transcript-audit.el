@@ -120,6 +120,29 @@ head does not settle the type; the caller then reads the whole payload."
     (when (and head (string-match "\\`(:type \\([-a-z0-9]+\\)[ )]" head))
       (cons t (intern (match-string 1 head))))))
 
+(defvar-local mevedel-transcript-audit--position-records nil
+  "(TICK . TABLE) mapping payload starts to (END . RECORD) at TICK.
+Pure decoding only, like `mevedel-transcript-audit--buffer-records'.  At an
+unchanged modification tick a payload's text is unchanged, so its record
+is found without copying the payload to look it up by content.")
+
+(defun mevedel-transcript-audit--buffer-record (start end)
+  "Return the record decoded from current buffer payload START..END."
+  (let ((tick (buffer-modified-tick))
+        (memo mevedel-transcript-audit--position-records))
+    (unless (eql tick (car memo))
+      (setq memo (cons tick (if memo
+                                (progn (clrhash (cdr memo)) (cdr memo))
+                              (make-hash-table :test #'eql)))
+            mevedel-transcript-audit--position-records memo))
+    (let ((entry (gethash start (cdr memo))))
+      (if (eql end (car entry))
+          (cdr entry)
+        (let ((record (mevedel--read-hook-audit-record
+                       (buffer-substring-no-properties start end))))
+          (puthash start (cons end record) (cdr memo))
+          record)))))
+
 (defun mevedel-transcript-audit--typed-record (object start end type)
   "Return the record in payload START..END of OBJECT when it has TYPE.
 OBJECT is a string, or nil for the current buffer.  With TYPE nil return
@@ -128,25 +151,22 @@ any valid record."
                       (named (mevedel-transcript-audit--payload-type
                               object start end)))
             (not (eq (cdr named) type)))
-    (when-let* ((record (mevedel--read-hook-audit-record
-                         (if object
-                             (substring-no-properties object start end)
-                           (buffer-substring-no-properties start end))))
+    (when-let* ((record (if object
+                            (mevedel--read-hook-audit-record
+                             (substring-no-properties object start end))
+                          (mevedel-transcript-audit--buffer-record start end)))
                 ((or (null type) (eq (plist-get record :type) type))))
       record)))
 
 (defun mevedel-transcript-audit--decode (text)
   "Read one encoded hook audit record from TEXT, or nil."
   (condition-case nil
-      (let ((read-eval nil))
-        (with-temp-buffer
-          (insert
-           (decode-coding-string
-            (base64-decode-string (string-trim (or text "")))
-            'utf-8 t))
-          (goto-char (point-min))
-          (let ((record (read (current-buffer))))
-            (and (listp record) (keywordp (car-safe record)) record))))
+      (let* ((read-eval nil)
+             (record (car (read-from-string
+                           (decode-coding-string
+                            (base64-decode-string (string-trim (or text "")))
+                            'utf-8 t)))))
+        (and (listp record) (keywordp (car-safe record)) record))
     (error nil)))
 
 (defun mevedel--format-hook-audit-record (record)
@@ -159,12 +179,27 @@ any valid record."
    'gptel 'mevedel-hook-audit
    'mevedel-hook-audit t))
 
+(defvar-local mevedel-transcript-audit--guest-prompts-memo nil
+  "(TICK . ATTRIBUTIONS) from the last whole-buffer guest prompt scan.")
+
 (defun mevedel-transcript-audit-guest-prompts ()
   "Return guest attribution positions in the current buffer.
 Each element is (POSITION . RECORD) where RECORD is the attribution plist
 and POSITION is the buffer position
 of the record's audit block, in ascending order.  The prompt a record
-attributes is the nearest user turn ending at or before POSITION."
+attributes is the nearest user turn ending at or before POSITION.
+The result is shared until the buffer's text or properties change;
+callers must not modify it.  A full projection asks once per prompt, and
+rescanning every audit payload each time dominated its allocation."
+  (let ((tick (buffer-modified-tick)))
+    (if (eql tick (car mevedel-transcript-audit--guest-prompts-memo))
+        (cdr mevedel-transcript-audit--guest-prompts-memo)
+      (let ((result (mevedel-transcript-audit--scan-guest-prompts)))
+        (setq mevedel-transcript-audit--guest-prompts-memo (cons tick result))
+        result))))
+
+(defun mevedel-transcript-audit--scan-guest-prompts ()
+  "Return guest attributions by scanning the whole current buffer."
   (save-excursion
     (save-restriction
       (widen)

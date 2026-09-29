@@ -2963,10 +2963,12 @@ Completed blocks are cached globally; see
 (defun mevedel-view--render-data-only-text-p (text)
   "Return non-nil if TEXT is only render-data scaffolding."
   (and (stringp text)
-       (not (string-empty-p (string-trim text)))
-       (string-empty-p
-        (string-trim
-         (mevedel-view--strip-render-data-display-text text)))))
+       ;; Without a block the text itself is what remains; skip the copies.
+       (string-search mevedel--render-data-open text)
+       (string-match-p "[^ \t\n\r]" text)
+       (not (string-match-p
+             "[^ \t\n\r]"
+             (mevedel-view--strip-render-data-display-text text)))))
 
 (defun mevedel-view--hook-audit-only-segment-p (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hook audit data."
@@ -3063,8 +3065,27 @@ turn shows one bogus thinking summary per tool boundary."
              (pmax (point-max))
              (s (max pmin (min seg-start pmax)))
              (e (max pmin (min seg-end pmax))))
-        (mevedel-view--scaffolding-only-text-p
-         (and (< s e) (buffer-substring-no-properties s e)))))))
+        (unless (mevedel-view--leading-content-p s e)
+          (mevedel-view--scaffolding-only-text-p
+           (and (< s e) (buffer-substring-no-properties s e))))))))
+
+(defconst mevedel-view--leading-content-regexp
+  "\\`\\(?:[ \t\r\n]*#\\+\\(?:begin\\|end\\)_reasoning\\b[^\n]*\\(?:\n\\|\\'\\)\\)*[ \t\r\n]*[^ \t\r\n#<]"
+  "Match text that visibly begins with content.
+Whitespace and reasoning marker lines may precede it; any other character
+there is outside every block that reasoning cleaning removes, since each
+removed construct begins with `#' or `<'.  Most segments are content, and
+proving that by cleaning a copy of each on every redraw dominated its
+allocation.")
+
+(defun mevedel-view--leading-content-p (start end)
+  "Return non-nil when the current buffer's START..END begins with content.
+See `mevedel-view--leading-content-regexp'."
+  (save-excursion
+    (save-restriction
+      (narrow-to-region start end)
+      (goto-char (point-min))
+      (looking-at-p (substring mevedel-view--leading-content-regexp 2)))))
 
 (defun mevedel-view--blank-segment-p (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END holds only whitespace.
@@ -3114,8 +3135,10 @@ Nil TEXT counts as glue.  See `mevedel-view--scaffolding-only-p'.
 Cached globally; see `mevedel-view--scaffolding-only-cache'."
   (or (null text)
       (gethash text mevedel-view--scaffolding-only-cache)
-      (when (string-empty-p
-             (string-trim (mevedel-view--clean-reasoning-text-1 text)))
+      (when (and (not (string-match-p
+                       mevedel-view--leading-content-regexp text))
+                 (string-empty-p
+             (string-trim (mevedel-view--clean-reasoning-text-1 text))))
         ;; Cleared rather than evicted one by one: recomputing a verdict is
         ;; the work this cache already exists to skip, and a transcript long
         ;; enough to overflow re-examines its oldest segments least.
