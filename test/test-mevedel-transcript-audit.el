@@ -192,8 +192,9 @@
         (should (= 1 reads))
         (should (= 1 (length (mevedel-transcript-audit-spans (buffer-string) 'fork-point))))
         (should (= 2 reads))
+        ;; The fork point was already read from this buffer at this tick.
         (should (= 4 (length (mevedel-transcript-audit-buffer-spans))))
-        (should (= 6 reads)))))
+        (should (= 5 reads)))))
 
   :doc "still finds a record whose type is not its first key"
   (with-temp-buffer
@@ -258,6 +259,33 @@
                  :directive-id "directive-1" :turn 3)))))
     (should-not (mevedel-transcript-directive-ranges
                  (concat start "ordinary text" end)))))
+
+(mevedel-deftest mevedel-transcript-audit--buffer-record
+  (:doc "decodes a payload once per modification tick without copying it again")
+  (let ((buffer (generate-new-buffer " *audit-position-memo*"))
+        (reads 0))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'prompt-rewrite :event "x")))
+          (let* ((read (symbol-function 'mevedel--read-hook-audit-record))
+                 (spans nil))
+            (cl-letf (((symbol-function 'mevedel--read-hook-audit-record)
+                       (lambda (text) (cl-incf reads) (funcall read text))))
+              (setq spans (mevedel-transcript-audit-buffer-spans))
+              (should (equal '("x") (mapcar (lambda (span)
+                                              (plist-get (plist-get span :record) :event))
+                                            spans)))
+              (should (eq (plist-get (car spans) :record)
+                          (plist-get (car (mevedel-transcript-audit-buffer-spans))
+                                     :record)))
+              (should (= 1 reads))
+              ;; An edit elsewhere changes the tick; the payload is read again.
+              (goto-char (point-min))
+              (insert "prefix ")
+              (should (mevedel-transcript-audit-buffer-spans))
+              (should (= 2 reads)))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-transcript-audit-buffer-spans ()
   ,test
@@ -445,6 +473,38 @@
                            (string-trim
                             (mevedel--strip-hook-audit-blocks
                              (buffer-string)))))))
+      (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-transcript-audit-guest-prompts/memo
+  (:doc "reuses one scan until text or provenance properties change")
+  (let ((buffer (generate-new-buffer " *guest-prompt-memo*"))
+        (scans 0))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "prompt")
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'guest-prompt :name "phone")))
+          (let ((scan (symbol-function
+                       'mevedel-transcript-audit--scan-guest-prompts)))
+            (cl-letf (((symbol-function
+                        'mevedel-transcript-audit--scan-guest-prompts)
+                       (lambda () (cl-incf scans) (funcall scan))))
+              (let ((first (mevedel-transcript-audit-guest-prompts)))
+                (should (eq first (mevedel-transcript-audit-guest-prompts)))
+                (should (= 1 scans))
+                (goto-char (point-max))
+                (insert (mevedel--format-hook-audit-record
+                         (list :type 'guest-prompt :name "laptop")))
+                (should (equal '("phone" "laptop")
+                               (mapcar (lambda (entry) (plist-get (cdr entry) :name))
+                                       (mevedel-transcript-audit-guest-prompts))))
+                (should (= 2 scans))
+                ;; Losing provenance is a property change the memo sees.
+                (with-silent-modifications
+                  (remove-text-properties (point-min) (point-max)
+                                          '(gptel nil mevedel-hook-audit nil)))
+                (should-not (mevedel-transcript-audit-guest-prompts))
+                (should (= 3 scans))))))
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel--strip-hook-audit-blocks/no-copy
