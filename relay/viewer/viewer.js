@@ -148,6 +148,13 @@
 
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
+    canComment: () => state.connected && !state.readOnly,
+    reveal: id => {
+      const turn = state.elements.get(id);
+      if (turn && typeof turn.scrollIntoView === 'function') {
+        turn.scrollIntoView({block: 'center', behavior: 'smooth'});
+      }
+    },
   });
   const history = window.mevedelHistoryView.create({
     send, el, onArtifacts:refreshFilter,
@@ -925,6 +932,7 @@
   // queued prompt never reads as swallowed.
   function showOwnQueue(entries) {
     state.ownQueue = entries;
+    artifacts.queue(entries);
     editing.conversation();
     if (!ownQueue) return;
     ownQueue.replaceChildren();
@@ -1067,6 +1075,8 @@
       history.handle(frame);
     } else if (frame.t === 'artifact') {
       artifacts.handle(frame);
+    } else if (frame.t === 'artifact-comment') {
+      artifacts.handleComment(frame);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
       // The host re-sends the same request id on every head redraw and

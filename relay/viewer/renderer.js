@@ -576,7 +576,10 @@
       if (folded) {
         const context = el('details', 'shared-context');
         disclosures.set('shared-context', context);
-        context.append(el('summary', '', `Shared context · ${shared.title || 'Shared item'} · ${shared.scope === 'selection' ? 'Selection' : 'Whole item'} · revision ${shared.revision ?? '?'}`));
+        const summary = shared.kind === 'artifact'
+          ? `Artifact comment · ${shared.artifact || 'artifact'} · ${shared.anchor?.label || 'Selection'}`
+          : `Shared context · ${shared.title || 'Shared item'} · ${shared.scope === 'selection' ? 'Selection' : 'Whole item'} · revision ${shared.revision ?? '?'}`;
+        context.append(el('summary', '', summary));
         context.append(el('pre', 'shared-context-body', text.slice(shared.text.length + 2).trimEnd()));
         prose.append(context);
       } else if (shared?.edited) prose.append(el('small', '', 'Edited on host · showing the delivered prompt'));

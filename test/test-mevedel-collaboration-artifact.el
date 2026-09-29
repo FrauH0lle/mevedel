@@ -30,6 +30,8 @@
 
 (require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-collaboration-artifact)
+(require 'mevedel-transcript-audit)
+(require 'mevedel-view)
 
 (mevedel-deftest mevedel-collaboration--artifact-fields
   (:doc "projects selected ApplyPatch render data inside the artifacts directory")
@@ -361,6 +363,207 @@
           (should-not sent))
       (delete-directory save-path t))))
 
+
+;;
+;;; Artifact comments
+
+(mevedel-deftest mevedel-collaboration--artifact-comment-string
+  (:doc "accepts bounded strings and rejects empty, oversized and non-strings")
+  (progn
+    (should (equal "a" (mevedel-collaboration--artifact-comment-string "a" :quote)))
+    (should-not (mevedel-collaboration--artifact-comment-string "" :quote))
+    (should (equal "" (mevedel-collaboration--artifact-comment-string "" :label t)))
+    (should-not (mevedel-collaboration--artifact-comment-string
+                 (make-string 513 ?x) :quote))
+    (should-not (mevedel-collaboration--artifact-comment-string 7 :quote))))
+
+(mevedel-deftest mevedel-collaboration--artifact-comment-anchor ()
+  ,test
+  (test)
+  :doc "rebuilds guest anchors from known bounded fields only"
+  (let ((anchor (mevedel-collaboration--artifact-comment-anchor
+                 '(:kind "box" :selector "main > section:nth-of-type(2)"
+                   :label "Schema › area · 3 elements"
+                   :sig (:tag "section" :h "00ff00ff00ff00ff" :evil "x")
+                   :quote "share" :start 12
+                   :region (:x0 0 :y0 0.25 :x1 0.5 :y1 1)
+                   :count 3 :script "alert(1)"))))
+    (should (equal anchor
+                   '(:kind "box" :selector "main > section:nth-of-type(2)"
+                     :label "Schema › area · 3 elements"
+                     :sig (:tag "section" :h "00ff00ff00ff00ff")
+                     :quote "share" :start 12
+                     :region (:x0 0 :y0 0.25 :x1 0.5 :y1 1)
+                     :count 3))))
+  :doc "drops malformed optional parts and defaults an unknown kind"
+  (should (equal (mevedel-collaboration--artifact-comment-anchor
+                  '(:kind "evil" :selector "p" :label nil
+                    :sig (:tag "Bad Tag" :h "zz")
+                    :start -4 :quote "x"
+                    :region (:x0 0.5 :y0 0 :x1 0.2 :y1 1)))
+                 '(:kind "element" :selector "p" :label "" :quote "x" :start 0)))
+  :doc "refuses anchors without a usable selector"
+  (progn
+    (should-not (mevedel-collaboration--artifact-comment-anchor '(:label "x")))
+    (should-not (mevedel-collaboration--artifact-comment-anchor
+                 (list :selector (make-string 1001 ?a))))
+    (should-not (mevedel-collaboration--artifact-comment-anchor '("p")))
+    (should-not (mevedel-collaboration--artifact-comment-anchor nil))))
+
+(mevedel-deftest mevedel-collaboration--artifact-comment-snapshot ()
+  ,test
+  (test)
+  :doc "names the artifact file, target, quote, box and excerpts"
+  (let ((snapshot (mevedel-collaboration--artifact-comment-snapshot
+                   '(:artifact "schema.html" :artifact-path "/tmp/a/schema.html")
+                   '(:kind "box" :selector "main" :label "Schema › area · 2 elements"
+                     :quote "share" :region (:x0 0 :y0 0 :x1 0.5 :y1 1) :count 2)
+                   '(:text "Two cards" :html "<div>Two cards</div>"))))
+    (should (string-match-p "^Comment on session artifact schema.html$" snapshot))
+    (should (string-match-p "^File: /tmp/a/schema.html$" snapshot))
+    (should (string-match-p "^Target: Schema › area · 2 elements$" snapshot))
+    (should (string-match-p "^Selected text: \"share\"$" snapshot))
+    (should (string-match-p "x 0-0.5, y 0-1 .*(2 elements covered)" snapshot))
+    (should (string-match-p "```html\n<div>Two cards</div>\n```" snapshot)))
+  :doc "omits oversized guest excerpts instead of truncating them silently"
+  (let ((snapshot (mevedel-collaboration--artifact-comment-snapshot
+                   '(:artifact "a.html")
+                   '(:kind "element" :selector "p" :label "")
+                   (list :text (make-string 4001 ?x) :html 7))))
+    (should-not (string-match-p "Target text" snapshot))
+    (should-not (string-match-p "Target HTML" snapshot))
+    (should-not (string-match-p "^Target:" snapshot))))
+
+(defun mevedel-test--artifact-comment-room (data-buf)
+  "Return a room for DATA-BUF with a live session and one HTML artifact."
+  (let* ((workspace (mevedel-workspace--create :type 'file :id "artifact-comment"
+                                               :root temporary-file-directory))
+         (session (mevedel-session-create "main" workspace)))
+    (with-current-buffer data-buf
+      (setq-local mevedel--session session mevedel--workspace workspace))
+    (mevedel-session-set-pending-input-paused session t)
+    (list :session session :data-buffer data-buf :transport 'transport
+          :guests (make-hash-table :test #'eql)
+          :records (list (list :id "tool-1" :kind "tool" :name "ApplyPatch"
+                               :artifact "schema.html"
+                               :artifact-path "/tmp/schema.html")
+                         (list :id "tool-2" :kind "tool" :name "ApplyPatch"
+                               :artifact "notes.md" :artifact-path "/tmp/notes.md")
+                         (list :id "tool-3" :kind "tool" :name "ApplyPatch"
+                               :artifact "gone.html" :artifact-path "/tmp/gone.html"
+                               :missing t)))))
+
+(defconst mevedel-test--artifact-comment-frame
+  '(:t "artifact-comment" :reqId 3 :id "tool-1"
+    :commentId "0123456789abcdef0123" :text "  Make this bigger  "
+    :anchor (:kind "word" :selector "#hero > p:nth-of-type(1)"
+             :label "SNT Schema v2 › word \"share\"" :quote "share" :start 9
+             :sig (:tag "p" :h "0123456789abcdef"))
+    :context (:text "countries share the same tables" :html "<p>countries share</p>"))
+  "A well-formed guest comment frame on the published schema.html artifact.")
+
+(mevedel-deftest mevedel-collaboration--artifact-comment-queue ()
+  ,test
+  (test)
+  :doc "queues an attributed follow-up with host-built context and stays idempotent"
+  (mevedel-view-test--with-buffers
+    (let* ((room (mevedel-test--artifact-comment-room data-buf))
+           (session (plist-get room :session))
+           (guest '(:name "Alice" :guest-id "alice" :writable t :role "full"))
+           (frame (copy-tree mevedel-test--artifact-comment-frame))
+           (reply (mevedel-collaboration--artifact-comment-queue room guest frame))
+           (entry (car (mevedel-session-pending-follow-ups session)))
+           (shared (plist-get entry :shared-question)))
+      (should (plist-get reply :queued))
+      (should (equal (plist-get reply :commentId) "0123456789abcdef0123"))
+      (should (equal (plist-get shared :kind) "artifact"))
+      (should (equal (plist-get shared :artifact) "schema.html"))
+      (should (equal (plist-get shared :text) "Make this bigger"))
+      (should-not (plist-get shared :itemId))
+      (should (equal (plist-get (plist-get shared :anchor) :quote) "share"))
+      (should (string-prefix-p
+               (concat "Make this bigger\n\nShared content snapshot (user-provided data):\n"
+                       "Comment on session artifact schema.html\nFile: /tmp/schema.html")
+               (plist-get entry :input)))
+      (should (equal (plist-get entry :guest-name) "Alice"))
+      ;; The Emacs view folds the context behind an artifact label.
+      (should (equal (plist-get (mevedel-transcript-audit-shared-context
+                                 (plist-get entry :input) shared)
+                                :label)
+                     "Artifact comment · schema.html · SNT Schema v2 › word \"share\""))
+      ;; A retry with the same identity does not queue a second comment.
+      (should (plist-get (mevedel-collaboration--artifact-comment-queue
+                          room guest (copy-tree frame))
+                         :queued))
+      (should (= 1 (length (mevedel-session-pending-follow-ups session))))))
+  :doc "refuses read-only links, bad identities, non-HTML, missing and unknown artifacts"
+  (mevedel-view-test--with-buffers
+    (let ((room (mevedel-test--artifact-comment-room data-buf))
+          (writer '(:name "Alice" :guest-id "alice" :writable t :role "full")))
+      (dolist (case (list (list '(:name "V" :writable nil) nil "not comment")
+                          (list writer '(:commentId "bad id") "identity")
+                          (list writer '(:id "tool-2") "Only HTML")
+                          (list writer '(:id "tool-3") "not published")
+                          (list writer '(:id "nope") "not published")
+                          (list writer '(:text "   ") "comment is required")
+                          (list writer '(:anchor (:label "x")) "could not be identified")))
+        (let ((frame (copy-tree mevedel-test--artifact-comment-frame)))
+          (cl-loop for (key value) on (nth 1 case) by #'cddr
+                   do (setq frame (plist-put frame key value)))
+          (let ((err (should-error (mevedel-collaboration--artifact-comment-queue
+                                    room (car case) frame))))
+            (should (string-match-p (nth 2 case) (error-message-string err))))))
+      (should-not (mevedel-session-pending-follow-ups (plist-get room :session))))))
+
+(mevedel-deftest mevedel-collaboration--artifact-comment-known-p
+  (:doc "finds queued and delivered artifact comments by identity")
+  (mevedel-view-test--with-buffers
+    (let* ((room (mevedel-test--artifact-comment-room data-buf))
+           (session (plist-get room :session))
+           (guest '(:name "Alice" :guest-id "alice" :writable t :role "full")))
+      (should-not (mevedel-collaboration--artifact-comment-known-p
+                   room "0123456789abcdef0123"))
+      (mevedel-collaboration--artifact-comment-queue
+       room guest (copy-tree mevedel-test--artifact-comment-frame))
+      (should (mevedel-collaboration--artifact-comment-known-p
+               room "0123456789abcdef0123"))
+      (mevedel-session-set-pending-input-paused session nil)
+      (cl-letf (((symbol-function 'gptel-send) #'ignore))
+        (mevedel-view--drain-follow-up data-buf))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should (mevedel-collaboration--artifact-comment-known-p
+               room "0123456789abcdef0123"))
+      (should-not (mevedel-collaboration--artifact-comment-known-p room "other")))))
+
+(mevedel-deftest mevedel-collaboration--handle-artifact-comment
+  (:doc "answers the sender with a receipt or a refusal and never signals")
+  (mevedel-view-test--with-buffers
+    (let* ((room (mevedel-test--artifact-comment-room data-buf))
+           sent)
+      (puthash 1 (list :name "Alice" :guest-id "alice" :writable t :ready t)
+               (plist-get room :guests))
+      (puthash 2 (list :name "Viewer" :writable nil :ready t)
+               (plist-get room :guests))
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+        (mevedel-collaboration--handle-artifact-comment
+         room 1 (copy-tree mevedel-test--artifact-comment-frame))
+        (should (equal (caar sent) 1))
+        (should (equal (plist-get (cdar sent) :t) "artifact-comment"))
+        (should (equal (plist-get (cdar sent) :reqId) 3))
+        (should (plist-get (cdar sent) :queued))
+        (setq sent nil)
+        (mevedel-collaboration--handle-artifact-comment
+         room 2 (plist-put (copy-tree mevedel-test--artifact-comment-frame)
+                           :commentId "fedcba9876543210fedc"))
+        (should (stringp (plist-get (cdar sent) :error)))
+        ;; Without a valid request id nothing is answered at all.
+        (setq sent nil)
+        (mevedel-collaboration--handle-artifact-comment
+         room 1 (plist-put (copy-tree mevedel-test--artifact-comment-frame) :reqId "x"))
+        (should-not sent)
+        (should (= 1 (length (mevedel-session-pending-follow-ups
+                              (plist-get room :session)))))))))
 
 (provide 'test-mevedel-collaboration-artifact)
 ;;; test-mevedel-collaboration-artifact.el ends here
