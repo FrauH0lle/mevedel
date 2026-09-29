@@ -740,6 +740,22 @@ begins with content skips the glue test. Batched refresh allocation fell to
 to 19.1 MB for control. The replay still collects once per root refresh at
 its 32 MB threshold.
 
+### 2026-09-29: subprocess offload re-measured
+
+The subprocess experiment's gain was keeping collections out of the editor.
+With collection deferred during typing, the compiled replay's median worst key
+delay is 43-45 ms for every scheduled refresh, and the largest remaining step
+is the insertion of one rendered turn, which must happen in the editor. A
+worker's floor was measured on the same captures with compiled mevedel: 52 ms
+to start Emacs, 194 ms to load mevedel, 215 ms to re-derive text properties
+the parent already holds (they do not cross a file), and 72 ms to scan and
+group the root capture, about 530 ms before it could return a plan, against
+709 ms for the whole in-process refresh. The grouped turns also reference
+buffers, so a plan needs a translation layer to cross at all. A prestarted
+worker would still pay the property derivation and about 196 MiB of memory.
+Offload can therefore lower neither the worst key delay nor the settlement
+time of these refreshes, and it is not built.
+
 ### September 2026: avoid copying first-arrival payloads before reading them
 
 A profile of the unchanged archived 9.6 MB tool span showed repeated copies
