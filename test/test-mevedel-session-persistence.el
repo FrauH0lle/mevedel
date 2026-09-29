@@ -4691,7 +4691,9 @@
                   (setq-local mevedel--data-buffer buf))
                 (insert "prompt before save\n")
                 (cl-letf (((symbol-function 'mevedel-view--full-rerender)
-                           (lambda () (cl-incf rerender-count))))
+                           (lambda () (cl-incf rerender-count)))
+                          ((symbol-function 'mevedel-view-rerender)
+                           (lambda (&rest _) (cl-incf rerender-count))))
                   (mevedel-session-artifacts-save session buf))
                 (should (= rerender-count 0)))
             (when (buffer-live-p vb) (kill-buffer vb))
@@ -4718,8 +4720,8 @@
                 (test-mevedel-session-persistence--release-and-kill
                  buf session)
                 (setq buf nil)
-                (cl-letf (((symbol-function 'mevedel-view--full-rerender)
-                           (lambda () (cl-incf rerender-count))))
+                (cl-letf (((symbol-function 'mevedel-view-rerender)
+                           (lambda (&rest _) (cl-incf rerender-count))))
                   (setq restored
                         (mevedel-session-persistence-restore session-dir)))
                 (should (buffer-live-p restored))
@@ -4734,9 +4736,9 @@
                               (mevedel-session-root-buffer restored-session)))
                   (should (string-match-p "hello from resume test"
                                           (plist-get history :result))))
-                ;; The rerender may fire via init-common's view-ensure
-                ;; flow (which touches the view buffer).  We only care
-                ;; that it fires at least once.
+                ;; The resume schedules its rerender; init-common's
+                ;; view-ensure flow may request another.  We only care
+                ;; that one is requested.
                 (should (>= rerender-count 1)))
             (test-mevedel-session-persistence--release-and-kill
              buf session)

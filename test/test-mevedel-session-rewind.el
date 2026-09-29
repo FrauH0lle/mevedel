@@ -698,6 +698,8 @@
                     (mevedel-session-artifacts-sidecar-path
                      (mevedel-session-save-path session)))))
               (should-not (cdr (assoc 1 (plist-get sidecar :prompt-index)))))
+            ;; The rewind schedules the view's rebuild.
+            (mevedel-view--flush-scheduled-render view-buf t)
             (with-current-buffer view-buf
               (should (equal draft (mevedel-view--input-text)))
               (should-not (string-match-p ":PROPERTIES:" (buffer-string)))
@@ -778,6 +780,7 @@
                  (lambda (segment) (memq (car segment) '(ignored tool)))
                  (mevedel-transcript-segments (point-min) (point-max)))
                 data-buf)))
+            (mevedel-view--flush-scheduled-render view-buf t)
             (with-current-buffer view-buf
               (should-not (string-match-p "^Assistant$" (buffer-string)))))
         (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
