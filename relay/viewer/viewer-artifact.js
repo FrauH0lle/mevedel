@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canComment}) {
+  function create({send, el, flash, summarize, reveal, canComment, busy}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
     const boxSummary = document.getElementById('artifacts-summary');
@@ -61,6 +61,7 @@
         reveal(id);
       } : null,
       canComment: typeof canComment === 'function' ? canComment : () => false,
+      busy: typeof busy === 'function' ? busy : () => false,
     }) : null;
 
     function note(text) {
@@ -278,6 +279,12 @@
       if (comments) comments.stored(frame);
     }
 
+    // The session started or finished a turn: markers show whether the
+    // assistant is still working on their threads.
+    function activity() {
+      if (comments) comments.activity();
+    }
+
     // A room message about artifact NAME as a whole, sent into the
     // artifact's own conversation through its latest published record.
     function discuss(name, text) {
@@ -290,7 +297,7 @@
     }
 
     return Object.freeze({open, render, handle, close, setTheme, queue, handleComment,
-                          storedComments, discuss});
+                          storedComments, discuss, activity});
   }
 
   window.mevedelArtifactView = Object.freeze({create});

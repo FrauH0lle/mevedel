@@ -149,6 +149,7 @@
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
     canComment: () => state.connected && !state.readOnly,
+    busy: () => state.connected && state.busy === true,
     reveal: id => {
       const turn = state.elements.get(id);
       if (!turn) {
@@ -1164,6 +1165,7 @@
       state.plan = frame.plan === true;
       renderModeline();
       editing.conversation();
+      artifacts.activity();
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,

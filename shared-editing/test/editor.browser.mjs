@@ -474,6 +474,19 @@ test('editor interaction regressions', async (t) => {
       assert.deepEqual(ask.selection, ['a']);
       assert.equal(ask.commentId, posted[0].opId);
       assert.equal(ask.text, 'Make this blue', 'the comment itself is the request');
+      // Its pin carries a turning ring while the assistant works on it.
+      const spinning = () => frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working] .comment-spin`).count();
+      await frame.locator('#comment-markers [data-working] .comment-spin').waitFor();
+      const delivered = {id:'q', kind:'user', guest:'Alice',
+        shared:{questionId:ask.questionId, commentId:posted[0].opId}, text:'Make this blue'};
+      await page.evaluate(records => window.port.postMessage({type:'conversation', connected:true, busy:true, own:[], records}), [delivered]);
+      await page.waitForTimeout(50);
+      assert.equal(await spinning(), 1, 'a delivered request spins while the session works');
+      await page.evaluate(records => window.port.postMessage({type:'conversation', connected:true, busy:true, own:[], records}),
+        [delivered, {id:'r', kind:'assistant', text:'Done.'}]);
+      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`)
+        .waitFor({state:'detached'});
+      assert.equal(await spinning(), 0, 'an answered thread stops spinning');
       await card.getByText('Resolve', {exact: true}).click();
       await card.waitFor({state: 'hidden'});
       assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1);

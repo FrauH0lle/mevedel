@@ -569,6 +569,13 @@ function mevedelArtifactCommentRuntime() {
         box-shadow:0 1px 4px rgba(0,0,0,.35);transform:translate(-4px,-100%)}
       .pin[data-state=queued]{background:#6b7280}
       .pin[data-state=answered]{background:#2f855a}
+      .pin[data-state=working]::after{content:"";position:absolute;inset:-6px;
+        box-sizing:border-box;border-radius:50%;border:2.5px solid transparent;
+        border-top-color:#d97757;border-right-color:#d97757;
+        animation:mevedel-comment-spin .9s linear infinite;pointer-events:none}
+      @keyframes mevedel-comment-spin{to{transform:rotate(360deg)}}
+      @media (prefers-reduced-motion:reduce){.pin[data-state=working]::after{
+        animation:none;border-style:dashed;border-color:#d97757}}
       .pin:focus-visible{outline:2px solid #3b82f6;outline-offset:2px}`;
     layer.append(style);
     document.documentElement.append(layerHost);
@@ -631,7 +638,8 @@ function mevedelArtifactCommentRuntime() {
       }
       pin.dataset.state = marker.state;
       pin.textContent = String(marker.n);
-      pin.setAttribute('aria-label', `Comment ${marker.n}`);
+      pin.setAttribute('aria-label', marker.state === 'working'
+        ? `Comment ${marker.n}, assistant working` : `Comment ${marker.n}`);
       const rect = rectOf(found);
       const onText = !!found.range;
       pin.style.left = `${(onText ? rect.left : rect.left + rect.width - 20) + scrollX}px`;
@@ -886,6 +894,7 @@ function mevedelArtifactCommentRuntime() {
 // every field is bounded before it is used or sent.
 function createArtifactCommentController(options) {
   const {send, el, body, toggle, flash, renderMarkdown, reveal, canComment} = options;
+  const busy = typeof options.busy === 'function' ? options.busy : () => false;
   const MAX_COMMENT_BYTES = 10000;
   const view = {frame: null, id: null, name: null, mode: false,
                 draft: null, composer: null, card: null, cardPinned: false};
@@ -993,7 +1002,10 @@ function createArtifactCommentController(options) {
     }
     if (queued.some(entry => entry && entry.shared && entry.shared.kind === 'artifact'
                     && entry.shared.commentId === id)) state = 'queued';
-    return {state, recordId, reply};
+    // Delivered and unanswered while the session runs a turn: working on it.
+    // A turn that ended without a reply leaves the thread merely sent.
+    const working = state === 'queued' || (state === 'sent' && busy());
+    return {state, recordId, reply, working};
   }
 
   function comments() {
@@ -1013,7 +1025,9 @@ function createArtifactCommentController(options) {
     }
     for (const local of pending.values()) {
       if (local.name === view.name && !seen.has(local.id)) {
-        list.push(Object.assign({}, local, assistantState(local.id)));
+        const known = assistantState(local.id);
+        if (local.toAssistant && !known.state) known.working = true;
+        list.push(Object.assign({}, local, known));
       }
     }
     return list;
@@ -1027,7 +1041,8 @@ function createArtifactCommentController(options) {
     const list = comments();
     const markers = list.map((comment, index) => ({id: comment.id, n: index + 1,
                                                    anchor: comment.anchor,
-                                                   state: comment.state || 'posted'}));
+                                                   state: comment.working ? 'working'
+                                                     : comment.state || 'posted'}));
     const encoded = JSON.stringify(markers);
     if (force === true || encoded !== lastMarkers) {
       lastMarkers = encoded;
@@ -1183,7 +1198,7 @@ function createArtifactCommentController(options) {
                        context: draft.context, toAssistant: assistant.checked});
         if (!stored.some(comment => comment && comment.id === commentId)) {
           pending.set(commentId, {id: commentId, name: view.name, anchor: draft.anchor, text,
-                                  actor: 'You', replies: []});
+                                  actor: 'You', replies: [], toAssistant: assistant.checked});
         }
         if (form === view.composer) {
           closeComposer();
@@ -1206,7 +1221,8 @@ function createArtifactCommentController(options) {
   // -- Thread card ------------------------------------------------------
 
   const cardVersion = comment => JSON.stringify(
-    [comment.text, comment.replies.map(reply => reply.id), comment.state, comment.reply]);
+    [comment.text, comment.replies.map(reply => reply.id), comment.state, comment.working,
+     comment.reply]);
 
   function closeCard() {
     if (view.card) view.card.remove();
@@ -1220,8 +1236,9 @@ function createArtifactCommentController(options) {
     if (reply) replyDrafts.set(comment.id, reply.value);
     card.replaceChildren();
     card.dataset.version = cardVersion(comment);
-    const status = {queued: 'Queued for the assistant', sent: 'Sent to assistant',
-                    answered: 'Answered'}[comment.state] || 'Posted';
+    const status = comment.working && comment.state !== 'queued' ? 'Assistant working…'
+      : {queued: 'Queued for the assistant', sent: 'Sent to assistant',
+         answered: 'Answered'}[comment.state] || 'Posted';
     const head = el('div', 'artifact-comment-head');
     head.append(el('span', '', [comment.actor || 'Guest', status].join(' · ')));
     const close = el('button', 'artifact-comment-close', '×');
@@ -1398,6 +1415,10 @@ function createArtifactCommentController(options) {
     },
     queue(entries) {
       queued = Array.isArray(entries) ? entries : [];
+      publishMarkers();
+    },
+    // The session's activity changed; working markers follow it.
+    activity() {
       publishMarkers();
     },
     // The host store changed for artifact NAME.

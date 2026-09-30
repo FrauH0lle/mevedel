@@ -24,8 +24,9 @@ const anchorTerms = () => document.body.dataset.kind === 'whiteboard'
       review:'The passage has changed. Review its current text before sending.',
       refreshed:'Current passage and discussion attached. Press Send thread to assistant when ready.'};
 export class AssistantPanel {
-  constructor({ capture, save, request, changed, reveal, state, restored }) {
-    Object.assign(this, { capture, save, request, changed, reveal, state });
+  constructor({ capture, save, request, changed, reveal, state, restored, onConversation }) {
+    Object.assign(this, { capture, save, request, changed, reveal, state,
+      onConversation: onConversation || (() => {}) });
     const validDrafts = restored && typeof restored.question?.text === 'string'
       && typeof restored.comment?.text === 'string' && restored.replies && restored.requests;
     this.drafts = validDrafts ? restored : {question:newDraft(), comment:newDraft(), replies:{}, requests:{}, view:'assistant'};
@@ -428,6 +429,22 @@ export class AssistantPanel {
     }
     this.changed();
     this.setComments(this.comments);
+    this.onConversation();
+  }
+  // Whether the assistant is still on comment ID's latest request: sending,
+  // queued, or delivered to a busy session that has not answered it yet.
+  working(id) {
+    if (this.sendingComments.has(id) || this.drafts.requests[id]?.receipt) return true;
+    const { records = [], own = [], busy, connected } = this.conversation;
+    if (own.some(entry => entry.shared?.commentId === id)) return true;
+    if (!connected || !busy) return false;
+    const last = records.findLastIndex(r => r.kind === 'user' && r.shared?.commentId === id);
+    if (last < 0) return false;
+    for (const record of records.slice(last + 1)) {
+      if (record.kind === 'user') return false;
+      if (record.kind === 'assistant' && record.text?.trim()) return false;
+    }
+    return true;
   }
   renderConversation() {
     const { records = [], own = [], busy, paused, connected, model,
