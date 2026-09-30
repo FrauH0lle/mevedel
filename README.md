@@ -106,6 +106,13 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                    "agents"
                    "prompts"
                    "skills"
+                   ("shared-editing"
+                    "shared-editing/host.bundle.mjs"
+                    "shared-editing/resvg.wasm"
+                    "shared-editing/font.ttf"
+                    "shared-editing/FONT-LICENSE"
+                    "shared-editing/RESVG-LICENSE"
+                    "shared-editing/THIRD-PARTY-NOTICES.txt")
                    "docs/*.md"
                    "docs/adr/*.md"
                    "docs/agents/*.md"
