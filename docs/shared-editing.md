@@ -297,8 +297,9 @@ objects it contains. The tool stays active for further comments; Escape returns
 to selection. Every open comment shows a numbered pin at the top-right corner
 of its anchor, following moves live. Hovering a pin outlines its anchor and
 shows the author, text, reply count, and whether its objects changed; clicking
-it opens the thread. Resolved comments have no pin, and pins renumber in order
-of the open comments. **Show objects** selects the thread's surviving objects
+it opens the thread. A ring turns around a pin while the assistant works on its
+thread, the same way as for artifact comments. Resolved comments have no pin,
+and pins renumber in order of the open comments. **Show objects** selects the thread's surviving objects
 and area and frames them. Pins, hover cards and threads are visible to view
 participants, who cannot post.
 
