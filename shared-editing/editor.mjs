@@ -373,7 +373,10 @@ function drawCommentMarkers(shapes, scale) {
     const box = commentAnchor(c, shapes);
     if (!box) return '';
     const [x, y, w, h] = box, gap = 4 / scale;
-    return `<g class="comment-marker" data-comment-id="${escape(c.id)}" data-status="${escape(c.anchorStatus)}"><rect class="comment-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="comment-pin" role="button" aria-label="Comment ${index + 1} by ${escape(c.actor.replace(/^Guest: /, ''))}" transform="translate(${x + w} ${y}) scale(${1 / scale})"><circle r="11"/><text>${index + 1}</text></g></g>`;
+    // A ring turns around the pin while the assistant works on its thread;
+    // markers are redrawn often, so the ring keeps its phase from the clock.
+    const working = assistant?.working(c.id);
+    return `<g class="comment-marker" data-comment-id="${escape(c.id)}" data-status="${escape(c.anchorStatus)}"${working ? ' data-working="true"' : ''}><rect class="comment-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="comment-pin" role="button" aria-label="Comment ${index + 1} by ${escape(c.actor.replace(/^Guest: /, ''))}${working ? ', assistant working' : ''}" transform="translate(${x + w} ${y}) scale(${1 / scale})">${working ? `<circle class="comment-spin" r="15" style="animation-delay:-${(performance.now() % 900) / 1000}s"/>` : ''}<circle r="11"/><text>${index + 1}</text></g></g>`;
   }).join('');
 }
 function revealObjects(comment) {
@@ -1694,6 +1697,7 @@ async function start(event) {
       }
     },
     reveal: comment => editor ? revealPassage(comment.range) : revealObjects(comment), state: () => ({ readOnly, online }), restored: recovery?.assistant,
+    onConversation: () => { if (!editor && doc) draw(); },
   });
   assistant.renderDraft();
   if (editor && matchMedia('(min-width:1100px)').matches) {

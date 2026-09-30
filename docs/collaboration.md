@@ -515,8 +515,11 @@ NAME · LABEL**, or **Artifact · NAME · Whole artifact**.
 The frame places each open comment's marker by its selector when the element
 still carries the same text fingerprint, and otherwise searches for the element
 whose fingerprint differs least, so a rewritten artifact keeps markers on
-content that survived. A marker whose content is gone is not shown. Hovering a
-marker shows its thread and the assistant's latest reply from the transcript;
+content that survived. A marker whose content is gone is not shown. A ring turns
+around a marker while the assistant works on its thread: its latest request is
+queued, or delivered while the session runs a turn and not yet answered; a turn
+that ends without a reply stops it. Reduced motion shows a still dashed ring.
+Hovering a marker shows its thread and the assistant's latest reply from the transcript;
 clicking pins it with a reply form, **Resolve**, and **Show in chat**, which
 closes the artifact panel, which covers the conversation, then scrolls to the
 latest request and highlights it. Resolving hides the marker for everyone.

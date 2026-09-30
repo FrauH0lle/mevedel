@@ -46,12 +46,14 @@ load('relay/viewer/viewer-artifact.js', context);
 
 const revealed = [];
 const sentFrames = [];
+let busy = false;
 const controller = window.mevedelArtifactView.create({
   send: frame => { sentFrames.push(frame); return Promise.resolve(true); },
   el: (tag, className, text) => element(document, tag, className, text),
   flash: () => {}, summarize: () => {},
   reveal: id => revealed.push({id, panelHidden: nodes['artifact-panel'].hidden}),
   canComment: () => true,
+  busy: () => busy,
 });
 
 controller.open({id: 'tool-1', artifact: 'page.html'});
@@ -82,6 +84,30 @@ controller.render([
 const markers = posted.filter(message => message.t === 'comment-markers').at(-1);
 assert.deepEqual(JSON.parse(JSON.stringify(markers.markers)),
                  [{id: 'c1', n: 1, anchor, state: 'answered'}]);
+
+// A delivered request spins its marker while the session works on it and
+// until an answer arrives; a queued one spins too, and a turn that ended
+// without a reply leaves the thread merely sent.
+const lastMarker = () => posted.filter(message => message.t === 'comment-markers').at(-1).markers[0];
+const delivered = [
+  {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
+  {id: 'u1', kind: 'user', guest: 'Alice',
+   shared: {kind: 'artifact', artifact: 'page.html', questionId: 'c1', commentId: 'c1', text: 'Wave'}},
+];
+controller.render(delivered);
+assert.equal(lastMarker().state, 'sent');
+busy = true;
+controller.activity();
+assert.equal(lastMarker().state, 'working');
+controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
+assert.equal(lastMarker().state, 'answered');
+controller.queue([{id: 9, shared: {kind: 'artifact', commentId: 'c1'}}]);
+assert.equal(lastMarker().state, 'working');
+controller.queue([]);
+busy = false;
+controller.render(delivered);
+assert.equal(lastMarker().state, 'sent');
+controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
 
 // A marker message from any other window opens nothing.
 const message = data => listeners.message.forEach(listener => listener(data));
