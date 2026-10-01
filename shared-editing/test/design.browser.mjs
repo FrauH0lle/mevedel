@@ -186,7 +186,7 @@ test('approved editor controls on the production bundle', async t => {
     await frame.locator('#undo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),1);
     await frame.locator('#redo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),2);
     await frame.locator('#canvas').focus();await page.keyboard.press('Control+a');
-    assert.equal(await frame.locator('#selection [data-resize]').count(),2);
+    assert.equal(await frame.locator('#selection [data-selected]').count(),2);
     await page.keyboard.press('Delete');assert.equal(await frame.locator('#scene [data-shape]').count(),0);
     await frame.locator('#undo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),2);
     await frame.getByRole('button',{name:'Zoom in',exact:true}).click();
@@ -217,7 +217,7 @@ test('approved editor controls on the production bundle', async t => {
       if(kind==='document') {
         assert.equal(await frame.locator('#formatting').isVisible(),false);
         assert.equal(await frame.locator('.tiptap').getAttribute('contenteditable'),'false');
-      } else assert.equal(await frame.locator('[data-tool="rect"]').count(),0);
+      } else assert.equal(await frame.locator('[data-tool="rectangle"]').count(),0);
       await page.close();
     }
   });

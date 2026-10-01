@@ -284,7 +284,9 @@ header {
 #scene [data-shape] > * {
   pointer-events: all;
 }
-#scene [data-shape] > polyline {
+/* Connectors and frames are picked by their drawn lines, not their area. */
+#scene [data-linear] *,
+#scene .frame-outline {
   pointer-events: stroke;
 }
 #scene [data-agent='true'] > :not(title) {

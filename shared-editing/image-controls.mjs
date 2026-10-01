@@ -34,7 +34,10 @@ export async function renderImageEdit(snapshot, edit) {
   return {imageEdit,width:clamp(Math.round(w*scaleX),1,8192),height:clamp(Math.round(h*scaleY),1,8192)};
 }
 
-export function imageTools(parent, getImage, commit, report) {
+/* GETIMAGE returns the selected image's snapshot, or a promise of it.
+   PREPARE turns a snapshot and edit into the changes COMMIT applies;
+   documents render the edited pixels, boards keep Excalidraw's crop fields. */
+export function imageTools(parent, getImage, commit, report, prepare = renderImageEdit) {
   let busy = false;
   const buttons = [];
   const button = (label, action) => {
@@ -44,17 +47,17 @@ export function imageTools(parent, getImage, commit, report) {
   const apply = async (snapshot, edit) => {
     if (busy) return false;
     busy = true; buttons.forEach(b => {b.disabled = true;});
-    try { await commit(snapshot,await renderImageEdit(snapshot,structuredClone(edit))); return true; }
+    try { await commit(snapshot,await prepare(snapshot,structuredClone(edit))); return true; }
     finally { busy = false; buttons.forEach(b => {b.disabled = false;}); }
   };
   const change = action => async () => {
-    const snapshot = getImage(); if (!snapshot || busy) return;
+    const snapshot = await getImage(); if (!snapshot || busy) return;
     const edit = structuredClone(snapshot.imageEdit || defaults()); delete edit.src;
     try { await apply(snapshot,action(edit)); } catch (error) { report(error.message); }
   };
   const rotate = edit => ({...edit,rotation:(edit.rotation+90)%360,flipX:edit.flipY,flipY:edit.flipX});
   button('Crop image', async () => {
-    const snapshot = getImage(); if (!snapshot || busy) return;
+    const snapshot = await getImage(); if (!snapshot || busy) return;
     try { await cropDialog(snapshot,apply,rotate); } catch (error) { report(error.message); }
   });
   button('Rotate 90°', change(rotate));

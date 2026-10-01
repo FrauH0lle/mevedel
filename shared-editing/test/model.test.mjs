@@ -1,22 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { create, restore, encode, inspect, applyUpdate, patch, putShape } from '../model.mjs';
+import { create, restore, encode, inspect, applyUpdate, patch, putElement, putFile, pruneFiles, filesOf } from '../model.mjs';
 import * as Y from 'yjs';
+const rect = (id, x, extra = {}) => ({ id, type: 'rectangle', x, y: 0, width: 100, height: 60, ...extra });
 
 test('two writers and an agent preserve independent edits and reject a stale target', () => {
   const host = create('whiteboard', 'Architecture');
   patch(host, [
-    {
-      id: 'client',
-      before: null,
-      after: { id: 'client', type: 'rect', box: [0, 0, 100, 60], text: 'Client' },
-    },
+    { id: 'client', before: null, after: rect('client', 0, { strokeColor: '#1971c2' }) },
   ]);
   const left = restore(encode(host)),
     right = restore(encode(host));
   const base = Y.encodeStateVector(host);
-  putShape(left, { id: 'api', type: 'rect', box: [200, 0, 100, 60], text: 'API' });
-  putShape(right, { id: 'db', type: 'rect', box: [400, 0, 100, 60], text: 'Database' });
+  putElement(left, rect('api', 200));
+  putElement(right, rect('db', 400));
   applyUpdate(host, Y.encodeStateAsUpdate(right, base));
   applyUpdate(host, Y.encodeStateAsUpdate(left, base));
   applyUpdate(host, Y.encodeStateAsUpdate(right, base));
@@ -27,13 +24,13 @@ test('two writers and an agent preserve independent edits and reject a stale tar
     ['api', 'client', 'db'],
   );
   const old = inspect(host).content.find((s) => s.id === 'client');
-  const moved = { ...old, box: [50, 50, 100, 60] };
+  const moved = { ...old, x: 50, y: 50 };
   patch(host, [{ id: 'client', before: old, after: moved }]);
   assert.throws(
-    () => patch(host, [{ id: 'client', before: old, after: { ...old, text: 'Browser' } }]),
+    () => patch(host, [{ id: 'client', before: old, after: { ...old, strokeColor: '#e03131' } }]),
     /stale/i,
   );
-  assert.equal(inspect(host).content.find((s) => s.id === 'client').text, 'Client');
+  assert.equal(inspect(host).content.find((s) => s.id === 'client').strokeColor, '#1971c2');
   const restored = restore(encode(host));
   assert.deepEqual(inspect(restored), inspect(host));
   restored.destroy();
@@ -121,61 +118,75 @@ test('document insertion beside a replaced block preserves both and ignores JSON
 
 test('same-property writes converge and deletion defeats an in-flight property edit', () => {
   const host = create('whiteboard', 'Conflicts');
-  putShape(host, { id: 'box', type: 'rect', box: [0, 0, 100, 50] });
+  putElement(host, rect('box', 0));
   const a = restore(encode(host)),
     b = restore(encode(host)),
     vector = Y.encodeStateVector(host);
-  a.getMap('shapes')
-    .get('box')
-    .set('geometry', { box: [10, 10, 100, 50] });
-  b.getMap('shapes')
-    .get('box')
-    .set('geometry', { box: [20, 20, 100, 50] });
+  a.getMap('elements').get('box').set('geometry', { x: 10, y: 10, width: 100, height: 50 });
+  b.getMap('elements').get('box').set('geometry', { x: 20, y: 20, width: 300, height: 50 });
   const ua = Y.encodeStateAsUpdate(a, vector),
     ub = Y.encodeStateAsUpdate(b, vector);
   applyUpdate(a, ub);
   applyUpdate(b, ua);
   assert.deepEqual(inspect(a), inspect(b));
-  b.getMap('shapes').delete('box');
+  const { x, width } = inspect(a).content[0];
+  assert.ok((x === 10 && width === 100) || (x === 20 && width === 300), 'geometry never mixes writers');
+  b.getMap('elements').delete('box');
   applyUpdate(a, Y.encodeStateAsUpdate(b, vector));
   assert.equal(inspect(a).content.length, 0);
   [a, b, host].forEach((d) => d.destroy());
 });
 
-test('style properties validate by value and layers order the scene', () => {
+test('Excalidraw fields validate by value and fractional indices order the scene', () => {
   const doc = create('whiteboard', 'Styles');
-  putShape(doc, {
-    id: 'front',
-    type: 'rect',
-    box: [0, 0, 100, 50],
-    dash: 'dashed',
-    rough: 2,
-    pattern: 'cross',
-    edges: 'sharp',
-    opacity: 40,
-    fontSize: 44,
-    layer: 3,
-  });
-  putShape(doc, { id: 'back', type: 'ellipse', box: [0, 0, 100, 50], layer: -1 });
-  putShape(doc, { id: 'middle', type: 'diamond', box: [0, 0, 100, 50] });
-  assert.deepEqual(
-    inspect(doc).content.map((s) => s.id),
-    ['back', 'middle', 'front'],
-  );
-  for (const bad of [
-    { dash: 'wavy' },
-    { rough: 3 },
-    { pattern: 'dots' },
-    { edges: 'bevel' },
-    { opacity: 101 },
-    { fontSize: 2 },
-    { layer: Infinity },
-    { fontSize: '24' },
+  putElement(doc, rect('front', 0, { strokeStyle: 'dashed', roughness: 2, fillStyle: 'cross-hatch',
+    backgroundColor: '#ffc9c9', roundness: { type: 3 }, opacity: 40, index: 'a2' }));
+  putElement(doc, { id: 'back', type: 'ellipse', x: 0, y: 0, width: 100, height: 50, index: 'a0' });
+  putElement(doc, { id: 'middle', type: 'diamond', x: 0, y: 0, width: 100, height: 50, index: 'a1' });
+  putElement(doc, { id: 'unplaced', type: 'diamond', x: 0, y: 0, width: 100, height: 50 });
+  assert.deepEqual(inspect(doc).content.map((s) => s.id), ['back', 'middle', 'front', 'unplaced'],
+    'elements without an index draw above indexed ones');
+  for (const [bad, message] of [
+    [{ strokeStyle: 'wavy' }, /Invalid rectangle strokeStyle/],
+    [{ fillStyle: 'dots' }, /fillStyle/],
+    [{ roundness: { type: 4 } }, /roundness/],
+    [{ opacity: 101 }, /opacity/],
+    [{ strokeColor: 'url(#x)' }, /strokeColor/],
+    [{ index: 'a 0' }, /index/],
+    [{ fontSize: 20 }, /Unknown rectangle property fontSize/],
+    [{ version: 3 }, /derived on export/],
+    [{ boundElements: [] }, /derived on export/],
   ])
-    assert.throws(
-      () => putShape(doc, { id: 'bad', type: 'rect', box: [0, 0, 10, 10], ...bad }),
-      /Invalid shape/,
-    );
-  assert.equal(doc.getMap('shapes').has('bad'), false);
+    assert.throws(() => putElement(doc, rect('bad', 0, bad)), message);
+  const { width: _, ...narrow } = rect('bad', 0);
+  assert.throws(() => putElement(doc, narrow), /needs width/);
+  assert.throws(() => putElement(doc, { id: 'bad', type: 'cylinder', x: 0, y: 0, width: 1, height: 1 }), /Unknown element type/);
+  assert.throws(() => putElement(doc, { id: 't', type: 'text', x: 0, y: 0, width: 0, height: 0 }), /needs text/);
+  assert.throws(() => putElement(doc, { id: 'l', type: 'line', x: 0, y: 0, width: 0, height: 0, points: [[0, 0]] }), /two points/);
+  assert.throws(() => putElement(doc, { id: 't', type: 'text', x: 0, y: 0, width: 0, height: 0, text: 'x', containerId: 't' }), /contain itself/);
+  assert.equal(doc.getMap('elements').has('bad'), false);
+  doc.destroy();
+});
+
+test('image files are validated, shared by reference and pruned when unreferenced', async () => {
+  const { handle } = await import('../host.mjs');
+  const { state } = await handle({ action: 'create', id: 'png', kind: 'whiteboard', opId: 'p', actor: 'Alice' });
+  const png = (await handle({ action: 'export', state, format: 'png' })).result.data;
+  const doc = create('whiteboard', 'Images');
+  const file = { mimeType: 'image/png', dataURL: `data:image/png;base64,${png}` };
+  putFile(doc, 'f1', file);
+  putElement(doc, { id: 'i1', type: 'image', x: 0, y: 0, width: 10, height: 10, fileId: 'f1' });
+  putElement(doc, { id: 'i2', type: 'image', x: 20, y: 0, width: 10, height: 10, fileId: 'f1' });
+  assert.throws(() => putFile(doc, 'f2', { mimeType: 'image/svg+xml', dataURL: 'data:image/svg+xml;base64,PHN2Zz4=' }), /PNG, JPEG, or WebP/);
+  assert.throws(() => putFile(doc, 'f2', { ...file, dataURL: file.dataURL.slice(0, -10) }), /PNG|image/i);
+  assert.throws(() => patch(doc, [{ id: 'i3', before: null, after: { id: 'i3', type: 'image', x: 0, y: 0, width: 1, height: 1, fileId: 'missing' } }]), /existing file/);
+  doc.getMap('elements').delete('i1');
+  pruneFiles(doc);
+  assert.deepEqual(Object.keys(filesOf(doc)), ['f1'], 'a file stays while any element uses it');
+  doc.getMap('elements').delete('i2');
+  pruneFiles(doc, new Set(['f1']));
+  assert.deepEqual(Object.keys(filesOf(doc)), ['f1'], 'retained history can keep a file');
+  pruneFiles(doc);
+  assert.deepEqual(filesOf(doc), {});
   doc.destroy();
 });

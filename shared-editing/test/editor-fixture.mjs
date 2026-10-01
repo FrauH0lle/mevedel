@@ -4,7 +4,31 @@ import {chromium,firefox} from 'playwright';
 import {handle} from '../host.mjs';
 
 // Packaged iframe and its real host API, connected over the native item port.
-export async function editorFixture(t) {
+/* An in-memory stand-in for the host's library requests. CATALOG lists
+   public libraries; LIBRARIES maps a source to its file text. */
+export function libraryHost(catalog = [], libraries = {}) {
+  let items = [];
+  const text = () => ({ text: JSON.stringify({ type: 'excalidrawlib', version: 2, libraryItems: items }) });
+  const handlers = {
+    library: () => text(),
+    'library-add': ({ text: added }) => {
+      const fresh = JSON.parse(added).libraryItems.filter((item) => !items.some((known) => known.id === item.id));
+      items = [...fresh, ...items];
+      return text();
+    },
+    'library-remove': ({ ids }) => { items = items.filter((item) => !ids.includes(item.id)); return text(); },
+    'library-catalog': () => ({ libraries: catalog }),
+    'library-fetch': ({ source }) => {
+      if (!libraries[source]) throw new Error('Library request failed: 404');
+      return { text: libraries[source] };
+    },
+  };
+  const handle = (args) => { handle.requests.push(args); return handlers[args.action](args); };
+  handle.requests = [];
+  return handle;
+}
+
+export async function editorFixture(t, { library = libraryHost() } = {}) {
   const server = createServer(async (req, res) => {
     const name = new URL(req.url, 'http://localhost').pathname.slice(1);
     if (name === 'room') {
@@ -26,21 +50,25 @@ export async function editorFixture(t) {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const engine = process.env.MEVEDEL_BROWSER === 'firefox' ? firefox : chromium;
   const browser = await engine.launch({ headless: true });
-  async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, readOnly = false, actor = 'Guest: Alice'} = {}) {
+  /* SCENE, .excalidraw text, opens a whiteboard with its image files. */
+  async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, scene, readOnly = false, actor = 'Guest: Alice'} = {}) {
     const page = await browser.newPage({ viewport });
     page.setDefaultTimeout(7000);
-    const created = await handle({
+    const created = scene ? await handle({ action: 'import', format: 'excalidraw', id: 'test', opId: 'create', actor, data: scene })
+      : await handle({
       action: 'create',
       id: 'test',
       opId: 'create',
       actor,
       kind,
       content: content ?? (kind === 'whiteboard'
-          ? [{ id: 'ellipse', type: 'ellipse', box: [100, 100, 300, 160] }]
+          ? [{ id: 'ellipse', type: 'ellipse', x: 100, y: 100, width: 300, height: 160 }]
           : undefined),
     });
     let state = created.state;
     await page.exposeFunction('apply', async (args) => {
+      // Emacs owns the element library; this stands in for mevedel-shared-library.
+      if (args.action.startsWith('library')) return library(args);
       const reply = await handle({ ...args, action:args.action === 'ask' ? 'read' : args.action, sync:args.action === 'read', question:args.action === 'ask', state, actor: 'Guest: Alice' });
       state = reply.state || state;
       return { ...reply.result, transactions: state.transactions };
@@ -57,7 +85,7 @@ export async function editorFixture(t) {
             try {
               if (window.rejectQuestion && data.args.action === 'ask') throw new Error('Host refused this submission');
               const result = await window.apply(data.args);
-              channel.port1.postMessage({ type: 'changed', ...result });
+              if (!data.args.action.startsWith('library')) channel.port1.postMessage({ type: 'changed', ...result });
               channel.port1.postMessage({ type: 'reply', reqId: data.reqId, result });
             } catch (error) {
               channel.port1.postMessage({ type: 'reply', reqId: data.reqId, error:error.message });

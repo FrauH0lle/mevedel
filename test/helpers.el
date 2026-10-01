@@ -1103,5 +1103,49 @@ Restores the window configuration and kills the buffer afterwards."
        (set-window-configuration config)
        (kill-buffer buffer))))
 
+
+;;
+;;; Local HTTP
+
+;; `url'
+(defvar url-privacy-level)
+(defvar url-proxy-services)
+
+(defun mevedel-test-http (respond action)
+  "Run ACTION with a local server URL whose requests call RESPOND.
+RESPOND receives a request line and returns (STATUS HEADERS BODY), or nil
+to leave the request unanswered.  All server processes are cleaned up."
+  (let (server clients)
+    (unwind-protect
+        (progn
+          (setq server
+                (make-network-process
+                 :name "mevedel-test-http" :server t :host 'local :service t
+                 :family 'ipv4 :noquery t
+                 :log (lambda (_server client _message) (push client clients))
+                 :filter
+                 (lambda (process input)
+                   (let ((request (concat (process-get process 'request) input)))
+                     (process-put process 'request request)
+                     (when (and (string-match "\r\n\r\n" request)
+                                (not (process-get process 'answered)))
+                       (process-put process 'answered t)
+                       (when-let* ((reply (funcall respond (car (split-string request "\r\n")))))
+                         (pcase-let* ((`(,status ,headers ,body) reply)
+                                      (bytes (encode-coding-string body 'utf-8)))
+                           (process-send-string
+                            process (concat "HTTP/1.1 " status "\r\n"
+                                            "Connection: close\r\n"
+                                            headers
+                                            (format "Content-Length: %d\r\n\r\n" (length bytes))
+                                            bytes))
+                           (process-send-eof process))))))))
+          (let ((url-proxy-services nil)
+                (url-privacy-level 'paranoid))
+            (funcall action (format "http://127.0.0.1:%s"
+                                    (plist-get (process-contact server t) :service)))))
+      (dolist (process (cons server clients))
+        (when (process-live-p process) (delete-process process))))))
+
 (provide 'helpers)
 ;;; helpers.el ends here
