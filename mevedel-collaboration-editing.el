@@ -9,6 +9,7 @@
 
 (require 'mevedel-shared-editing)
 (require 'mevedel-shared-conversation)
+(require 'mevedel-shared-library)
 (require 'mevedel-transcript-audit)
 
 ;; `mevedel-collaboration'
@@ -306,9 +307,17 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                            (eq guest (mevedel-collaboration--guest room peer))
                            (or read-only (plist-get guest :writable))))))
     (unless (and (member action '("list" "status" "read" "create" "import" "update"
-                                  "rename" "revert" "export" "ask" "comment" "reply-comment" "resolve-comment"))
+                                  "rename" "revert" "export" "ask" "comment" "reply-comment" "resolve-comment"
+                                  "library" "library-add" "library-remove" "library-catalog" "library-fetch"))
                  (funcall authorize))
       (error "This link does not permit that editing operation"))
+    ;; The element library belongs to the host, not to a session item.
+    (when (string-prefix-p "library" action)
+      (cl-return-from mevedel-collaboration-editing--dispatch
+        (mevedel-shared-library-handle
+         args (lambda (reply)
+                (when (funcall authorize)
+                  (mevedel-collaboration-editing--send room peer req-id reply))))))
     (when (equal action "ask")
       (when-let* ((receipt (mevedel-collaboration-editing--find-question room args)))
         (cl-return-from mevedel-collaboration-editing--dispatch

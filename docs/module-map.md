@@ -136,6 +136,7 @@ Chat / view
   mevedel-collaboration-editing.el browser shared editing and selection questions
   mevedel-shared-conversation.el item-scoped request history from canonical live/archive turns
   mevedel-shared-editing.el   private editor engine queue and durable session commits
+  mevedel-shared-library.el   host whiteboard element library and public Excalidraw collection
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-task.el browser task projection and publication
   mevedel-collaboration-share.el bearer-link and QR presentation surface

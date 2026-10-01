@@ -1,6 +1,6 @@
 /* Private JSON request handler. Emacs alone owns files, authority, and commits. */
 import * as Y from 'yjs';
-import { anchorSignature, checkContext, readComments } from './context.mjs';
+import { anchorSignature, boardContext, checkContext, readComments } from './context.mjs';
 import { readFile } from 'node:fs/promises';
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
 import {
@@ -8,9 +8,12 @@ import {
   restore,
   encode,
   inspect,
+  filesOf,
   applyUpdate,
   patch,
-  putShape,
+  putElement,
+  putFile,
+  pruneFiles,
   validate,
   check,
   identifier,
@@ -18,7 +21,9 @@ import {
   same,
 } from './model.mjs';
 import { initializeDocument, patchDocument, markdown, selectedText } from './document.mjs';
-import { boardSVG, documentHTML } from './render.mjs';
+import { boardSVG, documentHTML, usedFonts } from './render.mjs';
+import { parseScene, serializeScene } from './excalidraw.mjs';
+import { FONT_FILES } from './text.mjs';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const bytes = (text) => {
   check(
@@ -29,14 +34,13 @@ const bytes = (text) => {
   );
   return Buffer.from(text, 'base64');
 };
+const resource = (name) => readFile(new URL(`./${name}`, import.meta.url));
+const fontFiles = ['font.ttf', ...Object.values(FONT_FILES).map((file) => `${file}.ttf`)];
 let renderer;
 async function png(svg) {
-  renderer ||= Promise.all([
-    readFile(new URL('./resvg.wasm', import.meta.url)).then(initWasm),
-    readFile(new URL('./font.ttf', import.meta.url)),
-  ]);
-  const [, font] = await renderer;
-  const r = new Resvg(svg, { font: { fontBuffers: [font], defaultFontFamily: 'Noto Sans' } });
+  renderer ||= Promise.all([resource('resvg.wasm').then(initWasm), ...fontFiles.map(resource)]);
+  const [, ...fonts] = await renderer;
+  const r = new Resvg(svg, { font: { fontBuffers: fonts, defaultFontFamily: 'Noto Sans' } });
   try {
     const image = r.render();
     try {
@@ -48,6 +52,30 @@ async function png(svg) {
     r.free();
   }
 }
+/* A standalone SVG download embeds the fonts its text uses. Cropped images
+   are re-rendered to their visible pixels, so a download never reveals what
+   a crop hides; the editable .excalidraw file keeps the original. */
+async function exportSVG(elements, files) {
+  files = { ...files };
+  elements = await Promise.all(elements.map(async (e) => {
+    const file = e.type === 'image' && e.crop && files[e.fileId];
+    if (!file) return e;
+    const { x, y, width, height, naturalWidth, naturalHeight } = e.crop;
+    const [w, h] = [Math.max(1, Math.round(width)), Math.max(1, Math.round(height))];
+    const visible = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${x} ${y} ${width} ${height}"><image href="${file.dataURL}" width="${naturalWidth}" height="${naturalHeight}" preserveAspectRatio="none"/></svg>`;
+    files[`crop-${e.id}`] = { mimeType: 'image/png', dataURL: `data:image/png;base64,${await png(visible)}` };
+    const { crop, ...uncropped } = e;
+    return { ...uncropped, fileId: `crop-${e.id}` };
+  }));
+  const fonts = {};
+  for (const family of usedFonts(elements))
+    if (FONT_FILES[family])
+      fonts[family] = `data:font/ttf;base64,${b64(await resource(`${FONT_FILES[family]}.ttf`))}`;
+  return boardSVG(elements, { files, fonts });
+}
+/* Image files a retained contribution can restore must survive pruning. */
+const retainedFiles = (transactions) => new Set(transactions.flatMap((tx) =>
+  (tx.changes || []).flatMap((c) => [c.before?.fileId, c.after?.fileId]).filter(Boolean)));
 function differences(before, after) {
   const a = before.kind === 'whiteboard' ? before.content : before.content.content || [];
   const b = after.kind === 'whiteboard' ? after.content : after.content.content || [];
@@ -106,14 +134,16 @@ export async function handle(request) {
     'Unknown editing action',
   );
   let state = request.state,
-    doc;
+    doc,
+    notes;
   if (action === 'create' || action === 'import') {
     check(identifier(request.id), 'Invalid item identity');
     let content = request.content,
       kind = request.kind,
-      title = request.title;
+      title = request.title,
+      importedFiles;
     if (action === 'import') {
-      check(['native', 'markdown', 'text'].includes(request.format), 'Unsupported import format');
+      check(['native', 'excalidraw', 'markdown', 'text'].includes(request.format), 'Unsupported import format');
       check(
         typeof request.data === 'string' && Buffer.byteLength(request.data) <= LIMIT,
         'Import is too large',
@@ -133,10 +163,14 @@ export async function handle(request) {
                   },
                 ],
               };
+      } else if (request.format === 'excalidraw') {
+        kind = 'whiteboard';
+        title = request.title || 'Imported whiteboard';
+        ({ elements: content, files: importedFiles, notes } = parseScene(request.data));
       } else {
         const source = JSON.parse(request.data);
         check(
-          source.format === 'mevedel-editable-1' &&
+          source.format === 'mevedel-editable-1' && source.kind === 'document' &&
             Object.keys(source).every((k) => ['format', 'kind', 'title', 'content'].includes(k)),
           'Unsupported native file',
         );
@@ -147,13 +181,9 @@ export async function handle(request) {
     try {
       if (kind === 'document') initializeDocument(doc, content);
       else if (content) {
-        check(Array.isArray(content) && content.length <= 2000, 'Invalid board import');
-        check(
-          new Set(content.map((s) => s.id)).size === content.length,
-          'Duplicate shape identity',
-        );
         doc.transact(() => {
-          for (const shape of content) putShape(doc, shape);
+          for (const [id, file] of Object.entries(importedFiles || {})) putFile(doc, id, file);
+          for (const element of content) putElement(doc, element);
         });
         validate(doc);
       }
@@ -177,6 +207,19 @@ export async function handle(request) {
       vector = Y.encodeStateVector(doc);
     if (action === 'export') {
       const { format } = request;
+      if (before.kind === 'whiteboard') {
+        check(['native', 'svg', 'png'].includes(format), 'Unsupported board export');
+        const files = filesOf(doc);
+        if (format === 'native')
+          return { result: { text: serializeScene(before.content, files),
+            mime: 'application/vnd.excalidraw+json', extension: 'excalidraw' } };
+        return {
+          result:
+            format === 'svg'
+              ? { text: await exportSVG(before.content, files), mime: 'image/svg+xml', extension: 'svg' }
+              : { data: await png(boardSVG(before.content, { files })), mime: 'image/png', extension: 'png' },
+        };
+      }
       if (format === 'native')
         return {
           result: {
@@ -185,16 +228,6 @@ export async function handle(request) {
             extension: 'mevedel.json',
           },
         };
-      if (before.kind === 'whiteboard') {
-        check(['svg', 'png'].includes(format), 'Unsupported board export');
-        const svg = boardSVG(before.content);
-        return {
-          result:
-            format === 'svg'
-              ? { text: svg, mime: 'image/svg+xml', extension: 'svg' }
-              : { data: await png(svg), mime: 'image/png', extension: 'png' },
-        };
-      }
       check(['markdown', 'html'].includes(format), 'Unsupported document export');
       return {
         result: {
@@ -255,12 +288,8 @@ export async function handle(request) {
           request.selection.includes(before.kind === 'whiteboard' ? n.id : n.attrs?.id),
         );
         check(result.content.length === request.selection.length, 'Selection changed');
-        if (before.kind === 'whiteboard') {
-          const endpoints = new Set(result.content.flatMap((s) => [s.from, s.to]).filter(Boolean));
-          result.context = before.content.filter(
-            (s) => endpoints.has(s.id) && !request.selection.includes(s.id),
-          );
-        }
+        if (before.kind === 'whiteboard')
+          result.context = boardContext(before.content, request.selection);
       }
       if (request.sync) result.crdt = state.crdt;
       if (request.image && before.kind === 'whiteboard') {
@@ -271,10 +300,11 @@ export async function handle(request) {
         // An area question shows the whole board inside the area, with a margin
         // so objects at its edge keep their surroundings.
         const [x, y, w, h] = request.region || [], margin = Math.max(24, Math.round(Math.max(w, h) * 0.08));
+        const files = filesOf(doc);
         result.png = await png(request.region
-          ? boardSVG(before.content, request.imageMax, before.content,
-            [x - margin, y - margin, w + margin * 2, h + margin * 2], 4)
-          : boardSVG(result.content, request.imageMax, before.content));
+          ? boardSVG(before.content, { files, maxEdge: request.imageMax,
+            box: [x - margin, y - margin, w + margin * 2, h + margin * 2], maxScale: 4 })
+          : boardSVG(result.content, { files, maxEdge: request.imageMax, context: before.content }));
       }
       return { result };
     }
@@ -286,7 +316,7 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)) },
+        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc) }))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
     check(
@@ -304,7 +334,7 @@ export async function handle(request) {
       const anchor = board
         ? { selection: captured.snapshot.content.map(shape => shape.id),
             ...(request.region ? { region: request.region } : {}),
-            signature: anchorSignature(captured.snapshot.content) }
+            signature: anchorSignature(captured.snapshot.content, before.content) }
         : { range: request.range };
       comments = [...comments, { id: request.opId, actor: request.actor, text: request.text,
         ...anchor, quote: captured.quote, created: Date.now(), resolved: false }];
@@ -366,6 +396,8 @@ export async function handle(request) {
         : {}),
     };
     const changed = changes.length || transaction.title;
+    if (after.kind === 'whiteboard')
+      pruneFiles(doc, retainedFiles(changed ? [transaction, ...state.transactions].slice(0, 32) : state.transactions));
     const next = {
       ...state,
       kind: after.kind,
@@ -394,10 +426,11 @@ export async function handle(request) {
         id: next.id,
         revision,
         ...after,
-        ...(request.image && after.kind === 'whiteboard' ? {png: await png(boardSVG(after.content))} : {}),
+        ...(request.image && after.kind === 'whiteboard' ? {png: await png(boardSVG(after.content, { files: filesOf(doc) }))} : {}),
         comments: readComments(doc, comments),
         update: b64(Y.encodeStateAsUpdate(doc, vector)),
         transaction: changed ? transaction : null,
+        ...(notes?.length ? { notes } : {}),
       },
     };
   } finally {

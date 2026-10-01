@@ -116,7 +116,7 @@
 
 (mevedel-deftest mevedel-tool-editing--restore-nulls
   (:doc "Lower gptel's lossless null marker in model-supplied args before host encoding")
-  (let ((shape (list :type "rect" :box [0 0 10 10] :text "hi")))
+  (let ((shape (list :type "rectangle" :x 0 :y 0 :width 10 :height 10)))
     (should (equal (mevedel-tool-editing--restore-nulls
                     (list :id "a" :before :null :after shape))
                    (list :id "a" :before nil :after shape)))

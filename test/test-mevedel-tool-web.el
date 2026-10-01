@@ -138,42 +138,6 @@
 ;;
 ;;; HTTP behavior through the tool handler boundary
 
-(defun test-mevedel-tool-web--http (respond action)
-  "Run ACTION with a local server URL whose requests call RESPOND.
-RESPOND receives a request line and returns (STATUS HEADERS BODY), or nil
-to leave the request unanswered.  All server processes are cleaned up."
-  (let (server clients)
-    (unwind-protect
-        (progn
-          (setq server
-                (make-network-process
-                 :name "mevedel-web-test" :server t :host 'local :service t
-                 :family 'ipv4 :noquery t
-                 :log (lambda (_server client _message) (push client clients))
-                 :filter
-                 (lambda (process input)
-                   (let ((request (concat (process-get process 'request) input)))
-                     (process-put process 'request request)
-                     (when (and (string-match "\r\n\r\n" request)
-                                (not (process-get process 'answered)))
-                       (process-put process 'answered t)
-                       (when-let* ((reply (funcall respond (car (split-string request "\r\n")))))
-                         (pcase-let* ((`(,status ,headers ,body) reply)
-                                      (bytes (encode-coding-string body 'utf-8)))
-                           (process-send-string
-                            process (concat "HTTP/1.1 " status "\r\n"
-                                            "Connection: close\r\n"
-                                            headers
-                                            (format "Content-Length: %d\r\n\r\n" (length bytes))
-                                            bytes))
-                           (process-send-eof process))))))))
-          (let ((url-proxy-services nil)
-                (url-privacy-level 'paranoid))
-            (funcall action (format "http://127.0.0.1:%s"
-                                    (plist-get (process-contact server t) :service)))))
-      (dolist (process (cons server clients))
-        (when (process-live-p process) (delete-process process))))))
-
 (defun test-mevedel-tool-web--call (name args)
   "Run registered web tool NAME with ARGS and await its handler result."
   (let (results)
@@ -195,7 +159,7 @@ to leave the request unanswered.  All server processes are cleaned up."
   (let ((before (buffer-list))
         (foreign (generate-new-buffer " *foreign-web-response*")))
     (unwind-protect
-        (test-mevedel-tool-web--http
+        (mevedel-test-http
          (lambda (request)
            (if (string-match-p " /redirect " request)
                '("302 Found" "Location: /page\r\n" "")
@@ -214,7 +178,7 @@ to leave the request unanswered.  All server processes are cleaned up."
       (kill-buffer foreign)))
 
   :doc "HTTP failure becomes a canonical tool error"
-  (test-mevedel-tool-web--http
+  (mevedel-test-http
    (lambda (_) '("500 Internal Server Error" "" "failed"))
    (lambda (base)
      (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
@@ -223,7 +187,7 @@ to leave the request unanswered.  All server processes are cleaned up."
 
   :doc "a redirected request that never answers times out and releases buffers"
   (let ((mevedel-tool-web--timeout 0.1) (before (buffer-list)))
-    (test-mevedel-tool-web--http
+    (mevedel-test-http
      (lambda (request)
        (when (string-match-p " /redirect " request)
          '("302 Found" "Location: /hang\r\n" "")))
@@ -242,7 +206,7 @@ to leave the request unanswered.  All server processes are cleaned up."
   (test)
   :doc "parse errors settle once and a late callback cannot reenter parsing"
   (let (saved-callback saved-args results timer)
-    (test-mevedel-tool-web--http
+    (mevedel-test-http
      (lambda (_) '("200 OK" "" "body"))
      (lambda (base)
        (let ((retrieve (symbol-function 'url-retrieve))
@@ -283,7 +247,7 @@ to leave the request unanswered.  All server processes are cleaned up."
   ,test
   (test)
   :doc "configured EWW search returns five links and excerpts through the pipeline"
-  (test-mevedel-tool-web--http
+  (mevedel-test-http
    (lambda (request)
      (should (string-search "/search?q=two%20words" request))
      (list "200 OK" "Content-Type: text/html\r\n"
@@ -309,7 +273,7 @@ to leave the request unanswered.  All server processes are cleaned up."
         (mevedel-tool-web--search-queue nil)
         (mevedel-tool-web--timeout 0.1)
         results requests)
-    (test-mevedel-tool-web--http
+    (mevedel-test-http
      (lambda (request) (push request requests) nil)
      (lambda (base)
        (let ((eww-search-prefix (concat base "/?q=")))
@@ -336,7 +300,7 @@ to leave the request unanswered.  All server processes are cleaned up."
   (test)
   :doc "all YouTube stages use HTTP ownership and render description with timestamps"
   (let ((before (buffer-list)) requests)
-    (test-mevedel-tool-web--http
+    (mevedel-test-http
      (lambda (request)
        (push request requests)
        (cond
@@ -402,7 +366,7 @@ to leave the request unanswered.  All server processes are cleaned up."
             (timers-before (copy-sequence timer-list))
             (requests 0))
         (ert-info ((format "%s/%s" stage failure))
-          (test-mevedel-tool-web--http
+          (mevedel-test-http
            (lambda (request)
              (cl-incf requests)
              (let ((current (cond ((string-prefix-p "GET /watch?" request) 'watch)

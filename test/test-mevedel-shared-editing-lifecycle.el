@@ -46,10 +46,14 @@
 			 (let* ((image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jv1sAAAAASUVORK5CYII=")
 				(made (test-mevedel-shared-editing-call
 				       buffer
-				       (list :action "import" :format "native" :id "board" :opId "import" :actor "Guest"
+				       (list :action "import" :format "excalidraw" :id "board" :opId "import" :actor "Guest"
+					     :title "Original"
 					     :data (mevedel-shared-editing--json
-						    (list :format "mevedel-editable-1" :kind "whiteboard" :title "Original"
-							  :content (vector (list :id "image" :type "image" :box [0 0 100 100] :src image))))))))
+						    (list :type "excalidraw" :version 2
+							  :elements (vector (list :id "image" :type "image" :x 0 :y 0
+										  :width 100 :height 100 :fileId "pixel"))
+							  :files (list :pixel (list :id "pixel" :mimeType "image/png"
+										    :dataURL image))))))))
 			   (setq child (mevedel-session-fork-create buffer '(:fork-point-id "fixture-fork") 'conversation))
 			   (should (equal (plist-get made :content)
 					  (plist-get (test-mevedel-shared-editing-call child '(:action "read" :id "board")) :content)))

@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {editorFixture} from './editor-fixture.mjs';
 
+/* An element and, with TEXT, its bound label `${id}-label`. */
+const shape = (id, type, [x, y, width, height], text) => [{id, type, x, y, width, height},
+  ...(text ? [{id:`${id}-label`, type:'text', x, y, width:0, height:0, text, containerId:id}] : [])];
+const geometry = ({x, y, width, height}) => [x, y, width, height];
+
 // The real packaged iframe and port, without room setup, for interaction regressions.
 test('editor interaction regressions', async (t) => {
   const {open, browser, url} = await editorFixture(t);
@@ -16,9 +21,10 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('[data-live-preview="true"]').waitFor();
       assert.ok((await shape.boundingBox()).x>before.x+50);
       assert.equal(await frame.locator('#saved').innerText(),'Live movement · not saved yet');
-      assert.deepEqual((await page.evaluate(()=>window.apply({action:'read'}))).content[0].box,[100,100,300,160]);
+      const geometry=({x,y,width,height})=>[x,y,width,height];
+      assert.deepEqual(geometry((await page.evaluate(()=>window.apply({action:'read'}))).content[0]),[100,100,300,160]);
       const exported=await page.evaluate(()=>window.apply({action:'export',format:'native'}));
-      assert.deepEqual(JSON.parse(exported.text).content[0].box,[100,100,300,160]);
+      assert.deepEqual(geometry(JSON.parse(exported.text).elements[0]),[100,100,300,160]);
       // Starting another gesture uses the position the participant can see.
       const displayed=await shape.boundingBox();
       await page.mouse.move(displayed.x+displayed.width/2,displayed.y+displayed.height/2);
@@ -92,7 +98,7 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
       assert.equal(await page.evaluate(()=>window.updateCalls),loseAck ? 3 : 2,'no stale keystroke backlog');
       const stored=await page.evaluate(()=>window.apply({action:'read'}));
-      assert.equal(stored.content.find(s=>s.id==='ellipse').text,'test1234\n3333');
+      assert.equal(stored.content.find(s=>s.containerId==='ellipse').text,'test1234\n3333','the label is a bound text element');
       assert.equal(stored.revision,3,'retry does not commit the in-flight operation twice');
       await page.close();
     });
@@ -196,7 +202,17 @@ test('editor interaction regressions', async (t) => {
         await images.nth(2).waitFor();
         await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
         const saved = await page.evaluate(async()=>window.apply({action:'read'}));
-        assert.equal((JSON.stringify(saved.content).match(/data:image\/png;base64/g)||[]).length,3);
+        if (kind === 'document')
+          assert.equal((JSON.stringify(saved.content).match(/data:image\/png;base64/g)||[]).length,3);
+        else {
+          // Three image elements share one content-addressed file, as in Excalidraw.
+          const fileIds = saved.content.filter(e=>e.type==='image').map(e=>e.fileId);
+          assert.deepEqual(fileIds.map(id=>/^[0-9a-f]{40}$/.test(id)),[true,true,true]);
+          assert.equal(new Set(fileIds).size,1);
+          const file = JSON.parse((await page.evaluate(()=>window.apply({action:'export',format:'native'}))).text);
+          assert.deepEqual(Object.keys(file.files),[fileIds[0]]);
+          assert.equal(file.files[fileIds[0]].dataURL,`data:image/png;base64,${data}`);
+        }
         await frame.locator('#image-upload').setInputFiles({name:'bad.svg',mimeType:'image/svg+xml',buffer:Buffer.from('<svg/>')});
         await frame.locator('#saved').getByText('Use a PNG, JPEG, or WebP image up to 4 MB',{exact:true}).waitFor();
         assert.equal(await images.count(),3);
@@ -333,9 +349,9 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('box selection contains, touches with Alt, adds with Shift and keeps its area', async () => {
       const {page, frame} = await open({content:[
-        {id:'a', type:'rect', box:[0,0,100,100], text:'A'},
-        {id:'b', type:'rect', box:[300,0,100,100], text:'B'},
-        {id:'c', type:'ellipse', box:[0,300,100,100], text:'C'},
+        ...shape('a', 'rectangle', [0,0,100,100], 'A'),
+        ...shape('b', 'rectangle', [300,0,100,100], 'B'),
+        ...shape('c', 'ellipse', [0,300,100,100], 'C'),
       ]});
       const at = (x, y) => frame.locator('#canvas').evaluate((canvas, [x, y]) => {
         const p = new DOMPoint(x, y).matrixTransform(canvas.getScreenCTM());
@@ -352,7 +368,7 @@ test('editor interaction regressions', async (t) => {
         await page.mouse.up();
         if (modifier) await page.keyboard.up(modifier);
       };
-      const chosen = () => frame.locator('#selection [data-resize]').evaluateAll(n => n.map(e => e.dataset.resize).sort());
+      const chosen = () => frame.locator('#selection [data-selected]').evaluateAll(n => n.map(e => e.dataset.selected).sort());
       await drag([-20,-20], [200,150]);
       assert.deepEqual(await chosen(), ['a']);
       assert.equal(await frame.locator('#selection .selection-region').count(), 1);
@@ -371,14 +387,14 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#selection .selection-region').count(), 0);
       assert.equal(await frame.locator('#selection-question').isDisabled(), true);
       const content = await page.evaluate(async () => (await window.apply({action:'read'})).content);
-      assert.deepEqual(content.map(s => s.box), [[0,0,100,100],[300,0,100,100],[0,300,100,100]],
+      assert.deepEqual(content.filter(s => s.type !== 'text').map(geometry), [[0,0,100,100],[300,0,100,100],[0,300,100,100]],
         'box selection never edits content');
       await page.close();
     });
     await t.test('asking about a boxed area sends its region with the contained objects', async () => {
       const {page, frame} = await open({content:[
-        {id:'a', type:'rect', box:[0,0,100,100], text:'A'},
-        {id:'b', type:'rect', box:[300,0,100,100], text:'B'},
+        ...shape('a', 'rectangle', [0,0,100,100], 'A'),
+        ...shape('b', 'rectangle', [300,0,100,100], 'B'),
       ]});
       const [x0, y0, x1, y1] = await frame.locator('#canvas').evaluate(canvas => {
         const at = (x, y) => new DOMPoint(x, y).matrixTransform(canvas.getScreenCTM());
@@ -393,7 +409,7 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#selection-question').click();
       assert.match(await frame.locator('#context-title').innerText(), /Selected area/);
       assert.equal(await frame.locator('#selected-question').innerText(), 'Selected area');
-      assert.match(await frame.locator('#context-quote').textContent(), /^Area \d+ × \d+ at -2\d, -2\d\n1 object\nrect: A$/);
+      assert.match(await frame.locator('#context-quote').textContent(), /^Area \d+ × \d+ at -2\d, -2\d\n1 object\nrectangle: A$/);
       await frame.locator('#question').fill('Put a legend here');
       await frame.locator('#question-send').click();
       await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
@@ -409,8 +425,8 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('board comments: comment tool, numbered markers, hover card, threads and resolution', async () => {
       const {page, frame} = await open({content:[
-        {id:'a', type:'rect', box:[0,0,100,100], text:'A'},
-        {id:'b', type:'rect', box:[300,0,100,100], text:'B'},
+        ...shape('a', 'rectangle', [0,0,100,100], 'A'),
+        ...shape('b', 'rectangle', [300,0,100,100], 'B'),
       ]});
       const offset = await page.locator('iframe').boundingBox();
       const at = async (x, y) => {
@@ -427,7 +443,7 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#selection .comment-hover').count(), 1, 'hover outlines the target');
       await page.mouse.down(); await page.mouse.up();
       await frame.locator('#comment-text').waitFor();
-      assert.equal(await frame.locator('#comment-quote').textContent(), '1 object\nrect: A');
+      assert.equal(await frame.locator('#comment-quote').textContent(), '1 object\nrectangle: A');
       await frame.locator('#comment-text').fill('Make this blue');
       await frame.locator('#comment-assistant').uncheck();
       await frame.locator('#comment-post').click();
@@ -526,7 +542,7 @@ test('editor interaction regressions', async (t) => {
     await t.test('drawing a shape returns to selection for immediate text editing', async () => {
       const {page, frame} = await open();
       await frame.locator('#board-zoom').click();
-      await frame.locator('[data-tool="rect"]').click();
+      await frame.locator('[data-tool="rectangle"]').click();
       const canvas = await frame.locator('#canvas').boundingBox();
       await page.mouse.move(canvas.x + 620, canvas.y + 220);
       await page.mouse.down();
@@ -536,9 +552,13 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#scene [data-shape]:not([data-shape="ellipse"])').dblclick();
       await frame.locator('#shape-text').fill('Frontend');
       if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/inline-text.png'});
-      assert.equal(await frame.locator('#scene [data-shape]').count(), 2);
+      assert.equal(await frame.locator('#scene [data-shape]').count(), 3, 'the ellipse, the rectangle and its label');
       await page.keyboard.press('Control+Enter');
-      assert.equal(await frame.locator('#scene [data-shape]:not([data-shape="ellipse"]) text').textContent(), 'Frontend');
+      assert.equal(await frame.locator('#scene text').textContent(), 'Frontend');
+      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      const {content} = await page.evaluate(()=>window.apply({action:'read'}));
+      assert.equal(content.find(s=>s.type==='text').containerId, content.find(s=>s.type==='rectangle').id,
+        'the typed label is bound to the new rectangle');
       await page.close();
     });
     await t.test('received laser batches retain the circle between network updates', async () => {
@@ -559,29 +579,34 @@ test('editor interaction regressions', async (t) => {
     await t.test('bound arrows end at borders in the editor and after target movement', async () => {
       const {page, frame} = await open();
       await page.evaluate(async () => {
+        const bind = elementId => ({elementId, fixedPoint:[0.5, 0.5], mode:'orbit'});
         const reply = await window.apply({action:'patch',opId:'connect',changes:[
-          {id:'target',before:null,after:{id:'target',type:'rect',box:[550,100,200,160]}},
-          {id:'arrow',before:null,after:{id:'arrow',type:'arrow',box:[250,180,400,0],from:'ellipse',to:'target'}},
+          {id:'target',before:null,after:{id:'target',type:'rectangle',x:550,y:100,width:200,height:160}},
+          {id:'arrow',before:null,after:{id:'arrow',type:'arrow',x:250,y:180,width:400,height:0,
+            points:[[0,0],[400,0]],startBinding:bind('ellipse'),endBinding:bind('target')}},
         ]});
         window.port.postMessage({type:'changed',...reply});
       });
-      const arrow = frame.locator('[data-shape="arrow"] path[stroke="#242424"]');
-      await arrow.waitFor({state:'attached'});
-      const endpoints = () => arrow.evaluate(path => {
+      const shaft = frame.locator('[data-shape="arrow"] g[stroke-linecap] > path').first();
+      await shaft.waitFor({state:'attached'});
+      const endpoints = () => shaft.evaluate(path => {
         const a = path.getPointAtLength(0), b = path.getPointAtLength(path.getTotalLength());
-        return [[a.x,a.y],[b.x,b.y]];
+        return [[a.x,a.y],[b.x,b.y]].map(p => p.map(Math.round));
       });
-      assert.deepEqual(await endpoints(), [[400,180],[550,180]]);
+      // Bound ends sit 5 + strokeWidth / 2 outside each outline, as in Excalidraw.
+      assert.deepEqual(await endpoints(), [[406,180],[544,180]]);
       await frame.getByRole('button',{name:'Fit',exact:true}).click();
       await frame.locator('[data-shape="target"]').click({position:{x:100,y:80}});
       await page.keyboard.press('Shift+ArrowRight');
-      assert.deepEqual(await endpoints(), [[400,180],[560,180]]);
+      assert.deepEqual(await endpoints(), [[406,180],[554,180]]);
       const exported = await page.evaluate(async () => {
         await new Promise(resolve => setTimeout(resolve,400));
-        return (await window.apply({action:'export',format:'svg'})).text;
+        return JSON.parse((await window.apply({action:'export',format:'native'})).text);
       });
-      assert.match(exported, /M560 180L546 187L546 173Z/);
-      assert.match(exported, /560 180/);
+      const arrow = exported.elements.find(e => e.id === 'arrow');
+      assert.deepEqual([arrow.x, arrow.x + arrow.points.at(-1)[0]].map(Math.round), [406, 554],
+        'the file stores the ends where they are drawn');
+      assert.deepEqual(exported.elements.find(e => e.id === 'target').boundElements, [{id:'arrow', type:'arrow'}]);
       if (process.env.MEVEDEL_CONNECTOR_SCREENSHOTS)
         await page.screenshot({path:'.scratch/connector-borders/editor.png'});
       await page.close();
@@ -623,13 +648,15 @@ test('editor interaction regressions', async (t) => {
         '#a5d8ff',
       );
       assert.ok((await shown()).includes('Fill'), 'a filled shape offers fill patterns');
+      const outline = () => frame.locator('#scene [data-shape="ellipse"] path[fill="none"]').first().getAttribute('d');
+      const artist = await outline();
       await frame.getByRole('button', { name: 'Cartoonist', exact: true }).click();
-      assert.equal(await frame.locator('#scene [data-shape="ellipse"] path').count(), 3);
+      assert.notEqual(await outline(), artist, 'sloppiness redraws the outline');
       await frame.locator('#properties > summary').click();
       await frame.locator('#board-zoom').click();
       await frame.getByRole('button', { name: 'Rectangle', exact: true }).click();
       await frame.locator('#properties > summary').click();
-      assert.equal(await frame.locator('.sec[data-sec="edges"]').isHidden(), false);
+      assert.equal(await frame.locator('.sec[data-sec="roundness"]').isHidden(), false);
       await frame.locator('#properties > summary').click();
       const box = await frame.locator('#canvas').boundingBox();
       await page.mouse.move(box.x + 650, box.y + 180);
@@ -637,8 +664,7 @@ test('editor interaction regressions', async (t) => {
       await page.mouse.move(box.x + 750, box.y + 250);
       await page.mouse.up();
       const rect = frame.locator('#scene [data-shape]:not([data-shape="ellipse"])');
-      assert.equal(await rect.locator('clipPath').count(), 1, 'the new rectangle is hatched blue');
-      assert.equal(await rect.locator('g > path').getAttribute('stroke'), '#a5d8ff');
+      assert.equal(await rect.locator('g > path').first().getAttribute('stroke'), '#a5d8ff', 'the new rectangle is hatched blue');
       await frame.locator('#object-menu > summary').click();
       await frame.locator('.object-arrange > summary').click();
       await frame.getByRole('button', { name: 'Send to back', exact: true }).click();
@@ -746,7 +772,7 @@ test('editor interaction regressions', async (t) => {
         await page.evaluate(async kind => {
           const content = (await window.apply({action:'read'})).content;
           const before = kind === 'whiteboard' ? content[0] : content.content[0];
-          const after = kind === 'whiteboard' ? {...before,text:'Assistant text'} :
+          const after = kind === 'whiteboard' ? {...before,strokeColor:'#e03131'} :
             {...before,content:[{type:'text',text:'Assistant text'}]};
           const result = await window.apply({action:'patch',opId:'timed-edit',changes:[{
             id:kind === 'whiteboard' ? before.id : before.attrs.id,before,after,
@@ -775,7 +801,7 @@ test('editor interaction regressions', async (t) => {
           await page.evaluate(async ({kind,actor}) => {
             const content = (await window.apply({action:'read'})).content;
             const before = kind === 'whiteboard' ? content[0] : content.content[0];
-            const after = kind === 'whiteboard' ? {...before,text:actor} :
+            const after = kind === 'whiteboard' ? {...before,strokeColor:actor.startsWith('Agent:') ? '#2f9e44' : '#1971c2'} :
               {...before,content:[{type:'text',text:actor}]};
             const result = await window.apply({action:'patch',opId:actor.startsWith('Agent:') ? 'renew-agent' : 'renew-human',changes:[{
               id:kind === 'whiteboard' ? before.id : before.attrs.id,before,after,
@@ -1014,9 +1040,8 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#question').fill('What does this shape mean?');
       if (process.env.MEVEDEL_POLISH_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/shared-editing-polish/after/assistant-board.png',import.meta.url).pathname});
       await page.evaluate(async () => {
-        const current = await window.apply({action:'read'});
-        const before = current.content[0];
-        const reply = await window.apply({action:'patch',opId:'concurrent',changes:[{id:before.id,before,after:{...before,text:'Changed remotely'}}]});
+        const label = {id:'remote-label',type:'text',x:0,y:0,width:0,height:0,text:'Changed remotely',containerId:'ellipse'};
+        const reply = await window.apply({action:'patch',opId:'concurrent',changes:[{id:label.id,before:null,after:label}]});
         window.port.postMessage({type:'changed',...reply});
       });
       await frame.locator('#question-send').click();

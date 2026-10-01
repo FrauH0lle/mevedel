@@ -189,7 +189,7 @@ test(
       await Promise.all(
         pages.map((p) => frame(p).locator('#canvas').waitFor({ state: 'visible' })),
       );
-      assert.equal(await frame(pages[2]).locator('[data-tool="rect"]').count(), 0);
+      assert.equal(await frame(pages[2]).locator('[data-tool="rectangle"]').count(), 0);
       assert.equal(
         await frame(pages[0])
           .locator('body')
@@ -204,7 +204,7 @@ test(
       );
       async function rectangle(p, x, y) {
         const f = frame(p);
-        await f.locator('[data-tool="rect"]').click();
+        await f.locator('[data-tool="rectangle"]').click();
         const b = await f.locator('#canvas').boundingBox();
         await p.mouse.move(b.x + x, b.y + y);
         await p.mouse.down();
@@ -222,24 +222,21 @@ test(
       ).id;
       const snapshot = JSON.parse((await agent('SharedRead', { id: boardId })).result);
       assert.equal(snapshot.content.length, 2);
-      const shape = {
-        id: 'agent_box',
-        type: 'rect',
-        box: [600, 80, 140, 70],
-        text: 'Agent contribution',
-      };
+      const shape = { id: 'agent_box', type: 'rectangle', x: 600, y: 80, width: 140, height: 70 };
+      const label = { id: 'agent_label', type: 'text', x: 600, y: 80, width: 0, height: 0,
+        text: 'Agent contribution', containerId: 'agent_box' };
       const applied = await agent('SharedEdit', {
         id: boardId,
         action: 'patch',
-        changes: [{ id: shape.id, before: null, after: shape }],
+        changes: [{ id: shape.id, before: null, after: shape }, { id: label.id, before: null, after: label }],
       });
       assert.equal(applied.status, 'success', JSON.stringify(applied));
-      await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 3);
+      await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 4);
       await frame(pages[0]).locator('#undo').click();
-      await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 2);
+      await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 3);
       assert.equal(await frame(pages[1]).locator('[data-shape="agent_box"]').count(), 1);
       await frame(pages[0]).locator('#redo').click();
-      await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 3);
+      await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 4);
       const savedBefore = JSON.parse((await agent('SharedRead', { id: boardId })).result).revision;
       await frame(pages[1]).getByRole('button', { name: 'Zoom in', exact: true }).click();
       await frame(pages[1]).getByRole('button', { name: 'Zoom in', exact: true }).click();
@@ -331,7 +328,7 @@ test(
       await agent('RestartHelper');
       assert.equal(
         JSON.parse((await agent('SharedRead', { id: boardId })).result).content.length,
-        3,
+        4,
       );
       await pages[0].locator('#editing-close').click();
       await pages[0].locator('[data-create-editor="document"]').click();
@@ -614,10 +611,10 @@ test(
       await frame(pages[2]).locator('#download').click();
       const download = await downloadPromise;
       const exported = await readFile(await download.path());
-      assert.equal(JSON.parse(exported).kind, 'whiteboard');
+      assert.equal(JSON.parse(exported).type, 'excalidraw', 'a whiteboard downloads as an Excalidraw file');
       await pages[0].locator('#editing-close').click();
       await pages[0].locator('#editing-file').setInputFiles({
-        name: 'copy.mevedel.json',
+        name: 'copy.excalidraw',
         mimeType: 'application/json',
         buffer: exported,
       });
@@ -627,8 +624,8 @@ test(
       );
       assert.equal(imported.length, 1);
       assert.deepEqual(
-        JSON.parse((await agent('SharedRead', { id: imported[0].id })).result).content,
-        JSON.parse(exported).content,
+        JSON.parse((await agent('SharedRead', { id: imported[0].id })).result).content.map(e => e.id),
+        JSON.parse(exported).elements.map(e => e.id),
       );
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#question').fill('Private recovered question');
@@ -636,7 +633,7 @@ test(
       await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Private recovered question'));
       for (let reload = 0; reload < 2; reload++) {
         await pages[0].reload();
-        await frame(pages[0]).locator('[data-tool="rect"]').waitFor({state:'visible'});
+        await frame(pages[0]).locator('[data-tool="rectangle"]').waitFor({state:'visible'});
         if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
         assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
         assert.equal(await frame(pages[0]).locator('#context-detail').innerText(),capturedContext);
@@ -644,7 +641,7 @@ test(
       await frame(pages[0]).locator('#assistant-close').click();
       await pages[0].reload();
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
-      await frame(pages[0]).locator('[data-tool="rect"]').waitFor({ state: 'visible', timeout: 2000 });
+      await frame(pages[0]).locator('[data-tool="rectangle"]').waitFor({ state: 'visible', timeout: 2000 });
       async function forged(link, args) {
         return pages[2].evaluate(
           async ({ link, args }) => {
@@ -773,10 +770,11 @@ test(
         return canvas.toDataURL();
       });
       assert.ok(src.length>900000);
-      const imageBoard = JSON.parse((await agent('SharedCreate',{kind:'whiteboard',title:'Large image synchronization'})).result);
-      await agent('SharedEdit',{id:imageBoard.id,action:'patch',changes:[
-        {id:'large-image',before:null,after:{id:'large-image',type:'image',box:[100,100,300,300],src}}
-      ]});
+      // Image bytes arrive as files of an imported Excalidraw scene; the model cannot author them.
+      const imageBoard = JSON.parse((await agent('ImportShared',{title:'Large image synchronization',
+        data:JSON.stringify({type:'excalidraw',version:2,
+          elements:[{id:'large-image',type:'image',x:100,y:100,width:300,height:300,fileId:'large'}],
+          files:{large:{id:'large',mimeType:'image/png',dataURL:src}}})})).result);
       const imageURL = new URL(links.full);
       imageURL.searchParams.set('shared',imageBoard.id);
       const imageReader = await browser.newPage();
@@ -789,7 +787,7 @@ test(
         await frame(imageWriter).locator('#canvas').focus();
         const started=performance.now();
         await imageWriter.keyboard.press('ArrowRight');
-        await until(async()=>Number(await frame(imageReader).locator('#scene image').getAttribute('x'))===100+move);
+        await until(async()=>(await frame(imageReader).locator('[data-shape="large-image"] > g').getAttribute('transform')).startsWith(`translate(${100+move} 100)`));
         await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
         moveLatencies.push(performance.now()-started);
       }
@@ -801,8 +799,9 @@ test(
       await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
       const imageState=JSON.parse((await agent('SharedRead',{id:imageBoard.id})).result);
       assert.equal(imageState.content.length,2);
-      assert.ok(imageState.transactions.length<13,'image snapshots expire without blocking synchronization');
-      const typedShape=imageState.content.find(shape=>shape.type==='rect');
+      assert.ok(!JSON.stringify(imageState.transactions).includes('base64'),
+        'image bytes live in files, never in contribution snapshots');
+      const typedShape=imageState.content.find(shape=>shape.type==='rectangle');
       const moving=frame(imageWriter).locator(`#scene [data-shape="${typedShape.id}"]`);
       const watching=frame(imageReader).locator(`#scene [data-shape="${typedShape.id}"]`);
       const original=await watching.boundingBox(), handle=await moving.boundingBox();
@@ -814,7 +813,8 @@ test(
       assert.ok(Math.abs((await watching.boundingBox()).x-original.x)>30,'other participant sees movement before release');
       console.log(`Remote drag preview arrived in ${Math.round(performance.now()-previewAt)} ms before release`);
       const whileDragging=JSON.parse((await agent('SharedRead',{id:imageBoard.id})).result);
-      assert.deepEqual(whileDragging.content.find(s=>s.id===typedShape.id).box,typedShape.box,'preview does not save a revision');
+      const place=({x,y,width,height})=>[x,y,width,height];
+      assert.deepEqual(place(whileDragging.content.find(s=>s.id===typedShape.id)),place(typedShape),'preview does not save a revision');
       await frame(imageWriter).locator('#canvas').dispatchEvent('pointercancel');
       await imageWriter.mouse.up();
       await until(async()=>await watching.getAttribute('data-live-preview')==='false');
@@ -839,18 +839,16 @@ test(
       await imageReader.close();
       await imageContext.close();
       await agent('RestartHelper');
-      const headless = {
-        id: 'headless',
-        type: 'sticky',
-        box: [100, 300, 160, 100],
-        text: 'Created with all browsers closed',
-      };
+      const headless = { id: 'headless', type: 'stickynote', x: 100, y: 300, width: 160, height: 100 };
+      const headlessLabel = { id: 'headless_label', type: 'text', x: 100, y: 300, width: 0, height: 0,
+        text: 'Created with all browsers closed', containerId: 'headless' };
       assert.equal(
         (
           await agent('SharedEdit', {
             id: boardId,
             action: 'patch',
-            changes: [{ id: headless.id, before: null, after: headless }],
+            changes: [{ id: headless.id, before: null, after: headless },
+              { id: headlessLabel.id, before: null, after: headlessLabel }],
           })
         ).status,
         'success',
@@ -883,12 +881,7 @@ test(
       });
       await ownerPage.locator(`#editing-items [data-item-id="${boardId}"]`).click();
       await until(() => editorRequested);
-      const duringLoad = {
-        id: 'during_load',
-        type: 'rect',
-        box: [350, 300, 120, 60],
-        text: 'Committed while editor loaded',
-      };
+      const duringLoad = { id: 'during_load', type: 'rectangle', x: 350, y: 300, width: 120, height: 60 };
       assert.equal(
         (
           await agent('SharedEdit', {
@@ -914,17 +907,18 @@ test(
         await frame(ownerPage).locator('#download').click();
         const file = await readFile(await (await waiting).path());
         if (format === 'png') assert.equal(file.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-        else assert.match(file.toString(), /Created with all browsers closed/);
+        // The note's label wraps into one positioned line per row.
+        else assert.equal([...file.toString().matchAll(/>([^<>]*)<\/text>/g)].map(m => m[1]).join(' ')
+          .includes('Created with all browsers closed'), true);
       }
       const large = {
-        format: 'mevedel-editable-1',
-        kind: 'whiteboard',
-        title: 'Transferred drawing',
-        content: [
+        type: 'excalidraw',
+        version: 2,
+        elements: [
           {
             id: 'stroke',
-            type: 'pen',
-            box: [0, 0, 400, 100],
+            type: 'freedraw',
+            x: 0, y: 0, width: 400, height: 100,
             points: Array.from({ length: 4000 }, (_, i) => [i / 10, 50 + Math.sin(i / 10) * 40]),
           },
         ],
@@ -933,17 +927,17 @@ test(
       assert.ok(largeBytes.length > 65536);
       await ownerPage.locator('#editing-close').click();
       await ownerPage.locator('#editing-file').setInputFiles({
-        name: 'large.mevedel.json',
+        name: 'Transferred drawing.excalidraw',
         mimeType: 'application/json',
         buffer: largeBytes,
       });
       await frame(ownerPage).locator('[data-shape="stroke"]').waitFor({ state: 'visible' });
       const transferred = JSON.parse((await agent('SharedRead')).result).find(
-        (i) => i.title === 'Transferred drawing',
+        (i) => i.title === 'Transferred drawing.excalidraw',
       );
       assert.deepEqual(
         JSON.parse((await agent('SharedRead', { id: transferred.id })).result).content,
-        large.content,
+        large.elements,
       );
       const priorRevision = transferred.revision;
       await agent('StorageWritable', { writable: false });
@@ -964,7 +958,7 @@ test(
       const recoveryDownload = await recoveryWaiting;
       assert.match(recoveryDownload.suggestedFilename(), /recovery/);
       assert.equal(
-        JSON.parse(await readFile(await recoveryDownload.path(), 'utf8')).content.length,
+        JSON.parse(await readFile(await recoveryDownload.path(), 'utf8')).elements.length,
         2,
       );
       await agent('StorageWritable', { writable: true });
@@ -981,9 +975,9 @@ test(
       assert.equal(recovered.content.length, 2);
       assert.equal(recovered.revision, priorRevision + 1);
       await frame(ownerPage).locator('#canvas').focus();
-      await ownerPage.keyboard.press('c');
+      await ownerPage.keyboard.press('d');
       assert.equal(
-        await frame(ownerPage).locator('[data-tool="cylinder"]').getAttribute('aria-pressed'),
+        await frame(ownerPage).locator('[data-tool="diamond"]').getAttribute('aria-pressed'),
         'true',
       );
       const device = await owner.newCDPSession(ownerPage),
@@ -1008,11 +1002,11 @@ test(
       );
       assert.equal(
         JSON.parse((await agent('SharedRead', { id: transferred.id })).result).content.filter(
-          (s) => s.type === 'cylinder',
+          (s) => s.type === 'diamond',
         ).length,
         1,
       );
-      await frame(ownerPage).locator('[data-tool="pen"]').click();
+      await frame(ownerPage).locator('[data-tool="freedraw"]').click();
       await device.send('Input.dispatchMouseEvent', {
         type: 'mousePressed',
         x: area.x + 350,
@@ -1061,8 +1055,8 @@ test(
         return info.queue.length === 2 ? info : null;
       });
       assert.deepEqual(asked.attachments, [0, 1]);
-      assert.match(asked.queue[1], /"type":"pen"/);
-      assert.doesNotMatch(asked.queue[1], /"type":"cylinder"/);
+      assert.match(asked.queue[1], /"type":"freedraw"/);
+      assert.doesNotMatch(asked.queue[1], /"type":"diamond"/);
       await frame(ownerPage).locator('body').evaluate(() => window.retryQuestion());
       await delay(300);
       assert.equal((await agent('InspectTest')).queue.length, 2);
@@ -1110,7 +1104,7 @@ test(
         .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#recovery').click();
       assert.equal(
-        JSON.parse(await readFile(await (await endedRecovery).path(), 'utf8')).content.length,
+        JSON.parse(await readFile(await (await endedRecovery).path(), 'utf8')).elements.length,
         beforeEnd.content.length + 1,
       );
       assert.equal(
@@ -1127,14 +1121,14 @@ test(
       assert.match(await recoveryButton.innerText(), /local recovery/);
       await recoveryButton.click();
       await frame(ownerPage).locator('#canvas').waitFor({ state: 'visible' });
-      assert.equal(await frame(ownerPage).locator('[data-tool="rect"]').count(), 0);
+      assert.equal(await frame(ownerPage).locator('[data-tool="rectangle"]').count(), 0);
       const recoveredDownload = ownerPage.waitForEvent('download');
       await frame(ownerPage)
         .locator('#menu')
         .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#recovery').click();
       assert.equal(
-        JSON.parse(await readFile(await (await recoveredDownload).path(), 'utf8')).content.length,
+        JSON.parse(await readFile(await (await recoveredDownload).path(), 'utf8')).elements.length,
         beforeEnd.content.length + 1,
       );
       await agent('FenceHost');
