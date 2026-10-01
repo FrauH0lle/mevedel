@@ -480,3 +480,19 @@ func TestViewerHeaders(t *testing.T) {
 			viewerContentSecurityPolicy)
 	}
 }
+
+func TestSharedEditorHeaders(t *testing.T) {
+	_, srv := startRelay(t)
+	resp, err := http.Get(srv.URL + "/shared-editor.html")
+	if err != nil {
+		t.Fatalf("shared-editor.html: %v", err)
+	}
+	resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	// Board fonts are embedded data; the editor itself has no network access.
+	for _, want := range []string{"font-src data:;", "connect-src 'none';", "default-src 'none';"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("Content-Security-Policy = %q, want %q", csp, want)
+		}
+	}
+}

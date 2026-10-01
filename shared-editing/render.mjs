@@ -1,123 +1,264 @@
-/* Deterministic, data-only exports used by both browser and host. */
+/* Deterministic SVG for whiteboards and HTML for documents, used by both
+   browser and host. Board rendering follows Excalidraw's renderer (MIT,
+   https://github.com/excalidraw/excalidraw): roughjs shapes with the
+   element's seed, perfect-freehand strokes, and its text metrics. */
+import rough from 'roughjs';
+import { getStroke } from 'perfect-freehand';
 import { imageSource } from './image.mjs';
+import { fontStack, verticalOffset, BOUND_TEXT_PADDING } from './text.mjs';
+import { resolveScene, bounds, extent, shapesInRegion, LINEAR, pointBounds } from './scene.mjs';
+
+export { resolveScene, bounds, extent, shapesInRegion };
 export const escape = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
-export const FILLABLE = ['rect', 'ellipse', 'diamond', 'cylinder', 'sticky'];
-export const LINEAR = ['arrow', 'line', 'pen'];
-/* Resolved style of a shape: every absent property has one fixed meaning. */
-export function styleOf(s) {
-  return {
-    stroke: s.stroke || '#242424',
-    fill: s.fill || (s.type === 'sticky' ? '#fff1a8' : 'none'),
-    pattern: s.pattern || 'solid',
-    width: s.width || 2,
-    dash: s.dash || 'solid',
-    rough: s.rough || 0,
-    edges: s.edges || 'round',
-    opacity: s.opacity ?? 100,
-    fontSize: s.fontSize || 16,
-    layer: s.layer || 0,
-  };
-}
-export function pathPoints(shape, context) {
-  const [x, y, w, h] = shape.box;
-  const points = shape.points || [
-    [x, y],
-    [x + w, y + h],
-  ];
-  if (shape.type === 'pen') return points;
-  // ponytail: linear lookup, at most 2,000 shapes; index if measured render cost warrants it.
-  const targets = [shape.from, shape.to].map(id => context.find(s => s.id === id));
-  const centers = targets.map((target, i) => target
-    ? [target.box[0] + target.box[2] / 2, target.box[1] + target.box[3] / 2]
-    : i ? points.at(-1) : points[0]);
-  return targets.map((target, i) => target
-    ? borderPoint(target, centers[1 - i]) : centers[i]);
-}
+const generator = rough.generator();
+const n = (v) => String(+(+v).toFixed(2));
+const transparent = (color) => !color || color === 'transparent' || /^#[0-9a-f]{6}00$/i.test(color);
 
-// Intersect a center-to-center ray with the nominal silhouette. Hand-drawn
-// wobble is decorative; it must not make a connector's attachment wander.
-function borderPoint(shape, toward) {
-  const [x, y, w, h] = shape.box, rx = w / 2, ry = h / 2;
-  const center = [x + rx, y + ry], dx = toward[0] - center[0], dy = toward[1] - center[1];
-  if (!w || !h || (!dx && !dy)) return center;
-  const scale = Math.min(rx / Math.abs(dx), ry / Math.abs(dy));
-  const vx = dx * scale, vy = dy * scale;
-  const radius = shape.type === 'rect' && styleOf(shape).edges === 'round' && Math.min(w,h) > 6
-    ? Math.min(32, Math.min(w,h) * .25) : 0;
-  const vertices = shape.type === 'sticky' ? sticky(shape.box) : null;
-  const inside = t => {
-    const px = Math.abs(vx * t), py = Math.abs(vy * t);
-    if (shape.type === 'ellipse') return (px / rx) ** 2 + (py / ry) ** 2 <= 1;
-    if (shape.type === 'diamond') return px / rx + py / ry <= 1;
-    if (shape.type === 'cylinder') {
-      const rim = rimRy(h);
-      return (px / rx) ** 2 + (Math.max(0, py - ry + rim) / rim) ** 2 <= 1;
-    }
-    if (vertices) return vertices.every((a, i) => {
-      const b = vertices[(i + 1) % vertices.length];
-      return (b[0]-a[0]) * (center[1]+vy*t-a[1]) - (b[1]-a[1]) * (center[0]+vx*t-a[0]) >= 0;
-    });
-    return !radius || Math.max(0, px-rx+radius) ** 2 + Math.max(0, py-ry+radius) ** 2 <= radius ** 2;
+function adjustRoughness(e) {
+  const max = Math.max(e.width, e.height), min = Math.min(e.width, e.height);
+  if ((min >= 20 && max >= 50) ||
+      (min >= 15 && e.roundness && ['rectangle', 'diamond', 'line', 'image', 'stickynote',
+        'iframe', 'embeddable'].includes(e.type)) ||
+      (LINEAR.includes(e.type) && max >= 50))
+    return e.roughness;
+  return Math.min(e.roughness / (max < 10 ? 3 : 2), 2.5);
+}
+const isLoop = (points) => points.length >= 3 &&
+  Math.hypot(points[0][0] - points.at(-1)[0], points[0][1] - points.at(-1)[1]) <= 8;
+function roughOptions(e, continuous = false) {
+  const sw = e.strokeWidth;
+  const options = {
+    seed: e.seed || 1,
+    strokeLineDash: e.strokeStyle === 'dashed' ? [8, 8 + sw] : e.strokeStyle === 'dotted' ? [1.5, 6 + sw] : undefined,
+    disableMultiStroke: e.strokeStyle !== 'solid',
+    strokeWidth: e.strokeStyle !== 'solid' ? sw + 0.5 : sw,
+    fillWeight: sw / 2,
+    // ponytail: at most ~800 hatch lines per direction, so a board-sized fill stays cheap.
+    hachureGap: Math.max(sw * 4, Math.hypot(e.width, e.height) / 800),
+    roughness: adjustRoughness(e),
+    stroke: e.strokeColor,
+    preserveVertices: continuous || e.roughness < 2,
   };
-  let low = 0, high = 1;
-  // Most rays meet a straight side. Curved corners need a bounded search.
-  if (inside(high)) low = high;
-  else for (let i = 0; i < 32; i++) {
-    const mid = (low + high) / 2;
-    if (inside(mid)) low = mid;
-    else high = mid;
+  if (['rectangle', 'diamond', 'ellipse', 'iframe', 'embeddable'].includes(e.type)) {
+    options.fillStyle = e.fillStyle;
+    options.fill = transparent(e.backgroundColor) ? undefined : e.backgroundColor;
+    if (e.type === 'ellipse') options.curveFitting = 1;
+  } else if ((e.type === 'line' || e.type === 'freedraw') && isLoop(e.points)) {
+    options.fillStyle = e.fillStyle;
+    options.fill = e.backgroundColor === 'transparent' ? undefined : e.backgroundColor;
   }
-  return [center[0] + vx * low, center[1] + vy * low];
+  return options;
+}
+/* SVG for a roughjs drawable, as RoughSVG.draw writes it. */
+function draw(drawable, extra = '') {
+  const o = drawable.options;
+  return drawable.sets.map((set) => {
+    const d = generator.opsToPath(set, 2);
+    if (set.type === 'path')
+      return `<path d="${d}" stroke="${escape(o.stroke)}" stroke-width="${o.strokeWidth}" fill="none"${o.strokeLineDash ? ` stroke-dasharray="${o.strokeLineDash.join(' ')}"` : ''}${extra}/>`;
+    if (set.type === 'fillPath')
+      return `<path d="${d}" stroke="none" fill="${escape(o.fill)}"${['curve', 'polygon'].includes(drawable.shape) ? ' fill-rule="evenodd"' : ''}/>`;
+    return `<path d="${d}" stroke="${escape(o.fill)}" stroke-width="${o.fillWeight < 0 ? o.strokeWidth / 2 : o.fillWeight}" fill="none"/>`;
+  }).join('');
+}
+export function cornerRadius(x, e) {
+  if (e.roundness?.type === 1 || e.roundness?.type === 2) return x * 0.25;
+  if (e.roundness?.type === 3) {
+    const fixed = e.roundness.value ?? 32;
+    return x <= fixed / 0.25 ? x * 0.25 : fixed;
+  }
+  return 0;
+}
+function diamondPoints(e) {
+  const top = Math.floor(e.width / 2) + 1, right = Math.floor(e.height / 2) + 1;
+  return [[top, 0], [e.width, right], [top, e.height], [0, right]];
+}
+function shapeDrawable(e) {
+  const { width: w, height: h } = e;
+  if (['rectangle', 'iframe', 'embeddable'].includes(e.type)) {
+    if (!e.roundness) return generator.rectangle(0, 0, w, h, roughOptions(e));
+    const r = cornerRadius(Math.min(w, h), e);
+    return generator.path(`M ${r} 0 L ${w - r} 0 Q ${w} 0, ${w} ${r} L ${w} ${h - r} Q ${w} ${h}, ${w - r} ${h} L ${r} ${h} Q 0 ${h}, 0 ${h - r} L 0 ${r} Q 0 0, ${r} 0`, roughOptions(e, true));
+  }
+  if (e.type === 'diamond') {
+    const [[tx, ty], [rx, ry], [bx, by], [lx, ly]] = diamondPoints(e);
+    if (!e.roundness) return generator.polygon([[tx, ty], [rx, ry], [bx, by], [lx, ly]], roughOptions(e));
+    const vr = cornerRadius(Math.abs(tx - lx), e), hr = cornerRadius(Math.abs(ry - ty), e);
+    return generator.path(`M ${tx + vr} ${ty + hr} L ${rx - vr} ${ry - hr} C ${rx} ${ry}, ${rx} ${ry}, ${rx - vr} ${ry + hr} L ${bx + vr} ${by - hr} C ${bx} ${by}, ${bx} ${by}, ${bx - vr} ${by - hr} L ${lx + vr} ${ly + hr} C ${lx} ${ly}, ${lx} ${ly}, ${lx + vr} ${ly - hr} L ${tx - vr} ${ty + hr} C ${tx} ${ty}, ${tx} ${ty}, ${tx + vr} ${ty + hr}`, roughOptions(e, true));
+  }
+  return generator.ellipse(w / 2, h / 2, w, h, roughOptions(e));
 }
 
-/* Tight [x, y, w, h] around shapes. Connectors use their drawn path: a bound
-   arrow's stored box goes stale when its endpoints move. */
-export function extent(shapes, context = shapes) {
-  let left = Infinity,
-    top = Infinity,
-    right = -Infinity,
-    bottom = -Infinity;
-  for (const s of shapes)
-    for (const [x, y] of LINEAR.includes(s.type)
-      ? pathPoints(s, context)
-      : [[s.box[0], s.box[1]], [s.box[0] + s.box[2], s.box[1] + s.box[3]]]) {
-      left = Math.min(left, x);
-      top = Math.min(top, y);
-      right = Math.max(right, x);
-      bottom = Math.max(bottom, y);
+// Arrowheads (Excalidraw's bounds.ts getArrowheadPoints and shape.ts).
+const HEAD_SIZE = { arrow: 25, diamond: 12, diamond_outline: 12, cardinality_many: 15,
+  cardinality_one_or_many: 15, cardinality_zero_or_many: 15, cardinality_one: 20,
+  cardinality_exactly_one: 20, cardinality_zero_or_one: 20 };
+const turn = ([x, y], [cx, cy], a) => [cx + (x - cx) * Math.cos(a) - (y - cy) * Math.sin(a),
+  cy + (x - cx) * Math.sin(a) + (y - cy) * Math.cos(a)];
+function headPoints(e, points, curve, position, head, offset = 0) {
+  const ops = (curve.sets.find((s) => s.type === 'path') || curve.sets[0])?.ops || [];
+  if (ops.length < 2) return null;
+  const index = position === 'start' ? 1 : ops.length - 1, data = ops[index].data;
+  if (data.length !== 6) return null;
+  const p3 = [data[4], data[5]], p2 = [data[2], data[3]], p1 = [data[0], data[1]];
+  const prev = ops[index - 1];
+  const p0 = prev.op === 'move' ? prev.data : prev.op === 'bcurveTo' ? [prev.data[4], prev.data[5]] : [0, 0];
+  const at = (t, i) => (1 - t) ** 3 * p3[i] + 3 * t * (1 - t) ** 2 * p2[i] + 3 * t ** 2 * (1 - t) * p1[i] + p0[i] * t ** 3;
+  const [x2, y2] = position === 'start' ? p0 : p3, [x1, y1] = [at(0.3, 0), at(0.3, 1)];
+  const distance = Math.hypot(x2 - x1, y2 - y1) || 1, nx = (x2 - x1) / distance, ny = (y2 - y1) / distance;
+  const [c, p] = position === 'end' ? [points.at(-1), points.at(-2) || [0, 0]] : [points[0], points[1] || [0, 0]];
+  const size = Math.min(HEAD_SIZE[head] ?? 15, Math.hypot(c[0] - p[0], c[1] - p[1]) * (head.startsWith('diamond') ? 0.25 : 0.5));
+  const tx = x2 - nx * size * offset, ty = y2 - ny * size * offset, xs = tx - nx * size, ys = ty - ny * size;
+  if (head.startsWith('circle')) return [tx, ty, Math.hypot(ys - ty, xs - tx) + e.strokeWidth - 2];
+  const angle = ((head === 'bar' ? 90 : head === 'arrow' ? 20 : 25) * Math.PI) / 180;
+  if (head === 'cardinality_many' || head === 'cardinality_one_or_many')
+    return [xs, ys, ...turn([tx, ty], [xs, ys], -angle), ...turn([tx, ty], [xs, ys], angle)];
+  const a = turn([xs, ys], [tx, ty], -angle), b = turn([xs, ys], [tx, ty], angle);
+  if (head.startsWith('diamond')) {
+    const [px, py] = position === 'start' ? points[1] || [0, 0] : points.at(-2) || [0, 0];
+    const o = position === 'start'
+      ? turn([tx + size * 2, ty], [tx, ty], Math.atan2(py - ty, px - tx))
+      : turn([tx - size * 2, ty], [tx, ty], Math.atan2(ty - py, tx - px));
+    return [tx, ty, ...a, ...o, ...b];
+  }
+  return [tx, ty, ...a, ...b];
+}
+function arrowheads(e, points, curve, options, position, head) {
+  const line = { ...options, roughness: Math.min(1, options.roughness || 0) };
+  if (e.strokeStyle === 'dotted') line.strokeLineDash = [1.5, 6 + e.strokeWidth - 1 - 1];
+  else delete line.strokeLineDash;
+  const solid = (fill) => {
+    const o = { ...options, fill, fillStyle: 'solid', roughness: Math.min(1, options.roughness || 0) };
+    delete o.strokeLineDash;
+    return o;
+  };
+  const toTip = (p) => p ? [generator.line(p[2], p[3], p[0], p[1], line), generator.line(p[4], p[5], p[0], p[1], line)] : [];
+  const bar = (p) => p ? [generator.line(p[2], p[3], p[4], p[5], line)] : [];
+  const circle = (p, fill, scale = 1) => {
+    if (!p) return [];
+    const o = { ...options, fill, fillStyle: 'solid', stroke: e.strokeColor, roughness: Math.min(0.5, options.roughness || 0) };
+    delete o.strokeLineDash;
+    return [generator.circle(p[0], p[1], p[2] * scale, o)];
+  };
+  const pts = (h, offset) => headPoints(e, points, curve, position, h, offset);
+  const paper = '#ffffff';
+  switch (head) {
+    case 'circle': case 'circle_outline':
+      return circle(pts(head), head === 'circle' ? e.strokeColor : paper);
+    case 'triangle': case 'triangle_outline': case 'diamond': case 'diamond_outline': {
+      const p = pts(head);
+      if (!p) return [];
+      const corners = [];
+      for (let i = 0; i < p.length; i += 2) corners.push([p[i], p[i + 1]]);
+      return [generator.polygon([...corners, corners[0]], solid(head.endsWith('_outline') ? paper : e.strokeColor))];
     }
-  return [left, top, right - left, bottom - top];
+    case 'cardinality_one': return bar(pts(head));
+    case 'cardinality_many': return toTip(pts(head));
+    case 'cardinality_one_or_many': return [...toTip(pts('cardinality_many')), ...bar(pts('cardinality_one', -0.25))];
+    case 'cardinality_exactly_one': return [...bar(pts('cardinality_one', -0.5)), ...bar(pts('cardinality_one'))];
+    case 'cardinality_zero_or_one': return [...circle(pts('circle_outline', 1.5), paper, 0.8), ...bar(pts('cardinality_one', -0.5))];
+    case 'cardinality_zero_or_many': return [...toTip(pts('cardinality_many')), ...circle(pts('circle_outline', 1.5), paper, 0.8)];
+    default: return toTip(pts(head));
+  }
+}
+function elbowPath(points, radius = 16) {
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [prev, point, next] = [points[i - 1], points[i], points[i + 1]];
+    const corner = Math.min(radius, Math.hypot(next[0] - point[0], next[1] - point[1]) / 2,
+      Math.hypot(prev[0] - point[0], prev[1] - point[1]) / 2);
+    const toward = (other) => {
+      const horizontal = Math.abs(other[0] - point[0]) >= Math.abs(other[1] - point[1]);
+      return horizontal ? [point[0] + Math.sign(other[0] - point[0]) * corner, point[1]]
+        : [point[0], point[1] + Math.sign(other[1] - point[1]) * corner];
+    };
+    const [a, b] = [toward(prev), toward(next)];
+    d += ` L ${a[0]} ${a[1]} Q ${point[0]} ${point[1]}, ${b[0]} ${b[1]}`;
+  }
+  return `${d} L ${points.at(-1)[0]} ${points.at(-1)[1]}`;
+}
+function linearSVG(e, label) {
+  const points = e.path, options = roughOptions(e);
+  const curve = e.elbowed ? generator.path(elbowPath(points), roughOptions(e, true))
+    : !e.roundness ? (options.fill ? generator.polygon(points, options) : generator.linearPath(points, options))
+    : generator.curve(points, options);
+  const shapes = [curve];
+  if (e.type === 'arrow') {
+    if (e.startArrowhead) shapes.push(...arrowheads(e, points, curve, options, 'start', e.startArrowhead));
+    if (e.endArrowhead) shapes.push(...arrowheads(e, points, curve, options, 'end', e.endArrowhead));
+  }
+  let body = shapes.map((s) => draw(s)).join(''), defs = '';
+  if (label) {
+    // Cut a padded hole for the label, as Excalidraw does.
+    const [x1, y1, x2, y2] = pointBounds(points), P = BOUND_TEXT_PADDING, id = `mask-${escape(e.id)}`;
+    const area = `x="${n(x1 - 100)}" y="${n(y1 - 100)}" width="${n(x2 - x1 + 200)}" height="${n(y2 - y1 + 200)}"`;
+    defs = `<mask id="${id}" maskUnits="userSpaceOnUse" ${area}><rect ${area} fill="#fff"/><rect x="${n(label.x - P)}" y="${n(label.y - P)}" width="${n(label.width + 2 * P)}" height="${n(label.height + 2 * P)}" fill="#000"/></mask>`;
+    body = `<g mask="url(#${id})">${body}</g>`;
+  }
+  return defs + `<g stroke-linecap="round">${body}</g>`;
 }
 
-export function bounds(shapes, context = shapes) {
-  if (!shapes.length) return [-40, -40, 800, 500];
-  const [left, top, width, height] = extent(shapes, context);
-  return [left - 30, top - 30, Math.max(100, width + 60), Math.max(100, height + 60)];
+// Freedraw (Excalidraw's shape.ts freedraw helpers).
+function simplify(points, tolerance) {
+  if (points.length < 3) return points;
+  const [a, b] = [points[0], points.at(-1)];
+  let index = 0, max = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [px, py] = points[i], [dx, dy] = [b[0] - a[0], b[1] - a[1]], length = Math.hypot(dx, dy);
+    const distance = length ? Math.abs(dy * px - dx * py + b[0] * a[1] - b[1] * a[0]) / length
+      : Math.hypot(px - a[0], py - a[1]);
+    if (distance > max) { max = distance; index = i; }
+  }
+  if (max <= tolerance) return [a, b];
+  return [...simplify(points.slice(0, index + 1), tolerance).slice(0, -1), ...simplify(points.slice(index), tolerance)];
 }
-
-/* Shapes a region [x, y, w, h] contains entirely, or touches when TOUCHING. */
-export function shapesInRegion(shapes, region, touching = false) {
-  const [rx, ry, rw, rh] = region;
-  return shapes.filter((s) => {
-    const [x, y, w, h] = extent([s], shapes);
-    return touching
-      ? x <= rx + rw && x + w >= rx && y <= ry + rh && y + h >= ry
-      : x >= rx && y >= ry && x + w <= rx + rw && y + h <= ry + rh;
+function strokePath(outline) {
+  if (!outline.length) return '';
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const parts = ['M', outline[0], 'Q'];
+  outline.forEach((p, i) => parts.push(...(i === outline.length - 1 ? [p, mid(p, outline[0]), 'L', outline[0], 'Z'] : [p, mid(p, outline[i + 1])])));
+  return parts.map((p) => typeof p === 'string' ? p : `${n(p[0])},${n(p[1])}`).join(' ');
+}
+function freedrawSVG(e) {
+  const constant = e.strokeOptions?.variability === 'constant';
+  const input = !e.points.length ? [[0, 0, 0.5]]
+    : e.simulatePressure || constant ? e.points.map(([x, y]) => [x, y, constant ? 1 : 0.5])
+    : e.points.map(([x, y], i) => [x, y, e.pressures[i] ?? 0.5]);
+  // ponytail: constant-width strokes approximate @excalidraw/laser-pointer with an unthinned stroke.
+  const outline = getStroke(input, {
+    simulatePressure: e.simulatePressure && !constant,
+    size: e.strokeWidth * (constant ? 2.8 : 4.25),
+    thinning: constant ? 0 : 0.6, smoothing: 0.5,
+    streamline: e.strokeOptions?.streamline ?? 0.5,
+    easing: (t) => Math.sin((t * Math.PI) / 2), last: true,
   });
+  let body = '';
+  if (isLoop(e.points) && !transparent(e.backgroundColor))
+    body += draw(generator.curve(simplify(e.points, 0.75), { ...roughOptions(e), stroke: 'none' }));
+  return body + `<path d="${strokePath(outline)}" fill="${escape(e.strokeColor)}" stroke="none"/>`;
 }
 
-
-/* Sloppy geometry. The generator is seeded from the shape id, so every
-   browser and the host PNG draw the same wobble for the same shape. */
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-const n = (v) => String(+v.toFixed(2));
-function random(seed) {
-  let a = 0;
-  for (const c of seed) a = (a * 31 + c.charCodeAt(0)) | 0;
+function stickyPath(e, random, shadow = 0) {
+  const amount = Math.min([0, 1.5, 8][Math.max(0, Math.min(2, Math.round(e.roughness)))], Math.min(e.width, e.height) * 0.012);
+  const corners = [[0, 0], [e.width, 0], [e.width, e.height], [0, e.height]]
+    .map(([x, y]) => [x + shadow + (random() * 2 - 1) * amount, y + shadow + (random() * 2 - 1) * amount]);
+  const radius = e.roundness ? Math.min(Math.min(e.width, e.height) * 0.04, 16) : 0;
+  let d = '';
+  corners.forEach((c, i) => {
+    const prev = corners[(i + 3) % 4], next = corners[(i + 1) % 4];
+    const r = Math.min(radius, Math.hypot(c[0] - prev[0], c[1] - prev[1]) / 2, Math.hypot(c[0] - next[0], c[1] - next[1]) / 2);
+    const toward = (o) => { const l = Math.hypot(o[0] - c[0], o[1] - c[1]) || 1; return [c[0] + (o[0] - c[0]) / l * r, c[1] + (o[1] - c[1]) / l * r]; };
+    const [a, b] = [toward(prev), toward(next)];
+    d += `${i ? 'L' : 'M'} ${n(a[0])} ${n(a[1])} Q ${n(c[0])} ${n(c[1])} ${n(b[0])} ${n(b[1])} `;
+  });
+  return d + 'Z';
+}
+function seeded(seed) {
+  let a = seed >>> 0 || 1;
   return () => {
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -125,220 +266,112 @@ function random(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const offset = (length, r) => (r <= 0 ? 0 : (r + 0.18 * r * r) * clamp(length / 100, 0.35, 1.5));
-function line(x1, y1, x2, y2, r, rng, cont) {
-  const dx = x2 - x1,
-    dy = y2 - y1,
-    length = Math.hypot(dx, dy) || 0.001,
-    o = offset(length, r),
-    j = () => (rng() * 2 - 1) * o,
-    nx = -dy / length,
-    ny = dx / length,
-    bow = (rng() * 2 - 1) * o * 0.9;
-  return (
-    (cont ? '' : `M${n(x1 + j() * 0.5)} ${n(y1 + j() * 0.5)}`) +
-    `C${n(x1 + dx * 0.3 + j() * 0.7 + nx * bow)} ${n(y1 + dy * 0.3 + j() * 0.7 + ny * bow)} ${n(x1 + dx * 0.7 + j() * 0.7 + nx * bow)} ${n(y1 + dy * 0.7 + j() * 0.7 + ny * bow)} ${n(x2 + j() * 0.5)} ${n(y2 + j() * 0.5)}`
-  );
+// ponytail: sticky notes omit Excalidraw's lifted corner and date footer.
+function stickySVG(e) {
+  const body = stickyPath(e, seeded(e.seed)), id = `sticky-${escape(e.id)}`;
+  return `<path d="${stickyPath(e, seeded(e.seed + 1), 3)}" fill="#000" fill-opacity="0.16" stroke="none"/><path d="${body}" fill="${escape(e.backgroundColor)}" stroke="none"/><clipPath id="${id}"><path d="${body}"/></clipPath><path d="${body}" fill="none" stroke="#000" stroke-opacity="0.08" stroke-width="1" clip-path="url(#${id})"/>`;
 }
-function polygon(pts, r, rng) {
-  return (
-    pts.map((a, i) => line(...a, ...pts[(i + 1) % pts.length], r, rng, i > 0)).join('') + 'Z'
-  );
-}
-function through(pts) {
-  let d = `M${n(pts[0][0])} ${n(pts[0][1])}`;
-  for (let i = 1; i < pts.length - 1; i++)
-    d += `Q${n(pts[i][0])} ${n(pts[i][1])} ${n((pts[i][0] + pts[i + 1][0]) / 2)} ${n((pts[i][1] + pts[i + 1][1]) / 2)}`;
-  return d + `L${n(pts.at(-1)[0])} ${n(pts.at(-1)[1])}`;
-}
-function ellipse(cx, cy, rx, ry, r, rng) {
-  if (r <= 0 || rx < 1 || ry < 1)
-    return `M${n(cx + rx)} ${n(cy)}A${n(rx)} ${n(ry)} 0 1 0 ${n(cx - rx)} ${n(cy)}A${n(rx)} ${n(ry)} 0 1 0 ${n(cx + rx)} ${n(cy)}Z`;
-  const steps = clamp(Math.round((Math.PI * (rx + ry)) / 10), 16, 90) + 3,
-    o = offset(Math.min(rx, ry) * 2, r),
-    ph1 = rng() * Math.PI * 2,
-    ph2 = rng() * Math.PI * 2,
-    k1 = 2 + Math.floor(rng() * 2),
-    k2 = 4 + Math.floor(rng() * 3),
-    a1 = o * (0.55 + rng() * 0.45),
-    a2 = o * 0.35 * rng(),
-    start = rng() * Math.PI * 2,
-    total = Math.PI * 2 + 0.14 + rng() * 0.16,
-    pts = [];
-  for (let i = 0; i <= steps; i++) {
-    const a = start + (total * i) / steps,
-      d = a1 * Math.sin(k1 * a + ph1) + a2 * Math.sin(k2 * a + ph2);
-    pts.push([cx + (rx + d) * Math.cos(a), cy + (ry + d * 0.85) * Math.sin(a)]);
+
+function imageSVG(e, files) {
+  const file = e.fileId && files?.[e.fileId];
+  const w = e.width, h = e.height;
+  if (!file) return `<rect width="${n(w)}" height="${n(h)}" fill="#e7e7e7"/><path transform="translate(${n(w / 2 - 12)} ${n(h / 2 - 12)})" d="M3 3h18v18H3Zm4 12 4-5 3 4 2-2 4 5H7Z" fill="#888"/>`;
+  let uw = w, uh = h, cx = 0, cy = 0;
+  if (e.crop) {
+    uw = w / (e.crop.width / e.crop.naturalWidth);
+    uh = h / (e.crop.height / e.crop.naturalHeight);
+    cx = e.crop.x / (e.crop.naturalWidth / uw);
+    cy = e.crop.y / (e.crop.naturalHeight / uh);
   }
-  return through(pts);
+  const [sx, sy] = e.scale, id = `image-${escape(e.id)}`;
+  const flip = sx !== 1 || sy !== 1 ? ` transform="translate(${n(w / 2)} ${n(h / 2)}) scale(${sx} ${sy}) translate(${n(-w / 2)} ${n(-h / 2)})"` : '';
+  const radius = e.roundness ? cornerRadius(Math.min(w, h), e) : 0;
+  return `<clipPath id="${id}"><rect width="${n(w)}" height="${n(h)}"${radius ? ` rx="${n(radius)}"` : ''}/></clipPath><g clip-path="url(#${id})"><g${flip}><image href="${escape(file.dataURL)}" x="${n(-cx)}" y="${n(-cy)}" width="${n(uw)}" height="${n(uh)}" preserveAspectRatio="none"/></g></g>`;
 }
-function arc(cx, cy, rx, ry, a0, a1, r, rng) {
-  const steps = clamp(Math.round((Math.PI * (rx + ry)) / 12), 8, 60),
-    o = offset(Math.min(rx, ry) * 2, r) * 0.6,
-    pts = [];
-  for (let i = 0; i <= steps; i++) {
-    const a = a0 + ((a1 - a0) * i) / steps,
-      d = (rng() * 2 - 1) * o;
-    pts.push([cx + (rx + d) * Math.cos(a), cy + (ry + d * 0.85) * Math.sin(a)]);
-  }
-  return through(pts);
+
+export function textSVG(e) {
+  const lines = e.text.split('\n'), lineHeight = e.fontSize * e.lineHeight;
+  const x = e.textAlign === 'center' ? e.width / 2 : e.textAlign === 'right' ? e.width : 0;
+  const anchor = e.textAlign === 'center' ? 'middle' : e.textAlign === 'right' ? 'end' : 'start';
+  const top = verticalOffset(e.fontFamily, e.fontSize, lineHeight);
+  // One positioned text per line keeps blank lines and works in viewers that ignore tspans.
+  return lines.map((line, i) => `<text x="${n(x)}" y="${n(i * lineHeight + top)}" font-family="${escape(fontStack(e.fontFamily))}" font-size="${n(e.fontSize)}px" fill="${escape(e.strokeColor)}" text-anchor="${anchor}" xml:space="preserve" style="white-space:pre">${escape(line)}</text>`).join('');
 }
-function roundRect(x, y, w, h, rad, r, rng) {
-  const o = offset(Math.min(w, h), r) * 0.5,
-    j = () => (rng() * 2 - 1) * o,
-    q = (cx, cy, ex, ey) => `Q${n(cx)} ${n(cy)} ${n(ex)} ${n(ey)}`;
-  return (
-    line(x + rad, y, x + w - rad, y, r, rng, false) +
-    q(x + w + j(), y + j(), x + w + j() * 0.3, y + rad) +
-    line(x + w, y + rad, x + w, y + h - rad, r, rng, true) +
-    q(x + w + j(), y + h + j(), x + w - rad, y + h + j() * 0.3) +
-    line(x + w - rad, y + h, x + rad, y + h, r, rng, true) +
-    q(x + j(), y + h + j(), x + j() * 0.3, y + h - rad) +
-    line(x, y + h - rad, x, y + rad, r, rng, true) +
-    q(x + j(), y + j(), x + rad + j() * 0.3, y + j() * 0.3)
-  );
+
+function frameSVG(e) {
+  const name = e.name ?? 'Frame';
+  return `<rect class="frame-outline" width="${n(e.width)}" height="${n(e.height)}" rx="8" ry="8" fill="none" stroke="#bbb" stroke-width="2"/><text x="0" y="-6" font-family="Noto Sans, sans-serif" font-size="14px" fill="#999999">${escape(name)}</text>`;
 }
-const rimRy = (h) => Math.min(16, h * 0.18);
-const sticky = ([x, y, w, h]) => {
-  const lift = Math.min(3, h * 0.06);
-  return [
-    [x + 1, y + lift],
-    [x + w - 2, y],
-    [x + w, y + h - 1],
-    [x, y + h],
-  ];
-};
-/* Outline paths of one shape: the strokes it is drawn with, and its
-   smooth silhouette used for fills. */
-function outline(s, r, rng) {
-  const [x, y, w, h] = s.box;
-  if (s.type === 'ellipse') return [ellipse(x + w / 2, y + h / 2, w / 2, h / 2, r, rng)];
-  if (s.type === 'diamond')
-    return [
-      polygon(
-        [
-          [x + w / 2, y],
-          [x + w, y + h / 2],
-          [x + w / 2, y + h],
-          [x, y + h / 2],
-        ],
-        r,
-        rng,
-      ),
-    ];
-  if (s.type === 'sticky') return [polygon(sticky(s.box), r, rng)];
-  if (s.type === 'cylinder') {
-    const ry = rimRy(h),
-      cx = x + w / 2;
-    if (r <= 0)
-      return [
-        ellipse(cx, y + ry, w / 2, ry, 0, rng),
-        `M${n(x)} ${n(y + ry)}V${n(y + h - ry)}A${n(w / 2)} ${n(ry)} 0 0 0 ${n(x + w)} ${n(y + h - ry)}V${n(y + ry)}`,
-      ];
-    return [
-      ellipse(cx, y + ry, w / 2, ry, r, rng),
-      line(x, y + ry, x, y + h - ry, r, rng, false) +
-        line(x + w, y + ry, x + w, y + h - ry, r, rng, false),
-      arc(cx, y + h - ry, w / 2, ry, 0, Math.PI, r, rng),
-    ];
-  }
-  const rad = Math.min(32, Math.min(w, h) * 0.25);
-  if (styleOf(s).edges === 'round' && Math.min(w, h) > 6)
-    return [
-      r <= 0
-        ? `M${n(x + rad)} ${n(y)}H${n(x + w - rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x + w)} ${n(y + rad)}V${n(y + h - rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x + w - rad)} ${n(y + h)}H${n(x + rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x)} ${n(y + h - rad)}V${n(y + rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x + rad)} ${n(y)}Z`
-        : roundRect(x, y, w, h, rad, r, rng),
-    ];
-  return [
-    polygon(
-      [
-        [x, y],
-        [x + w, y],
-        [x + w, y + h],
-        [x, y + h],
-      ],
-      r,
-      rng,
-    ),
-  ];
+function placeholderSVG(e) {
+  const filled = { ...e, roughness: 0, backgroundColor: transparent(e.backgroundColor) ? '#d3d3d3' : e.backgroundColor, fillStyle: 'solid' };
+  return draw(shapeDrawable(filled)) + `<text x="${n(e.width / 2)}" y="${n(e.height / 2)}" text-anchor="middle" font-family="Noto Sans, sans-serif" font-size="14px" fill="#1e1e1e">${escape((e.link || 'Embedded content').slice(0, 80))}</text>`;
 }
-function hatch(s, style, rng) {
-  const [x, y, w, h] = s.box,
-    cx = x + w / 2,
-    cy = y + h / 2,
-    R = Math.hypot(w, h) / 2;
-  // ponytail: at most 400 lines per direction, so a board-sized shape stays cheap to draw.
-  const gap = Math.max(6, style.width * 3.4, (2 * R) / 400);
-  let d = '';
-  for (const angle of style.pattern === 'cross' ? [-Math.PI / 4, Math.PI / 4] : [-Math.PI / 4]) {
-    const dx = Math.cos(angle),
-      dy = Math.sin(angle);
-    for (let t = -R - gap + gap * rng(); t <= R + gap; t += gap) {
-      const px = cx - dy * t,
-        py = cy + dx * t;
-      d += line(px - dx * R, py - dy * R, px + dx * R, py + dy * R, style.rough * 0.35, rng, false);
-    }
-  }
-  return d;
+
+/* An unfilled shape is picked by its interior too; roughjs strokes are open lines. */
+function silhouette(e) {
+  const { width: w, height: h } = e;
+  if (e.type === 'ellipse') return `<ellipse class="hit" cx="${n(w / 2)}" cy="${n(h / 2)}" rx="${n(w / 2)}" ry="${n(h / 2)}" fill="transparent"/>`;
+  if (e.type === 'diamond')
+    return `<path class="hit" d="M${diamondPoints(e).map((p) => p.map(n).join(' ')).join('L')}Z" fill="transparent"/>`;
+  return `<rect class="hit" width="${n(w)}" height="${n(h)}" fill="transparent"/>`;
 }
-export function shapeSVG(s, shapes) {
-  const [x, y, w, h] = s.box,
-    style = styleOf(s),
-    ink = escape(style.stroke),
-    rng = random(s.id),
-    dash =
-      style.dash === 'dashed'
-        ? ` stroke-dasharray="10 ${n(7 + style.width)}"`
-        : style.dash === 'dotted'
-          ? ` stroke-dasharray="1.2 ${n(4.5 + style.width * 1.4)}"`
-          : '';
-  const attrs = `stroke="${ink}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"${dash}`;
-  const passes = style.rough > 0 && style.dash === 'solid' ? 2 : 1;
-  let body = '';
-  if (s.type === 'image')
-    body = `<image href="${escape(imageSource(s))}" x="${x}" y="${y}" width="${w}" height="${h}"/>`;
-  else if (LINEAR.includes(s.type)) {
-    const pts = pathPoints(s, shapes);
-    if (s.type === 'pen') body = `<path d="${through(pts)}" fill="none" ${attrs}/>`;
-    else
-      for (let p = 0; p < passes; p++)
-        body += `<path d="${pts.map((a, i) => (i ? line(...pts[i - 1], ...a, style.rough, rng, i > 1) : '')).join('')}" fill="none" ${attrs}/>`;
-    if (s.type === 'arrow') {
-      const [ax, ay] = pts.at(-2), [bx, by] = pts.at(-1);
-      const length = Math.hypot(bx - ax, by - ay);
-      if (length) {
-        const ux = (bx - ax) / length, uy = (by - ay) / length, size = style.width * 7;
-        // Draw the head directly so SVG readers need no marker/context paint support.
-        body += `<path d="M${n(bx)} ${n(by)}L${n(bx - size * ux - size / 2 * uy)} ${n(by - size * uy + size / 2 * ux)}L${n(bx - size * ux + size / 2 * uy)} ${n(by - size * uy - size / 2 * ux)}Z" fill="${ink}"/>`;
-      }
-    }
-  } else if (s.type !== 'text') {
-    const fill = escape(style.fill);
-    if (fill !== 'none') {
-      const silhouette = outline(s, 0, rng).join('');
-      if (style.pattern === 'solid') body += `<path d="${silhouette}" fill="${fill}" stroke="none"/>`;
-      else
-        body += `<clipPath id="clip-${escape(s.id)}"><path d="${silhouette}"/></clipPath><g clip-path="url(#clip-${escape(s.id)})"><path d="${hatch(s, style, rng)}" fill="none" stroke="${fill}" stroke-width="${n(Math.max(1, style.width * 0.6))}" stroke-linecap="round"/></g>`;
-    }
-    for (let p = 0; p < passes; p++)
-      for (const d of outline(s, style.rough, rng)) body += `<path d="${d}" fill="none" ${attrs}/>`;
-  }
-  if (s.text) {
-    const centered = !['text', ...LINEAR].includes(s.type),
-      size = style.fontSize,
-      lead = size * 1.375;
-    const lines = s.text.split('\n'),
-      tx = centered ? x + w / 2 : x + 10;
-    const ty = centered ? y + h / 2 - ((lines.length - 1) * lead) / 2 + size * 0.375 : y + size * 1.5;
-    // Explicit baselines also work in SVG viewers that ignore tspan positions.
-    // Empty lines still consume a full line of vertical space.
-    body += lines.map((line, i) => `<text x="${tx}" y="${n(ty + i * lead)}" text-anchor="${centered ? 'middle' : 'start'}" font-family="Noto Sans, sans-serif" font-size="${size}" fill="${ink}">${escape(line)}</text>`).join('');
-  }
-  return `<g data-shape="${escape(s.id)}"${style.opacity < 100 ? ` opacity="${style.opacity / 100}"` : ''}>${body}</g>`;
+const cache = new Map();
+/* SVG group for one resolved element. INTERACTIVE adds editor hit areas. */
+export function elementSVG(e, scene, files, interactive = false) {
+  const label = e.type === 'arrow' && scene.labels.get(e.id)?.[0];
+  const key = JSON.stringify([e, interactive, e.fileId ? Boolean(files?.[e.fileId]) : 0,
+    e.frameId && scene.byId.get(e.frameId)?.opacity, label && [label.x, label.y, label.width, label.height]]);
+  const hit = cache.get(key);
+  if (hit) return hit;
+  let svg;
+  const deg = n((e.angle * 180) / Math.PI);
+  const local = (body) => `<g transform="translate(${n(e.x)} ${n(e.y)})${e.angle ? ` rotate(${deg} ${n(e.width / 2)} ${n(e.height / 2)})` : ''}">${body}</g>`;
+  if (LINEAR.includes(e.type)) {
+    svg = linearSVG(e, label);
+    if (interactive) svg = `<path class="hit" d="M${e.path.map((p) => `${n(p[0])} ${n(p[1])}`).join('L')}" stroke="transparent" stroke-width="14" vector-effect="non-scaling-stroke" fill="none"/>` + svg;
+  } else if (e.type === 'freedraw') {
+    const [x1, y1, x2, y2] = pointBounds(e.points);
+    svg = `<g transform="translate(${n(e.x)} ${n(e.y)})${e.angle ? ` rotate(${deg} ${n((x1 + x2) / 2)} ${n((y1 + y2) / 2)})` : ''}">${freedrawSVG(e)}</g>`;
+  } else if (e.type === 'text')
+    svg = local((interactive ? `<rect class="hit" width="${n(e.width)}" height="${n(e.height)}" fill="transparent"/>` : '') + textSVG(e));
+  else if (e.type === 'image') svg = local(imageSVG(e, files));
+  else if (e.type === 'stickynote') svg = local(stickySVG(e));
+  else if (e.type === 'frame' || e.type === 'magicframe') svg = local(frameSVG(e));
+  else if (e.type === 'embeddable' || e.type === 'iframe') svg = local(placeholderSVG(e));
+  else svg = local((interactive ? silhouette(e) : '') + `<g stroke-linecap="round">${draw(shapeDrawable(e))}</g>`);
+  const frame = e.frameId && scene.byId.get(e.frameId);
+  const opacity = ((frame && ['frame', 'magicframe'].includes(frame.type) ? frame.opacity : 100) * e.opacity) / 10000;
+  svg = `<g data-shape="${escape(e.id)}"${LINEAR.includes(e.type) ? ' data-linear="true"' : ''}${opacity < 1 ? ` opacity="${n(opacity)}"` : ''}>${svg}</g>`;
+  if (cache.size > 4000) cache.clear();
+  cache.set(key, svg);
+  return svg;
 }
-export function boardSVG(shapes, maxEdge = 2048, context = shapes, box = bounds(shapes, context), maxScale = 1) {
+/* Clip paths for frames, so elements inside a frame stay inside it. */
+function frameClips(scene) {
+  return scene.order.filter((e) => e.type === 'frame' || e.type === 'magicframe').map((f) =>
+    `<clipPath id="frame-${escape(f.id)}"><rect width="${n(f.width)}" height="${n(f.height)}" rx="8" ry="8" transform="translate(${n(f.x)} ${n(f.y)})${f.angle ? ` rotate(${n((f.angle * 180) / Math.PI)} ${n(f.width / 2)} ${n(f.height / 2)})` : ''}"/></clipPath>`).join('');
+}
+export function sceneSVG(scene, files, interactive = false) {
+  return frameClips(scene) + scene.order.map((e) => {
+    const svg = elementSVG(e, scene, files, interactive);
+    const frame = e.frameId && scene.byId.get(e.frameId);
+    return frame && ['frame', 'magicframe'].includes(frame.type) ? `<g clip-path="url(#frame-${escape(frame.id)})">${svg}</g>` : svg;
+  }).join('');
+}
+/* A standalone board SVG with an opaque white background. FONTS maps a
+   font family to an embeddable data URL for viewers without the fonts. */
+export function boardSVG(elements, { files = {}, maxEdge = 2048, box, maxScale = 1, context = elements, fonts } = {}) {
+  const scene = resolveScene(context);
+  const shown = new Set(elements.flatMap((e) => [e.id, ...(scene.labels.get(e.id) || []).map((t) => t.id)]));
+  const subset = { ...scene, order: scene.order.filter((e) => shown.has(e.id)) };
+  box ||= bounds(elements, scene);
   const scale = Math.min(maxScale, maxEdge / Math.max(box[2], box[3]));
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.join(' ')}"><rect x="${box[0]}" y="${box[1]}" width="${box[2]}" height="${box[3]}" fill="#ffffff"/>${shapes.map((s) => shapeSVG(s, context)).join('')}</svg>`;
+  const faces = fonts ? Object.entries(fonts).map(([family, url]) => `@font-face{font-family:"${family}";src:url(${url})}`).join('') : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.map(n).join(' ')}">${faces ? `<style>${faces}</style>` : ''}<rect x="${n(box[0])}" y="${n(box[1])}" width="${n(box[2])}" height="${n(box[3])}" fill="#ffffff"/>${sceneSVG(subset, files)}</svg>`;
+}
+/* Families a scene's text uses, for embedding fonts in exports. */
+export function usedFonts(elements) {
+  return [...new Set(resolveScene(elements).order.filter((e) => e.type === 'text').map((e) => fontStack(e.fontFamily).split(',')[0]))];
 }
 export function documentHTML(json) {
   const render = (node) => {

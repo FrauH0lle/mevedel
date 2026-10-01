@@ -254,7 +254,10 @@
         (should-not (mevedel-session-pending-follow-ups session))))))
 
 (mevedel-deftest mevedel-collaboration-editing--dispatch
-  (:doc "Guest requests forward only closed keys, including a board area, with host attribution")
+  ()
+  ,test
+  (test)
+  :doc "Guest requests forward only closed keys, including a board area, with host attribution"
   (let* ((guests (make-hash-table :test #'eql))
          (guest (list :name "Alice" :writable t))
          (session 'session)
@@ -287,7 +290,37 @@
         (should (equal (plist-get request :action) "read"))
         (should (eq (plist-get request :question) t))
         (should (eq (plist-get request :whole) t))
-        (should (equal (plist-get request :text) "Make it pretty"))))))
+        (should (equal (plist-get request :text) "Make it pretty")))))
+
+  :doc "Library requests reach the host's library only for writable links"
+  (let* ((directory (make-temp-file "mevedel-editing-library-" t))
+         (mevedel-shared-library-file (file-name-concat directory "library.excalidrawlib"))
+         (session (mevedel-session--create))
+         (guests (make-hash-table :test #'eql))
+         (guest (list :name "Alice" :writable t))
+         (room (list :session session :transport 'test :guests guests))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+         frames)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport _peer frame) (push frame frames))))
+          (puthash 1 guest guests)
+          ;; Refusals signal before any reply; the room handler reports them.
+          (cl-labels ((reply (args)
+                        (setq frames nil)
+                        (condition-case err
+                            (progn
+                              (mevedel-collaboration-editing--dispatch room 1 guest 7 args)
+                              (mevedel-shared-editing--parse
+                               (base64-decode-string (plist-get (car frames) :data))))
+                          (error (list :error (error-message-string err))))))
+            (should (string-match-p "\"libraryItems\":\\[\\]"
+                                    (plist-get (plist-get (reply '(:action "library")) :result) :text)))
+            (plist-put guest :writable nil)
+            (should (string-match-p "does not permit"
+                                    (plist-get (reply '(:action "library")) :error)))
+            (should-not (file-exists-p mevedel-shared-library-file))))
+      (delete-directory directory t))))
 
 (provide 'test-mevedel-collaboration-editing)
 ;;; test-mevedel-collaboration-editing.el ends here

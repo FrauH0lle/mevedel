@@ -95,6 +95,18 @@
                            editing-test-node
                          (file-name-concat editing-test-root "missing-node")))
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
+                ("ImportShared"
+                 (mevedel-shared-editing-call
+                  editing-test-session
+                  (append (list :action "import" :format "excalidraw" :opId "import" :actor "Guest: Test"
+                                :id (substring (secure-hash 'sha256 (format "%s" (random t))) 0 32))
+                          (plist-get command :args))
+                  (lambda (reply)
+                    (write-region (mevedel-shared-editing--json
+                                   (if (plist-get reply :error) (list :error (plist-get reply :error))
+                                     (list :status "success"
+                                           :result (mevedel-shared-editing--json (plist-get reply :result)))))
+                                  nil (file-name-concat editing-test-root "reply.json") nil 'silent))))
                 ("RestartHelper"
                  (mevedel-shared-editing-stop)
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))

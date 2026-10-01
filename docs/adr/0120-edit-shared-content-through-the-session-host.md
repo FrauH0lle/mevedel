@@ -36,8 +36,9 @@ editor runs in an opaque iframe with an item-scoped MessageChannel; the
 trusted viewer retains credentials and enforces the action allowlist. Forms
 support local editor dialogs; CSP forbids network form submission and fetches.
 
-Geometry is one atomic shape property; independent text/style properties
-remain separate. Same-property concurrent writes follow Yjs's deterministic
+Geometry is one atomic element property; independent text/style properties
+remain separate. Whiteboard content is Excalidraw elements
+([ADR 0121](0121-store-whiteboards-as-excalidraw-elements.md)). Same-property concurrent writes follow Yjs's deterministic
 ordering, and deletion wins over an in-flight property edit to that record.
 The first drag implementation only redrew after release. Move and resize now
 render temporary geometry through the same scene and connector renderer, then
@@ -77,8 +78,10 @@ Native, HTML, and Markdown document exports retain image data without a separate
 asset service or remote fetch. Existing session activity drives visible working
 indicators in the room and editor chats; no second request lifecycle is tracked.
 
-Image transforms preserve `src` as the source and keep normalized crop,
+Document image transforms preserve `src` as the source and keep normalized crop,
 quarter-turn rotation, flips, and a rendered PNG in one `imageEdit` property.
+Board images use Excalidraw's `crop`, `scale` and `angle` instead
+([ADR 0121](0121-store-whiteboards-as-excalidraw-elements.md)).
 This atomic attribute prevents concurrent edits from mixing transformation
 settings with another edit's rendered pixels. Browser canvas rendering serves
 both editors; ordinary renderers and HTML/Markdown exports use those pixels,
@@ -361,9 +364,10 @@ review controller. Documents continue to return structured content.
 ## Connector borders
 
 A real board exposed bound arrows running through component labels because the
-renderer used target centers as visible endpoints. Bindings still store target
-IDs, but the shared renderer now intersects the center-to-center direction with
-each target's nominal silhouette. Both endpoints follow target movement and
+renderer used target centers as visible endpoints. The shared renderer now
+places each bound end on the target's nominal silhouette; with Excalidraw
+bindings ([ADR 0121](0121-store-whiteboards-as-excalidraw-elements.md)) that
+is the outline offset by Excalidraw's binding gap, toward the fixed point. Both endpoints follow target movement and
 resizing in the browser and in host snapshots. Hand-drawn wobble remains a
 visual decoration rather than changing attachment geometry. Existing boards
 benefit without content rewrites; unbound endpoints keep their explicit points.

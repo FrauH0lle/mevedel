@@ -55,8 +55,8 @@ can check availability and view items but still cannot edit them.
 
 The minimum includes the switch disabling Node web storage, introduced in
 [Node 22.4](https://nodejs.org/en/blog/release/v22.4.0). The helper uses Yjs,
-Tiptap's shared schema, and packaged resvg WASM with Noto Sans for headless
-PNG rendering. It exposes only a private stdin/stdout connection to Emacs.
+Tiptap's shared schema, roughjs and perfect-freehand, and packaged resvg WASM
+with Excalifont, Nunito, Comic Shanns and Noto Sans for headless PNG rendering. It exposes only a private stdin/stdout connection to Emacs.
 End users receive generated bundles, renderer resources, and third-party
 notices; they do not run npm installation.
 
@@ -67,16 +67,30 @@ npm ci --prefix shared-editing
 npm run build --prefix shared-editing
 ```
 
+The board fonts are generated from Excalidraw's font subsets with
+`python3 shared-editing/fonts.py EXCALIDRAW_CHECKOUT` (fontTools and brotli).
+It writes the TTFs the host renders with, the WOFF2 files embedded in the
+editor bundle, and `font-metrics.json`, the advance widths every client uses
+to measure and wrap text. Rebuild the bundles afterwards.
+
 Commit the lockfile and generated helper/viewer bundles together. The build
 also assembles license notices; font and renderer licenses accompany their
 packaged resources. Rebuild the relay to embed changed viewer assets.
 
 ## Editing and pointing
 
-The drawing menu follows the selected `af756034` reference: hand, selection,
-rectangle, diamond, ellipse, database, sticky note, arrow, line, freehand,
-text, and eraser, followed by the laser tool. Buttons expose tool names and
-keyboard shortcuts. Selection supports Shift multi-selection, arrow-key
+A whiteboard holds Excalidraw elements and draws them as Excalidraw does
+([ADR 0121](adr/0121-store-whiteboards-as-excalidraw-elements.md)): roughjs
+strokes and fills from each element's seed, perfect-freehand drawing, and
+Excalidraw's fonts and text layout. Every browser, the host's PNGs and the
+exports draw the same wobble.
+
+The drawing menu follows Excalidraw: hand (H), selection (V), rectangle (R),
+diamond (D), ellipse (O), sticky note (N), arrow (A), line (L), freehand
+drawing (P or X), **Shape from drawing** (Shift+X), text (T) and eraser (E),
+followed by the laser (K), comment (M) and image (9) tools. Number keys 1–8
+and 0 select tools as in Excalidraw. Buttons expose tool names and keyboard
+shortcuts. Selection supports Shift multi-selection, arrow-key
 movement, Delete, and resizing. Dragging across empty canvas with the
 selection tool, including by touch, draws a selection box: releasing selects
 the objects it fully contains, Alt selects every object it touches, and Shift
@@ -95,23 +109,41 @@ and a five-second expiry remove remote previews. A preview packet contains only
 up to 100 object IDs and bounding boxes, with the pending operation ID after
 release. New shapes, text, style, and keyboard edits use normal committed
 updates.
-Click inside an unfilled shape to select it; lines have a wider invisible hit
-area. Double-click a shape or press Enter
-to edit its label in place, with the same alignment, size, and line spacing.
+Click inside a shape to select it, filled or not; lines have a wider invisible
+hit area. Double-click a shape or press Enter to edit its label in place, with
+the label's font, size, alignment and line height; double-clicking empty canvas
+starts free text there. A label is an Excalidraw text element bound to its
+container: it wraps to the container, centres in it, moves with it, and grows
+the container when it no longer fits. Arrows carry labels the same way, with a
+gap cut into the line behind them. Clicking a label selects its container.
 Finishing a drawing returns to selection, so a double-click edits the new shape
 instead of creating more shapes. Text is shared while typing; blur or Ctrl/Command+Enter
 finishes, and Escape cancels if another writer has not changed that text.
-The **Style** panel follows the same reference: stroke and background
-colours, hachure/cross/solid fill, stroke width, solid/dashed/dotted strokes,
-sloppiness (architect, artist, cartoonist), sharp or round rectangle edges,
-font size, and opacity. It shows only the
-sections that apply to the selection or the active drawing tool, changes the
-selected objects, and remembers the choices for new ones. Sloppy outlines are
-seeded from the shape id, so every browser and the host's PNG draw the same
-wobble.
-**Objects** exposes Select all, Clear selection, Edit text, Duplicate, Delete,
-and **Arrange & move** for layer order and precise nudges. **Shortcuts** lists
-the canvas keys. Selection handles retain their screen size as the view changes.
+Finishing with no text removes the label or text element.
+
+**Shape from drawing** turns a stroke drawn by hand into a clean rectangle,
+diamond, ellipse, arrow or line when it matches one, using Excalidraw's
+recognizer; other strokes stay freehand drawings. The result takes the current
+style and is an ordinary edit, so Undo restores the board as it was before the
+stroke. Strokes smaller than 25 screen pixels are not converted.
+
+The **Style** panel follows Excalidraw: stroke and background colours,
+hachure/cross-hatch/solid fill, stroke width, solid/dashed/dotted strokes,
+sloppiness (architect, artist, cartoonist), sharp or round edges, start and
+end arrowheads (none, arrow, triangle, circle, bar), font (hand-drawn
+Excalifont, normal Nunito, code Comic Shanns), font size, text alignment and
+opacity. It shows only the sections that apply to the selection or the active
+drawing tool, changes the selected objects and their labels, and remembers the
+choices for new ones. Elements imported with other Excalidraw values, such as
+the cardinality arrowheads, keep and draw them.
+**Objects** exposes Select all, Clear selection, Edit text, Duplicate
+(Ctrl/Command+D), Group (Ctrl/Command+G), Ungroup (Ctrl/Command+Shift+G), Lock,
+Unlock all, Delete, and **Arrange & move** for layer order and precise nudges.
+Clicking any member of a group selects the whole group. A locked element
+cannot be selected, moved or erased until **Unlock all**. Duplicates and
+copies keep the bindings and labels among themselves and drop the others.
+**Shortcuts** lists the canvas keys. Selection handles retain their screen
+size as the view changes.
 Wheel zoom, zoom buttons, Fit, and the percentage button (reset to 100%) affect
 only the local viewport. The board fits existing objects once on opening.
 Both whiteboards and documents accept PNG, JPEG, and WebP through the board's
@@ -119,6 +151,9 @@ image button or **Insert → Image…**, clipboard paste, or file drag-and-drop.
 position; multiple files insert together and support Undo/Redo. Images are
 embedded in the item and retained in native exports; document HTML and Markdown
 exports also carry their image data. External image URLs are not fetched.
+A board stores each image once as an Excalidraw file named by its content
+hash; image elements refer to it, so repeated images and contribution history
+never repeat its bytes.
 Selecting an image exposes **Crop image**, **Rotate 90°**, **Flip horizontal**,
 **Flip vertical**, and **Reset image** in both editors. Crop opens a shared
 dialog with draggable edges, arrow-key adjustments (Shift for ten pixels),
@@ -127,56 +162,47 @@ full source while retaining orientation; **Reset image** clears both. Apply
 commits one undoable edit; Cancel leaves the image unchanged. A removed or
 changed image is reported instead of overwritten when applying a stale dialog.
 
-The original stays in `src`; optional `imageEdit` holds the normalized crop,
-quarter-turn rotation, flips, and rendered PNG together as one attributed
-shared property. Both source and rendered data count toward existing image
-and item limits. Native exports retain both so reset remains possible.
-PNG/SVG board exports and HTML/Markdown document exports use the rendered
-image, so other viewers show the same crop and orientation without special
-CSS or hidden original pixels. Reset and transformations follow local Undo/Redo
-and arrive at other participants through the existing editor synchronization.
-Arrow endpoints can bind to shapes. Bound arrows meet the facing shape borders
-and follow moves and resizes; ellipses, diamonds, rounded corners, and database
-rims use their silhouettes. The editor and PNG/SVG exports share this geometry.
+On a board these are Excalidraw's `crop`, `scale` (flips) and `angle`
+(rotation, about the image's centre): the original pixels stay in the file and
+the renderer crops them. Cropping keeps the image's display scale. In a
+document, the original stays in `src`; optional `imageEdit` holds the
+normalized crop, quarter-turn rotation, flips, and rendered PNG together as one
+attributed shared property, and both count toward image and item limits.
+Board PNG and SVG downloads and document HTML/Markdown exports show only the
+visible pixels: an SVG download replaces a cropped image with its cropped
+rendering. The `.excalidraw` and native document files keep the original so
+reset remains possible. Transformations follow local Undo/Redo and arrive at
+other participants through the existing editor synchronization.
+Arrows bind to shapes as in Excalidraw. A bound end in orbit mode sits on the
+target's outline, offset by 5 + half its stroke width, toward the binding's
+fixed point; inside mode places it at the fixed point. Bound ends follow moves
+and resizes of their targets. Moving an arrow away from its targets unbinds
+the ends whose targets stay behind. The editor and PNG/SVG exports share this
+geometry; a binding to a deleted element is drawn unbound.
 
-Documents support paragraphs, headings, emphasis, lists, links, code blocks,
-and tables. Headings 1–6, inline code, code blocks, quotes, list indentation,
-clear formatting, dividers and line breaks are exposed in the grouped menus.
-Selecting a table reveals row, column and cell menus for insertion, deletion,
-header toggles, merging and splitting. Column borders resize by dragging.
-Links have edit/remove controls. Images have alt text, title, dimensions,
-optional proportions, drag handles and deletion; dimension changes undo and
-collaborate like other content edits. Named carets show other writers. Each browser's Undo/Redo
-uses its own transactions. Agent contributions have readable attribution and
-a Revert action; an overlapping later edit makes the inverse fail instead
-of restoring an old whole-item snapshot. The Contributions display groups
-consecutive saves from the same participant name until another participant
-edits or there is a five-second idle gap. The editor checks for unsent changes
-every 300 ms. While a save awaits acknowledgement, further edits accumulate
-into one recoverable follow-up, sent as soon as that save succeeds. It keeps
-the in-flight operation unchanged for safe retries, so slower hosts do not
-build a queue of obsolete intermediate text states. Contribution grouping
-does not delay durability or merge already committed revision records. Agent
-transactions remain individually revertible. History retains at most 32
-transactions and targets a 4 MiB snapshot budget, expiring oldest entries first.
-The newest transaction stays revertible even if it alone exceeds that history
-budget, subject to the overall item limit. The Contributions display identifies
-the earliest retained revision, so a displayed burst may cover only its recent part.
+## Element library
 
-A pale highlight identifies newly received assistant edits for eight seconds,
-fading during the final two seconds. Each changed shape or document block has
-its own expiry; a human edit clears its highlight immediately. Repeated syncs
-do not restart the timer, and opening an item does not highlight its older
-contributions. Reduced motion disables the fade, retaining the same expiry.
-**Highlight recent assistant edits** toggles this display. Attribution and
-Revert remain available in Contributions after the highlight expires;
-highlights do not become content, formatting, or export marks.
+**Library** offers the session host's personal Excalidraw library, built-in
+items and the public collection at
+[libraries.excalidraw.com](https://libraries.excalidraw.com). Clicking an
+item inserts copies with fresh identities at the centre of the view, selected
+for moving; groups, labels and bindings within the item are kept.
 
-Yjs merges concurrent typing and unrelated shape changes. A shape's geometry
-is one atomic property, while text and style remain independently editable.
-Same-property writes resolve using Yjs's deterministic ordering. Deletion
-wins over an in-flight property edit to the deleted record. This guarantees
-convergence, not reconciliation of competing human intentions.
+**Add selection** stores the selected objects and their labels as an item;
+**Import file…** adds the items of an `.excalidrawlib` file; **Download** saves
+the personal library as one. Items are removed with ×. The library is the file
+named by `mevedel-shared-library-file`, by default
+`~/.emacs.d/mevedel/library.excalidrawlib`, so it can be shared with
+excalidraw.com and other Excalidraw editors. It belongs to the host's Emacs,
+not to a session: every writable participant in every room sees and changes the
+same library. View links have no library.
+
+**Browse public libraries** lists the public collection with a search field;
+opening one shows its items, and **Add all to my library** copies them. The
+editor has no network access, so Emacs fetches the index and library files
+from `mevedel-shared-library-catalog-url`, and only library files listed there.
+The built-in **Database** item replaces the former cylinder shape: a group of
+an ellipse and lines, as Excalidraw has no cylinder element.
 
 Ordinary board cursors move one named arrow per participant. Selecting **Laser
 pointer** makes mouse or pen hover visible locally and to collaborators; on a
@@ -216,7 +242,13 @@ Selected connectors retain their current bound geometry; endpoint objects
 accompany the selection as context.
 
 `SharedCreate` creates a named item. `SharedEdit` applies patches, renames,
-or targeted inverses. Whiteboard edits also return a PNG of the resulting
+or targeted inverses. Board patches use Excalidraw elements with Excalidraw's
+field names; absent fields take Excalidraw's defaults, labels are text
+elements with a `containerId`, and connections are arrows with
+`startBinding`/`endBinding`. The derived Excalidraw fields `version`,
+`versionNonce`, `updated`, `isDeleted` and `boundElements` are refused. An
+image element must reference an existing file; the assistant cannot add image
+bytes. Whiteboard edits also return a PNG of the resulting
 canonical revision through the normal tool-media path, so the model can inspect
 the visual result without a separate read or a connected browser. A patch carries exact `before` values from a read and
 new `after` values; null adds or deletes. Documents target top-level blocks
@@ -304,8 +336,8 @@ and area and frames them. Pins, hover cards and threads are visible to view
 participants, who cannot post.
 
 A board comment records its object IDs, optional area, quote, and a fingerprint
-of those objects; image data contributes only its length. The thread is
-**changed** once an object moves, restyles, changes text or is deleted, and
+of those objects and their labels. The thread is
+**changed** once an object moves, restyles, changes its label or is deleted, and
 **removed** when none of its objects remain and it has no area. An area
 outlives its objects. A request to the assistant attaches the anchor's surviving
 objects and its area, subject to the same review of changed context; the host
@@ -316,9 +348,11 @@ For a whiteboard, select one or more objects and choose **Ask about selection**.
 After a box selection, the question is about the **Selected area**: it carries
 the box's board region with the objects it contains, including an area with no
 objects, so a request such as “put a legend here” names a place. Unselected
-objects the area touches accompany it as context, with image data replaced by
-a reference to the attached PNG, which shows the area with a small margin and
-is scaled up to four times so small areas stay legible.
+objects the area touches accompany it as context with their labels; images
+appear by file reference, and their pixels only in the attached PNG, which
+shows the area with a small margin and is scaled up to four times so small
+areas stay legible. Selected objects bring their labels and the shapes their
+arrows connect as context.
 The discussion composer offers **Selected objects** (or **Selected area**) /
 **Whole whiteboard** or **Selected passage** / **Whole document**. Switching to the whole item retains
 the previously attached selection, so switching back does not require selecting
@@ -372,8 +406,8 @@ established truncation point are not consulted. Ordinary requests without
 trusted item attribution skip item-related transcript classification.
 
 Accepted questions include item identity, title, committed revision, exact selected
-text or shapes, the selected board area, bounded surrounding document blocks,
-connector endpoints or touched neighbours, and a matching board PNG as a normal
+text or elements, the selected board area, bounded surrounding document blocks,
+labels, connector endpoints or touched neighbours, and a matching board PNG as a normal
 attachment. Questions use the ordinary queue
 with guest attribution; correlation metadata is persisted as model-invisible
 transcript audit data. Provider failures appear in the conversation. If the host edits a queued question,
@@ -415,24 +449,36 @@ recovery download until the host supplies valid current content and authority.
 
 ## Downloads and imports
 
-Standard downloads use a committed revision: PNG/SVG for whiteboards,
-Markdown/HTML for documents, or an editable native JSON file. Native files
+Standard downloads use a committed revision: PNG/SVG or an Excalidraw file for
+whiteboards, and Markdown/HTML or an editable native JSON file for documents.
+The **Excalidraw file** (`.excalidraw`) is a complete Excalidraw scene: every
+element field, fractional z-order indices, derived reverse references, label
+and connector positions as displayed, and the image files in use. It opens in
+excalidraw.com and other Excalidraw editors. Native and Excalidraw files
 preserve supported content, relationships, and embedded assets. They exclude
 credentials, presence, collaboration history, and undo stacks. Markdown and
 images are viewable conversions with less editable structure.
 Whiteboard PNG and SVG downloads use an opaque white background independent
-of the room theme, without the editor grid or temporary highlights. SVG labels
-use individually positioned text lines, preserving blank lines, and arrowheads
-use explicit paths so Qt-based viewers retain the same text layout and arrows.
+of the room theme, without the editor grid or temporary highlights. SVG
+downloads embed the fonts their text uses. SVG labels use individually
+positioned text lines, preserving blank lines, and arrowheads use explicit
+paths so Qt-based viewers retain the same text layout and arrows.
 
-Import supports the current native format, Markdown/plain text documents,
-and raster images on boards. It validates the complete input before creating
-a new item and collaboration lineage, preserving the original. Uploaded HTML,
+Import supports `.excalidraw` scenes (also as `.json`), the native document
+format, Markdown/plain text documents, and raster images, which open as a new
+whiteboard holding that image. It validates the complete input before creating
+a new item and collaboration lineage, preserving the original. An Excalidraw
+scene goes through Excalidraw's restore rules: legacy fields migrate, deleted
+and invisible elements and unknown element types are dropped, and unusable
+values take Excalidraw's defaults. Images in formats other than PNG, JPEG and
+WebP are drawn as placeholders, and the room reports them after import.
+Library files are imported in the editor's **Library**. Uploaded HTML,
 JavaScript, external image URLs, and unsupported formats are rejected. There
-are no legacy readers or migrations.
+are no legacy readers or migrations; whiteboards saved in mevedel's former
+shape format no longer open.
 
-Bounds are explicit: 16 MiB canonical state/native input, 2,000 shapes,
-4,000 points per stroke, 200 targets per agent transaction, and 1 MiB document
+Bounds are explicit: 16 MiB canonical state/native input, 4,000 elements and
+200 image files per board, 4,000 points per stroke, 8 MiB per library, 200 targets per agent transaction, and 1 MiB document
 JSON excluding embedded image data, with bounded depth and node count. Documents
 allow up to 12 MiB of embedded image data within the canonical state limit.
 Raster images are limited to 16 megapixels each and 32 megapixels per item; browser image uploads are at
@@ -448,7 +494,7 @@ are not repeated through the contribution list on every broadcast.
 
 The packaged editor has an opaque iframe origin and an item-scoped message
 port. CSP forbids networking and submitted forms while permitting local
-editor dialogs. Room credentials stay in the trusted viewer. The relay stays
+editor dialogs and the board fonts embedded as data (`font-src data:`). Room credentials stay in the trusted viewer. The relay stays
 content-blind. [ADR 0120](adr/0120-edit-shared-content-through-the-session-host.md)
 records the change from model-only authorship to direct shared editing.
 
@@ -458,7 +504,7 @@ records the change from model-only authorship to direct shared editing.
 npm test --prefix shared-editing
 npm run test:browser --prefix shared-editing
 npx @emacs-eask/cli clean elc
-npx @emacs-eask/cli test ert test/test-mevedel-shared-editing*.el test/test-mevedel-tool-editing.el test/test-mevedel-collaboration-editing.el
+npx @emacs-eask/cli test ert test/test-mevedel-shared-editing*.el test/test-mevedel-shared-library.el test/test-mevedel-tool-editing.el test/test-mevedel-collaboration-editing.el
 MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 ```
 
@@ -467,6 +513,10 @@ replacement, local/remote laser trails, grouped contributions, export-neutral
 assistant highlights, frozen context, stale/offline refusal, explicit comments,
 reply rendering, disclosure continuity, box selection, area questions, board
 comment pins and threads, and a small keyboard-sized viewport.
+`test/board-tools.browser.mjs` covers shape recognition, the library (with a
+stand-in for the host's library requests), groups, locking, duplicates,
+arrowheads and fonts; `test/test-mevedel-shared-library.el` covers the library
+file and public collection through a local HTTP server.
 The room scenario also checks question-draft recovery across repeated reloads. Set
 `MEVEDEL_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
 preview screenshots under `.scratch/shared-collaborative-editing/`.

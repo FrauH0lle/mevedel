@@ -110,6 +110,9 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                     "shared-editing/host.bundle.mjs"
                     "shared-editing/resvg.wasm"
                     "shared-editing/font.ttf"
+                    "shared-editing/Excalifont.ttf"
+                    "shared-editing/Nunito.ttf"
+                    "shared-editing/ComicShanns.ttf"
                     "shared-editing/FONT-LICENSE"
                     "shared-editing/RESVG-LICENSE"
                     "shared-editing/THIRD-PARTY-NOTICES.txt")

@@ -6,7 +6,7 @@ import {editorFixture} from './editor-fixture.mjs';
 // Real image pixels, editor transactions, host validation and exports.
 test('shared image transformations', async t => {
   const {open} = await editorFixture(t);
-  for (const kind of ['whiteboard','document']) await t.test(kind,async () => {
+  for (const kind of ['document']) await t.test(kind,async () => {
     const {page,frame} = await open({kind,content:kind==='whiteboard'?[]:undefined,viewport:{width:1280,height:900}});
     const src = await page.evaluate(() => {
       const canvas = document.createElement('canvas');canvas.width=80;canvas.height=40;
@@ -119,6 +119,92 @@ test('shared image transformations', async t => {
     if(process.env.MEVEDEL_IMAGE_SCREENSHOTS)
       await page.screenshot({path:`.scratch/image-tools/${kind}-crop-phone.png`});
     await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    await page.close();
+  });
+  await t.test('whiteboard', async () => {
+    const {page,frame} = await open({content:[],viewport:{width:1280,height:900}});
+    const src = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');canvas.width=80;canvas.height=40;
+      const ctx=canvas.getContext('2d');
+      for (const [color,x,y] of [['#ff0000',0,0],['#00ff00',40,0],['#0000ff',0,20],['#ffff00',40,20]]) {
+        ctx.fillStyle=color;ctx.fillRect(x,y,40,20);
+      }
+      return canvas.toDataURL();
+    });
+    await frame.locator('#image-upload').setInputFiles({name:'quadrants.png',mimeType:'image/png',buffer:Buffer.from(src.split(',')[1],'base64')});
+    const image = frame.locator('#scene image');
+    await image.waitFor();await image.click();
+    await frame.locator('#image-tools').waitFor();
+    const read = async () => page.evaluate(async () => (await window.apply({action:'read'})).content.find(s=>s.type==='image'));
+    const saved = () => frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+    // The host's PNG shows what every viewer sees: sample the image's corners.
+    const corners = () => page.evaluate(async () => {
+      const {data} = await window.apply({action:'export',format:'png'});
+      const img = new Image();img.src=`data:image/png;base64,${data}`;await img.decode();
+      const c=document.createElement('canvas');c.width=img.width;c.height=img.height;
+      const ctx=c.getContext('2d');ctx.drawImage(img,0,0);
+      const [w,h]=[img.width-60,img.height-60];
+      return {size:[w,h],colors:[[32,32],[28+w,32],[32,28+h],[28+w,28+h]]
+        .map(([x,y])=>[...ctx.getImageData(x,y,1,1).data].slice(0,3).join(','))};
+    });
+    const until = async test => {
+      for (let i = 0; !test(await read()); i++) {
+        assert.ok(i < 100, 'the image edit is saved');
+        await page.waitForTimeout(50);
+      }
+      await saved();return read();
+    };
+    await saved();
+    const before = await read();
+    assert.match(before.fileId,/^[0-9a-f]{40}$/);
+    await frame.getByRole('button',{name:'Rotate 90°',exact:true}).click();
+    let edited = await until(e => Math.abs(e.angle - Math.PI / 2) < 1e-9);
+    assert.equal(edited.fileId,before.fileId,'the original file is retained');
+    assert.deepEqual(await corners(),{size:[40,80],colors:['0,0,255','255,0,0','255,255,0','0,255,0']});
+    await frame.getByRole('button',{name:'Flip horizontal',exact:true}).click();
+    edited = await until(e => e.scale[0] * e.scale[1] === -1);
+    assert.deepEqual((await corners()).colors,['255,0,0','0,0,255','0,255,0','255,255,0']);
+    await frame.getByRole('button',{name:'Flip vertical',exact:true}).click();
+    edited = await until(e => e.scale[0] * e.scale[1] === 1 && e.scale[1] === -1);
+    assert.deepEqual((await corners()).colors,['0,255,0','255,255,0','255,0,0','0,0,255']);
+    await frame.getByRole('button',{name:'Reset image',exact:true}).click();
+    edited = await until(e => !e.angle && e.scale[0] === 1 && e.scale[1] === 1);
+    assert.deepEqual(await corners(),{size:[80,40],colors:['255,0,0','0,255,0','0,0,255','255,255,0']});
+    await frame.getByRole('button',{name:'Crop image',exact:true}).click();
+    const dialog = frame.locator('.image-crop-dialog');await dialog.waitFor();
+    await dialog.getByLabel('Crop width (%)',{exact:true}).fill('50');
+    await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    assert.equal((await read()).crop ?? null,null,'cancel does not apply the crop');
+    await frame.getByRole('button',{name:'Crop image',exact:true}).click();await dialog.waitFor();
+    await dialog.getByLabel('Crop width (%)',{exact:true}).fill('50');
+    await dialog.getByRole('button',{name:'Apply image',exact:true}).click();await dialog.waitFor({state:'detached'});
+    edited = await until(e => e.crop?.width === 40);
+    assert.deepEqual(edited.crop,{x:0,y:0,width:40,height:40,naturalWidth:80,naturalHeight:40});
+    assert.deepEqual([edited.width,edited.height],[40,40],'cropping keeps the display scale');
+    assert.deepEqual(await corners(),{size:[40,40],colors:['255,0,0','255,0,0','0,0,255','0,0,255']});
+    await frame.locator('#undo').click();await saved();assert.equal((await read()).crop ?? null,null);
+    await frame.locator('#redo').click();await saved();assert.deepEqual((await read()).crop,edited.crop);
+    const native = await page.evaluate(async () => (await window.apply({action:'export',format:'native'})).text);
+    assert.ok(native.includes(src),'the Excalidraw file keeps the original, so the crop stays editable');
+    const svg = await page.evaluate(async () => (await window.apply({action:'export',format:'svg'})).text);
+    assert.ok(!svg.includes(src),'an SVG download does not reveal cropped-away pixels');
+    // Read-only viewers receive the same appearance without editing controls.
+    const viewer = await open({scene:native,readOnly:true});
+    await viewer.frame.locator('#scene image').waitFor();
+    assert.match(await viewer.frame.locator('#scene clipPath').first().innerHTML(),/<rect width="40" height="40"/);
+    assert.equal(await viewer.frame.locator('#image-tools').isVisible(),false);await viewer.page.close();
+    // An update while the crop dialog is open must not be overwritten.
+    await image.click();await frame.getByRole('button',{name:'Crop image',exact:true}).click();await dialog.waitFor();
+    await page.evaluate(async () => {
+      const before=(await window.apply({action:'read'})).content.find(s=>s.type==='image');
+      const result=await window.apply({action:'patch',opId:'concurrent-image',changes:[{id:before.id,before,after:{...before,width:100,height:100}}]});
+      window.port.postMessage({type:'changed',...result});
+    });
+    await dialog.getByRole('button',{name:'Apply image',exact:true}).click();
+    await dialog.getByRole('alert').getByText(/This image changed/).waitFor();
+    await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    const current = await read();assert.equal(current.width,100);
+    assert.equal(current.fileId,before.fileId);
     await page.close();
   });
 });

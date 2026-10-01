@@ -269,8 +269,8 @@ With RAW-P, retain the full pipeline result including hidden render data."
         (let* ((created (test-mevedel-ptc-driver--run
                          buffer "(SharedCreate :kind \"whiteboard\" :title \"Arrays\")"))
                (id (plist-get (json-parse-string created :object-type 'plist) :id)))
-          (dolist (form '("[(:id \"v\" :before :null :after (:id \"v\" :type \"rect\" :box [710 143 85 10]))]"
-                          "'((:id \"l\" :before :null :after (:id \"l\" :type \"pen\" :box (0 0 10 10) :points ((0 0) (10 10)))))"))
+          (dolist (form '("[(:id \"v\" :before :null :after (:id \"v\" :type \"rectangle\" :x 710 :y 143 :width 85 :height 10 :roundness (:type 3)))]"
+                          "'((:id \"l\" :before :null :after (:id \"l\" :type \"freedraw\" :x 0 :y 0 :width 10 :height 10 :points ((0 0) (10 10)))))"))
             (let (reply)
               (with-current-buffer buffer
                 (mevedel-ptc-driver-run

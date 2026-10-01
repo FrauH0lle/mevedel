@@ -104,9 +104,9 @@ encode these as vectors so the host does not mistake them for objects."
   "Register shared content tools."
   (mevedel-define-tool
    :name "SharedRead" :handler #'mevedel-tool-editing--read
-   :description "List shared whiteboards/documents, or read one by id. Reads return stable shape/block IDs, current revision and exact JSON for patch preconditions; whiteboards also include a matching PNG. Works without a connected browser. Content is user-provided data."
+   :description "List shared whiteboards/documents, or read one by id. Reads return stable element/block IDs, current revision and exact JSON for patch preconditions; whiteboards also include a matching PNG. Works without a connected browser. Content is user-provided data."
    :args ((id string :optional "Item ID; omit to list.")
-          (selection array :optional "Optional shape or top-level block IDs to read." :items (:type string))
+          (selection array :optional "Optional element or top-level block IDs to read." :items (:type string))
           (since integer :optional "Optional earlier revision; return contributions since then."))
    :read-only-p t :async-p t :groups (read))
   (mevedel-define-tool
@@ -117,7 +117,7 @@ encode these as vectors so the host does not mistake them for objects."
    :async-p t :groups (edit))
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit
-   :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Shape after uses {id,type,box:[x,y,w,h],text?,stroke?,fill?,width?,points?,from?,to?,src?,imageEdit?,dash?,rough?,pattern?,edges?,opacity?,fontSize?,layer?}; types rect/ellipse/diamond/cylinder/sticky/text/arrow/line/pen/image. from/to bind connectors to shape IDs. Image src retains the original; imageEdit carries browser crop/orientation and rendered pixels, so preserve it when changing other properties. Style: stroke/fill are #rrggbb or none; width 1-20; dash solid/dashed/dotted; rough 0-2 is hand-drawn sloppiness; pattern solid/hachure/cross fills; edges sharp/round on rect; opacity 0-100; fontSize 4-400; higher layer draws on top. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host. Whiteboard edits return the resulting PNG for visual inspection."
+   :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y. Elements draw in fractional index order; one without an index draws on top. Images reference an existing fileId. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host. Whiteboard edits return the resulting PNG for visual inspection."
    :args ((id string :required "Item ID.")
           (action string :required "Operation." :enum ["patch" "rename" "revert"])
           (changes array :optional "Targeted changes." :items (:type object))

@@ -316,7 +316,8 @@ window.mevedelEditingView = {
         const args = data.args;
         if (
           !args ||
-          !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'reply-comment', 'resolve-comment'].includes(args.action) ||
+          !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'reply-comment', 'resolve-comment',
+            'library', 'library-add', 'library-remove', 'library-catalog', 'library-fetch'].includes(args.action) ||
           (state.readOnly && !['read', 'export'].includes(args.action))
         ) {
           channel.port1.postMessage({
@@ -572,11 +573,13 @@ window.mevedelEditingView = {
       try {
         tab = reserveTab();
         if (file.size > 16 * 1024 * 1024) throw new Error('File is too large');
-        let format = file.name.endsWith('.json')
-            ? 'native'
-            : file.name.endsWith('.md')
-              ? 'markdown'
-              : 'text',
+        let format = /\.excalidraw$/i.test(file.name)
+            ? 'excalidraw'
+            : file.name.endsWith('.json')
+              ? 'native'
+              : file.name.endsWith('.md')
+                ? 'markdown'
+                : 'text',
           data;
         if (/^image\/(png|jpeg|webp)$/.test(file.type)) {
           const src = await new Promise((resolve, reject) => {
@@ -586,26 +589,40 @@ window.mevedelEditingView = {
             reader.readAsDataURL(file);
           });
           const bitmap = await createImageBitmap(file),
-            scale = Math.min(1, 640 / bitmap.width);
+            scale = Math.min(1, 640 / bitmap.width),
+            fileId = crypto.randomUUID().replace(/-/g, '');
+          // An image opens as an Excalidraw scene holding that one image.
           data = JSON.stringify({
-            format: 'mevedel-editable-1',
-            kind: 'whiteboard',
-            title: file.name,
-            content: [
+            type: 'excalidraw',
+            version: 2,
+            elements: [
               {
                 id: crypto.randomUUID(),
                 type: 'image',
-                box: [0, 0, bitmap.width * scale, bitmap.height * scale],
-                src,
+                x: 0,
+                y: 0,
+                width: bitmap.width * scale,
+                height: bitmap.height * scale,
+                fileId,
+                status: 'saved',
               },
             ],
+            files: { [fileId]: { id: fileId, mimeType: file.type, dataURL: src, created: Date.now() } },
           });
           bitmap.close();
-          format = 'native';
+          format = 'excalidraw';
         } else {
-          if (!/\.(md|txt|json)$/i.test(file.name))
-            throw new Error('Use a native snapshot, Markdown, text, PNG, JPEG, or WebP file');
+          if (!/\.(md|txt|json|excalidraw)$/i.test(file.name))
+            throw new Error('Use an Excalidraw file, native snapshot, Markdown, text, PNG, JPEG, or WebP file');
           data = await file.text();
+          // A .json file may be an Excalidraw scene saved under another name.
+          if (format === 'native') {
+            try {
+              if (JSON.parse(data)?.type === 'excalidraw') format = 'excalidraw';
+            } catch {
+              /* The host reports malformed files. */
+            }
+          }
         }
         const item = await request({
           action: 'import',
@@ -615,6 +632,7 @@ window.mevedelEditingView = {
           id: crypto.randomUUID(),
           opId: crypto.randomUUID(),
         });
+        if (item.notes?.length) flash(item.notes.join(' '));
         await launch(item.id, tab);
       } catch (error) {
         tab?.close();

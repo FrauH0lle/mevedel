@@ -20,9 +20,18 @@ import {
   ySyncPluginKey,
 } from '@tiptap/y-tiptap';
 import { extensions, schema, seedEmptyText, selectionPositions, validateDocument } from './document.mjs';
-import { restore, encode, inspect, putShape, validateShape, validate } from './model.mjs';
+import { restore, encode, inspect, filesOf, putElement, putFile, validateElement, validate, compareOrder } from './model.mjs';
 import { validateImage } from './image.mjs';
-import { shapeSVG, escape, bounds, extent, shapesInRegion, styleOf, FILLABLE, LINEAR } from './render.mjs';
+import { sceneSVG, elementSVG, escape, resolveScene, bounds, extent, shapesInRegion } from './render.mjs';
+import { CONTAINERS, LINEAR, pointBounds } from './scene.mjs';
+import { containerTextBox, containerSizeFor, fontStack, measure, FONT_FILES } from './text.mjs';
+import { serializeScene } from './excalidraw.mjs';
+import { recognize } from './autoshape.mjs';
+import { libraryPanel, placeElements } from './library.mjs';
+import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
+import Excalifont from './Excalifont.woff2';
+import Nunito from './Nunito.woff2';
+import ComicShanns from './ComicShanns.woff2';
 const $ = (id) => document.getElementById(id),
   remote = Symbol('remote'),
   local = Symbol('local');
@@ -63,28 +72,44 @@ let tool = 'select',
   boardPreviews,
   outgoingPreview = null,
   refresh = () => {};
-/* Style of the next drawn shape; the panel edits it alongside the selection. */
+/* Style of the next drawn element in Excalidraw's fields; the panel edits it
+   alongside the selection. `roundness` holds the panel's round/sharp choice. */
 const current = {
-  stroke: '#242424',
-  fill: 'none',
-  pattern: 'hachure',
-  width: 2,
-  dash: 'solid',
-  rough: 1,
-  edges: 'round',
+  strokeColor: '#1e1e1e',
+  backgroundColor: 'transparent',
+  fillStyle: 'hachure',
+  strokeWidth: 2,
+  strokeStyle: 'solid',
+  roughness: 1,
+  roundness: 'round',
   opacity: 100,
-  fontSize: 24,
+  fontSize: 20,
+  fontFamily: 5,
+  textAlign: 'left',
+  startArrowhead: null,
+  endArrowhead: 'arrow',
 };
-const drawable = ['rect', 'diamond', 'ellipse', 'cylinder', 'sticky', 'arrow', 'line', 'pen', 'text'];
+const drawable = ['rectangle', 'diamond', 'ellipse', 'stickynote', 'arrow', 'line', 'freedraw', 'autoshape', 'text'];
+const SHAPES = ['rectangle', 'diamond', 'ellipse'];
 function applies(key, type) {
-  if (key === 'fill' || key === 'pattern') return FILLABLE.includes(type);
-  if (key === 'edges') return type === 'rect';
-  if (key === 'fontSize') return !LINEAR.includes(type) && type !== 'image';
-  if (key === 'width') return !['text', 'image'].includes(type);
-  if (key === 'dash' || key === 'rough') return !['text', 'pen', 'image'].includes(type);
-  if (key === 'stroke') return type !== 'image';
+  if (key === 'backgroundColor') return [...SHAPES, 'stickynote', 'line', 'freedraw', 'autoshape'].includes(type);
+  if (key === 'fillStyle') return [...SHAPES, 'line', 'freedraw', 'autoshape'].includes(type);
+  if (key === 'roundness') return ['rectangle', 'diamond', 'line', 'image', 'stickynote', 'autoshape'].includes(type);
+  if (['fontSize', 'fontFamily'].includes(key)) return ['text', 'stickynote', ...SHAPES].includes(type);
+  if (key === 'textAlign') return type === 'text';
+  if (key === 'startArrowhead' || key === 'endArrowhead') return type === 'arrow';
+  if (key === 'strokeWidth') return [...SHAPES, 'arrow', 'line', 'freedraw', 'autoshape'].includes(type);
+  if (key === 'strokeStyle') return [...SHAPES, 'arrow', 'line', 'autoshape'].includes(type);
+  if (key === 'roughness') return [...SHAPES, 'arrow', 'line', 'stickynote', 'autoshape'].includes(type);
+  if (key === 'strokeColor') return !['image', 'frame', 'magicframe'].includes(type);
   return true;
 }
+/* Excalidraw's roundness for the panel's round/sharp CHOICE on TYPE. */
+const roundnessFor = (type, choice) =>
+  choice !== 'round' ? null : { type: ['rectangle', 'image', 'iframe', 'embeddable'].includes(type) ? 3 : 2 };
+/* Labels are styled through their container. */
+const LABEL_STYLES = ['strokeColor', 'fontSize', 'fontFamily', 'opacity'];
+const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 const replies = new Map();
 let documentSelection = null,
   captureDocumentSelection = () => {},
@@ -264,69 +289,92 @@ function history(transactions = []) {
     $('contributions').append(row);
   }
 }
+let cachedList = null, cachedScene = null;
+/* Stored elements in z-order; cached until the next document update. */
 function shapeList() {
-  return inspect(doc).content;
+  return (cachedList ||= inspect(doc).content);
 }
-function transformGeometry(geometry, box) {
-  const old = geometry.box;
-  return {
-    box,
-    ...(geometry.points
-      ? {
-          points: geometry.points.map(([x, y]) => [
-            box[0] + (x - old[0]) * (old[2] ? box[2] / old[2] : 1),
-            box[1] + (y - old[1]) * (old[3] ? box[3] / old[3] : 1),
-          ]),
-        }
-      : {}),
-  };
+function currentScene() {
+  return (cachedScene ||= resolveScene(shapeList()));
+}
+const elementMap = () => doc.getMap('elements');
+const geometryOf = (id) => elementMap().get(id)?.get('geometry');
+/* The displayed box [x, y, w, h] a geometry occupies, before rotation. */
+function geometryBox(g) {
+  if (!g.points) return [g.x, g.y, g.width, g.height];
+  const [x1, y1, x2, y2] = pointBounds(g.points);
+  return [g.x + x1, g.y + y1, x2 - x1, y2 - y1];
+}
+/* GEOMETRY moved and scaled so its box becomes BOX. */
+function transformGeometry(g, [x, y, w, h]) {
+  if (!g.points) return { ...g, x, y, width: w, height: h };
+  const [x1, y1, x2, y2] = pointBounds(g.points);
+  const sx = x2 - x1 ? w / (x2 - x1) : 1, sy = y2 - y1 ? h / (y2 - y1) : 1;
+  return { ...g, x, y, width: w, height: h, points: g.points.map(([px, py]) => [(px - x1) * sx, (py - y1) * sy]) };
 }
 function dragGeometry(d) {
   if (!d?.end || !['move', 'resize'].includes(d.mode)) return [];
-  return (d.mode === 'move' ? d.boxes : [[d.id, d.before]]).map(([id, g]) => [
-    id, transformGeometry(g, d.mode === 'move'
-      ? [g.box[0] + d.end[0] - d.start[0], g.box[1] + d.end[1] - d.start[1], ...g.box.slice(2)]
-      : [...g.box.slice(0, 2), Math.max(10, d.end[0] - g.box[0]), Math.max(10, d.end[1] - g.box[1])]),
-  ]);
+  return (d.mode === 'move' ? d.boxes : [[d.id, d.before]]).map(([id, g]) => {
+    const box = geometryBox(g);
+    return [id, transformGeometry(g, d.mode === 'move'
+      ? [box[0] + d.end[0] - d.start[0], box[1] + d.end[1] - d.start[1], box[2], box[3]]
+      : [box[0], box[1], Math.max(10, d.end[0] - box[0]), Math.max(10, d.end[1] - box[1])])];
+  });
 }
 function visibleGeometry(id) {
-  const geometry = doc.getMap('shapes').get(id).get('geometry');
+  const geometry = geometryOf(id);
   const box = boardPreviews?.boxes().get(id);
-  return box ? transformGeometry(geometry,box) : geometry;
+  return box ? transformGeometry(geometry, box) : geometry;
+}
+let fontsLoaded = false;
+/* Board fonts travel inside the bundle; the editor's sandbox has no network. */
+function loadFonts() {
+  if (fontsLoaded) return;
+  fontsLoaded = true;
+  const data = { Excalifont, Nunito, ComicShanns };
+  for (const [family, file] of Object.entries(FONT_FILES)) {
+    const face = new FontFace(family, `url(data:font/woff2;base64,${data[file]})`);
+    document.fonts.add(face);
+    face.load().then(() => { sceneSignature = ''; if (doc) draw(); }, () => {});
+  }
+}
+/* The scene as displayed now, with drag and remote previews applied. */
+function displayedScene(extra = []) {
+  const live = boardPreviews?.boxes() || new Map();
+  const preview = new Map(dragGeometry(drag));
+  if (!preview.size && !live.size && !extra.length) return currentScene();
+  // A dragged connector leaves shapes that stay behind.
+  const unbound = (s) => {
+    const keys = drag?.loose?.get(s.id);
+    if (!keys) return s;
+    const copy = { ...s };
+    for (const key of keys) delete copy[key];
+    return copy;
+  };
+  return resolveScene([...shapeList().map(s => preview.has(s.id) ? {...unbound(s), ...preview.get(s.id)}
+    : live.has(s.id) ? {...s, ...transformGeometry(s, live.get(s.id))} : s), ...extra]);
 }
 function draw() {
   const live = boardPreviews?.boxes() || new Map();
-  const preview = new Map(dragGeometry(drag));
-  const shapes = shapeList().map(s => preview.has(s.id) ? {...s, ...preview.get(s.id)}
-    : live.has(s.id) ? {...s, ...transformGeometry(s,live.get(s.id))} : s);
+  const scene = displayedScene();
+  const shapes = scene.order;
   $('canvas').setAttribute('viewBox', view.join(' '));
   const scale = $('canvas').getScreenCTM()?.a || 1;
   if ($('board-zoom')) $('board-zoom').textContent = `${Math.round(scale * 100)}%`;
-  const signature = JSON.stringify([shapes, scale, [...agentTargets], $('show-agent').checked]);
+  const files = filesOf(doc);
+  const signature = JSON.stringify([shapes, Object.keys(files), [...agentTargets], $('show-agent').checked]);
   if (signature !== sceneSignature) {
     sceneSignature = signature;
-    $('scene').innerHTML = shapes.map((s) => shapeSVG(s, shapes)).join('');
-    for (const [index, group] of $('scene').querySelectorAll('[data-shape]').entries()) {
-      const shape = shapes[index];
-      group.dataset.agent = String(agentTargets.has(shape.id) && $('show-agent').checked);
-      const target = agentTargets.get(shape.id);
+    $('scene').innerHTML = sceneSVG(scene, files, true);
+    for (const group of $('scene').querySelectorAll('[data-shape]')) {
+      const id = group.dataset.shape;
+      group.dataset.agent = String(agentTargets.has(id) && $('show-agent').checked);
+      const target = agentTargets.get(id);
       if (target) {
         group.style.setProperty('--highlight-delay', `${target.started - performance.now()}ms`);
         const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
         title.textContent = target.label;
         group.append(title);
-      }
-      if (LINEAR.includes(shape.type)) {
-        const hit = group.querySelector('path').cloneNode();
-        hit.setAttribute('stroke', 'transparent');
-        hit.setAttribute('stroke-width', Math.max(shape.width || 2, 14 / scale));
-        hit.style.pointerEvents = 'stroke';
-        group.prepend(hit);
-      } else if (shape.type === 'text') {
-        const hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        ['x', 'y', 'width', 'height'].forEach((key, i) => hit.setAttribute(key, shape.box[i]));
-        hit.setAttribute('fill', 'transparent');
-        group.prepend(hit);
       }
     }
   }
@@ -336,41 +384,43 @@ function draw() {
       group.dataset.livePreview = String(live.has(group.dataset.shape));
     }
   layoutShapeText();
-  for (const id of selected) if (!doc.getMap('shapes').has(id)) selected.delete(id);
+  for (const id of selected) if (!elementMap().has(id)) selected.delete(id);
   const selectedImage = selected.size === 1 && shapes.find(s => selected.has(s.id) && s.type === 'image');
   $('image-tools').hidden = readOnly || !selectedImage;
-  $('image-size').textContent = selectedImage ? `${Math.round(selectedImage.box[2])} × ${Math.round(selectedImage.box[3])} px` : '';
+  $('image-size').textContent = selectedImage ? `${Math.round(selectedImage.width)} × ${Math.round(selectedImage.height)} px` : '';
   $('selection').innerHTML = shapes
     .filter((s) => selected.has(s.id))
     .map((s) => {
       const [x, y, w, h] = s.box;
       const gap = 4 / scale, handle = 10 / scale;
-      return `<rect x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" fill="none" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><rect data-resize="${escape(s.id)}" x="${x + w - handle / 2}" y="${y + h - handle / 2}" width="${handle}" height="${handle}" fill="white" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"/>`;
+      // Group members move together; only a lone element resizes.
+      return `<rect data-selected="${escape(s.id)}" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" fill="none" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>${selected.size === 1 ? `<rect data-resize="${escape(s.id)}" x="${x + w - handle / 2}" y="${y + h - handle / 2}" width="${handle}" height="${handle}" fill="white" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"/>` : ''}`;
     })
     .join('') + regionSVG(drag?.mode === 'marquee' ? drag.region : selectionRegion, drag?.mode === 'marquee')
-    + hoverSVG(tool === 'comment' && !drag && shapes.find((s) => s.id === hoverShape), shapes, scale);
-  drawCommentMarkers(shapes, scale);
+    + hoverSVG(tool === 'comment' && !drag && scene.byId.get(hoverShape), scale)
+    + (drag?.mode === 'draw' ? drawingPreview(drag) : '');
+  drawCommentMarkers(scene, scale);
   boardPresence?.animate();
   $('selection-question').disabled = $('comment-selection').disabled = readOnly || !(selected.size || selectionRegion);
   refresh();
 }
-function hoverSVG(shape, shapes, scale) {
-  if (!shape) return '';
-  const [x, y, w, h] = extent([shape], shapes), gap = 4 / scale;
+function hoverSVG(item, scale) {
+  if (!item?.box) return '';
+  const [x, y, w, h] = item.box, gap = 4 / scale;
   return `<rect class="comment-hover" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/>`;
 }
 /* The board box a comment refers to: its surviving objects and its area. */
-function commentAnchor(comment, shapes) {
-  const live = shapes.filter((s) => comment.selection?.includes(s.id));
-  const boxes = [...(live.length ? [extent(live, shapes)] : []), ...(comment.region ? [comment.region] : [])];
+function commentAnchor(comment, scene) {
+  const live = scene.order.filter((s) => comment.selection?.includes(s.id));
+  const boxes = [...(live.length ? [extent(live, scene)] : []), ...(comment.region ? [comment.region] : [])];
   if (!boxes.length) return null;
   const x = Math.min(...boxes.map((b) => b[0])), y = Math.min(...boxes.map((b) => b[1]));
   return [x, y, Math.max(...boxes.map((b) => b[0] + b[2])) - x, Math.max(...boxes.map((b) => b[1] + b[3])) - y];
 }
 /* Numbered pins at the top-right corner of each open comment's anchor. */
-function drawCommentMarkers(shapes, scale) {
+function drawCommentMarkers(scene, scale) {
   $('comment-markers').innerHTML = commentStates.filter((c) => !c.resolved).map((c, index) => {
-    const box = commentAnchor(c, shapes);
+    const box = commentAnchor(c, scene);
     if (!box) return '';
     const [x, y, w, h] = box, gap = 4 / scale;
     // A ring turns around the pin while the assistant works on its thread;
@@ -380,11 +430,11 @@ function drawCommentMarkers(shapes, scale) {
   }).join('');
 }
 function revealObjects(comment) {
-  const shapes = shapeList(), box = commentAnchor(comment, shapes);
+  const scene = currentScene(), box = commentAnchor(comment, scene);
   if (!box) throw new Error('The commented objects were removed');
-  selected = new Set(shapes.filter((s) => comment.selection?.includes(s.id)).map((s) => s.id));
+  selected = new Set(shapeList().filter((s) => comment.selection?.includes(s.id)).map((s) => s.id));
   selectionRegion = comment.region || null;
-  view = bounds([{ id: '', type: 'rect', box }]);
+  view = [box[0] - 30, box[1] - 30, Math.max(100, box[2] + 60), Math.max(100, box[3] + 60)];
   selectTool('select');
 }
 function regionSVG(region, active) {
@@ -399,8 +449,39 @@ function regionBetween(a, b) {
 }
 /* A box selection selects the shapes it contains, or touches with Alt. */
 function marqueeSelection(d) {
-  const hits = shapesInRegion(shapeList(), d.region, d.touching).map((s) => s.id);
+  const hits = shapesInRegion(shapeList(), d.region, d.touching, currentScene())
+    .filter((s) => !s.locked).flatMap((s) => [...withGroup(s.id)]);
   return new Set(d.additive ? [...d.base, ...hits] : hits);
+}
+/* The selectable unit for element ID: its outermost group, if any. */
+function withGroup(id) {
+  const element = currentScene().byId.get(id);
+  const group = element?.groupIds?.at(-1);
+  return new Set(group ? shapeList().filter((s) => s.groupIds?.includes(group)).map((s) => s.id) : [id]);
+}
+/* Bound labels of the elements IDS. */
+const labelsOf = (ids) => shapeList().filter((s) => s.type === 'text' && ids.has(s.containerId)).map((s) => s.id);
+const topIndex = () => shapeList().reduce((top, s) => (s.index && (!top || s.index > top) ? s.index : top), null);
+/* Fresh z-order keys above everything, for N new elements. */
+const nextIndices = (n) => generateNKeysBetween(topIndex(), null, n);
+/* A new element of TYPE in the current style. */
+function styledElement(type, geometry) {
+  const element = { id: crypto.randomUUID(), type, ...geometry, seed: randomSeed(), index: nextIndices(1)[0] };
+  for (const [key, value] of Object.entries(current)) {
+    // Text style reaches labels through their own text elements.
+    const textual = ['fontSize', 'fontFamily', 'textAlign'].includes(key);
+    if (textual ? type === 'text' : applies(key, type))
+      element[key] = key === 'roundness' ? roundnessFor(type, value) : value;
+  }
+  if (type === 'stickynote' && [undefined, 'transparent'].includes(element.backgroundColor)) element.backgroundColor = '#ffdf6b';
+  if (element.roundness === null) delete element.roundness;
+  return element;
+}
+/* SVG for the element being drawn. */
+function drawingPreview(d) {
+  if (!d.element) return '';
+  const scene = resolveScene([d.element]);
+  return elementSVG(scene.byId.get(d.element.id), scene, filesOf(doc));
 }
 function world(event) {
   const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(
@@ -493,46 +574,91 @@ function button(parent, label, action) {
 }
 function layoutShapeText() {
   if (!textEditing) return;
-  const shape = shapeList().find(s => s.id === textEditing);
-  if (!shape) { $('shape-text').blur(); return; }
-  const input = $('shape-text'), [x, y, w, h] = shape.box;
-  const matrix = $('canvas').getScreenCTM(), size = styleOf(shape).fontSize;
-  const centered = !['text', ...LINEAR].includes(shape.type);
-  const height = Math.max(1, input.value.split('\n').length) * size * 1.375;
-  const point = new DOMPoint(centered ? x : x + 10,
-    centered ? y + (h - height) / 2 : y + size * .4375).matrixTransform(matrix);
+  const scene = displayedScene(), item = scene.byId.get(textEditing);
+  if (!item) { $('shape-text').blur(); return; }
+  const container = item.bound && scene.byId.get(item.containerId);
+  const input = $('shape-text'), matrix = $('canvas').getScreenCTM();
+  let x = item.x, width = Math.max(item.width, item.fontSize);
+  if (container && container.type !== 'arrow') {
+    const box = containerTextBox(container, item.fontSize);
+    x = container.x + box.x;
+    width = box.width;
+  }
+  const point = new DOMPoint(x, item.y).matrixTransform(matrix);
   Object.assign(input.style, {
-    left: `${point.x}px`, top: `${point.y}px`, width: `${w * matrix.a}px`,
-    height: `${height * matrix.a}px`, fontSize: `${size * matrix.a}px`,
-    textAlign: centered ? 'center' : 'left', color: styleOf(shape).stroke,
+    left: `${point.x}px`, top: `${point.y}px`, width: `${(width + 2) * matrix.a}px`,
+    height: `${Math.max(item.height, item.fontSize * item.lineHeight) * matrix.a}px`,
+    fontSize: `${item.fontSize * matrix.a}px`, lineHeight: String(item.lineHeight),
+    fontFamily: fontStack(item.fontFamily), textAlign: item.textAlign, color: item.strokeColor,
+    whiteSpace: container ? 'pre-wrap' : 'pre',
   });
 }
+/* Grow a label's container until the label fits, as Excalidraw does. */
+function fitContainer(textId) {
+  const scene = currentScene(), label = scene.byId.get(textId);
+  const container = label?.bound && scene.byId.get(label.containerId);
+  if (!container || container.type === 'arrow') return;
+  const box = containerTextBox(container, label.fontSize), g = geometryOf(container.id);
+  const grow = (text, room, size) => container.type === 'stickynote' ? text + size - room : containerSizeFor(text, container.type);
+  const width = label.width > box.width ? Math.max(g.width, grow(label.width, box.width, g.width)) : g.width;
+  const height = label.height > box.height ? Math.max(g.height, grow(label.height, box.height, g.height)) : g.height;
+  if (width !== g.width || height !== g.height)
+    doc.transact(() => elementMap().get(container.id).set('geometry', { ...g, width, height }), local);
+}
+/* Edit the text of element ID: a text element, or a container's label,
+   created on demand. Empty text is removed when editing finishes. */
 function editText(id) {
   if (readOnly) return;
-  const shape = doc.getMap('shapes').get(id);
-  if (!shape) return;
-  const input = $('shape-text');
-  textEditing = id;
+  const element = elementMap().get(id);
+  if (!element) return;
+  let textId = id, created = false;
   undo?.stopCapturing();
-  const before = shape.get('text') || '';
+  if (element.get('type') !== 'text') {
+    if (!CONTAINERS.includes(element.get('type'))) return;
+    textId = shapeList().find(s => s.type === 'text' && s.containerId === id)?.id;
+    if (!textId) {
+      textId = crypto.randomUUID();
+      created = true;
+      const g = element.get('geometry');
+      doc.transact(() => putElement(doc, { id: textId, type: 'text', x: g.x, y: g.y, width: 0, height: 0,
+        text: '', containerId: id, strokeColor: element.get('strokeColor') ?? current.strokeColor,
+        fontSize: current.fontSize, fontFamily: current.fontFamily, textAlign: 'center',
+        verticalAlign: 'middle', seed: randomSeed(), index: nextIndices(1)[0] }), local);
+    }
+  }
+  const input = $('shape-text');
+  textEditing = textId;
+  const before = elementMap().get(textId).get('text') || '';
   input.value = before;
   draw();
   input.hidden = false;
   input.focus();
   input.select();
   const finish = (save) => {
-    if (textEditing !== id) return;
+    if (textEditing !== textId) return;
     textEditing = null;
     input.hidden = true;
-    const current = doc.getMap('shapes').get(id);
-    if (!save && current?.get('text') === input.value)
-      doc.transact(() => current.set('text', before), local);
+    const text = elementMap().get(textId), unchanged = text?.get('text') === input.value;
+    if (!text) { /* removed by another writer */ }
+    else if (!save && unchanged)
+      doc.transact(() => (created ? elementMap().delete(textId) : text.set('text', before)), local);
+    else if (save && !text.get('text').trim()) doc.transact(() => elementMap().delete(textId), local);
+    else if (save) fitContainer(textId);
     undo?.stopCapturing();
     draw();
   };
   input.oninput = () => {
-    const current = doc.getMap('shapes').get(id);
-    if (current) doc.transact(() => current.set('text', input.value), local);
+    const text = elementMap().get(textId);
+    if (!text) return;
+    doc.transact(() => {
+      text.set('text', input.value);
+      // Typed text is the source; the label wraps it for display.
+      text.delete('originalText');
+      if (!text.get('containerId') && text.get('autoResize') !== false) {
+        const size = measure(input.value, text.get('fontFamily') ?? 5, text.get('fontSize') ?? 20, text.get('lineHeight'));
+        text.set('geometry', { ...text.get('geometry'), ...size });
+      }
+    }, local);
   };
   input.onblur = () => finish(true);
   input.onkeydown = (event) => {
@@ -542,6 +668,12 @@ function editText(id) {
       $('canvas').focus();
     }
   };
+}
+/* Content-addressed file id, as Excalidraw names image files. */
+async function fileIdOf(file) {
+  if (!crypto.subtle) return crypto.randomUUID().replace(/-/g, '');
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', await file.arrayBuffer()));
+  return [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 async function insertImages(files, position) {
   if (readOnly || !files.length) return;
@@ -563,7 +695,8 @@ async function insertImages(files, position) {
       validateImage(src);
       const bitmap = await createImageBitmap(file);
       const scale = Math.min(1, 640 / bitmap.width);
-      images.push({src, alt: file.name, width: bitmap.width * scale, height: bitmap.height * scale});
+      images.push({src, alt: file.name, width: bitmap.width * scale, height: bitmap.height * scale,
+        mimeType: file.type, fileId: editor ? null : await fileIdOf(file)});
       bitmap.close();
     }
     if (readOnly) return;
@@ -572,15 +705,21 @@ async function insertImages(files, position) {
       const current = ySyncPluginKey.getState(editor.state).binding;
       const at = relativePositionToAbsolutePosition(doc, current.type, anchor, current.mapping);
       if (at === null) throw new Error('The image insertion point was removed; try again');
-      const content = images.map(attrs => ({type:'image', attrs:{...attrs, id:crypto.randomUUID()}}));
+      const content = images.map(({src, alt, width, height}) =>
+        ({type:'image', attrs:{src, alt, width, height, id:crypto.randomUUID()}}));
       validateDocument({...editor.getJSON(), content:[...editor.getJSON().content, ...content]});
       editor.chain().focus().insertContentAt(at, content).run();
     } else {
+      const indices = nextIndices(images.length);
       const shapes = images.map((image, index) => ({
-        id: crypto.randomUUID(), type: 'image', src: image.src,
-        box: [origin[0] + index * 24, origin[1] + index * 24, image.width, image.height],
+        id: crypto.randomUUID(), type: 'image', fileId: image.fileId, status: 'saved', scale: [1, 1],
+        x: origin[0] + index * 24, y: origin[1] + index * 24, width: image.width, height: image.height,
+        seed: randomSeed(), index: indices[index],
       }));
-      doc.transact(() => shapes.forEach(shape => putShape(doc, shape)), local);
+      doc.transact(() => images.forEach((image, index) => {
+        putFile(doc, image.fileId, { mimeType: image.mimeType, dataURL: image.src, created: Date.now() });
+        putElement(doc, shapes[index]);
+      }), local);
       selected = new Set(shapes.map(shape => shape.id));
       selectTool('select');
     }
@@ -630,36 +769,111 @@ function imageControls() {
     insertImages(files);
   }, true);
 }
+const TAU = Math.PI * 2, QUARTER = Math.PI / 2;
+const quarterOf = (angle) => Math.round((((angle % TAU) + TAU) % TAU) / QUARTER) % 4;
+const naturalSizes = new Map();
+async function naturalSize(src) {
+  if (!naturalSizes.has(src)) {
+    const image = new Image();
+    image.src = src;
+    await image.decode();
+    naturalSizes.set(src, [image.naturalWidth, image.naturalHeight]);
+  }
+  return naturalSizes.get(src);
+}
+/* The image dialog's edit for a board image. Excalidraw rotates after
+   flipping and the dialog flips after rotating: one flip reverses the turn. */
+function boardImageEdit(e, [nw, nh]) {
+  const flipX = e.scale[0] < 0, flipY = e.scale[1] < 0, quarter = quarterOf(e.angle);
+  const rotation = (flipX === flipY ? quarter * 90 : 360 - quarter * 90) % 360;
+  const crop = e.crop ? [e.crop.x / nw, e.crop.y / nh, e.crop.width / nw, e.crop.height / nh] : [0, 0, 1, 1];
+  return { crop, rotation, flipX, flipY };
+}
+/* Excalidraw crop, flip and rotation for a dialog EDIT (null resets), at
+   the image's current display scale and centre. */
+async function boardImageChanges(snapshot, edit) {
+  const [nw, nh] = await naturalSize(snapshot.src), e = snapshot.element;
+  const previous = boardImageEdit(e, [nw, nh]), next = edit || { crop: [0, 0, 1, 1], rotation: 0, flipX: false, flipY: false };
+  const kx = e.width / (previous.crop[2] * nw), ky = e.height / (previous.crop[3] * nh);
+  const width = next.crop[2] * nw * kx, height = next.crop[3] * nh * ky;
+  const turn = ((next.flipX === next.flipY ? next.rotation : -next.rotation) * Math.PI) / 180;
+  const full = next.crop.every((v, i) => Math.abs(v - [0, 0, 1, 1][i]) < 1e-9);
+  return {
+    x: e.x + (e.width - width) / 2, y: e.y + (e.height - height) / 2, width, height,
+    angle: edit ? e.angle - quarterOf(e.angle) * QUARTER + turn : 0,
+    scale: [next.flipX ? -1 : 1, next.flipY ? -1 : 1],
+    crop: full ? null : { x: next.crop[0] * nw, y: next.crop[1] * nh, width: next.crop[2] * nw,
+      height: next.crop[3] * nh, naturalWidth: nw, naturalHeight: nh },
+  };
+}
+/* Stored geometry for an arrow drawn where it is displayed now, when its
+   bindings are about to be dropped. */
+function detachedGeometry(id) {
+  const item = displayedScene().byId.get(id), g = geometryOf(id);
+  if (!item?.path || item.angle) return g;
+  const [x1, y1, x2, y2] = pointBounds(item.path), [x, y] = item.path[0];
+  return { ...g, x, y, width: x2 - x1, height: y2 - y1, points: item.path.map(([px, py]) => [px - x, py - y]) };
+}
+/* Bindings of arrows in MOVED whose targets stay where they are: a moved
+   connector leaves them, as in Excalidraw. Maps arrow id to binding keys. */
+function looseEnds(moved) {
+  const loose = new Map();
+  for (const id of moved) {
+    const arrow = elementMap().get(id);
+    if (arrow?.get('type') !== 'arrow') continue;
+    const keys = ['startBinding', 'endBinding'].filter((key) => arrow.get(key) && !moved.has(arrow.get(key).elementId));
+    if (keys.length) loose.set(id, keys);
+  }
+  return loose;
+}
+/* Unbind the loose ends of MOVED arrows, keeping them where they are drawn. */
+function detachArrows(moved) {
+  for (const [id, keys] of looseEnds(moved)) {
+    const arrow = elementMap().get(id);
+    arrow.set('geometry', detachedGeometry(id));
+    for (const key of keys) arrow.delete(key);
+  }
+}
+const typeNames = {
+  rectangle: 'Rectangle', diamond: 'Diamond', ellipse: 'Ellipse', stickynote: 'Sticky note', arrow: 'Arrow',
+  line: 'Line', freedraw: 'Drawing', text: 'Text', image: 'Image', frame: 'Frame', magicframe: 'Frame',
+  embeddable: 'Embed', iframe: 'Embed', autoshape: 'Shape from drawing',
+};
 function board() {
   document.body.dataset.kind = 'whiteboard';
   $('board').hidden = false;
-  imageTools($('image-tools'), () => {
+  loadFonts();
+  imageTools($('image-tools'), async () => {
     const shape = selected.size === 1 && shapeList().find(s => selected.has(s.id) && s.type === 'image');
-    return !readOnly && shape ? {...shape,width:shape.box[2],height:shape.box[3]} : null;
+    const file = shape && filesOf(doc)[shape.fileId];
+    if (readOnly || !file) return null;
+    const element = currentScene().byId.get(shape.id);
+    return { id: shape.id, src: file.dataURL, element, stored: shape,
+      imageEdit: boardImageEdit(element, await naturalSize(file.dataURL)), width: element.width, height: element.height };
   }, (before, changes) => {
-    const current = shapeList().find(s => s.id === before.id);
-    if (readOnly || !current || ['src','imageEdit','box'].some(key =>
-      JSON.stringify(current[key]) !== JSON.stringify(before[key])))
+    const now = shapeList().find(s => s.id === before.id);
+    if (readOnly || !now || JSON.stringify(now) !== JSON.stringify(before.stored))
       throw new Error('This image changed while you were editing it. Reopen the image tools to try again.');
-    const after = {...current,imageEdit:changes.imageEdit,
-      box:[...current.box.slice(0,2),changes.width,changes.height]};
+    const after = { ...now, ...changes };
+    if (after.crop === null) delete after.crop;
+    if (!after.angle) delete after.angle;
     const candidate = restore(encode(doc));
-    try {putShape(candidate,after);validate(candidate);} finally {candidate.destroy();}
+    try { putElement(candidate, after); validate(candidate); } finally { candidate.destroy(); }
     undo.stopCapturing();
-    doc.transact(() => putShape(doc,after),local);
+    doc.transact(() => putElement(doc, after), local);
     undo.stopCapturing();
-  },message => status(message,true));
+  }, message => status(message, true), boardImageChanges);
   const tools = [
     ['pan', 'Hand', 'H'],
     ['select', 'Selection', 'V'],
-    ['rect', 'Rectangle', 'R'],
+    ['rectangle', 'Rectangle', 'R'],
     ['diamond', 'Diamond', 'D'],
     ['ellipse', 'Ellipse', 'O'],
-    ['cylinder', 'Database', 'C'],
-    ['sticky', 'Sticky note', 'S'],
+    ['stickynote', 'Sticky note', 'N'],
     ['arrow', 'Arrow', 'A'],
     ['line', 'Line', 'L'],
-    ['pen', 'Draw', 'P'],
+    ['freedraw', 'Draw', 'P'],
+    ['autoshape', 'Shape from drawing', 'Shift X'],
     ['text', 'Text', 'T'],
     ['erase', 'Eraser', 'E'],
     ['laser', 'Laser pointer', 'K'],
@@ -668,14 +882,14 @@ function board() {
   const icons = {
     pan: 'M8 13V6a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v9c0 5-3 7-7 7-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 2',
     select: 'm5 3 14 10-7 1-3 7Z',
-    rect: 'M4 4h16v16H4Z',
+    rectangle: 'M4 4h16v16H4Z',
     diamond: 'm12 3 9 9-9 9-9-9Z',
     ellipse: 'M21 12a9 7 0 1 0-18 0 9 7 0 1 0 18 0',
-    cylinder: 'M4 6c0-5 16-5 16 0s-16 5-16 0v12c0 5 16 5 16 0V6',
-    sticky: 'M4 4h16v11l-5 5H4Zm11 16v-5h5',
+    stickynote: 'M4 4h16v11l-5 5H4Zm11 16v-5h5',
     arrow: 'M4 20 20 4M10 4h10v10',
     line: 'M4 20 20 4',
-    pen: 'M3 18c5-20 4 12 10-5s8-8 8-8',
+    freedraw: 'M3 18c5-20 4 12 10-5s8-8 8-8',
+    autoshape: 'M3 19c2-7 5 1 8-5s5-3 7-6M4 4h7v7H4ZM17 14l1 2 2 1-2 1-1 2-1-2-2-1 2-1Z',
     text: 'M4 5h16M12 5v15M8 20h8',
     erase: 'm3 15 12-12 7 7-12 12H9Zm6-6 7 7M10 22h12',
     laser: 'm3 21 10-10 3 3L6 24ZM17 7l3-3M14 5V2M21 10h3',
@@ -698,18 +912,19 @@ function board() {
     if (readOnly && !['select', 'pan'].includes(value)) continue;
     const b = button(strip, '', () => selectTool(value));
     b.dataset.tool = value;
-    if (['rect', 'arrow', 'erase', 'comment'].includes(value)) b.classList.add('tool-group-start');
+    if (['rectangle', 'arrow', 'erase', 'comment'].includes(value)) b.classList.add('tool-group-start');
     b.title = `${label} (${key})`;
     b.setAttribute('aria-label', label);
-    b.setAttribute('aria-keyshortcuts', key);
+    b.setAttribute('aria-keyshortcuts', key.replace(' ', '+'));
     b.setAttribute('aria-pressed', String(value === 'select'));
-    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[value]}"/></svg><kbd>${key}</kbd>`;
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[value]}"/></svg><kbd>${key.replace('Shift ', '⇧')}</kbd>`;
   }
   if (!readOnly) {
     const imageButton = button(strip, '', () => {});
     imageButton.id = 'board-image';
-    imageButton.title = 'Insert image (or drop an image on the canvas)';
+    imageButton.title = 'Insert image (9, or drop an image on the canvas)';
     imageButton.setAttribute('aria-label', 'Insert image');
+    imageButton.setAttribute('aria-keyshortcuts', '9');
     imageButton.className = 'tool-group-start';
     imageButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 18 6-6 4 4 3-4 5 6"/></svg>';
   }
@@ -719,108 +934,186 @@ function board() {
   properties.innerHTML = '<summary>Style</summary><div class="menu-body"></div>';
   commands.append(properties);
   const panel = properties.lastElementChild;
+  const TEXTUAL = ['fontSize', 'fontFamily', 'textAlign'];
+  /* The elements a style KEY changes for the selection: the selected
+     elements it applies to, and labels for text and label styles. */
+  const styleTargets = (key) => {
+    const chosen = shapeList().filter((s) => selected.has(s.id));
+    const labels = new Set(labelsOf(selected));
+    const own = chosen.filter((s) => (TEXTUAL.includes(key) ? s.type === 'text' : applies(key, s.type)));
+    const bound = LABEL_STYLES.includes(key) || TEXTUAL.includes(key)
+      ? shapeList().filter((s) => labels.has(s.id)) : [];
+    return [...own, ...bound];
+  };
   const value = (key) => {
-    for (const s of shapeList()) if (selected.has(s.id) && applies(key, s.type)) return styleOf(s)[key];
-    return current[key];
+    const target = styleTargets(key)[0];
+    if (!target) return current[key];
+    const full = currentScene().byId.get(target.id);
+    return key === 'roundness' ? (full.roundness ? 'round' : 'sharp') : full[key];
   };
   const style = (key, v) => {
     current[key] = v;
     doc.transact(() => {
-      for (const id of selected) {
-        const s = doc.getMap('shapes').get(id);
-        if (s && applies(key, s.get('type'))) s.set(key, v);
+      for (const target of styleTargets(key)) {
+        const element = elementMap().get(target.id);
+        if (key === 'roundness') {
+          const roundness = roundnessFor(target.type, v);
+          roundness ? element.set('roundness', roundness) : element.delete('roundness');
+        } else element.set(key, v);
+        if (key === 'fontFamily' && element.has('lineHeight')) element.delete('lineHeight');
       }
     }, local);
     refresh();
   };
   const remove = () =>
     doc.transact(() => {
-      for (const id of selected) doc.getMap('shapes').delete(id);
+      for (const id of [...selected, ...labelsOf(selected)]) elementMap().delete(id);
     }, local);
   const reorder = (front) => {
-    const layers = shapeList().map((s) => s.layer || 0),
-      layer = front ? Math.max(...layers) + 1 : Math.min(...layers) - 1;
+    const order = shapeList(), moving = new Set([...selected, ...labelsOf(selected)]);
+    const moved = order.filter((s) => moving.has(s.id)), rest = order.filter((s) => !moving.has(s.id));
+    if (!moved.length) return;
     doc.transact(() => {
-      for (const id of selected) doc.getMap('shapes').get(id)?.set('layer', layer);
+      // Unindexed elements draw on top; give them keys so the move holds.
+      const unindexed = rest.filter((s) => !s.index);
+      const restKeys = generateNKeysBetween(rest.filter((s) => s.index).at(-1)?.index ?? null, null, unindexed.length);
+      unindexed.forEach((s, i) => elementMap().get(s.id).set('index', restKeys[i]));
+      const top = restKeys.at(-1) ?? rest.filter((s) => s.index).at(-1)?.index ?? null;
+      const bottom = rest.find((s) => s.index)?.index ?? restKeys[0] ?? null;
+      const keys = front ? generateNKeysBetween(top, null, moved.length) : generateNKeysBetween(null, bottom, moved.length);
+      moved.forEach((s, i) => elementMap().get(s.id).set('index', keys[i]));
     }, local);
   };
+  /* Copies of IDS (with their labels) offset by DELTA, keeping references
+     among the copies and dropping the rest. */
+  const copyElements = (ids, delta) => {
+    const sources = shapeList().filter((s) => ids.has(s.id) || (s.type === 'text' && ids.has(s.containerId)));
+    const fresh = new Map(sources.map((s) => [s.id, crypto.randomUUID()]));
+    const groups = new Map();
+    const group = (g) => (groups.has(g) || groups.set(g, crypto.randomUUID().replace(/-/g, '')), groups.get(g));
+    const keys = nextIndices(sources.length);
+    return sources.map((s, i) => {
+      const copy = { ...s, ...(s.type === 'arrow' ? detachedGeometry(s.id) : {}), id: fresh.get(s.id),
+        seed: randomSeed(), index: keys[i] };
+      copy.x += delta; copy.y += delta;
+      if (copy.groupIds) copy.groupIds = copy.groupIds.map(group);
+      if (copy.containerId) copy.containerId = fresh.get(copy.containerId) ?? null;
+      for (const key of ['startBinding', 'endBinding']) {
+        if (!copy[key]) continue;
+        if (fresh.has(copy[key].elementId)) copy[key] = { ...copy[key], elementId: fresh.get(copy[key].elementId) };
+        else delete copy[key];
+      }
+      if (copy.containerId === null) delete copy.containerId;
+      return copy;
+    });
+  };
   const duplicate = () => {
-    // Copies keep their own geometry; a copied connector no longer follows the originals.
-    const copies = shapeList()
-      .filter((s) => selected.has(s.id))
-      .map(({ from: _from, to: _to, ...s }) => ({
-        ...s,
-        id: crypto.randomUUID(),
-        box: [s.box[0] + 10, s.box[1] + 10, s.box[2], s.box[3]],
-        ...(s.points ? { points: s.points.map(([x, y]) => [x + 10, y + 10]) } : {}),
-      }));
+    const copies = copyElements(selected, 10);
     if (!copies.length) return;
-    doc.transact(() => copies.forEach((s) => putShape(doc, s)), local);
-    selected = new Set(copies.map((s) => s.id));
+    doc.transact(() => copies.forEach((s) => putElement(doc, s)), local);
+    selected = new Set(copies.filter((s) => !s.containerId).map((s) => s.id));
     draw();
   };
+  const regroup = (join) => doc.transact(() => {
+    const id = crypto.randomUUID().replace(/-/g, '');
+    for (const s of shapeList().filter((e) => selected.has(e.id))) {
+      const element = elementMap().get(s.id), groupIds = s.groupIds || [];
+      const next = join ? [...groupIds, id] : groupIds.slice(0, -1);
+      next.length ? element.set('groupIds', next) : element.delete('groupIds');
+    }
+  }, local);
+  const lock = () => {
+    doc.transact(() => { for (const id of selected) elementMap().get(id)?.set('locked', true); }, local);
+    selected.clear();
+  };
+  const unlockAll = () => doc.transact(() => {
+    for (const s of shapeList()) if (s.locked) elementMap().get(s.id).delete('locked');
+  }, local);
   if (!readOnly) {
     const icon = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
     const option = (key, v, label, body) =>
       `<button type="button" class="opt" data-prop="${key}" data-val="${v}" title="${label}" aria-label="${label}">${body}</button>`;
     const swatch = (key, label, color) =>
-      `<button type="button" class="swatch${color === 'none' ? ' transparent' : ''}"${color === 'none' ? '' : ` style="background:${color}"`} data-prop="${key}" data-val="${color}" aria-label="${label}: ${color === 'none' ? 'transparent' : color}"></button>`;
+      `<button type="button" class="swatch${color === 'transparent' ? ' transparent' : ''}"${color === 'transparent' ? '' : ` style="background:${color}"`} data-prop="${key}" data-val="${color}" aria-label="${label}: ${color}"></button>`;
     const colors = (key, label, list) =>
       list.map((c) => swatch(key, label, c)).join('') +
       `<label class="swatch custom" title="Custom ${label.toLowerCase()} colour"><input type="color" data-color="${key}" aria-label="Custom ${label.toLowerCase()} colour"></label>`;
     const section = (key, title, body) =>
       `<div class="sec" data-sec="${key}"><h4>${title}</h4><div class="row">${body}</div></div>`;
+    const heads = (key) => [['null', 'None', '<path d="M4 12h16"/>'], ['arrow', 'Arrow', '<path d="M4 12h16M14 6l6 6-6 6"/>'],
+      ['triangle', 'Triangle', '<path d="M4 12h10"/><path d="m13 6 7 6-7 6Z" fill="currentColor"/>'],
+      ['circle', 'Circle', '<path d="M4 12h11"/><circle cx="17" cy="12" r="3" fill="currentColor"/>'],
+      ['bar', 'Bar', '<path d="M4 12h16M20 6v12"/>']]
+      .map(([v, label, body]) => option(key, v, `${key === 'startArrowhead' ? 'Start' : 'End'} arrowhead: ${label}`,
+        icon(key === 'startArrowhead' ? `<g transform="matrix(-1 0 0 1 24 0)">${body}</g>` : body))).join('');
     panel.innerHTML =
-      section('stroke', 'Stroke', colors('stroke', 'Stroke', ['#242424', '#e03131', '#2f9e44', '#1971c2', '#7048e8'])) +
-      section('fill', 'Background', colors('fill', 'Background', ['none', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#fff1a8'])) +
+      section('strokeColor', 'Stroke', colors('strokeColor', 'Stroke', ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#f08c00'])) +
+      section('backgroundColor', 'Background', colors('backgroundColor', 'Background', ['transparent', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#ffec99'])) +
       section(
-        'pattern',
+        'fillStyle',
         'Fill',
-        option('pattern', 'hachure', 'Hachure', icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12l8-8M4 19 19 4M10 20 20 10" stroke-width="1.3"/>')) +
-          option('pattern', 'cross', 'Cross-hatch', icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12l8-8M4 19 19 4M10 20 20 10M12 4l8 8M5 5l14 14M4 12l8 8" stroke-width="1.3"/>')) +
-          option('pattern', 'solid', 'Solid', icon('<rect x="4" y="4" width="16" height="16" rx="2" fill="currentColor"/>')),
+        option('fillStyle', 'hachure', 'Hachure', icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12l8-8M4 19 19 4M10 20 20 10" stroke-width="1.3"/>')) +
+          option('fillStyle', 'cross-hatch', 'Cross-hatch', icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12l8-8M4 19 19 4M10 20 20 10M12 4l8 8M5 5l14 14M4 12l8 8" stroke-width="1.3"/>')) +
+          option('fillStyle', 'solid', 'Solid', icon('<rect x="4" y="4" width="16" height="16" rx="2" fill="currentColor"/>')),
       ) +
       section(
-        'width',
+        'strokeWidth',
         'Stroke width',
         [
           [1, 'Thin', 1.5],
           [2, 'Bold', 3],
           [4, 'Extra bold', 5],
         ]
-          .map(([v, label, w]) => option('width', v, label, icon(`<path d="M5 12h14" stroke-width="${w}"/>`)))
+          .map(([v, label, w]) => option('strokeWidth', v, label, icon(`<path d="M5 12h14" stroke-width="${w}"/>`)))
           .join(''),
       ) +
       section(
-        'dash',
+        'strokeStyle',
         'Stroke style',
-        option('dash', 'solid', 'Solid', icon('<path d="M5 12h14"/>')) +
-          option('dash', 'dashed', 'Dashed', icon('<path d="M4 12h4M10 12h4M16 12h4"/>')) +
-          option('dash', 'dotted', 'Dotted', icon('<path d="M5 12h.01M9.5 12h.01M14 12h.01M18.5 12h.01" stroke-width="2.4"/>')),
+        option('strokeStyle', 'solid', 'Solid', icon('<path d="M5 12h14"/>')) +
+          option('strokeStyle', 'dashed', 'Dashed', icon('<path d="M4 12h4M10 12h4M16 12h4"/>')) +
+          option('strokeStyle', 'dotted', 'Dotted', icon('<path d="M5 12h.01M9.5 12h.01M14 12h.01M18.5 12h.01" stroke-width="2.4"/>')),
       ) +
       section(
-        'rough',
+        'roughness',
         'Sloppiness',
-        option('rough', 0, 'Architect', icon('<path d="M4 16 10 8l5 7 5-8"/>')) +
-          option('rough', 1, 'Artist', icon('<path d="M4 16c2-3 3.5-8 6-8s2.5 7 5 7 3-6 5-8"/>')) +
-          option('rough', 2, 'Cartoonist', icon('<path d="M3.5 16c1.5-2 2-9 5-8.5S9 17 12.5 15.5s1-8 3.5-8.5 2 5 4.5 2"/>')),
+        option('roughness', 0, 'Architect', icon('<path d="M4 16 10 8l5 7 5-8"/>')) +
+          option('roughness', 1, 'Artist', icon('<path d="M4 16c2-3 3.5-8 6-8s2.5 7 5 7 3-6 5-8"/>')) +
+          option('roughness', 2, 'Cartoonist', icon('<path d="M3.5 16c1.5-2 2-9 5-8.5S9 17 12.5 15.5s1-8 3.5-8.5 2 5 4.5 2"/>')),
       ) +
       section(
-        'edges',
+        'roundness',
         'Edges',
-        option('edges', 'sharp', 'Sharp', icon('<path d="M5 19V5h14"/>')) +
-          option('edges', 'round', 'Round', icon('<path d="M5 19v-8a6 6 0 0 1 6-6h8"/>')),
+        option('roundness', 'sharp', 'Sharp', icon('<path d="M5 19V5h14"/>')) +
+          option('roundness', 'round', 'Round', icon('<path d="M5 19v-8a6 6 0 0 1 6-6h8"/>')),
+      ) +
+      section('startArrowhead', 'Start arrowhead', heads('startArrowhead')) +
+      section('endArrowhead', 'End arrowhead', heads('endArrowhead')) +
+      section(
+        'fontFamily',
+        'Font',
+        [[5, 'Hand-drawn'], [6, 'Normal'], [8, 'Code']]
+          .map(([v, label]) => option('fontFamily', v, label, `<span style="font-family:${fontStack(v)}">Aa</span>`))
+          .join(''),
       ) +
       section(
         'fontSize',
         'Font size',
         [
           [16, 'S'],
-          [24, 'M'],
-          [32, 'L'],
-          [44, 'XL'],
+          [20, 'M'],
+          [28, 'L'],
+          [36, 'XL'],
         ]
           .map(([v, label]) => option('fontSize', v, `Font size ${label}`, label))
+          .join(''),
+      ) +
+      section(
+        'textAlign',
+        'Text align',
+        [['left', 'Left', 'M4 6h16M4 12h10M4 18h13'], ['center', 'Center', 'M4 6h16M7 12h10M5.5 18h13'],
+          ['right', 'Right', 'M4 6h16M10 12h10M7 18h13']]
+          .map(([v, label, d]) => option('textAlign', v, `Align ${label.toLowerCase()}`, icon(`<path d="${d}"/>`)))
           .join(''),
       ) +
       section('opacity', 'Opacity', '<input type="range" min="0" max="100" step="5" aria-label="Opacity"><output>100</output>');
@@ -830,9 +1123,9 @@ function board() {
     panel.onclick = (event) => {
       const b = event.target.closest('[data-prop]');
       if (b) {
-        const key = b.dataset.prop;
+        const key = b.dataset.prop, raw = b.dataset.val;
         undo.stopCapturing();
-        style(key, ['width', 'rough', 'fontSize'].includes(key) ? +b.dataset.val : b.dataset.val);
+        style(key, raw === 'null' ? null : ['strokeWidth', 'roughness', 'fontSize', 'fontFamily'].includes(key) ? +raw : raw);
         undo.stopCapturing();
         return;
       }
@@ -847,27 +1140,24 @@ function board() {
         shapes.length ? shapes.map((s) => s.type) : drawable.includes(tool) ? [tool] : [],
       );
       const has = (fn) => [...kinds].some(fn);
-      const show = {
-        stroke: has((k) => applies('stroke', k)),
-        fill: has((k) => applies('fill', k)),
-        pattern: has((k) => applies('pattern', k)) && value('fill') !== 'none',
-        width: has((k) => applies('width', k)),
-        dash: has((k) => applies('dash', k)),
-        rough: has((k) => applies('rough', k)),
-        edges: kinds.has('rect'),
-        fontSize: kinds.has('text') || kinds.has('sticky') || shapes.some((s) => s.text),
+      const labelled = labelsOf(selected).length > 0;
+      const show = Object.fromEntries(Object.keys(current).map((key) => [key, has((k) => applies(key, k))]));
+      Object.assign(show, {
+        fillStyle: show.fillStyle && value('backgroundColor') !== 'transparent',
+        fontSize: kinds.has('text') || labelled || (!shapes.length && ['stickynote', 'text'].includes(tool)),
+        fontFamily: kinds.has('text') || labelled || (!shapes.length && ['stickynote', 'text'].includes(tool)),
         opacity: kinds.size > 0,
-      };
+      });
       properties.firstElementChild.setAttribute('aria-disabled', String(!kinds.size));
       if (!kinds.size) properties.open = false;
-      const name = tools.find(([value]) => value === (shapes[0]?.type || tool))?.[1] || 'Image';
+      const name = typeNames[shapes[0]?.type || tool] || 'Element';
       caption.textContent = shapes.length > 1 ? `${shapes.length} objects` : shapes.length ? name : `New ${name.toLowerCase()}`;
       for (const sec of panel.querySelectorAll('.sec')) sec.hidden = !show[sec.dataset.sec];
       for (const b of panel.querySelectorAll('[data-prop]'))
         b.setAttribute('aria-pressed', String(String(value(b.dataset.prop)) === b.dataset.val));
       for (const input of panel.querySelectorAll('input[data-color]')) {
         const v = value(input.dataset.color);
-        if (v !== 'none') input.value = v;
+        if (/^#[0-9a-f]{6}$/i.test(v)) input.value = v;
       }
       range.value = value('opacity');
       range.nextElementSibling.value = value('opacity');
@@ -876,13 +1166,14 @@ function board() {
   properties.hidden = readOnly;
   const canvas = $('canvas');
   const actions = [];
-  const all = () => { selected = new Set(shapeList().map(s => s.id)); selectionRegion = null; selectTool('select'); };
+  const all = () => { selected = new Set(shapeList().filter(s => !s.locked && !(s.containerId && s.type === 'text')).map(s => s.id)); selectionRegion = null; selectTool('select'); };
   const clear = () => { selected.clear(); selectionRegion = null; selectTool('select'); };
   const move = (dx, dy, step = 1) => doc.transact(() => {
     selectionRegion = null;
+    detachArrows(selected);
     for (const id of selected) {
-      const shape = doc.getMap('shapes').get(id), geometry = shape.get('geometry'), box = geometry.box;
-      shape.set('geometry', transformGeometry(geometry, [box[0] + dx * step, box[1] + dy * step, ...box.slice(2)]));
+      const shape = elementMap().get(id), geometry = shape.get('geometry');
+      shape.set('geometry', { ...geometry, x: geometry.x + dx * step, y: geometry.y + dy * step });
     }
   }, local);
   const action = (parent, label, run, enabled, shortcut = '', keepOpen = false) => {
@@ -902,7 +1193,11 @@ function board() {
   action(objectBody, 'Clear selection', clear, () => selected.size > 0, 'Esc');
   if (!readOnly) {
     action(objectBody, 'Edit text', () => editText([...selected][0]), () => selected.size === 1, 'Enter').classList.add('menu-divider');
-    action(objectBody, 'Duplicate', duplicate, () => selected.size > 0);
+    action(objectBody, 'Duplicate', duplicate, () => selected.size > 0, '⌘ / Ctrl D');
+    action(objectBody, 'Group', () => regroup(true), () => selected.size > 1, '⌘ / Ctrl G');
+    action(objectBody, 'Ungroup', () => regroup(false), () => shapeList().some(s => selected.has(s.id) && s.groupIds?.length), '⌘ / Ctrl ⇧ G');
+    action(objectBody, 'Lock', lock, () => selected.size > 0);
+    action(objectBody, 'Unlock all', unlockAll, () => shapeList().some(s => s.locked));
     const arrange = document.createElement('details');
     arrange.className = 'object-arrange';
     arrange.innerHTML = '<summary>Arrange & move</summary><div></div>';
@@ -922,8 +1217,9 @@ function board() {
     select: 'Drag across empty canvas to box-select (Alt: touched objects). Shift adds. Double-click edits text.',
     pan: 'Drag to move around the canvas. Scroll to zoom.',
     text: 'Click to place text. Ctrl / ⌘ Enter to finish.',
-    sticky: 'Click to place a note. Ctrl / ⌘ Enter to finish.',
+    stickynote: 'Click to place a note. Ctrl / ⌘ Enter to finish.',
     arrow: 'Drag between objects to connect them. Connections follow the objects.',
+    autoshape: 'Draw a rectangle, diamond, ellipse, arrow or line by hand; it becomes a clean shape.',
     erase: 'Click an object to erase it. Undo restores it.',
     laser: 'Drag to point. The trail fades without changing the board.',
     comment: 'Click an object or drag across an area to comment on it.',
@@ -936,14 +1232,29 @@ function board() {
     if ($('document-stat').textContent !== label) $('document-stat').textContent = label;
     $('hint').textContent = readOnly ? 'View only · Select objects or use the hand to explore.' : hints[tool] || 'Drag to draw. Choose Style to change the next object.';
   };
-  for (const menu of [objectMenu, properties]) {
+  const library = readOnly ? null : libraryPanel({
+    parent: commands, request, report: (message) => status(message, true),
+    selection: () => shapeList().filter((s) => selected.has(s.id) || (s.type === 'text' && selected.has(s.containerId))),
+    download: (text) => port.postMessage({ type: 'recovery', result: { text, mime: 'application/vnd.excalidrawlib+json', extension: 'excalidrawlib' } }),
+    insert: (elements) => {
+      const center = [view[0] + view[2] / 2, view[1] + view[3] / 2];
+      const placed = placeElements(elements, center, nextIndices(elements.length), randomSeed);
+      undo.stopCapturing();
+      doc.transact(() => placed.forEach((e) => putElement(doc, e)), local);
+      undo.stopCapturing();
+      selected = new Set(placed.filter((e) => !e.containerId).map((e) => e.id));
+      selectTool('select');
+    },
+  });
+  const menus = [objectMenu, properties, ...(library ? [library] : [])];
+  for (const menu of menus) {
     const summary = menu.firstElementChild;
     summary.addEventListener('click', event => {
       event.preventDefault();
       if (summary.getAttribute('aria-disabled') === 'true') return;
       menu.open = !menu.open;
       if (!menu.open) return;
-      (menu === objectMenu ? properties : objectMenu).open = false;
+      for (const other of menus) if (other !== menu) other.open = false;
       const body = menu.lastElementChild;
       body.style.marginLeft = '0px';
       const rect = body.getBoundingClientRect();
@@ -958,11 +1269,11 @@ function board() {
   shortcuts.setAttribute('aria-labelledby', 'board-shortcuts-title');
   shortcuts.innerHTML = `<form method="dialog"><h2 id="board-shortcuts-title">Whiteboard shortcuts</h2>
     <p>Click the canvas before using shortcuts.</p>
-    <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}</dl></section>
+    <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}${readOnly ? '' : '<div><dt>Insert image</dt><dd><kbd>9</kbd></dd></div>'}</dl></section>
     <section><h3>Working on the canvas</h3><dl>
     <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
     <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Middle-button drag</dd></div><div><dt>Zoom at pointer</dt><dd>Scroll</dd></div>
-    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Comment on the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
+    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Duplicate</dt><dd>Ctrl / ⌘ D</dd></div><div><dt>Group / ungroup</dt><dd>Ctrl / ⌘ G / Shift G</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Comment on the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
     </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
   document.body.append(shortcuts);
   button($('tools'), 'Shortcuts', () => shortcuts.showModal()).className = 'board-help';
@@ -976,7 +1287,7 @@ function board() {
     view = [view[0] + view[2] * (1 - factor) / 2, view[1] + view[3] * (1 - factor) / 2, next, view[3] * factor];
     draw();
   };
-  button(zoom, 'Fit', () => { view = bounds(shapeList()); draw(); }).title = 'Fit all objects';
+  button(zoom, 'Fit', () => { view = bounds(shapeList(), currentScene()); draw(); }).title = 'Fit all objects';
   button(zoom, '−', () => zoomBy(1.2)).setAttribute('aria-label', 'Zoom out');
   const percentage = button(zoom, '100%', () => zoomBy(canvas.getScreenCTM()?.a || 1));
   percentage.id = 'board-zoom'; percentage.title = 'Reset zoom to 100%'; percentage.setAttribute('aria-label', 'Reset zoom to 100%');
@@ -984,8 +1295,20 @@ function board() {
   boardPresence = new BoardPresence(canvas, $('presence'));
   boardPreviews = new BoardPreviews(()=>{ draw(); saved(); });
   new ResizeObserver(() => draw()).observe(canvas);
-  const hitAt = (event) =>
-    document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
+  /* The selectable element under EVENT: a label selects its container,
+     and locked elements are not selectable. */
+  const hitAt = (event) => {
+    const id = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
+    const item = id && currentScene().byId.get(id);
+    if (!item) return undefined;
+    const target = item.bound ? currentScene().byId.get(item.containerId) : item;
+    return target && !target.locked ? target.id : undefined;
+  };
+  const bindingTo = (id) => {
+    const target = id && currentScene().byId.get(id);
+    return target && !['arrow', 'line', 'freedraw'].includes(target.type)
+      ? { elementId: id, fixedPoint: [0.5001, 0.5001], mode: 'orbit' } : null;
+  };
   canvas.onpointerdown = (event) => {
     if (event.button !== 0 && event.button !== 1) return;
     const pin = event.target.closest?.('.comment-pin');
@@ -1017,7 +1340,7 @@ function board() {
     if (tool === 'comment' && !readOnly) {
       // A click comments on an object; a drag comments on an area and its objects.
       selectionRegion = null;
-      selected = id ? new Set([id]) : new Set();
+      selected = id ? withGroup(id) : new Set();
       drag = { mode: 'marquee', comment: true, target: id, start: point,
         screen: [event.clientX, event.clientY], additive: false, base: new Set(selected), region: null };
       draw();
@@ -1042,36 +1365,40 @@ function board() {
         draw();
         return;
       }
+      const unit = withGroup(id);
       if (event.shiftKey) {
-        selected.has(id) ? selected.delete(id) : selected.add(id);
-      } else if (!selected.has(id)) selected = new Set([id]);
+        const on = !selected.has(id);
+        for (const member of unit) on ? selected.add(member) : selected.delete(member);
+      } else if (!selected.has(id)) selected = unit;
       draw();
-      if (!readOnly)
+      if (!readOnly) {
+        const loose = looseEnds(selected);
         drag = {
           mode: 'move',
           start: point,
-          boxes: [...selected].map((key) => [key, visibleGeometry(key)]),
+          loose,
+          boxes: [...selected].map((key) => [key, loose.has(key) ? detachedGeometry(key) : visibleGeometry(key)]),
         };
+      }
       return;
     }
     if (readOnly) return;
     if (tool === 'erase') {
-      if (id) doc.transact(() => doc.getMap('shapes').delete(id), local);
+      if (id) doc.transact(() => [id, ...labelsOf(new Set([id]))].forEach((key) => elementMap().delete(key)), local);
       return;
     }
-    const shape = { id: crypto.randomUUID(), type: tool, box: [...point, 1, 1] };
-    for (const [key, v] of Object.entries(current)) if (applies(key, tool)) shape[key] = v;
-    if (tool === 'sticky' && shape.fill === 'none') {
-      shape.fill = '#fff1a8';
-      shape.pattern = 'solid';
-    }
-    drag = { mode: 'draw', start: point, points: [point], from: id, shape };
+    const stroke = ['freedraw', 'autoshape'].includes(tool);
+    const element = styledElement(tool === 'autoshape' ? 'freedraw' : tool, { x: point[0], y: point[1], width: 0, height: 0 });
+    if (stroke) Object.assign(element, { points: [[0, 0]], simulatePressure: event.pointerType !== 'pen',
+      ...(event.pointerType === 'pen' ? { pressures: [event.pressure] } : {}) });
+    if (LINEAR.includes(tool)) element.points = [[0, 0], [0, 0]];
+    drag = { mode: 'draw', start: point, points: [point], from: id, element };
   };
   canvas.onpointermove = (event) => {
     const point = world(event);
     if (drag && ['move','resize'].includes(drag.mode)) {
       drag.end = point;
-      outgoingPreview = {shapes:dragGeometry(drag).slice(0,100).map(([id,g])=>({id,box:g.box}))};
+      outgoingPreview = {shapes:dragGeometry(drag).slice(0,100).map(([id,g])=>({id,box:geometryBox(g)}))};
     }
     if (event.pointerType !== 'touch' || drag)
       presence(point, tool === 'laser' ? 'laser' : 'cursor');
@@ -1100,28 +1427,58 @@ function board() {
     }
     if (drag.mode === 'draw') {
       drag.end = point;
-      if (drag.points.length < 3999) drag.points.push(point);
-      const s = drag.shape;
-      s.box = [
-        Math.min(point[0], drag.start[0]),
-        Math.min(point[1], drag.start[1]),
-        Math.abs(point[0] - drag.start[0]),
-        Math.abs(point[1] - drag.start[1]),
-      ];
-      if (LINEAR.includes(s.type)) s.points = s.type === 'pen' ? drag.points : [drag.start, point];
-      if (s.type === 'pen') {
-        const xs = s.points.map((p) => p[0]),
-          ys = s.points.map((p) => p[1]),
-          x = Math.min(...xs),
-          y = Math.min(...ys);
-        s.box = [x, y, Math.max(...xs) - x, Math.max(...ys) - y];
-      }
+      const e = drag.element, [sx, sy] = drag.start;
+      if (e.points && !LINEAR.includes(e.type)) {
+        if (e.points.length < 3999) {
+          e.points.push([point[0] - sx, point[1] - sy]);
+          drag.points.push(point);
+          if (e.pressures) e.pressures.push(event.pressure);
+        }
+        const [x1, y1, x2, y2] = pointBounds(e.points);
+        Object.assign(e, { width: x2 - x1, height: y2 - y1 });
+      } else if (LINEAR.includes(e.type)) {
+        e.points = [[0, 0], [point[0] - sx, point[1] - sy]];
+        Object.assign(e, { width: Math.abs(point[0] - sx), height: Math.abs(point[1] - sy) });
+      } else Object.assign(e, { x: Math.min(point[0], sx), y: Math.min(point[1], sy),
+        width: Math.abs(point[0] - sx), height: Math.abs(point[1] - sy) });
       draw();
-      $('selection').innerHTML = shapeSVG(s, shapeList());
     } else if (drag.mode === 'move' || drag.mode === 'resize') {
       drag.end = point;
       draw();
     }
+  };
+  /* The element a finished drawing gesture D creates. */
+  const finishedElement = (d, event) => {
+    let e = d.element;
+    if (['text', 'stickynote'].includes(e.type)) {
+      const size = e.type === 'stickynote' ? 200 : 0;
+      Object.assign(e, { x: d.start[0], y: d.start[1], width: Math.max(size, e.width), height: Math.max(size, e.height) });
+      if (e.type === 'text') Object.assign(e, { text: '', width: 0, height: e.fontSize * 1.25 });
+    } else if (e.width < 3 && e.height < 3 && !e.points) Object.assign(e, { width: 150, height: 90 });
+    else if (e.width < 3 && e.height < 3 && LINEAR.includes(e.type))
+      Object.assign(e, { points: [[0, 0], [150, 90]], width: 150, height: 90 });
+    if (tool === 'autoshape') {
+      const shape = recognize(d.points, canvas.getScreenCTM()?.a || 1);
+      if (shape.type !== 'freedraw') {
+        const kept = { id: e.id, seed: e.seed, index: e.index };
+        if (LINEAR.includes(shape.type)) {
+          e = styledElement(shape.type, { x: shape.from[0], y: shape.from[1],
+            width: Math.abs(shape.to[0] - shape.from[0]), height: Math.abs(shape.to[1] - shape.from[1]),
+            points: [[0, 0], [shape.to[0] - shape.from[0], shape.to[1] - shape.from[1]]] });
+        } else {
+          const [x, y, width, height] = shape.box;
+          e = styledElement(shape.type, { x, y, width, height });
+        }
+        Object.assign(e, kept);
+      }
+    }
+    if (e.type === 'arrow') {
+      const end = hitAt(event), start = d.from;
+      const startBinding = bindingTo(start), endBinding = end !== start ? bindingTo(end) : null;
+      if (startBinding) e.startBinding = startBinding;
+      if (endBinding) e.endBinding = endBinding;
+    }
+    return e;
   };
   canvas.onpointerup = (event) => {
     if (!drag) return;
@@ -1140,32 +1497,16 @@ function board() {
     }
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
     if (d.mode === 'draw') {
-      const s = d.shape;
-      if (['text', 'sticky'].includes(s.type)) {
-        s.box = [...d.start, 180, 100];
-        s.text = s.type === 'sticky' ? 'New note' : 'Text';
-      } else if (s.box[2] < 3 && s.box[3] < 3) {
-        s.box = [...d.start, 150, 90];
-        if (['line', 'arrow', 'pen'].includes(s.type))
-          s.points = [d.start, [d.start[0] + 150, d.start[1] + 90]];
-      }
-      if (s.type === 'arrow') {
-        if (d.from) s.from = d.from;
-        const to = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')
-          ?.dataset.shape;
-        if (to) s.to = to;
-      }
-      validateShape(s);
-      doc.transact(() => putShape(doc, s), local);
-      selected = new Set([s.id]);
+      const e = finishedElement(d, event);
+      validateElement(e);
+      doc.transact(() => putElement(doc, e), local);
+      selected = new Set([e.id]);
       selectTool('select');
-      if (['text', 'sticky'].includes(s.type)) editText(s.id);
+      if (['text', 'stickynote'].includes(e.type)) editText(e.id);
     } else if (d.end) {
       doc.transact(() => {
-        for (const [id, geometry] of dragGeometry(d)) {
-          const shape = doc.getMap('shapes').get(id);
-          if (shape) shape.set('geometry', geometry);
-        }
+        for (const [id, keys] of d.loose || []) for (const key of keys) elementMap().get(id)?.delete(key);
+        for (const [id, geometry] of dragGeometry(d)) elementMap().get(id)?.set('geometry', geometry);
       }, local);
       if (outgoingPreview) outgoingPreview.opId = bufferedId;
       if (event.pointerType === 'touch') {
@@ -1203,8 +1544,14 @@ function board() {
     draw();
   };
   canvas.ondblclick = (event) => {
+    if (tool !== 'select' || readOnly) return;
     const id = hitAt(event);
-    if (id && tool === 'select') editText(id);
+    if (id) { editText(id); return; }
+    // Double-clicking empty canvas starts text there, as in Excalidraw.
+    const [x, y] = world(event), text = styledElement('text', { x, y, width: 0, height: current.fontSize * 1.25, text: '' });
+    undo?.stopCapturing();
+    doc.transact(() => putElement(doc, text), local);
+    editText(text.id);
   };
   canvas.onwheel = (event) => {
     event.preventDefault();
@@ -1221,41 +1568,52 @@ function board() {
   };
   canvas.onkeydown = (event) => {
     if (event.ctrlKey || event.metaKey) {
-      if (event.key === 'a') {
+      const key = event.key.toLowerCase();
+      if (key === 'a') {
         event.preventDefault();
         all();
+      } else if (!readOnly && key === 'd' && selected.size) {
+        event.preventDefault();
+        undo.stopCapturing(); duplicate(); undo.stopCapturing();
+      } else if (!readOnly && key === 'g') {
+        event.preventDefault();
+        undo.stopCapturing(); regroup(!event.shiftKey); undo.stopCapturing();
       }
       return;
     }
     const keys = {
       v: 'select',
       h: 'pan',
-      r: 'rect',
+      r: 'rectangle',
       o: 'ellipse',
       d: 'diamond',
-      c: 'cylinder',
       a: 'arrow',
       l: 'line',
-      p: 'pen',
+      p: 'freedraw',
+      x: 'freedraw',
+      X: 'autoshape',
       t: 'text',
-      s: 'sticky',
+      n: 'stickynote',
       e: 'erase',
       k: 'laser',
       m: 'comment',
       1: 'select',
-      2: 'rect',
+      2: 'rectangle',
       3: 'diamond',
       4: 'ellipse',
       5: 'arrow',
       6: 'line',
-      7: 'pen',
+      7: 'freedraw',
       8: 'text',
-      9: 'sticky',
       0: 'erase',
     };
     if (keys[event.key] && (!readOnly || ['select', 'pan'].includes(keys[event.key]))) {
       event.preventDefault();
       selectTool(keys[event.key]);
+    }
+    if (event.key === '9' && !readOnly) {
+      event.preventDefault();
+      $('board-image').click();
     }
     if (event.key === 'Escape') {
       clear();
@@ -1277,7 +1635,7 @@ function board() {
       move(...moves[event.key], event.shiftKey ? 10 : 1);
     }
   };
-  undo = new Y.UndoManager(doc.getMap('shapes'), {
+  undo = new Y.UndoManager([elementMap(), doc.getMap('files')], {
     trackedOrigins: new Set([local]),
   });
   doc.on('update', () => draw());
@@ -1514,6 +1872,8 @@ async function start(event) {
   online = event.data.online !== false;
   revision = item.revision;
   doc = restore(bytes(item.crdt));
+  // Registered first, so every later update listener sees fresh elements.
+  doc.on('update', () => { cachedList = cachedScene = null; });
   const recovery = event.data.draft;
   if (recovery?.crdt) {
     try {
@@ -1663,7 +2023,7 @@ async function start(event) {
     ...(item.kind === 'whiteboard' ? ['png', 'svg'] : ['markdown', 'html']),
   ])
     $('export').add(
-      new Option(value === 'native' ? 'Editable snapshot' : value.toUpperCase(), value),
+      new Option(value === 'native' ? (item.kind === 'whiteboard' ? 'Excalidraw file' : 'Editable snapshot') : value.toUpperCase(), value),
     );
   $('download').onclick = async () => {
     try {
@@ -1677,13 +2037,14 @@ async function start(event) {
   $('recovery').onclick = () => {
     port.postMessage({
       type: 'recovery',
-      result: {
-        text: JSON.stringify({ format: 'mevedel-editable-1', ...inspect(doc) }),
-        mime: 'application/json',
-        extension: 'recovery.mevedel.json',
-      },
+      result: item.kind === 'whiteboard'
+        ? { text: serializeScene(shapeList(), filesOf(doc)), mime: 'application/vnd.excalidraw+json',
+            extension: 'recovery.excalidraw' }
+        : { text: JSON.stringify({ format: 'mevedel-editable-1', ...inspect(doc) }),
+            mime: 'application/json', extension: 'recovery.mevedel.json' },
     });
   };
+
   assistant = new AssistantPanel({
     capture: captureAttachment, request, save: saveBeforeQuestion,
     changed: () => {
