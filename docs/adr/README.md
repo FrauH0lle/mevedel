@@ -153,3 +153,6 @@ to the decision bearing that ID.
 - [ADR 0119: Keep views reconstructable and rendering bounded](0119-keep-views-reconstructable-and-rendering-bounded.md).
 
 - [ADR 0120: Edit shared content through the session host](0120-edit-shared-content-through-the-session-host.md).
+
+- [ADR 0121: Store whiteboards as Excalidraw elements](0121-store-whiteboards-as-excalidraw-elements.md)
+  amends ADR 0120's whiteboard schema, image transforms and connector rendering.

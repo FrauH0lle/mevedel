@@ -155,6 +155,21 @@ body.editor #properties .menu-body { border-radius:4px; max-height:calc(100dvh -
 .board-menu .editor-menu > button { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .board-menu kbd { font:11px var(--font-ui); color:var(--muted); }
 .object-arrange > summary { padding:8px 10px; font-size:13px; border:0; background:transparent; }
+.library .library-body { width:320px; gap:8px; padding:10px; }
+.library-actions { display:flex; flex-wrap:wrap; gap:4px; }
+.library-actions button { padding:6px 8px; background:var(--surface-2); }
+.library-body h4 { margin:6px 2px 0; font-size:12px; color:var(--muted); font-weight:600; }
+.library-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+.library-item { position:relative; }
+.editor-menu .library-insert { display:flex; flex-direction:column; align-items:center; gap:4px; width:100%; padding:6px; border:1px solid var(--line); background:#fff; color:#1e1e1e; text-align:center; }
+.library-insert img { width:100%; height:64px; object-fit:contain; }
+.library-insert span { font-size:11px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-menu .library-remove { position:absolute; top:2px; right:2px; padding:0 6px; line-height:18px; }
+.library-body input[type=search] { width:100%; box-sizing:border-box; }
+.library-catalog { display:flex; flex-direction:column; gap:2px; max-height:50dvh; overflow-y:auto; }
+.editor-menu .library-entry { display:flex; flex-direction:column; align-items:flex-start; gap:1px; }
+.library-entry small { color:var(--muted); }
+.library-entry span { font-size:12px; white-space:normal; }
 .object-arrange[open] { background:var(--ground); }
 .object-arrange > div > button { display:block; width:100%; }
 .board-nudges { display:flex; gap:4px; padding:4px 10px; }

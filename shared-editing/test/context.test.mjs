@@ -6,6 +6,9 @@ import { restore } from '../model.mjs';
 import { captureContext, checkContext, readComments } from '../context.mjs';
 import { selectionPositions } from '../document.mjs';
 const load = state => restore(Buffer.from(state.crdt, 'base64'));
+/* A shape and, with TEXT, its bound label. */
+const shape = (id, x, text, type = 'rectangle', y = 0) => [{id, type, x, y, width:100, height:100},
+  ...(text ? [{id:`label-${id}`, type:'text', x, y, width:0, height:0, text, containerId:id}] : [])];
 const rangeFor = (start, from, end, to) => ({
   anchor:Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(start, from, -1)),
   head:Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(end, to, -1)),
@@ -70,13 +73,14 @@ test('cross-block and reversed selections capture exact text and committed item 
 
 test('board context keeps selection identities, rejects deleted targets and bounds large context', async () => {
   const {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',content:[
-    {id:'a',type:'rect',box:[0,0,100,100],text:'A'}, {id:'b',type:'ellipse',box:[200,0,100,100],text:'B'}]});
+    ...shape('a', 0, 'A'), ...shape('b', 200, 'B', 'ellipse')]});
   const doc = load(state);
   try {
     assert.match(captureContext(doc, {selection:['a']}).quote, /^1 object\n/);
     const captured = captureContext(doc, {selection:['a','b']});
     assert.equal(captured.snapshot.content.length, 2);
-    assert.match(captured.quote, /rect: A\nellipse: B/);
+    assert.deepEqual(captured.snapshot.context.map(e => e.id), ['label-a','label-b'], 'labels give the selection its meaning');
+    assert.match(captured.quote, /rectangle: A\nellipse: B/);
     const {result} = await handle({action:'read',state,question:true,selection:['a','b'],expected:captured.snapshot,image:true});
     assert.ok(result.png.length > 100);
     assert.throws(() => captureContext(doc, {selection:['missing']}), /no longer available/);
@@ -123,9 +127,11 @@ test('thread replies are attributed, retry-safe and included in explicit questio
 
 test('board areas carry their region, nearby objects without image bytes and a cropped PNG', async () => {
   const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-  const {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',content:[
-    {id:'a',type:'rect',box:[0,0,100,100],text:'A'}, {id:'far',type:'ellipse',box:[2000,2000,100,100],text:'Far'},
-    {id:'pic',type:'image',box:[150,0,100,100],src:image}]});
+  const {state} = await handle({action:'import',format:'excalidraw',id:'board',opId:'create',actor:'Alice',
+    data:JSON.stringify({type:'excalidraw',version:2,elements:[
+      ...shape('a', 0, 'A'), ...shape('far', 2000, 'Far', 'ellipse', 2000),
+      {id:'pic',type:'image',x:150,y:0,width:100,height:100,fileId:'pixel'}],
+      files:{pixel:{id:'pixel',mimeType:'image/png',dataURL:image,created:1}}})});
   const doc = load(state);
   const size = png => { const b = Buffer.from(png, 'base64'); return [b.readUInt32BE(16), b.readUInt32BE(20)]; };
   try {
@@ -134,10 +140,10 @@ test('board areas carry their region, nearby objects without image bytes and a c
     assert.deepEqual(captured.snapshot.region, region);
     assert.equal(captured.snapshot.scope, 'selection');
     assert.deepEqual(captured.snapshot.content.map(s => s.id), ['a']);
-    assert.deepEqual(captured.snapshot.context.map(s => s.id), ['pic'], 'touched neighbours, not distant objects');
-    assert.equal(captured.snapshot.context[0].src, undefined);
-    assert.match(captured.snapshot.context[0].image, /PNG/);
-    assert.match(captured.quote, /^Area 200 × 120 at -10, -10\n1 object\nrect: A$/);
+    assert.deepEqual(captured.snapshot.context.map(s => s.id), ['label-a', 'pic'], 'touched neighbours, not distant objects');
+    assert.equal(captured.snapshot.context[1].fileId, 'pixel');
+    assert.doesNotMatch(JSON.stringify(captured.snapshot), /base64/, 'image bytes stay out of the question');
+    assert.match(captured.quote, /^Area 200 × 120 at -10, -10\n1 object\nrectangle: A$/);
     const empty = captureContext(doc, {region:[500,500,50,40]});
     assert.deepEqual([empty.snapshot.content, empty.snapshot.context], [[], []]);
     assert.match(empty.quote, /^Area 50 × 40 at 500, 500\n0 objects$/);
@@ -157,11 +163,11 @@ test('board areas carry their region, nearby objects without image bytes and a c
 
 test('board comments anchor to objects and areas, track changes and send surviving objects', async () => {
   let {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',content:[
-    {id:'a',type:'rect',box:[0,0,100,100],text:'A'}, {id:'b',type:'rect',box:[300,0,100,100],text:'B'}]});
+    ...shape('a', 0, 'A'), ...shape('b', 300, 'B')]});
   const commit = async (edit) => {
     const doc = load(state);
     try {
-      edit(doc.getMap('shapes'));
+      edit(doc.getMap('elements'));
       ({state} = await handle({action:'update',opId:crypto.randomUUID(),actor:'Guest: Bob',state,
         update:Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64')}));
     } finally { doc.destroy(); }
@@ -179,16 +185,16 @@ test('board comments anchor to objects and areas, track changes and send survivi
     expected:objects}), /Select objects or an area/);
   assert.deepEqual(state.comments[0].selection, ['a','b']);
   assert.match(state.comments[0].signature, /^[0-9a-f]{16}$/);
-  assert.equal(state.comments[0].quote, '2 objects\nrect: A\nrect: B');
+  assert.equal(state.comments[0].quote, '2 objects\nrectangle: A\nrectangle: B');
   assert.deepEqual(state.comments[1].region, [500,0,80,60]);
   assert.deepEqual(statuses().map(c => c.anchorStatus), ['current','current']);
-  await commit(shapes => shapes.get('b').set('text', 'B2'));
-  assert.deepEqual(statuses().map(c => c.anchorStatus), ['changed','current'], 'an edited object changes its thread');
+  await commit(shapes => shapes.get('label-b').set('text', 'B2'));
+  assert.deepEqual(statuses().map(c => c.anchorStatus), ['changed','current'], 'an edited label changes its thread');
   await commit(shapes => shapes.delete('b'));
   const [thread] = statuses();
   assert.equal(thread.anchorStatus, 'changed');
   assert.deepEqual(thread.liveSelection, ['a']);
-  assert.equal(thread.liveQuote, '1 object\nrect: A');
+  assert.equal(thread.liveQuote, '1 object\nrectangle: A');
   doc = load(state);
   const surviving = captureContext(doc, {selection:thread.liveSelection}).snapshot;
   doc.destroy();
@@ -204,10 +210,10 @@ test('board comments anchor to objects and areas, track changes and send survivi
 
 test('room questions about a whole item capture current content without a reviewed snapshot', async () => {
   let {state} = await handle({action:'create',id:'board',opId:'create',actor:'Guest: Alice',kind:'whiteboard',
-    content:[{id:'a',type:'rect',box:[0,0,100,100],text:'A'},{id:'b',type:'ellipse',box:[200,0,100,100],text:'B'}]});
+    content:[...shape('a', 0, 'A'), ...shape('b', 200, 'B', 'ellipse')]});
   const asked = await handle({action:'read',question:true,whole:true,state});
   assert.equal(asked.result.snapshot.scope, 'whole');
-  assert.deepEqual(asked.result.snapshot.content.map(shape => shape.id), ['a','b']);
+  assert.deepEqual(asked.result.snapshot.content.map(shape => shape.id), ['a','b','label-a','label-b']);
   assert.match(asked.result.quote, /^2 objects/);
   // Without the whole-item flag a question still needs the snapshot its
   // sender reviewed, and the flag never combines with a selection.

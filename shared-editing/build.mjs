@@ -19,6 +19,7 @@ const browser = await build({
   entryPoints: [root + 'editor.mjs'],
   outfile: root + '../relay/viewer/shared-editor.js',
   bundle: true,
+  loader: { '.woff2': 'base64' },
   platform: 'browser',
   format: 'iife',
   target: 'es2022',
@@ -54,5 +55,8 @@ for (const [bundle, file] of [
     notices += `\n--- ${pkg.name} ${pkg.version} ---\n`;
     for (const name of files) notices += (await readFile(directory + '/' + name, 'utf8')) + '\n';
   }
+  // Ported Excalidraw code, and in the editor bundle its embedded fonts.
+  notices += '\n--- Excalidraw ---\n' + (await readFile(root + 'EXCALIDRAW-LICENSE', 'utf8'));
+  if (bundle === browser) notices += '\n--- Fonts ---\n' + (await readFile(root + 'FONT-LICENSE', 'utf8'));
   await writeFile(file, notices.trimEnd() + '\n');
 }
