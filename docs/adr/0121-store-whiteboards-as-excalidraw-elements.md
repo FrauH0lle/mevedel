@@ -61,12 +61,20 @@ board was not a pain point; only the data layer and its drawing changed.
 - **The cylinder became a library item.** Excalidraw has no cylinder type.
   Keeping one as a private type would break files opened elsewhere, so the
   database shape is a built-in group of an ellipse and lines.
-- **The element library belongs to the host.** A personal `.excalidrawlib`
-  file, `mevedel-shared-library-file`, is offered to writable editors in every
-  room. Emacs fetches the public catalog from libraries.excalidraw.com because
-  the editor's sandbox has no network access; it fetches only that catalog's
-  library files. Items stay opaque JSON in Emacs; inserting one validates it
-  like any other edit.
+- **Element libraries belong to the host.** A directory of `.excalidrawlib`
+  files, `mevedel-shared-library-directory`, holds the personal library and
+  installed ones; mevedel ships a built-in library. They are offered to
+  writable editors in every room and to the model. Excalidraw keeps its
+  library in the browser, apart from scenes; a host directory gives the same
+  separation while surviving browsers and sessions. Emacs fetches the public
+  catalog from libraries.excalidraw.com because the editor's sandbox has no
+  network access; it fetches only that catalog's library files. Items stay
+  opaque JSON in Emacs; inserting one validates it like any other edit.
+- **The model inserts library items by reference.** `SharedRead` lists items
+  as `LIBRARY/ITEM-ID` with a numbered PNG sheet, and `SharedEdit` `insert`
+  places one with fresh identities in the helper. Copying an item's elements
+  into a patch would make the model handle ids, groups and bindings that the
+  editor's insertion already remaps.
 - **Shape recognition is an editor tool.** Excalidraw's moment-based
   recognizer turns a stroke drawn with the autoshape tool into a rectangle,
   diamond, ellipse, arrow or line, or keeps it as freedraw. The result is an
@@ -86,8 +94,9 @@ board was not a pain point; only the data layer and its drawing changed.
   questions and previews would need re-integration on its API. The element
   model chosen here is also the first step if that ever changes.
 - **Port Excalidraw's interaction in full.** Most of its specification
-  describes tools, handles and snapping. Cherry-picking interaction (groups,
-  locking, arrowheads, fonts) where it helped was cheaper than cloning it.
+  describes tools, handles and snapping. Cherry-picking interaction (groups
+  and entering them, locking, arrowheads, fonts, transform and point handles,
+  arrow types) where it helped was cheaper than cloning it.
 
 ## Consequences
 
@@ -95,5 +104,16 @@ Existing whiteboards no longer open; there is no migration. The editor bundle
 grows by the fonts and roughjs; the editor CSP gains `font-src data:`, so the
 relay must be rebuilt and redeployed. Constant-width freedraw approximates
 Excalidraw's laser-pointer stroke with perfect-freehand, and sticky notes omit
-the lifted corner and date footer. Elbow arrows are drawn from their stored
-points but not routed.
+the lifted corner and date footer. Elbow arrows take a fixed orthogonal route
+between the facing sides of their shapes instead of Excalidraw's A* router,
+so they do not avoid other shapes.
+
+## Decision history
+
+The first version kept one personal library file, `mevedel-shared-library-file`,
+and "Add all to my library" merged public libraries into it. In use, the user
+wanted a few public libraries installed on the host and always available, as
+separate collections. The library directory replaces the single file;
+installing writes the library as its own file, which can also be removed
+whole. Excalidraw's own libraries never travelled with scenes either, so
+nothing was lost by keeping them off the board.

@@ -22,7 +22,10 @@ import {
 } from './model.mjs';
 import { initializeDocument, patchDocument, markdown, selectedText } from './document.mjs';
 import { boardSVG, documentHTML, usedFonts } from './render.mjs';
-import { parseScene, serializeScene } from './excalidraw.mjs';
+import { parseScene, serializeScene, parseLibrary, placeElements } from './excalidraw.mjs';
+import { extent } from './scene.mjs';
+import { generateNKeysBetween } from 'fractional-indexing';
+import { escape } from './render.mjs';
 import { FONT_FILES } from './text.mjs';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const bytes = (text) => {
@@ -76,6 +79,29 @@ async function exportSVG(elements, files) {
 /* Image files a retained contribution can restore must survive pruning. */
 const retainedFiles = (transactions) => new Set(transactions.flatMap((tx) =>
   (tx.changes || []).flatMap((c) => [c.before?.fileId, c.after?.fileId]).filter(Boolean)));
+/* Items of LIBRARIES ({name, text}) as the model sees them: a listing of
+   references and a numbered PNG sheet of the first items. */
+async function librarySheet(libraries) {
+  check(Array.isArray(libraries) && libraries.length <= 100, 'Invalid libraries');
+  const items = libraries.flatMap(({ name, text }) => parseLibrary(text).map((item) => {
+    const [, , width, height] = extent(item.elements);
+    return { ref: `${name}/${item.id}`, name: item.name || '', library: name,
+      elements: item.elements.length, size: [Math.round(width), Math.round(height)], item };
+  }));
+  // ponytail: one sheet of 60 items; filter by library name to see the rest.
+  const shown = items.slice(0, 60), cell = [200, 170], columns = 6;
+  const cells = shown.map(({ item, name }, i) => {
+    const [x, y] = [(i % columns) * cell[0], Math.floor(i / columns) * cell[1]];
+    const art = boardSVG(item.elements, { maxEdge: 150, maxScale: 2 }).replace('<svg ', `<svg x="${x + 25}" y="${y + 5}" `);
+    return `${art}<text x="${x + 100}" y="${y + 160}" text-anchor="middle" font-family="Noto Sans" font-size="13" fill="#1e1e1e">${i + 1}. ${escape(name.slice(0, 26))}</text>`;
+  }).join('');
+  const width = cell[0] * Math.min(columns, Math.max(1, shown.length)), height = cell[1] * Math.max(1, Math.ceil(shown.length / columns));
+  return {
+    items: items.map(({ item, ...entry }, i) => ({ number: i + 1, ...entry })),
+    ...(items.length > shown.length ? { sheet: `The sheet shows items 1-${shown.length}; read fewer libraries to see others.` } : {}),
+    png: await png(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#ffffff"/>${cells}</svg>`),
+  };
+}
 function differences(before, after) {
   const a = before.kind === 'whiteboard' ? before.content : before.content.content || [];
   const b = after.kind === 'whiteboard' ? after.content : after.content.content || [];
@@ -129,8 +155,9 @@ export async function handle(request) {
       doc.destroy();
     }
   }
+  if (action === 'library-sheet') return { result: await librarySheet(request.libraries) };
   check(
-    ['create', 'import', 'read', 'update', 'patch', 'rename', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'update', 'patch', 'insert', 'rename', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -323,7 +350,7 @@ export async function handle(request) {
       Object.keys(state.receipts).length < 65536,
       'Editing history limit reached; export and import into a new item',
     );
-    let comments = state.comments || [];
+    let comments = state.comments || [], inserted;
     if (action === 'comment') {
       const board = before.kind === 'whiteboard';
       check(board ? request.selection?.length || request.region : request.range,
@@ -353,6 +380,20 @@ export async function handle(request) {
       check(typeof request.resolved === 'boolean', 'Invalid comment status');
       comments = comments.map(c => c.id === request.commentId ? {...c, resolved: request.resolved} : c);
     } else if (action === 'update') applyUpdate(doc, bytes(request.update));
+    else if (action === 'insert') {
+      check(before.kind === 'whiteboard', 'Library items insert into whiteboards');
+      const item = parseLibrary(request.library).find((candidate) => candidate.id === request.item);
+      check(item, 'Unknown library item');
+      check([request.x, request.y].every((v) => Number.isFinite(v) && Math.abs(v) <= 1e6), 'insert needs x and y');
+      const [, , width, height] = extent(item.elements);
+      const top = before.content.filter((e) => e.index).at(-1)?.index ?? null;
+      const files = filesOf(doc);
+      // Library items carry no image files; a missing image draws as a placeholder.
+      const elements = item.elements.map((e) => (e.fileId && !files[e.fileId] ? { ...e, fileId: null } : e));
+      inserted = placeElements(elements, [request.x + width / 2, request.y + height / 2],
+        generateNKeysBetween(top, null, elements.length), () => Math.floor(Math.random() * 2 ** 31));
+      patch(doc, inserted.map((e) => ({ id: e.id, before: null, after: e })));
+    }
     else if (action === 'rename') {
       check(
         typeof request.title === 'string' && request.title.trim() && request.title.length <= 200,
@@ -431,6 +472,7 @@ export async function handle(request) {
         update: b64(Y.encodeStateAsUpdate(doc, vector)),
         transaction: changed ? transaction : null,
         ...(notes?.length ? { notes } : {}),
+        ...(inserted ? { inserted: inserted.map((e) => e.id) } : {}),
       },
     };
   } finally {
