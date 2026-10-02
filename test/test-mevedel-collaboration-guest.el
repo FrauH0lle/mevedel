@@ -704,6 +704,26 @@
                                     :data (base64-encode-string "--- a\n"))))))
             (should (= 1 (length paths)))
             (should (string-suffix-p ".patch" (car paths))))
+          ;; Other UTF-8 text keeps its own extension, unless Read would
+          ;; take that extension for binary; binary bytes are refused.
+          (let ((paths (mevedel-collaboration--save-guest-attachments
+                        (list (list :mime "text/plain" :extension "py"
+                                    :data (base64-encode-string
+                                           (encode-coding-string "print(\"λ\")\n" 'utf-8)))
+                              (list :mime "text/plain" :extension "png"
+                                    :data (base64-encode-string "<svg/>"))))))
+            (should (equal '("py" "txt") (mapcar #'file-name-extension paths))))
+          (should-not (mevedel-collaboration--save-guest-attachments
+                       (list (list :mime "text/plain" :extension "exe"
+                                   :data (base64-encode-string "MZ\0\220")))))
+          (should-not (mevedel-collaboration--save-guest-attachments
+                       (list (list :mime "text/plain" :extension "../x"
+                                   :data (base64-encode-string "\377\376")))))
+          (let ((path (car (mevedel-collaboration--save-guest-attachments
+                            (list (list :mime "text/plain" :extension "../x"
+                                        :data (base64-encode-string "ok")))))))
+            (should (equal dir (directory-file-name (file-name-directory path))))
+            (should (string-suffix-p ".txt" path)))
           ;; Unknown type, malformed data, over-budget, and too many
           ;; attachments each drop the whole set.
           (should-not (mevedel-collaboration--save-guest-attachments
