@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canComment, canDelete, busy}) {
+  function create({send, el, flash, summarize, reveal, canComment, canDelete, busy, ask}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
     const boxSummary = document.getElementById('artifacts-summary');
@@ -47,7 +47,10 @@
     const closeButton = document.getElementById('artifact-close');
     const body = document.getElementById('artifact-body');
     const commentToggle = document.getElementById('artifact-comment');
-    const view = {id: null, name: null, reqId: 0, staging: null,
+    const askButton = document.getElementById('artifact-ask');
+    // KIND is 'artifact' for a session card or 'file' for a project file,
+    // which has no comments and is removed from the file tree instead.
+    const view = {id: null, name: null, kind: 'artifact', reqId: 0, staging: null,
                   meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
     let theme = null;
@@ -112,6 +115,7 @@
       if (tab) tab.hidden = true;
       if (download) download.hidden = true;
       if (remove) remove.hidden = true;
+      if (askButton) askButton.hidden = true;
     }
 
     // Deleting removes the file for everyone; the host resolves it from its
@@ -141,11 +145,11 @@
       flash(`${name} deleted.`);
     }
 
-    function open(record) {
-      if (!panel || !record || typeof record.id !== 'string') return;
+    function fetch(kind, id, name, frame) {
       close();
-      view.id = record.id;
-      view.name = record.artifact || 'artifact';
+      view.id = id;
+      view.name = name;
+      view.kind = kind;
       view.reqId = ++requestSequence;
       view.staging = [];
       if (title) title.textContent = view.name;
@@ -153,11 +157,23 @@
       note('Loading…');
       panel.hidden = false;
       const reqId = view.reqId;
-      send({t: 'artifact-get', reqId, id: record.id}).then(ok => {
+      send({...frame, reqId}).then(ok => {
         if (!ok && view.reqId === reqId && metaEl) {
           metaEl.textContent = 'Connection lost';
         }
       });
+    }
+
+    function open(record) {
+      if (!panel || !record || typeof record.id !== 'string') return;
+      fetch('artifact', record.id, record.artifact || 'artifact',
+            {t: 'artifact-get', id: record.id});
+    }
+
+    // A project file, named by its path in the project.
+    function openFile(path) {
+      if (!panel || typeof path !== 'string') return;
+      fetch('file', path, path, {t: 'file-get', path});
     }
 
     function renderContent() {
@@ -166,13 +182,15 @@
       const {formatBytes, renderMarkdown} = window.mevedelTranscriptRenderer;
       if (metaEl) metaEl.textContent = `${formatBytes(view.bytes.length)} · ${mime}`;
       body.replaceChildren();
+      const artifact = view.kind === 'artifact';
       if (download) download.hidden = false;
-      if (remove) remove.hidden = !(typeof canDelete === 'function' && canDelete());
+      if (remove) remove.hidden = !(artifact && typeof canDelete === 'function' && canDelete());
+      if (askButton) askButton.hidden = artifact || !ask || !ask.available();
       if (mime === 'text/html') {
         if (tab) tab.hidden = false;
-        const frame = sandboxedFrame(document, text(), true);
+        const frame = sandboxedFrame(document, text(), artifact);
         body.append(frame);
-        if (comments) comments.attach(frame, view.id, view.name);
+        if (comments && artifact) comments.attach(frame, view.id, view.name);
       } else if (mime === 'text/markdown') {
         const prose = renderMarkdown(text());
         prose.className = 'prose artifact-prose';
@@ -211,7 +229,7 @@
       const collected = view.staging.reduce((sum, part) => sum + part.length, 0);
       if (collected > MAX_BASE64) {
         view.staging = null;
-        note('Artifact too large for this viewer.');
+        note('Too large for this viewer; open it on the host.');
         return;
       }
       if (frame.final === true) {
@@ -220,7 +238,7 @@
         let binary;
         try { binary = atob(encoded); }
         catch (_error) {
-          note('Artifact transfer was corrupted; try again.');
+          note('The transfer was corrupted; try again.');
           return;
         }
         const bytes = new Uint8Array(binary.length);
@@ -297,6 +315,15 @@
     if (closeButton) closeButton.addEventListener('click', close);
     if (tab) tab.addEventListener('click', openTab);
     if (download) download.addEventListener('click', downloadFile);
+    // ASK is {available, run}: whether a file can start a session here,
+    // and starting one about the file at a path.
+    if (askButton && ask) {
+      askButton.addEventListener('click', () => {
+        const path = view.name;
+        close();
+        ask.run(path);
+      });
+    }
     function queue(entries) {
       if (comments) comments.queue(entries);
     }
@@ -327,7 +354,7 @@
       return comments.discuss(record.id, text, images);
     }
 
-    return Object.freeze({open, render, handle, handleDelete, close, setTheme, queue, handleComment,
+    return Object.freeze({open, openFile, render, handle, handleDelete, close, setTheme, queue, handleComment,
                           storedComments, discuss, activity});
   }
 

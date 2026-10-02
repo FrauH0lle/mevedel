@@ -71,6 +71,7 @@ function fakeFile(name, type, text) {
   return {
     name, type, size: bytes.length,
     arrayBuffer: async () => bytes,
+    slice: (start, end) => ({arrayBuffer: async () => bytes.subarray(start, end)}),
   };
 }
 
@@ -588,6 +589,9 @@ async function main() {
                'invites', 'invite-button', 'invite', 'invite-tiers',
                'lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
                'lobby-title', 'lobby-new', 'lobby-refresh',
+               'lobby-tabs', 'lobby-tab-sessions', 'lobby-tab-files',
+               'lobby-sessions', 'lobby-files', 'files-path', 'files-list',
+               'files-status', 'files-upload', 'files-input', 'artifact-ask',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
                'editing-title', 'editing-file', 'editing-import', 'editing-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
@@ -779,6 +783,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-files.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-lobby.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
@@ -1216,10 +1221,24 @@ async function main() {
   assert.equal(nodes.attachments.children.length, 2);
   assert.match(textOf(nodes.attachments), /build\.log/);
   assert.match(textOf(nodes.attachments), /tool\.py/);
+  // Marking one attachment for the project uploads its original file
+  // after the prompt, which carries only the prompt's own copies.
+  const shareToggle = nodes.attachments.children[1].children[1];
+  assert.equal(shareToggle.attributes['aria-pressed'], 'false');
+  shareToggle.dispatch('click');
+  assert.equal(nodes.attachments.children[1].children[1].attributes['aria-pressed'], 'true');
   nodes['composer-input'].value = 'see the log';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 8, 'prompt with attachment');
+  await waitFor(() => first.sent.length === 9, 'prompt with attachment and its upload');
+  const shared = await unseal(key, first.sent[8]);
+  assert.deepEqual({...shared, data: Buffer.from(shared.data, 'base64').toString()},
+                   {t: 'file-upload', reqId: 1, data: 'print("hi")\n', dir: '',
+                    name: 'tool.py', size: 12, rename: true, final: true});
+  await deliver({t: 'file-upload', reqId: 1, ok: true, path: 'tool-2.py'});
+  await waitFor(() => /tool-2\.py added to the project/.test(textOf(nodes.notice)),
+                'project share notice');
   const withFile = await unseal(key, first.sent[7]);
+  assert.equal(withFile.images.some(image => 'share' in image || 'file' in image), false);
   assert.equal(withFile.images.length, 2);
   assert.equal(withFile.images[0].mime, 'text/plain');
   assert.equal(withFile.images[0].extension, undefined, 'a typed file needs no extension');

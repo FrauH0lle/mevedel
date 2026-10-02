@@ -76,3 +76,10 @@
 #editing-panel { bottom: auto; height: 100dvh; }
 #editing-panel .panel-head { padding: 3px 10px; min-height: 32px; }
 #editing-close { padding: 3px 10px; font-size: 12px; min-height: 28px; }
+
+/* On a phone the actions leave the title no room; a file's path is the
+   one thing worth reading there, so it takes its own line. */
+@media (max-width: 34rem) {
+  #artifact-panel .panel-head { flex-wrap: wrap; row-gap: .35rem; }
+  #artifact-panel .panel-headline { flex-basis: 100%; }
+}

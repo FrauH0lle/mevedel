@@ -24,8 +24,13 @@
     window.location.reload();
   }
 
-  function create({state, send, el, notice, sessions, navigate = follow}) {
+  function create({state, send, el, notice, sessions, files = null, navigate = follow}) {
     const section = document.getElementById('lobby');
+    const tabs = document.getElementById('lobby-tabs');
+    const sessionsTab = document.getElementById('lobby-tab-sessions');
+    const filesTab = document.getElementById('lobby-tab-files');
+    const sessionsPane = document.getElementById('lobby-sessions');
+    const filesPane = document.getElementById('lobby-files');
     const list = document.getElementById('lobby-list');
     const empty = document.getElementById('lobby-empty');
     const omitted = document.getElementById('lobby-omitted');
@@ -34,8 +39,33 @@
     const refresh = document.getElementById('lobby-refresh');
 
     let active = false;
+    let project = null;
+    let tab = 'sessions';
     let requestSequence = 0;
     const opening = new Map();
+
+    function retitle() {
+      const noun = tab === 'files' ? 'files' : 'sessions';
+      title.textContent = project ? `${project} ${noun}` : noun[0].toUpperCase() + noun.slice(1);
+    }
+
+    // Project files are a full-link feature: a view link lists sessions
+    // and nothing else, so it gets no tabs at all.
+    function select(next) {
+      tab = next === 'files' && files && state.writable ? 'files' : 'sessions';
+      sessionsTab.setAttribute('aria-selected', String(tab === 'sessions'));
+      filesTab.setAttribute('aria-selected', String(tab === 'files'));
+      sessionsPane.hidden = tab !== 'sessions';
+      filesPane.hidden = tab !== 'files';
+      newButton.hidden = !state.owner || tab !== 'sessions';
+      retitle();
+      if (tab === 'files') files.show(project);
+    }
+
+    function reload() {
+      if (tab === 'files') files.refresh();
+      else send({t: 'lobby-refresh'});
+    }
 
     function open(row, button) {
       const reqId = ++requestSequence;
@@ -74,9 +104,11 @@
         // kept where those rooms list the others.
         sessions.rememberCurrent(`Lobby · ${frame.project || 'project'}`);
       }
-      title.textContent = frame.project ? `${frame.project} sessions` : 'Sessions';
-      document.title = frame.project ? `${frame.project} · mevedel` : 'mevedel';
-      newButton.hidden = !state.owner;
+      project = typeof frame.project === 'string' && frame.project ? frame.project : null;
+      document.title = project ? `${project} · mevedel` : 'mevedel';
+      tabs.hidden = !(files && state.writable);
+      newButton.hidden = !state.owner || tab !== 'sessions';
+      retitle();
       const rows = Array.isArray(frame.sessions) ? frame.sessions : [];
       list.replaceChildren(...rows.map(renderRow));
       empty.hidden = rows.length > 0;
@@ -110,13 +142,13 @@
     newButton.addEventListener('click', () => {
       sessions.openNewSession('Starts a separate session in this project.');
     });
-    refresh.addEventListener('click', () => send({t: 'lobby-refresh'}));
+    refresh.addEventListener('click', reload);
+    sessionsTab.addEventListener('click', () => select('sessions'));
+    filesTab.addEventListener('click', () => select('files'));
     // A phone tab returning to the foreground is the moment the list may
     // be stale: sessions were opened or created while it slept.
     document.addEventListener('visibilitychange', () => {
-      if (active && document.visibilityState === 'visible') {
-        send({t: 'lobby-refresh'});
-      }
+      if (active && document.visibilityState === 'visible') reload();
     });
 
     return Object.freeze({show, opened, created, active: () => active});

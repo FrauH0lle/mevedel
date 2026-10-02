@@ -36,8 +36,10 @@ separate retention policy.
 
 A lobby link is a long-lived bearer: it stays valid across restarts and
 periods without guests until rotated. A full or owner lobby link can open,
-and an owner link create, sessions in that workspace, so it carries more
-standing authority than any single room link.
+and an owner link create, sessions in that workspace, and a full link can
+read, upload and remove the project's files
+([ADR 0122](0122-let-full-links-change-project-files-directly.md)), so it
+carries more standing authority than any single room link.
 
 Shared whiteboards and documents follow the same access lifetime. Their
 accepted content is durable session state and survives the room; ending a

@@ -202,7 +202,7 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
   display: none;
 }
 
-.lobby { max-width: 51rem; margin: 0 auto; padding: 1.5rem 1rem 2rem; }
+.lobby { width: 100%; max-width: 51rem; margin: 0 auto; padding: 1.5rem 1rem 2rem; }
 .lobby[hidden] { display: none; }
 
 .lobby-head {
@@ -252,3 +252,87 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
 .lobby-row .btn { flex: 0 0 auto; }
 .lobby-empty { color: var(--muted); margin: 1rem 0 0; }
 .lobby-empty[hidden] { display: none; }
+
+/* A full link's lobby has two tabs: the session list and the project's
+   files. */
+.lobby-tabs {
+  display: flex;
+  gap: .25rem;
+  margin: 0 0 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.lobby-tabs[hidden] { display: none; }
+.lobby-tab {
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: .45rem .8rem;
+  cursor: pointer;
+}
+.lobby-tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.lobby-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#lobby-sessions[hidden], .lobby-files[hidden] { display: none; }
+
+.lobby-files { border-radius: var(--panel-radius); }
+.files-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .6rem;
+}
+.files-path {
+  flex: 1 1 12rem;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .15rem;
+  overflow-wrap: anywhere;
+}
+.files-crumb {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: .1rem .2rem;
+  cursor: pointer;
+}
+.files-crumb:last-child { color: var(--ink); font-weight: 600; }
+.files-sep { color: var(--muted); }
+.files-row { padding: .45rem 0; gap: .6rem; }
+.files-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: .45rem;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: .2rem 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.files-name:hover { color: var(--accent); }
+.files-icon { color: var(--muted); width: .8rem; flex: 0 0 auto; }
+.files-row .lobby-meta { flex: 0 0 auto; }
+/* A list of files carries a Remove per row; a solid danger block on every
+   row would shout, so it reads as a quiet control until pointed at. */
+.files-row .btn.danger {
+  background: none;
+  color: var(--failed);
+  border: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.files-row .btn.danger:hover,
+.files-row .btn.danger:focus-visible { border-color: var(--failed); }
