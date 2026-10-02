@@ -77,15 +77,24 @@ window.mevedelEditingView = {
         return null;
       }
     }
-    function recoveryCatalog() {
+    function forgetDraft(id) {
+      try { localStorage.removeItem(draftKey(id)); } catch (_) { /* storage unavailable */ }
+    }
+    /* List local drafts the catalog lacks as recoveries.  Only a catalog just
+       listed by the host is AUTHORITATIVE about what it no longer has. */
+    function recoveryCatalog(authoritative = false) {
       try {
         const prefix = draftKey('');
+        const gone = [];
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           if (!key?.startsWith(prefix)) continue;
           const id = key.slice(prefix.length),
             draft = readDraft(id);
-          if (draft && !catalog.has(id))
+          // A draft of an item the host no longer has is worth keeping only
+          // while it holds edits that never reached the host.
+          if (authoritative && draft && !catalog.has(id) && !draft.pending?.length) gone.push(id);
+          else if (draft && !catalog.has(id))
             catalog.set(id, {
               id,
               kind: draft.kind,
@@ -93,6 +102,7 @@ window.mevedelEditingView = {
               local: true,
             });
         }
+        gone.forEach(forgetDraft);
       } catch (_) {
         /* Existing open editors can still export without storage. */
       }
@@ -312,6 +322,10 @@ window.mevedelEditingView = {
             });
           return;
         }
+        if (data.type === 'delete') {
+          if (!state.readOnly && catalog.has(id)) confirmDelete(catalog.get(id));
+          return;
+        }
         if (data.type !== 'request' || typeof data.reqId !== 'string') return;
         const args = data.args;
         if (
@@ -391,7 +405,7 @@ window.mevedelEditingView = {
         if (generation !== availabilityGeneration) return;
         catalog.clear();
         items.forEach((item) => catalog.set(item.id, item));
-        recoveryCatalog();
+        recoveryCatalog(true);
         render();
       } catch (error) {
         if (generation !== availabilityGeneration) return;
@@ -524,7 +538,9 @@ window.mevedelEditingView = {
       } catch (_) {
         return;
       }
-      if (frame.reqId === 'event') {
+      if (frame.reqId === 'event' && value.event === 'deleted') {
+        removed(value);
+      } else if (frame.reqId === 'event') {
         const { id, kind, title, revision } = value,
           previous = catalog.get(id);
         catalog.set(id, { id, kind, title, revision });
@@ -542,6 +558,49 @@ window.mevedelEditingView = {
         if (value.error) entry.reject(new Error(value.error));
         else entry.resolve(value.result);
       }
+    }
+    // Deleting removes an item for everyone, with its comments and history.
+    // There is no undo; the sheet offers a copy that can be imported again.
+    const deleteSheet = document.getElementById('delete-shared');
+    let deleting = null;
+    function confirmDelete(item) {
+      if (!deleteSheet || state.readOnly) return;
+      deleting = item;
+      const kind = item.kind === 'whiteboard' ? 'whiteboard' : 'document';
+      document.getElementById('delete-shared-title').textContent = `Delete “${item.title}”?`;
+      document.getElementById('delete-shared-note').textContent =
+        `This removes the ${kind} for everyone in this room, with its comments and contribution history. `
+        + 'It cannot be undone; a downloaded copy can be imported again.';
+      deleteSheet.returnValue = '';
+      deleteSheet.showModal();
+    }
+    document.getElementById('delete-shared-copy')?.addEventListener('click', async () => {
+      if (!deleting) return;
+      try {
+        download(await request({ action: 'export', id: deleting.id, format: 'native' }), deleting.title);
+      } catch (error) {
+        flash(error.message);
+      }
+    });
+    deleteSheet?.addEventListener('close', async () => {
+      const item = deleting;
+      deleting = null;
+      if (!item || deleteSheet.returnValue !== 'delete') return;
+      try {
+        await request({ action: 'delete', id: item.id });
+      } catch (error) {
+        flash(error.message);
+      }
+    });
+    // An item deleted anywhere leaves the list; an editor showing it closes.
+    function removed({ id, actor }) {
+      const item = catalog.get(id);
+      catalog.delete(id);
+      if (!readDraft(id)?.pending?.length) forgetDraft(id);
+      recoveryCatalog();
+      render();
+      if (id === current && !panel.hidden) document.getElementById('editing-close').click();
+      if (item) flash(`“${item.title}” was deleted${actor ? ` by ${actor}` : ''}.`);
     }
     document.querySelectorAll('[data-create-editor]').forEach(
       (button) =>

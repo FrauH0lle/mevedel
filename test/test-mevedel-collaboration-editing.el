@@ -327,7 +327,35 @@
         (should (equal (plist-get request :action) "read"))
         (should (eq (plist-get request :question) t))
         (should (eq (plist-get request :whole) t))
-        (should (equal (plist-get request :text) "Make it pretty")))))
+        (should (equal (plist-get request :text) "Make it pretty")))
+      ;; Full links delete with their own attribution; view links cannot.
+      (setq requests nil)
+      (mevedel-collaboration-editing--dispatch room 1 guest 9 '(:action "delete" :id "board"))
+      (should (equal '("delete" "board" "Guest: Alice")
+                     (let ((request (car requests)))
+                       (list (plist-get request :action) (plist-get request :id)
+                             (plist-get request :actor)))))
+      (let ((viewer (list :name "Bob")))
+        (cl-letf (((symbol-function 'mevedel-collaboration--guest) (lambda (_room _peer) viewer)))
+          (should-error (mevedel-collaboration-editing--dispatch
+                         room 2 viewer 10 '(:action "delete" :id "board")))))))
+
+  :doc "A deleted item reaches every guest, and its viewers leave it"
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :session 'session :guests guests))
+         sent)
+    (puthash 1 (list :name "Alice" :editing-item "board") guests)
+    (puthash 2 (list :name "Bob" :editing-item "notes") guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
+              ((symbol-function 'mevedel-collaboration-editing--send)
+               (lambda (_room peer req-id value) (push (list peer req-id value) sent))))
+      (mevedel-collaboration-editing--changed
+       'session '(:id "board" :deleted t :actor "Guest: Ann") nil))
+    (should (equal '((1 "event" (:event "deleted" :id "board" :actor "Ann"))
+                     (2 "event" (:event "deleted" :id "board" :actor "Ann")))
+                   (sort sent (lambda (a b) (< (car a) (car b))))))
+    (should-not (plist-get (gethash 1 guests) :editing-item))
+    (should (equal "notes" (plist-get (gethash 2 guests) :editing-item))))
 
   :doc "Library requests reach the host's library only for writable links"
   (let* ((directory (make-temp-file "mevedel-editing-library-" t))

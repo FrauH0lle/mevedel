@@ -218,6 +218,51 @@
     (should (equal "application/octet-stream"
                    (mevedel-collaboration--artifact-mime "noext")))))
 
+(mevedel-deftest mevedel-collaboration--handle-artifact-delete
+  (:doc "deletes a published artifact and its comments for writable links only")
+  (let* ((save-path (make-temp-file "mevedel-guest-artifact-delete-" t))
+         (dir (file-name-as-directory
+               (expand-file-name (mevedel-session-artifacts-artifacts-dir save-path))))
+         (path (file-name-concat dir "mockup.html"))
+         (board (file-name-concat dir "shared-editing" "board.json"))
+         (comments (file-name-concat
+                    save-path (mevedel-collaboration--artifact-comment-logical "mockup.html")))
+         (session (mevedel-session--create :name "s" :save-path save-path
+                                           :authority-mode 'pid-lock))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :guests guests :transport 'transport
+                     :records
+                     (list (list :id "tool-1" :kind "tool" :name "ApplyPatch"
+                                 :artifact "mockup.html" :artifact-path path)
+                           (list :id "tool-2" :kind "tool" :name "ApplyPatch"
+                                 :artifact "shared-editing/board.json" :artifact-path board))))
+         sent)
+    (puthash 1 (list :name "viewer" :writable nil :ready t) guests)
+    (puthash 2 (list :name "writer" :writable t :ready t) guests)
+    (unwind-protect
+        (progn
+          (dolist (file (list path board comments))
+            (make-directory (file-name-directory file) t)
+            (with-temp-file file (insert "x")))
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+            (cl-labels ((reply (peer id)
+                          (setq sent nil)
+                          (mevedel-collaboration--handle-artifact-delete
+                           room peer (list :reqId 3 :id id))
+                          (cdr (car sent))))
+              (should (string-match-p "not delete" (plist-get (reply 1 "tool-1") :error)))
+              (should (file-exists-p path))
+              (should (eq t (plist-get (reply 2 "tool-1") :ok)))
+              (should-not (file-exists-p path))
+              (should-not (file-exists-p comments))
+              (should (equal "artifact-delete" (plist-get (reply 2 "nope") :t)))
+              (should (plist-get (reply 2 "nope") :error))
+              ;; Items are deleted as items, never as a model-written file.
+              (should (string-match-p "Shared work" (plist-get (reply 2 "tool-2") :error)))
+              (should (file-exists-p board)))))
+      (delete-directory save-path t))))
+
 (mevedel-deftest mevedel-collaboration--handle-artifact-get
   (:doc "answers published artifacts in bounded chunks and refuses everything else")
   (let* ((save-path (make-temp-file "mevedel-guest-artifact-" t))
