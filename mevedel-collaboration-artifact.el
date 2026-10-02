@@ -44,6 +44,20 @@
                   "mevedel-collaboration-transport" (transport peer frame))
 (defvar mevedel-collaboration--max-frame-json-bytes)
 
+;; `mevedel-collaboration-artifact-comments'
+(declare-function mevedel-collaboration--artifact-comment-logical
+                  "mevedel-collaboration-artifact-comments" (name))
+(autoload 'mevedel-collaboration--artifact-comment-logical
+  "mevedel-collaboration-artifact-comments")
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifacts-dir
+                  "mevedel-session-artifacts" (save-path))
+(declare-function mevedel-session-artifacts-delete-files
+                  "mevedel-session-artifacts" (session paths))
+(autoload 'mevedel-session-artifacts-artifacts-dir "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-delete-files "mevedel-session-artifacts")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-within-root-p
                   "mevedel-resource" (path root))
@@ -170,6 +184,48 @@
                                 (list :data (substring data start end)
                                       :final (if done t :json-false))))
                               start end))))))))))))))
+
+(defun mevedel-collaboration-delete-artifact (session name)
+  "Delete SESSION's artifact NAME with its comments and update its room.
+NAME is the path relative to the artifacts folder, as cards and the
+artifacts cockpit show it.  Whiteboards and documents keep their state
+below `shared-editing/' and are deleted as items, not as files."
+  (let ((directory (mevedel-session-artifacts-artifacts-dir
+                    (or (mevedel-session-save-path session)
+                        (error "This session has no artifacts folder")))))
+    (when (string-prefix-p "shared-editing/" name)
+      (error "Delete whiteboards and documents from Shared work"))
+    (mevedel-session-artifacts-delete-files
+     session
+     (list (expand-file-name name directory)
+           (file-name-concat (mevedel-session-save-path session)
+                             (mevedel-collaboration--artifact-comment-logical name))))
+    ;; Only a loaded collaboration can have a room to tell.
+    (when (featurep 'mevedel-collaboration)
+      (mevedel-collaboration-notify-artifacts-changed session))))
+
+(defun mevedel-collaboration--handle-artifact-delete (room peer frame)
+  "Delete the published artifact FRAME names for writable guest PEER in ROOM.
+The file comes from the host's own record, never from the frame.  Every
+refusal is answered to the sender."
+  (let ((guest (mevedel-collaboration--guest room peer))
+        (req-id (plist-get frame :reqId)))
+    (when (and guest (mevedel-collaboration--request-id-p req-id))
+      (mevedel-collaboration--transport-send
+       (plist-get room :transport) peer
+       (append
+        (list :t "artifact-delete" :reqId req-id)
+        (condition-case err
+            (let ((record (mevedel-collaboration--artifact-record
+                           room guest (plist-get frame :id))))
+              (unless (plist-get guest :writable)
+                (error "This link can view artifacts but not delete them"))
+              (unless (and record (not (plist-get record :missing)))
+                (error "This artifact is no longer on the host"))
+              (mevedel-collaboration-delete-artifact
+               (plist-get room :session) (plist-get record :artifact))
+              (list :ok t :artifact (plist-get record :artifact)))
+          (error (list :error (error-message-string err)))))))))
 
 (defun mevedel-collaboration-notify-artifacts-changed (session)
   "Re-publish SESSION after its artifact folder changed on disk."

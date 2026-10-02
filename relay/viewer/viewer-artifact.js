@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canComment, busy}) {
+  function create({send, el, flash, summarize, reveal, canComment, canDelete, busy}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
     const boxSummary = document.getElementById('artifacts-summary');
@@ -43,6 +43,7 @@
     const metaEl = document.getElementById('artifact-meta');
     const tab = document.getElementById('artifact-tab');
     const download = document.getElementById('artifact-download');
+    const remove = document.getElementById('artifact-delete');
     const closeButton = document.getElementById('artifact-close');
     const body = document.getElementById('artifact-body');
     const commentToggle = document.getElementById('artifact-comment');
@@ -110,6 +111,34 @@
       if (body) body.replaceChildren();
       if (tab) tab.hidden = true;
       if (download) download.hidden = true;
+      if (remove) remove.hidden = true;
+    }
+
+    // Deleting removes the file for everyone; the host resolves it from its
+    // own record of the card, and the card then reads as deleted.
+    const deletions = new Map();
+    let deleteSequence = 0;
+    if (remove) {
+      remove.addEventListener('click', async () => {
+        if (!view.id || !window.confirm(`Delete ${view.name} for everyone in this room? This cannot be undone.`)) return;
+        const reqId = ++deleteSequence;
+        deletions.set(reqId, view.name);
+        if (!await send({t: 'artifact-delete', reqId, id: view.id})) {
+          deletions.delete(reqId);
+          flash('Connection lost; nothing was deleted.');
+        }
+      });
+    }
+    function handleDelete(frame) {
+      const name = deletions.get(frame.reqId);
+      if (!name) return;
+      deletions.delete(frame.reqId);
+      if (typeof frame.error === 'string') {
+        flash(frame.error);
+        return;
+      }
+      if (view.name === name) close();
+      flash(`${name} deleted.`);
     }
 
     function open(record) {
@@ -138,6 +167,7 @@
       if (metaEl) metaEl.textContent = `${formatBytes(view.bytes.length)} · ${mime}`;
       body.replaceChildren();
       if (download) download.hidden = false;
+      if (remove) remove.hidden = !(typeof canDelete === 'function' && canDelete());
       if (mime === 'text/html') {
         if (tab) tab.hidden = false;
         const frame = sandboxedFrame(document, text(), true);
@@ -297,7 +327,7 @@
       return comments.discuss(record.id, text, images);
     }
 
-    return Object.freeze({open, render, handle, close, setTheme, queue, handleComment,
+    return Object.freeze({open, render, handle, handleDelete, close, setTheme, queue, handleComment,
                           storedComments, discuss, activity});
   }
 

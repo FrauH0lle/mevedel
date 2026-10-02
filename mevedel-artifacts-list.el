@@ -2,9 +2,11 @@
 
 ;;; Commentary:
 
-;; Tabulated browser for files under `<save-path>/artifacts/'.  The cockpit
-;; lists, opens, and deletes those files and tells a live collaboration room
-;; when an existing conversation card has changed on disk.
+;; Tabulated browser for a session's artifacts: the files under
+;; `<save-path>/artifacts/' and the shared whiteboards and documents.  The
+;; cockpit lists, opens, and deletes them; a live collaboration room learns of
+;; each deletion.  Items keep their state below `shared-editing/', so that
+;; subtree lists as items, never as files.
 
 ;;; Code:
 
@@ -42,15 +44,22 @@
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 
 ;; `mevedel-collaboration-artifact'
-(declare-function mevedel-collaboration-notify-artifacts-changed
-                  "mevedel-collaboration-artifact" (session))
+(declare-function mevedel-collaboration-delete-artifact
+                  "mevedel-collaboration-artifact" (session name))
+(autoload 'mevedel-collaboration-delete-artifact "mevedel-collaboration-artifact")
+
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
+                  (session args callback &optional authorize commit))
+(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (session))
+(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (session))
+(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifacts-dir
                   "mevedel-session-artifacts" (save-path))
-(declare-function mevedel-session-artifacts-delete-files
-                  "mevedel-session-artifacts" (session paths))
-(autoload 'mevedel-session-artifacts-delete-files "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -73,12 +82,18 @@
   (when-let* ((save-path (and session (mevedel-session-save-path session))))
     (mevedel-session-artifacts-artifacts-dir save-path)))
 
+(defun mevedel-artifacts-list--file-paths (dir)
+  "Return the artifact files under DIR, without the shared items' state."
+  (cl-remove-if (lambda (path)
+                  (string-prefix-p "shared-editing/" (file-relative-name path dir)))
+                (directory-files-recursively dir ".*")))
+
 (defun mevedel-artifacts-list--files (session)
   "Return SESSION's artifact file plists, newest modification first."
   (when-let* ((dir (mevedel-artifacts-list--directory session))
               ((file-directory-p dir)))
     (let (items)
-      (dolist (path (directory-files-recursively dir ".*"))
+      (dolist (path (mevedel-artifacts-list--file-paths dir))
         (when-let* ((attributes (file-attributes path)))
           (push (list :name (file-relative-name path dir)
                       :path path
@@ -90,18 +105,35 @@
                     (time-less-p (plist-get right :modified)
                                  (plist-get left :modified)))))))
 
+(defun mevedel-artifacts-list--items (session)
+  "Return SESSION's shared whiteboards and documents as artifact rows."
+  (when (mevedel-session-save-path session)
+    (mapcar (lambda (item)
+              (list :name (format "%s · %s"
+                                  (if (equal (plist-get item :kind) "whiteboard")
+                                      "Whiteboard" "Document")
+                                  (plist-get item :title))
+                    :item (plist-get item :id)
+                    :path (concat "item:" (plist-get item :id))
+                    :kind (plist-get item :kind)
+                    :title (plist-get item :title)))
+            (mevedel-shared-editing-list session))))
+
 (defun mevedel-artifacts-list-count (session)
-  "Return how many artifact files SESSION has, best effort."
+  "Return how many artifacts SESSION has, best effort."
   (or (ignore-errors
         (when-let* ((directory (mevedel-artifacts-list--directory session))
                     ((file-directory-p directory)))
-          (length (directory-files-recursively directory ".*"))))
+          ;; Item ids only: reading every item's state is not a count.
+          (+ (length (mevedel-artifacts-list--file-paths directory))
+             (length (mevedel-shared-editing-ids session)))))
       0))
 
 (defun mevedel-artifacts-list--collect (context)
-  "Collect artifact rows for CONTEXT."
-  (mevedel-artifacts-list--files
-   (mevedel-artifacts-list--session context)))
+  "Collect artifact rows for CONTEXT: shared items, then files."
+  (let ((session (mevedel-artifacts-list--session context)))
+    (append (mevedel-artifacts-list--items session)
+            (mevedel-artifacts-list--files session))))
 
 (defun mevedel-artifacts-list--entry (item _context)
   "Return tabulated row for artifact ITEM."
@@ -109,8 +141,10 @@
    (plist-get item :path)
    (vector
     (plist-get item :name)
-    (file-size-human-readable (or (plist-get item :size) 0))
-    (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified)))))
+    (if (plist-get item :item) ""
+      (file-size-human-readable (or (plist-get item :size) 0)))
+    (if (plist-get item :item) ""
+      (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified))))))
 
 (defun mevedel-artifacts-list--header (items context)
   "Return cockpit header for artifact ITEMS and CONTEXT."
@@ -123,21 +157,33 @@
 
 (defun mevedel-artifacts-list--details (item _context)
   "Return the information report for artifact ITEM."
-  (list :title "Artifact" :subtitle (plist-get item :name)
-        :identity (plist-get item :path)
-        :sections
-        (list
-         (list :id 'artifact :title "Artifact"
-               :body (mevedel-report-fields
-                      (list "Name" (plist-get item :name))
-                      (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
-                      (list "Modified" (format-time-string "%Y-%m-%d %H:%M:%S" (plist-get item :modified)))))
-         (list :id 'location :title "Location"
-               :body (mevedel-report-fields (list "Path" (plist-get item :path)))))))
+  (if (plist-get item :item)
+      (list :title (if (equal (plist-get item :kind) "whiteboard") "Whiteboard" "Document")
+            :subtitle (plist-get item :title)
+            :identity (plist-get item :item)
+            :sections
+            (list (list :id 'item :title "Shared item"
+                        :body (mevedel-report-fields
+                               (list "Title" (plist-get item :title))
+                               (list "Id" (plist-get item :item))))))
+    (list :title "Artifact" :subtitle (plist-get item :name)
+          :identity (plist-get item :path)
+          :sections
+          (list
+           (list :id 'artifact :title "Artifact"
+                 :body (mevedel-report-fields
+                        (list "Name" (plist-get item :name))
+                        (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
+                        (list "Modified" (format-time-string "%Y-%m-%d %H:%M:%S" (plist-get item :modified)))))
+           (list :id 'location :title "Location"
+                 :body (mevedel-report-fields (list "Path" (plist-get item :path))))))))
 
 (defun mevedel-artifacts-list--selected-path ()
   "Return the selected artifact's still-existing path."
-  (let ((path (plist-get (mevedel-cockpit-surface-selected) :path)))
+  (let* ((item (mevedel-cockpit-surface-selected))
+         (path (plist-get item :path)))
+    (when (plist-get item :item)
+      (user-error "Open whiteboards and documents from the room's Shared work"))
     (unless (and path (file-exists-p path))
       (mevedel-cockpit-surface-refresh)
       (user-error "Artifact file no longer exists"))
@@ -159,19 +205,32 @@ cannot read the target's filesystem."
   (find-file (mevedel-artifacts-list--selected-path)))
 
 (defun mevedel-artifacts-list-delete ()
-  "Delete the selected artifact, which also unpublishes it."
+  "Delete the selected artifact, which also unpublishes it.
+A whiteboard or document is deleted as a shared item, after any save in
+progress, together with its comments and history."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-artifacts-list--session context))
          (item (mevedel-cockpit-surface-selected))
-         (path (mevedel-artifacts-list--selected-path)))
-    (when (yes-or-no-p (format "Delete artifact %s? "
-                               (plist-get item :name)))
-      (mevedel-session-artifacts-delete-files session (list path))
-      (when (fboundp 'mevedel-collaboration-notify-artifacts-changed)
-        (mevedel-collaboration-notify-artifacts-changed session))
-      (mevedel-cockpit-surface-refresh)
-      (message "mevedel: artifact %s deleted" (plist-get item :name)))))
+         (id (plist-get item :item)))
+    (if id
+        (when (yes-or-no-p (format "Delete %s with its comments and history? "
+                                   (plist-get item :name)))
+          (let ((buffer (current-buffer)))
+            (mevedel-shared-editing-call
+             session (list :action "delete" :id id :actor "Host")
+             (lambda (reply)
+               (if-let* ((failure (plist-get reply :error)))
+                   (message "mevedel: %s was not deleted: %s" (plist-get item :name) failure)
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer (mevedel-cockpit-surface-refresh)))
+                 (message "mevedel: %s deleted" (plist-get item :name)))))))
+      (let ((path (mevedel-artifacts-list--selected-path)))
+        (when (yes-or-no-p (format "Delete artifact %s? " (plist-get item :name)))
+          (mevedel-collaboration-delete-artifact
+           session (file-relative-name path (mevedel-artifacts-list--directory session)))
+          (mevedel-cockpit-surface-refresh)
+          (message "mevedel: artifact %s deleted" (plist-get item :name)))))))
 
 (defun mevedel-artifacts-list-quit ()
   "Quit the artifacts cockpit and return to the session cockpit."
