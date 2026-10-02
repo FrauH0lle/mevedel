@@ -48,6 +48,9 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifacts-dir
                   "mevedel-session-artifacts" (save-path))
+(declare-function mevedel-session-artifacts-delete-files
+                  "mevedel-session-artifacts" (session paths))
+(autoload 'mevedel-session-artifacts-delete-files "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -164,7 +167,7 @@ cannot read the target's filesystem."
          (path (mevedel-artifacts-list--selected-path)))
     (when (yes-or-no-p (format "Delete artifact %s? "
                                (plist-get item :name)))
-      (delete-file path)
+      (mevedel-session-artifacts-delete-files session (list path))
       (when (fboundp 'mevedel-collaboration-notify-artifacts-changed)
         (mevedel-collaboration-notify-artifacts-changed session))
       (mevedel-cockpit-surface-refresh)
