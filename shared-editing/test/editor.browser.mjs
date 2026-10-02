@@ -502,6 +502,23 @@ test('editor interaction regressions', async (t) => {
       await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`)
         .waitFor({state:'detached'});
       assert.equal(await spinning(), 0, 'an answered thread stops spinning');
+      // Resolved elsewhere while its pin is hovered, the peek closes with the pin.
+      await frame.locator('#assistant-close').click();
+      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"] .comment-pin`).hover();
+      await frame.locator('#comment-peek:not([hidden])').waitFor();
+      await page.evaluate(async commentId => {
+        const result = await window.apply({action:'resolve-comment', opId:'elsewhere', commentId, resolved:true});
+        window.port.postMessage({type:'changed', ...result});
+      }, posted[0].opId);
+      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"]`).waitFor({state:'detached'});
+      assert.equal(await frame.locator('#comment-peek').isHidden(), true);
+      await page.evaluate(async commentId => {
+        const result = await window.apply({action:'resolve-comment', opId:'reopen', commentId, resolved:false});
+        window.port.postMessage({type:'changed', ...result});
+      }, posted[0].opId);
+      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"]`).waitFor();
+      await frame.locator('#ask-toggle').click();
+      await frame.locator('#comments-tab').click();
       await card.getByText('Resolve', {exact: true}).click();
       await card.waitFor({state: 'hidden'});
       assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1);
