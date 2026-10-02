@@ -1882,6 +1882,50 @@ behavior.  Return the publication outcome, or PATH after a direct write."
         (mevedel-session-persistence-write-current-buffer-atomically path))
       path)))
 
+(defun mevedel-session-artifacts-delete-files (session paths)
+  "Delete SESSION's artifact-folder files PATHS and commit their removal.
+Every path must lie in SESSION's artifacts folder; ones that neither exist
+nor are published are skipped.  A portable session commits the tombstones
+with a fresh sidecar at once, so Resume, Save As and Fork cannot bring a
+file back before the next full save.  Return the removed paths."
+  (let* ((save-path (or (mevedel-session-save-path session)
+                        (error "Session has no persistence path")))
+         (directory (file-name-as-directory
+                     (mevedel-session-artifacts-artifacts-dir save-path)))
+         (portable (mevedel-session-codec-portable-authority-p session))
+         (paths
+          (cl-remove-if-not
+           (lambda (path)
+             (or (file-exists-p path)
+                 (and portable
+                      (mevedel-session-artifacts-artifact-present-p
+                       session (file-relative-name path save-path) t))))
+           (mapcar (lambda (path)
+                     (let ((path (expand-file-name path)))
+                       (unless (file-in-directory-p path directory)
+                         (error "Not a session artifact: %s" path))
+                       path))
+                   paths))))
+    (when paths
+      (if (not portable)
+          (dolist (path paths) (delete-file path))
+        (let ((buffer (mevedel-session-root-buffer session)))
+          (unless (buffer-live-p buffer)
+            (error "Deleting a published artifact needs the live session"))
+          (mevedel-session-durability-with-transaction
+            (mevedel-session-artifacts-assert-mutation-authority session buffer)
+            ;; The folder is mirrored on every save, so the fixed file goes
+            ;; first: a later save then republishes the removal, not the file.
+            (dolist (path paths)
+              (when (file-exists-p path) (delete-file path)))
+            (mevedel-session-publication-publish
+             session
+             (append (mapcar (lambda (path) (list :path path :delete t)) paths)
+                     (list (mevedel-session-artifacts--sidecar-artifact
+                            session buffer)))
+             t)))))
+    paths))
+
 (defun mevedel-session-artifacts--sidecar-publication-artifact
     (session root-buffer)
   "Return SESSION's freshly built sidecar marker artifact.

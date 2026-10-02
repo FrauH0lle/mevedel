@@ -1597,6 +1597,43 @@
       (mevedel-workspace-clear-registry))))
 
 
+(mevedel-deftest mevedel-session-artifacts-delete-files (:quiet t)
+  ,test
+  (test)
+  :doc "commits a portable artifact's removal at once, so Resume cannot bring it back"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-delete-artifact-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buf (generate-new-buffer " *test-delete-artifact*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (setq-local mevedel--session session)
+          (insert "First prompt\n")
+          (mevedel-session-artifacts-save session buf)
+          (let* ((save-path (mevedel-session-save-path session))
+                 (note (file-name-concat
+                        (mevedel-session-artifacts-artifacts-dir save-path) "note.md")))
+            (make-directory (file-name-directory note) t)
+            (with-temp-file note (insert "draft"))
+            (mevedel-session-artifacts-save session buf nil t)
+            (should (mevedel-session-artifacts-artifact-present-p
+                     session "artifacts/note.md" t))
+            (should (equal (list note) (mevedel-session-artifacts-delete-files
+                                        session (list note))))
+            (should-not (file-exists-p note))
+            ;; The committed snapshot itself no longer has it.
+            (should-not (assoc "artifacts/note.md"
+                               (plist-get (mevedel-session-publication-read save-path)
+                                          :artifacts)))
+            (should-not (mevedel-session-artifacts-delete-files session (list note)))
+            (should-error (mevedel-session-artifacts-delete-files
+                           session (list (file-name-concat save-path "session.meta.el"))))))
+      (test-mevedel-session-persistence--release-and-kill buf session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+
 (mevedel-deftest mevedel-session-artifacts-instruction-snapshots (:quiet t)
   ,test
   (test)
