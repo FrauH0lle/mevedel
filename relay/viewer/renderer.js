@@ -446,13 +446,15 @@
       who.append(el('span', 'name', 'Tool'));
     }
     // A turn in a directive or item discussion names it; the chip is also
-    // the way to switch the room into that discussion to reply there.
+    // the way to switch the room into that discussion to reply there.  A
+    // view already inside that discussion supplies no label and gets no chip.
     const scope = scopeKey(record);
-    if (scope) {
-      const chip = el('button', 'dirchip', directiveLabel(scope));
+    const label = scope && directiveLabel(scope);
+    if (label) {
+      const chip = el('button', 'dirchip', label);
       chip.type = 'button';
       chip.dataset.scope = scope;
-      chip.setAttribute('title', `Show and reply in ${directiveLabel(scope)}`);
+      chip.setAttribute('title', `Show and reply in ${label}`);
       who.append(chip);
     }
     return who;
