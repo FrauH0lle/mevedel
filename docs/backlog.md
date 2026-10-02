@@ -17,6 +17,12 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Add optional cached container/VM/WSL detection to environment context for
   local and SSH targets; TRAMP execution targets are already reported.
 - Check the codebase for battery friendliness
+- Lobby: let a lobby open a session whose same-host lock is provably stale
+  (dead PID or PID reuse) without the Emacs prompt; today a crash leaves such
+  sessions refusable only from the keyboard. See `docs/collaboration.md#the-lobby`.
+- Headless hosts: audit minibuffer prompts reachable during a guest-driven
+  turn outside the interaction overlays (`yes-or-no-p`, `completing-read`);
+  an Emacs daemon has nobody to answer them.
 
 ## Request lifecycle
 

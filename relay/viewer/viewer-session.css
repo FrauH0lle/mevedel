@@ -172,3 +172,62 @@
 }
 
 .invite-entry .invite-open { text-decoration: none; }
+
+/* A lobby link opens the project's session list instead of a room: the
+   conversation, composer and room menu have nothing to show. */
+body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
+  #notify-button, #session-box, #requests, #own-queue, #assistant-working,
+  #composer, .live-controls) {
+  display: none;
+}
+
+.lobby { max-width: 51rem; margin: 0 auto; padding: 1.5rem 1rem 2rem; }
+.lobby[hidden] { display: none; }
+
+.lobby-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: 1rem;
+}
+
+.lobby-head h2 {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: -.02em;
+  overflow-wrap: anywhere;
+}
+
+.lobby-list { list-style: none; margin: 0; padding: 0; }
+
+.lobby-row {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .8rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.lobby-row:last-child { border-bottom: 1px solid var(--line); }
+
+.lobby-main { flex: 1; min-width: 0; display: grid; gap: .15rem; }
+.lobby-name { font-weight: 600; overflow-wrap: anywhere; }
+.lobby-meta { color: var(--muted); font-size: .85rem; }
+
+.lobby-preview {
+  margin: 0;
+  color: var(--muted);
+  font-size: .9rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.lobby-row .btn { flex: 0 0 auto; }
+.lobby-empty { color: var(--muted); margin: 1rem 0 0; }
+.lobby-empty[hidden] { display: none; }

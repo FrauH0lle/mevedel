@@ -83,6 +83,35 @@
         (should-error (mevedel-collaboration--relay-origins)
                       :type 'user-error)))))
 
+(mevedel-deftest mevedel-collaboration--links
+  (:doc "builds three links whose secrets are prefixes of each other")
+  (let ((links (mevedel-collaboration--links
+                "https://collab.example" "room" (make-string 32 ?k)
+                (make-string 16 ?w) (make-string 16 ?o)))
+        (secret (lambda (bytes)
+                  (mevedel-collaboration--base64url bytes))))
+    (should (equal (format "https://collab.example/#room.%s"
+                           (funcall secret (make-string 32 ?k)))
+                   (plist-get links :link-view)))
+    (should (equal (format "https://collab.example/#room.%s"
+                           (funcall secret (concat (make-string 32 ?k)
+                                                   (make-string 16 ?w))))
+                   (plist-get links :link-full)))
+    (should (equal (format "https://collab.example/#room.%s"
+                           (funcall secret (concat (make-string 32 ?k)
+                                                   (make-string 16 ?w)
+                                                   (make-string 16 ?o))))
+                   (plist-get links :link-owner)))))
+
+(mevedel-deftest mevedel-collaboration--guest-link
+  (:doc "hands a guest a room at its own tier and no higher")
+  (let ((room '(:link-view "v" :link-full "f" :link-owner "o")))
+    (should (equal "v" (mevedel-collaboration--guest-link room '(:name "a"))))
+    (should (equal "f" (mevedel-collaboration--guest-link
+                        room '(:writable t))))
+    (should (equal "o" (mevedel-collaboration--guest-link
+                        room '(:writable t :owner t))))))
+
 (mevedel-deftest mevedel-collaboration--sanitize-guest-name
   (:doc "bounds guest names, strips control characters, and never yields empty")
   (progn

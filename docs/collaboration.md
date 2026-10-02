@@ -26,6 +26,8 @@ The relay serves the viewer but never receives the room key.
 reports its bearer links (the full-control link is copied to the kill ring).
 `/collab status` reports the room, relay connectivity, and guest names
 without printing any secret, and `/collab stop` ends that session's room.
+`/collab lobby` shares a workspace's session list instead; see
+[the lobby](#the-lobby).
 Sessions may be shared concurrently; each has an independent room, key,
 and guest set. Killing the owning data buffer, ending its session, explicitly
 stopping the share, or exiting Emacs tears its room down. Otherwise the room
@@ -200,6 +202,54 @@ that arrives later open a tab by itself, the link arrives in the request
 sheet as something to tap. Creating a session is not idempotent, so a repeat
 request inside the duplicate-prompt window is dropped.
 
+## The lobby
+
+A lobby is a room bound to a workspace instead of a session: one bookmarkable
+link that lists the workspace's sessions and opens or creates them. `/collab
+lobby` starts the current workspace's lobby and presents its links in the
+share panel; `/collab lobby stop` stops it, and `/collab lobby rotate`
+replaces its credentials. A host without a keyboard, such as an Emacs daemon,
+starts one with `(mevedel-collaboration-lobby-start DIRECTORY)`, which
+returns the lobby with its links under `:link-view`, `:link-full` and
+`:link-owner`. `/collab status` reports running lobbies beside rooms.
+
+Unlike a room, a lobby's credentials persist. They are generated once and
+stored in `.mevedel/lobby` in the workspace state directory, readable only by
+the user, so a restarted Emacs recreates the same relay room and its links
+keep working; open browser tabs reconnect on their own. Stopping the lobby
+leaves the credentials in place. Rotating them is the revocation operation:
+every earlier lobby link stops working. The rooms a lobby hands out are
+ordinary rooms with the ordinary share lifetime
+([ADR 0114](adr/0114-tie-collaboration-room-lifetime-to-host-share.md)).
+
+Link tiers keep their meaning. A view link lists sessions; a full link can
+also open them; an owner link can also create them. Opening a session resumes
+it when it is not live, shares it when it is not already shared, and returns
+its room's link at the requester's own tier, so the lobby never grants more
+than the link that reached it. The session id in an open request only selects
+among the sessions the listing shows; it never becomes a path. Creation uses
+the [guest-requested session](#guest-requested-sessions) path with the
+lobby's workspace and root; a non-owner request is refused, because a lobby
+has no session in which to ask the host.
+
+Each row carries the session id, display name, last save time, a prompt
+preview of at most 160 characters, and whether the session is live in Emacs
+and shared. Live sessions that were never saved come first, then saved ones,
+newest first; a listing holds at most 200 rows and reports how many it left
+out. The listing is sent on join and on request; the browser asks again on
+Refresh and whenever the lobby tab returns to the foreground.
+
+Guests act while nobody may be at the keyboard, so lobby frames run with
+`inhibit-interaction`. A step that would prompt in Emacs refuses the request
+instead of waiting: a session whose lock is held by another live Emacs, or was
+left stale by a crash, must be opened in Emacs first. A clean exit releases
+session locks.
+
+In the browser, a lobby link renders the session list in place of the
+conversation and composer. Open replaces the page with the session's room.
+The lobby stores itself in the browser's room list, so every room it opens
+lists it under Rooms as the way back.
+
 ## Scoped prompts and attachments
 
 Directives and shared items are the room's discussions. Records inside a
@@ -217,16 +267,23 @@ Selecting a shared item sends the composer's text into that item's own
 conversation as a whole-item question, the same way the editor asks. A room
 message has no reviewed snapshot, so the helper captures the item as currently
 committed. An artifact's whole-item question names its file instead (see
-[artifact comments](#artifact-comments)). Commands, skills and attachments stay main-chat features; the viewer
+[artifact comments](#artifact-comments)). Commands and skills stay main-chat features; the viewer
 refuses them in an item discussion and says so. The composer placeholder and
 scope line name the discussion a message will reach.
 
+Every composer that asks the model takes attachments: the room composer in
+any discussion, the whiteboard and document **Ask the assistant** form, and the
+new-session first prompt. **Attach**, pasting into the message and dropping
+files onto the composer all add them. Comments and replies stay text-only.
 A prompt can carry up to three attachments totaling 1.25 MiB decoded: JPEG,
 PNG, WebP, PDF, plain text, Markdown, CSV, JSON, or patch text. The host generates
 filenames under workspace media storage and queues them through the normal
-file-mention path. The viewer can downscale images; non-image files cannot be
-resampled to fit. Invalid attachment sets are omitted as a whole; their prompt
-text may still be queued. A storage error refuses that prompt without ending
+file-mention path; a whiteboard question's own board snapshot rides beside them.
+The viewer can downscale images; non-image files cannot be
+resampled to fit. On a main-chat prompt an invalid attachment set is omitted
+as a whole and its text may still be queued; an item, artifact or new-session
+question with an invalid set is refused, so it never reaches the model without
+the files its sender chose. A storage error refuses that prompt without ending
 the room. Failed enqueue removes the files just created for it.
 
 ## Transcript, agent, and task projection
