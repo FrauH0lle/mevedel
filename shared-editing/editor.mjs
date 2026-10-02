@@ -68,6 +68,9 @@ let tool = 'select',
   selectionRegion = null,
   view = [-40, -40, 1000, 650],
   drag = null,
+  /* Autoshape strokes waiting for a following stroke before recognition. */
+  pendingShape = null,
+  settlePendingShape = () => {},
   lastPresence = 0,
   pointing = null,
   presenceTimer = null,
@@ -90,11 +93,15 @@ const current = {
   fontSize: 20,
   fontFamily: 5,
   textAlign: 'left',
+  verticalAlign: 'middle',
   startArrowhead: null,
   endArrowhead: 'arrow',
   arrowType: 'round',
 };
 const drawable = ['rectangle', 'diamond', 'ellipse', 'stickynote', 'arrow', 'line', 'freedraw', 'autoshape', 'text'];
+/* How long a finished autoshape stroke waits for the next one, so an arrow's
+   head can follow its shaft as a second stroke. */
+const AUTOSHAPE_DELAY = 700;
 const SHAPES = ['rectangle', 'diamond', 'ellipse'];
 function applies(key, type) {
   if (key === 'backgroundColor') return [...SHAPES, 'stickynote', 'line', 'freedraw', 'autoshape'].includes(type);
@@ -403,13 +410,20 @@ function displayedScene(extra = []) {
 }
 function draw() {
   const live = boardPreviews?.boxes() || new Map();
-  const scene = displayedScene();
+  const scene = { ...displayedScene(), paper: canvasPaper() };
   const shapes = scene.order;
   $('canvas').setAttribute('viewBox', view.join(' '));
+  const background = doc.getMap('meta').get('background') || '';
+  if (background) $('board').style.setProperty('--canvas', background);
+  else $('board').style.removeProperty('--canvas');
+  for (const b of document.querySelectorAll('#canvas-background [data-background]'))
+    b.setAttribute('aria-pressed', String(b.dataset.background === background));
+  const custom = document.querySelector('#canvas-background .custom');
+  custom?.setAttribute('aria-pressed', String(Boolean(background) && !BACKGROUNDS.some(([value]) => value === background)));
   const scale = $('canvas').getScreenCTM()?.a || 1;
   if ($('board-zoom')) $('board-zoom').textContent = `${Math.round(scale * 100)}%`;
   const files = filesOf(doc);
-  const signature = JSON.stringify([shapes, Object.keys(files), [...agentTargets], $('show-agent').checked]);
+  const signature = JSON.stringify([shapes, Object.keys(files), [...agentTargets], $('show-agent').checked, scene.paper]);
   if (signature !== sceneSignature) {
     sceneSignature = signature;
     $('scene').innerHTML = sceneSVG(scene, files, true);
@@ -440,7 +454,9 @@ function draw() {
   $('selection').innerHTML = selectionSVG(scene, scale)
     + regionSVG(drag?.mode === 'marquee' ? drag.region : attachedRegion(), drag?.mode === 'marquee')
     + hoverSVG(tool === 'comment' && !drag && scene.byId.get(hoverShape), scale)
-    + (drag?.mode === 'draw' ? drawingPreview(drag) : '');
+    // Strokes in progress are authored content, drawn as the board will be.
+    + `<g class="authored">${(pendingShape?.strokes.map(drawingPreview).join('') || '')
+      + (drag?.mode === 'draw' ? drawingPreview(drag) : '')}</g>`;
   drawCommentMarkers(scene, scale);
   boardPresence?.animate();
   $('selection-question').disabled = $('comment-selection').disabled = readOnly || !(selected.size || selectionRegion);
@@ -574,6 +590,7 @@ function styledElement(type, geometry) {
   for (const [key, value] of Object.entries(current)) {
     // Text style reaches labels through their own text elements.
     const textual = ['fontSize', 'fontFamily', 'textAlign'].includes(key);
+    if (key === 'verticalAlign') continue;
     if (key === 'arrowType') Object.assign(element, type !== 'arrow' ? {} : value === 'elbow' ? { elbowed: true }
       : value === 'round' ? { roundness: { type: 2 } } : {});
     else if (textual ? type === 'text' : applies(key, type))
@@ -584,9 +601,12 @@ function styledElement(type, geometry) {
   return element;
 }
 /* SVG for the element being drawn. */
+/* The colour the board's canvas is drawn on: its own, or the theme's. */
+const canvasPaper = () => doc.getMap('meta').get('background')
+  || getComputedStyle(document.documentElement).getPropertyValue('--board-bg').trim() || '#ffffff';
 function drawingPreview(d) {
   if (!d.element) return '';
-  const scene = resolveScene([d.element]);
+  const scene = { ...resolveScene([d.element]), paper: canvasPaper() };
   return elementSVG(scene.byId.get(d.element.id), scene, filesOf(doc));
 }
 function world(event) {
@@ -658,6 +678,8 @@ function showPresence(data) {
 }
 
 function selectTool(value) {
+  // Leaving the tool ends the strokes it was collecting.
+  if (value !== 'autoshape') settlePendingShape();
   stopPointing();
   $('menu').open = false;
   tool = value;
@@ -947,10 +969,30 @@ const typeNames = {
   line: 'Line', freedraw: 'Drawing', text: 'Text', image: 'Image', frame: 'Frame', magicframe: 'Frame',
   embeddable: 'Embed', iframe: 'Embed', autoshape: 'Shape from drawing',
 };
+/* Excalidraw's canvas colours, after the theme's own board colour. */
+const BACKGROUNDS = [['', 'Theme'], ['#ffffff', 'White'], ['#f8f9fa', 'Grey'], ['#f5faff', 'Blue'],
+  ['#fffce8', 'Yellow'], ['#fdf8f6', 'Rose']];
+/* The canvas colour is the board's own, shared and undoable like an edit. */
+function canvasBackground() {
+  const section = $('canvas-background'), row = section.querySelector('.row');
+  section.hidden = readOnly;
+  if (readOnly) return;
+  const set = (value) => doc.transact(() => {
+    if (value) doc.getMap('meta').set('background', value);
+    else doc.getMap('meta').delete('background');
+  }, local);
+  row.innerHTML = BACKGROUNDS.map(([value, label]) =>
+    `<button type="button" class="swatch" data-background="${value}" style="background:${value || 'var(--board-bg)'}" aria-label="Canvas background: ${label}" title="${label}"></button>`).join('')
+    + '<label class="swatch custom" title="Custom canvas colour"><input type="color" aria-label="Custom canvas colour"></label>';
+  for (const b of row.querySelectorAll('[data-background]')) b.onclick = () => set(b.dataset.background);
+  // A picker commits once it closes, not for every colour it passes through.
+  row.querySelector('input').onchange = (event) => set(event.target.value);
+}
 function board() {
   document.body.dataset.kind = 'whiteboard';
   $('board').hidden = false;
   loadFonts();
+  canvasBackground();
   imageTools($('image-tools'), async () => {
     const shape = selected.size === 1 && shapeList().find(s => selected.has(s.id) && s.type === 'image');
     const file = shape && filesOf(doc)[shape.fileId];
@@ -1042,13 +1084,15 @@ function board() {
   properties.innerHTML = '<summary>Style</summary><div class="menu-body"></div>';
   commands.append(properties);
   const panel = properties.lastElementChild;
-  const TEXTUAL = ['fontSize', 'fontFamily', 'textAlign'];
+  const TEXTUAL = ['fontSize', 'fontFamily', 'textAlign', 'verticalAlign'];
   /* The elements a style KEY changes for the selection: the selected
      elements it applies to, and labels for text and label styles. */
   const styleTargets = (key) => {
     const chosen = shapeList().filter((s) => selected.has(s.id));
     const labels = new Set(labelsOf(selected));
-    const own = chosen.filter((s) => (TEXTUAL.includes(key) ? s.type === 'text' : applies(key, s.type)));
+    // Vertical alignment places a label in its container; free text has none.
+    const own = key === 'verticalAlign' ? []
+      : chosen.filter((s) => (TEXTUAL.includes(key) ? s.type === 'text' : applies(key, s.type)));
     const bound = LABEL_STYLES.includes(key) || TEXTUAL.includes(key)
       ? shapeList().filter((s) => labels.has(s.id)) : [];
     return [...own, ...bound];
@@ -1244,6 +1288,14 @@ function board() {
           .map(([v, label, d]) => option('textAlign', v, `Align ${label.toLowerCase()}`, icon(`<path d="${d}"/>`)))
           .join(''),
       ) +
+      section(
+        'verticalAlign',
+        'Vertical align',
+        [['top', 'Top', 'M4 4h16'], ['middle', 'Middle', 'M4 12h5M15 12h5'], ['bottom', 'Bottom', 'M4 20h16']]
+          .map(([v, label, d]) => option('verticalAlign', v, `Align ${label.toLowerCase()}`,
+            icon(`<path d="${d}"/><rect x="9" y="${{ top: 6, middle: 8, bottom: 10 }[v]}" width="6" height="8" rx="1"/>`)))
+          .join(''),
+      ) +
       section('opacity', 'Opacity', '<input type="range" min="0" max="100" step="5" aria-label="Opacity"><output>100</output>');
     const caption = document.createElement('p');
     caption.className = 'property-caption';
@@ -1274,6 +1326,8 @@ function board() {
         fillStyle: show.fillStyle && value('backgroundColor') !== 'transparent',
         fontSize: kinds.has('text') || labelled || (!shapes.length && ['stickynote', 'text'].includes(tool)),
         fontFamily: kinds.has('text') || labelled || (!shapes.length && ['stickynote', 'text'].includes(tool)),
+        textAlign: kinds.has('text') || labelled || (!shapes.length && tool === 'text'),
+        verticalAlign: labelsOf(new Set(shapes.filter((s) => s.type !== 'arrow').map((s) => s.id))).length > 0,
         opacity: kinds.size > 0,
       });
       properties.firstElementChild.setAttribute('aria-disabled', String(!kinds.size));
@@ -1635,7 +1689,7 @@ function board() {
   };
   /* The element a finished drawing gesture D creates. */
   const finishedElement = (d, event) => {
-    let e = d.element;
+    const e = d.element;
     if (['text', 'stickynote'].includes(e.type)) {
       const size = e.type === 'stickynote' ? 200 : 0;
       Object.assign(e, { x: d.start[0], y: d.start[1], width: Math.max(size, e.width), height: Math.max(size, e.height) });
@@ -1643,21 +1697,6 @@ function board() {
     } else if (e.width < 3 && e.height < 3 && !e.points) Object.assign(e, { width: 150, height: 90 });
     else if (e.width < 3 && e.height < 3 && LINEAR.includes(e.type))
       Object.assign(e, { points: [[0, 0], [150, 90]], width: 150, height: 90 });
-    if (tool === 'autoshape') {
-      const shape = recognize(d.points, canvas.getScreenCTM()?.a || 1);
-      if (shape.type !== 'freedraw') {
-        const kept = { id: e.id, seed: e.seed, index: e.index };
-        if (LINEAR.includes(shape.type)) {
-          e = styledElement(shape.type, { x: shape.from[0], y: shape.from[1],
-            width: Math.abs(shape.to[0] - shape.from[0]), height: Math.abs(shape.to[1] - shape.from[1]),
-            points: [[0, 0], [shape.to[0] - shape.from[0], shape.to[1] - shape.from[1]]] });
-        } else {
-          const [x, y, width, height] = shape.box;
-          e = styledElement(shape.type, { x, y, width, height });
-        }
-        Object.assign(e, kept);
-      }
-    }
     if (e.type === 'arrow') {
       const end = hitAt(event), start = d.from;
       const startBinding = bindingTo(start), endBinding = end !== start ? bindingTo(end) : null;
@@ -1665,6 +1704,55 @@ function board() {
       if (endBinding) e.endBinding = endBinding;
     }
     return e;
+  };
+  /* Hold autoshape stroke D for AUTOSHAPE_DELAY; another stroke in that time
+     joins it, and the strokes are then recognized as one drawing. */
+  const holdStroke = (d) => {
+    pendingShape ??= { strokes: [] };
+    pendingShape.strokes.push(d);
+    clearTimeout(pendingShape.timer);
+    pendingShape.timer = setTimeout(settlePendingShape, AUTOSHAPE_DELAY);
+    draw();
+  };
+  settlePendingShape = () => {
+    const pending = pendingShape;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    // A stroke still being drawn joins the group when it ends.
+    if (drag?.mode === 'draw') {
+      pending.timer = setTimeout(settlePendingShape, AUTOSHAPE_DELAY);
+      return;
+    }
+    pendingShape = null;
+    const [first] = pending.strokes, matrix = canvas.getScreenCTM();
+    const shape = recognize(pending.strokes.flatMap((s) => s.points), matrix?.a || 1);
+    let elements = pending.strokes.map((s) => s.element);
+    if (shape.type !== 'freedraw') {
+      const { id, seed, index } = first.element;
+      let e;
+      if (LINEAR.includes(shape.type)) {
+        e = styledElement(shape.type, { x: shape.from[0], y: shape.from[1],
+          width: Math.abs(shape.to[0] - shape.from[0]), height: Math.abs(shape.to[1] - shape.from[1]),
+          points: [[0, 0], [shape.to[0] - shape.from[0], shape.to[1] - shape.from[1]]] });
+      } else {
+        const [x, y, width, height] = shape.box;
+        e = styledElement(shape.type, { x, y, width, height });
+      }
+      Object.assign(e, { id, seed, index });
+      if (e.type === 'arrow' && matrix) {
+        // The tip, not where the pen lifted after the head, says what it points at.
+        const tip = new DOMPoint(...shape.to).matrixTransform(matrix);
+        const end = hitAtExcept({ clientX: tip.x, clientY: tip.y });
+        const startBinding = bindingTo(first.from), endBinding = end !== first.from ? bindingTo(end) : null;
+        if (startBinding) e.startBinding = startBinding;
+        if (endBinding) e.endBinding = endBinding;
+      }
+      elements = [e];
+    }
+    elements.forEach(validateElement);
+    doc.transact(() => elements.forEach((e) => putElement(doc, e)), local);
+    selected = new Set(elements.map((e) => e.id));
+    selectTool('select');
   };
   canvas.onpointerup = (event) => {
     if (!drag) return;
@@ -1682,7 +1770,8 @@ function board() {
       return;
     }
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
-    if (d.mode === 'draw') {
+    if (d.mode === 'draw' && tool === 'autoshape') holdStroke(d);
+    else if (d.mode === 'draw') {
       const e = finishedElement(d, event);
       validateElement(e);
       doc.transact(() => putElement(doc, e), local);
@@ -1842,7 +1931,8 @@ function board() {
       move(...moves[event.key], event.shiftKey ? 10 : 1);
     }
   };
-  undo = new Y.UndoManager([elementMap(), doc.getMap('files')], {
+  // Titles change through the host, so the board's own meta is its background.
+  undo = new Y.UndoManager([elementMap(), doc.getMap('files'), doc.getMap('meta')], {
     trackedOrigins: new Set([local]),
   });
   doc.on('update', () => draw());
@@ -2245,7 +2335,8 @@ async function start(event) {
     port.postMessage({
       type: 'recovery',
       result: item.kind === 'whiteboard'
-        ? { text: serializeScene(shapeList(), filesOf(doc)), mime: 'application/vnd.excalidraw+json',
+        ? { text: serializeScene(shapeList(), filesOf(doc), { background: doc.getMap('meta').get('background') }),
+            mime: 'application/vnd.excalidraw+json',
             extension: 'recovery.excalidraw' }
         : { text: JSON.stringify({ format: 'mevedel-editable-1', ...inspect(doc) }),
             mime: 'application/json', extension: 'recovery.mevedel.json' },

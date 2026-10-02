@@ -14,12 +14,13 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'mevedel-structs)
 
 ;; `mevedel-tool-web'
 (declare-function mevedel-tool-web--retrieve "mevedel-tool-web" (url parse callback))
 
 (defcustom mevedel-shared-library-directory
-  (file-name-concat user-emacs-directory "mevedel" "libraries")
+  (file-name-concat mevedel-user-dir "whiteboard-libraries")
   "Directory of `.excalidrawlib' libraries offered to whiteboard editors.
 Each file is one library named after the file.  Installing from the public
 collection adds a file; any Excalidraw library copied here appears too."
@@ -157,15 +158,14 @@ Unreadable files are skipped, so one broken library hides no others."
     (unless (file-exists-p file) (error "Library %s is not installed" name))
     (delete-file file)))
 
-(defun mevedel-shared-library-item (library id)
-  "Return library LIBRARY's text and check that it holds item ID."
-  (let ((text (plist-get (cl-find library (mevedel-shared-library-libraries)
-                                  :key (lambda (l) (plist-get l :name)) :test #'equal)
-                         :text)))
-    (unless (and text (cl-find id (mevedel-shared-library--parse text)
-                               :key #'mevedel-shared-library--id :test #'equal))
-      (error "No library item %s/%s; list items with SharedRead :library t" library id))
-    text))
+(defun mevedel-shared-library-text (library)
+  "Return the text of host library LIBRARY.
+The helper resolves item references, since it derives the ids of version 1
+items that carry none."
+  (or (plist-get (cl-find library (mevedel-shared-library-libraries)
+                          :key (lambda (l) (plist-get l :name)) :test #'equal)
+                 :text)
+      (error "No library %s; list items with SharedRead :library t" library)))
 
 (defun mevedel-shared-library--fetch (path parse callback)
   "Fetch PATH below the catalog URL, PARSE its body, then call CALLBACK.
@@ -200,7 +200,7 @@ CALLBACK receives a reply plist with `:result' or `:error'."
                    (replace-regexp-in-string
                     "/" "-" (string-remove-suffix ".excalidrawlib" (downcase source)))))
          (counts (and key (hash-table-p stats) (gethash key stats))))
-    (list :name (format "%s" (gethash "name" entry ""))
+    (list :name (string-trim (format "%s" (gethash "name" entry "")))
           :description (format "%s" (gethash "description" entry ""))
           :authors (mapconcat (lambda (author)
                                 (format "%s" (if (hash-table-p author) (gethash "name" author "") author)))

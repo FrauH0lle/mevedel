@@ -36,3 +36,15 @@ test('hand-drawn strokes become clean shapes, scribbles stay strokes', () => {
   assert.equal(recognize(rectangle, 0.1).type, 'freedraw');
   recognize(rectangle).box.forEach((v, i) => assert.ok(Math.abs(v - [0, 0, 200, 120][i]) <= 4));
 });
+
+test('a shaft and a separately drawn head read as one arrow', () => {
+  const shaft = trace([[0, 0], [240, 0]]);
+  const chevron = trace([[215, -18], [240, 0], [215, 18]], 8);
+  const barbs = [...trace([[240, 0], [215, -18]], 8), ...trace([[240, 0], [215, 18]], 8)];
+  for (const head of [chevron, barbs]) {
+    const shape = recognize([...shaft, ...head]);
+    assert.equal(shape.type, 'arrow');
+    assert.ok(shape.to[0] > 225 && Math.abs(shape.to[1]) < 10, JSON.stringify(shape.to));
+    assert.ok(Math.abs(shape.from[0]) < 4, 'the arrow starts where the shaft did');
+  }
+});

@@ -136,6 +136,12 @@ export class AssistantPanel {
       };
     }
     $('ask').onsubmit = event => { event.preventDefault(); this.submit(); };
+    // Files ride with the question; a changed set is a new question.
+    this.files = window.mevedelAttachments.create({list:$('question-attachments'),
+      notice:message => this.notice(message, true),
+      onchange:() => { this.draft.opId = crypto.randomUUID(); this.changed(); }});
+    window.mevedelAttachments.bind(this.files, {target:$('ask'), input:$('question'),
+      button:$('question-attach'), picker:$('question-files')});
     $('comment-form').onsubmit = event => {
       event.preventDefault();
       this.postComment(undefined, $('comment-assistant').checked);
@@ -225,9 +231,13 @@ export class AssistantPanel {
     const draft = structuredClone(this.draft), a = draft.attachment;
     try {
       this.notice('Saving edits and submitting…');
+      await this.files.settled();
+      const files = this.files.items();
       await this.save();
       const result = await this.request({action:'ask', opId:draft.opId, questionId:draft.opId,
-        text:draft.text, expected:a.snapshot, range:a.range, selection:a.selection, region:a.region});
+        text:draft.text, expected:a.snapshot, range:a.range, selection:a.selection, region:a.region,
+        ...(files.length ? {images:this.files.frame(files)} : {})});
+      this.files.remove(files);
       this.receipt = { ...result, questionId: draft.opId };
       this.notice(result.delivered ? 'This question is already in the conversation.' : 'Question queued. Your answer will appear here.');
       if (this.draft.opId === draft.opId) {

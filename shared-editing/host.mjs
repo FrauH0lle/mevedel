@@ -15,6 +15,7 @@ import {
   putFile,
   pruneFiles,
   validate,
+  validBackground,
   check,
   identifier,
   LIMIT,
@@ -58,7 +59,7 @@ async function png(svg) {
 /* A standalone SVG download embeds the fonts its text uses. Cropped images
    are re-rendered to their visible pixels, so a download never reveals what
    a crop hides; the editable .excalidraw file keeps the original. */
-async function exportSVG(elements, files) {
+async function exportSVG(elements, files, background) {
   files = { ...files };
   elements = await Promise.all(elements.map(async (e) => {
     const file = e.type === 'image' && e.crop && files[e.fileId];
@@ -74,7 +75,7 @@ async function exportSVG(elements, files) {
   for (const family of usedFonts(elements))
     if (FONT_FILES[family])
       fonts[family] = `data:font/ttf;base64,${b64(await resource(`${FONT_FILES[family]}.ttf`))}`;
-  return boardSVG(elements, { files, fonts });
+  return boardSVG(elements, { files, fonts, background });
 }
 /* Image files a retained contribution can restore must survive pruning. */
 const retainedFiles = (transactions) => new Set(transactions.flatMap((tx) =>
@@ -157,7 +158,7 @@ export async function handle(request) {
   }
   if (action === 'library-sheet') return { result: await librarySheet(request.libraries) };
   check(
-    ['create', 'import', 'read', 'update', 'patch', 'insert', 'rename', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'update', 'patch', 'insert', 'rename', 'background', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -168,7 +169,8 @@ export async function handle(request) {
     let content = request.content,
       kind = request.kind,
       title = request.title,
-      importedFiles;
+      importedFiles,
+      background;
     if (action === 'import') {
       check(['native', 'excalidraw', 'markdown', 'text'].includes(request.format), 'Unsupported import format');
       check(
@@ -193,7 +195,7 @@ export async function handle(request) {
       } else if (request.format === 'excalidraw') {
         kind = 'whiteboard';
         title = request.title || 'Imported whiteboard';
-        ({ elements: content, files: importedFiles, notes } = parseScene(request.data));
+        ({ elements: content, files: importedFiles, notes, background } = parseScene(request.data));
       } else {
         const source = JSON.parse(request.data);
         check(
@@ -211,6 +213,7 @@ export async function handle(request) {
         doc.transact(() => {
           for (const [id, file] of Object.entries(importedFiles || {})) putFile(doc, id, file);
           for (const element of content) putElement(doc, element);
+          if (background) doc.getMap('meta').set('background', background);
         });
         validate(doc);
       }
@@ -238,13 +241,13 @@ export async function handle(request) {
         check(['native', 'svg', 'png'].includes(format), 'Unsupported board export');
         const files = filesOf(doc);
         if (format === 'native')
-          return { result: { text: serializeScene(before.content, files),
+          return { result: { text: serializeScene(before.content, files, { background: before.background }),
             mime: 'application/vnd.excalidraw+json', extension: 'excalidraw' } };
         return {
           result:
             format === 'svg'
-              ? { text: await exportSVG(before.content, files), mime: 'image/svg+xml', extension: 'svg' }
-              : { data: await png(boardSVG(before.content, { files })), mime: 'image/png', extension: 'png' },
+              ? { text: await exportSVG(before.content, files, before.background), mime: 'image/svg+xml', extension: 'svg' }
+              : { data: await png(boardSVG(before.content, { files, background: before.background })), mime: 'image/png', extension: 'png' },
         };
       }
       if (format === 'native')
@@ -329,9 +332,10 @@ export async function handle(request) {
         const [x, y, w, h] = request.region || [], margin = Math.max(24, Math.round(Math.max(w, h) * 0.08));
         const files = filesOf(doc);
         result.png = await png(request.region
-          ? boardSVG(before.content, { files, maxEdge: request.imageMax,
+          ? boardSVG(before.content, { files, maxEdge: request.imageMax, background: before.background,
             box: [x - margin, y - margin, w + margin * 2, h + margin * 2], maxScale: 4 })
-          : boardSVG(result.content, { files, maxEdge: request.imageMax, context: before.content }));
+          : boardSVG(result.content, { files, maxEdge: request.imageMax, context: before.content,
+            background: before.background }));
       }
       return { result };
     }
@@ -343,7 +347,7 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc) }))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)) },
+        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
     check(
@@ -383,7 +387,7 @@ export async function handle(request) {
     else if (action === 'insert') {
       check(before.kind === 'whiteboard', 'Library items insert into whiteboards');
       const item = parseLibrary(request.library).find((candidate) => candidate.id === request.item);
-      check(item, 'Unknown library item');
+      check(item, `No library item ${request.item}; list items with SharedRead library`);
       check([request.x, request.y].every((v) => Number.isFinite(v) && Math.abs(v) <= 1e6), 'insert needs x and y');
       const [, , width, height] = extent(item.elements);
       const top = before.content.filter((e) => e.index).at(-1)?.index ?? null;
@@ -394,7 +398,15 @@ export async function handle(request) {
         generateNKeysBetween(top, null, elements.length), () => Math.floor(Math.random() * 2 ** 31));
       patch(doc, inserted.map((e) => ({ id: e.id, before: null, after: e })));
     }
-    else if (action === 'rename') {
+    else if (action === 'background') {
+      check(before.kind === 'whiteboard', 'Only whiteboards have a canvas background');
+      // An empty value returns the board to the room theme's colour.
+      if (request.background === '') doc.getMap('meta').delete('background');
+      else {
+        check(validBackground(request.background), 'Canvas background must be an opaque #rrggbb colour, or empty for the theme');
+        doc.getMap('meta').set('background', request.background);
+      }
+    } else if (action === 'rename') {
       check(
         typeof request.title === 'string' && request.title.trim() && request.title.length <= 200,
         'Invalid title',
@@ -402,7 +414,7 @@ export async function handle(request) {
       doc.getMap('meta').set('title', request.title);
     } else if (action === 'patch' || action === 'revert') {
       let changes = request.changes;
-      let title;
+      let title, background;
       if (action === 'revert') {
         const tx = state.transactions.find((t) => t.id === request.transaction);
         check(tx, 'Contribution is no longer available to revert');
@@ -416,12 +428,20 @@ export async function handle(request) {
           check(before.title === tx.title.after, 'Stale title; rename it explicitly');
           title = tx.title.before;
         }
+        if (tx.background) {
+          check((before.background ?? null) === tx.background.after, 'The canvas background changed since');
+          background = tx.background;
+        }
       }
       if (action === 'patch' || changes.length) {
         if (before.kind === 'whiteboard') patch(doc, changes);
         else patchDocument(doc, changes);
       }
       if (title !== undefined) doc.getMap('meta').set('title', title);
+      if (background) {
+        if (background.before) doc.getMap('meta').set('background', background.before);
+        else doc.getMap('meta').delete('background');
+      }
     }
     const after = inspect(doc),
       revision = state.revision + 1;
@@ -435,8 +455,11 @@ export async function handle(request) {
       ...(before.title !== after.title
         ? { title: { before: before.title, after: after.title } }
         : {}),
+      ...(before.background !== after.background
+        ? { background: { before: before.background ?? null, after: after.background ?? null } }
+        : {}),
     };
-    const changed = changes.length || transaction.title;
+    const changed = changes.length || transaction.title || transaction.background;
     if (after.kind === 'whiteboard')
       pruneFiles(doc, retainedFiles(changed ? [transaction, ...state.transactions].slice(0, 32) : state.transactions));
     const next = {
@@ -467,7 +490,7 @@ export async function handle(request) {
         id: next.id,
         revision,
         ...after,
-        ...(request.image && after.kind === 'whiteboard' ? {png: await png(boardSVG(after.content, { files: filesOf(doc) }))} : {}),
+        ...(request.image && after.kind === 'whiteboard' ? {png: await png(boardSVG(after.content, { files: filesOf(doc), background: after.background }))} : {}),
         comments: readComments(doc, comments),
         update: b64(Y.encodeStateAsUpdate(doc, vector)),
         transaction: changed ? transaction : null,

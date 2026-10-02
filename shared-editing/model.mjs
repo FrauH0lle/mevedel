@@ -47,9 +47,12 @@ export function compareOrder(a, b) {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 export function inspect(doc) {
+  const background = doc.getMap('meta').get('background');
   return {
     kind: doc.getMap('meta').get('kind'),
     title: doc.getMap('meta').get('title'),
+    // A whiteboard's canvas colour, shared like its title; absent is the theme's.
+    ...(background ? { background } : {}),
     content:
       doc.getMap('meta').get('kind') === 'document'
         ? documentJSON(doc)
@@ -77,6 +80,8 @@ const oneOf = (...values) => (v) => values.includes(v);
 const nullable = (test) => (v) => v === null || test(v);
 const string = (max) => (v) => typeof v === 'string' && v.length <= max;
 const point = (v) => Array.isArray(v) && v.length === 2 && v.every(finite(-1e6, 1e6));
+/* An opaque canvas colour, as Excalidraw's viewBackgroundColor. */
+export const validBackground = (v) => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
 const COLOR = /^(transparent|#[0-9a-fA-F]{3,4}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8}|[a-zA-Z]{3,20}|(rgb|rgba|hsl|hsla)\([0-9.,%\s/+-]{1,60}\))$/;
 export const ARROWHEADS = ['arrow', 'bar', 'circle', 'circle_outline', 'triangle', 'triangle_outline',
   'diamond', 'diamond_outline', 'cardinality_one', 'cardinality_many', 'cardinality_one_or_many',
@@ -200,10 +205,12 @@ export function validate(doc) {
   );
   const meta = doc.getMap('meta');
   check(
-    [...meta.keys()].every((key) => ['kind', 'title'].includes(key)),
+    [...meta.keys()].every((key) => ['kind', 'title', 'background'].includes(key)),
     'Unknown editor property',
   );
   check(['whiteboard', 'document'].includes(meta.get('kind')), 'Unknown editor kind');
+  check(!meta.has('background') || (meta.get('kind') === 'whiteboard' && validBackground(meta.get('background'))),
+    'Invalid canvas background');
   check(
     typeof meta.get('title') === 'string' &&
       meta.get('title').trim().length > 0 &&
