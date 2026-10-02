@@ -299,20 +299,22 @@
       if (!roomsList) return;
       roomsList.replaceChildren();
       rooms.forEach(room => {
-        const row = el('div', 'invite-tier');
+        const row = el('div', 'invite-tier room-entry');
         row.append(el('span', 'invite-name', room.name));
         const link = roomLink(room);
-        const actions = el('span', 'invite-what');
-        row.append(actions);
+        // Unlike an invitation's one action, a room has several; they share
+        // the row's action column instead of stacking in one cell.
+        const actions = el('span', 'room-actions');
         if (link) {
-          row.append(openButton(link));
-          row.append(copyButton('Copy', link));
+          actions.append(openButton(link));
+          actions.append(copyButton('Copy', link));
         }
         const forget = el('button', 'btn quiet', 'Forget');
         forget.type = 'button';
         forget.setAttribute('title', 'Drop this link from this browser');
         forget.addEventListener('click', () => forgetRoom(room.room));
-        row.append(forget);
+        actions.append(forget);
+        row.append(actions);
         roomsList.append(row);
       });
     }

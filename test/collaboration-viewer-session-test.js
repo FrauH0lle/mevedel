@@ -121,9 +121,14 @@ function roomLink(nodes, index) {
   assert.deepEqual(rooms(nodes), ['flow']);
   assert.equal(JSON.parse(store.get('mevedel-rooms')).length, 1);
 
-  // Forget is the one thing that does drop it.
+  // A row is its name and one group of actions, so the layout can give the
+  // actions their own column instead of stacking them in one cell.
   const row = nodes['rooms-list'].children[0];
-  row.children[row.children.length - 1].dispatch('click');
+  assert.deepEqual(row.children.map(child => child.className), ['invite-name', 'room-actions']);
+  const actions = row.children[1];
+  assert.deepEqual(actions.children.map(textOf), ['Open room ↗', 'Copy', 'Forget']);
+  // Forget is the one thing that does drop it.
+  actions.children.at(-1).dispatch('click');
   assert.deepEqual(rooms(nodes), []);
   assert.deepEqual(JSON.parse(store.get('mevedel-rooms')), []);
   assert.equal(nodes['rooms-button'].hidden, true);
