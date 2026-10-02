@@ -118,16 +118,23 @@ them the same way."
   (when buffer-read-only (user-error "Session is read-only"))
   (let ((path (file-name-concat (mevedel-session-save-path session) logical)))
     (if (mevedel-session-codec-portable-authority-p session)
-        (mevedel-session-publication-publish
-         session
-         (list
-          (list :path path :content content :coding 'utf-8-unix)
-          (list :path (mevedel-session-artifacts-sidecar-path
-                       (mevedel-session-save-path session))
-                :content (mevedel-session-artifacts-printed-value
-                          (mevedel-session-artifacts-build-sidecar
-                           session (current-buffer)))
-                :commit-marker t)) t)
+        (progn
+          ;; The authority gate only shallow-materializes a fresh portable
+          ;; session.  Its first durable write needs the full root snapshot,
+          ;; or Resume finds no published segment.
+          (unless (mevedel-session-artifacts-artifact-present-p
+                   session "session.meta.el" t)
+            (mevedel-session-artifacts-save session (current-buffer)))
+          (mevedel-session-publication-publish
+           session
+           (list
+            (list :path path :content content :coding 'utf-8-unix)
+            (list :path (mevedel-session-artifacts-sidecar-path
+                         (mevedel-session-save-path session))
+                  :content (mevedel-session-artifacts-printed-value
+                            (mevedel-session-artifacts-build-sidecar
+                             session (current-buffer)))
+                  :commit-marker t)) t))
       (let ((write-region-inhibit-fsync nil))
         (mevedel--write-file-atomically path content 'utf-8-unix #o600)))))
 
