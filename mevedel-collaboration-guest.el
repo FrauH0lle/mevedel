@@ -16,6 +16,10 @@
 (require 'json)
 
 ;; `mevedel-collaboration'
+;; `mevedel-tool-fs-read'
+(declare-function mevedel-tool-fs-read--binary-extension-p "mevedel-tool-fs-read" (filename))
+(autoload 'mevedel-tool-fs-read--binary-extension-p "mevedel-tool-fs-read")
+
 (declare-function mevedel-collaboration--base64url-decode
                   "mevedel-collaboration" (string))
 (declare-function mevedel-collaboration--guest
@@ -865,12 +869,33 @@ sends to main chat instead of failing the prompt."
                         :key #'mevedel-directive-id :test #'equal)))
     id))
 
+(defun mevedel-collaboration--attachment-extension (image bytes)
+  "Return the extension guest attachment IMAGE with BYTES is saved under.
+A typed attachment takes its type's extension.  A plain-text one -- a
+source or markup file -- keeps its own extension when that is short and
+not one Read treats as binary, else `txt', and must be UTF-8 text.
+Return nil for anything else."
+  (let ((mime (plist-get image :mime))
+        (own (plist-get image :extension)))
+    (if (and (equal mime "text/plain") own)
+        (and (not (string-search "\0" bytes))
+             (not (string-match-p "[\200-\377]"
+                                  (decode-coding-string bytes 'utf-8 t)))
+             (if (and (stringp own)
+                      (string-match-p "\\`[a-z0-9]\\{1,12\\}\\'" own)
+                      (not (mevedel-tool-fs-read--binary-extension-p
+                            (concat "attachment." own))))
+                 own
+               "txt"))
+      (cdr (assoc mime mevedel-collaboration--attachment-extensions)))))
+
 (defun mevedel-collaboration--save-guest-attachments (images)
   "Save valid guest attachments IMAGES under the session media directory.
-IMAGES is the decoded frame list of (:mime STRING :data BASE64) plists.
-Return the saved absolute paths.  Runs in the view buffer.  Anything
-invalid -- unknown type, undecodable data, or a set over the byte
-budget -- drops the whole set rather than attaching a partial one."
+IMAGES is the decoded frame list of (:mime STRING :data BASE64) plists;
+a plain-text one may name its own `:extension'.  Return the saved
+absolute paths.  Runs in the view buffer.  Anything invalid -- unknown
+type, undecodable data, non-text bytes, or a set over the byte budget --
+drops the whole set rather than attaching a partial one."
   (when (and images (listp images)
              (<= (length images)
                  mevedel-collaboration--max-prompt-attachments))
@@ -878,15 +903,14 @@ budget -- drops the whole set rather than attaching a partial one."
       (let ((total 0)
             (decoded nil))
         (dolist (image images)
-          (let* ((extension (cdr (assoc (plist-get image :mime)
-                                        mevedel-collaboration--attachment-extensions)))
-                 (bytes (and extension
-                             (stringp (plist-get image :data))
+          (let* ((bytes (and (stringp (plist-get image :data))
                              (condition-case nil
                                  (base64-decode-string
                                   (plist-get image :data))
-                               (error nil)))))
-            (unless (and bytes (> (length bytes) 0))
+                               (error nil))))
+                 (extension (and bytes (mevedel-collaboration--attachment-extension
+                                        image bytes))))
+            (unless (and extension (> (length bytes) 0))
               (throw 'invalid nil))
             (cl-incf total (length bytes))
             (when (> total mevedel-collaboration--max-attachment-bytes)

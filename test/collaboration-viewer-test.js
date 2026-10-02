@@ -1156,22 +1156,27 @@ async function main() {
                                        preventDefault: () => { dropped = true; }});
   assert.equal(dropped, false, 'a text drag keeps the browser default');
   nodes.composer.dispatch('drop', {
+    // Source files go as text with their own extension; binaries stay out.
     dataTransfer: files(fakeFile('build.log', '', 'log line\n'),
-                        fakeFile('notes.exe', 'application/x-msdownload', 'x')),
+                        fakeFile('tool.py', 'text/x-python', 'print("hi")\n'),
+                        fakeFile('notes.exe', 'application/x-msdownload', 'MZ\0\x90')),
     preventDefault: () => { dropped = true; }});
   assert.equal(dropped, true);
   assert.equal(nodes.composer.dataset.dropping, undefined);
   await api2.addFiles([]);
-  assert.equal(nodes.attachments.children.length, 1);
+  assert.equal(nodes.attachments.children.length, 2);
   assert.match(textOf(nodes.attachments), /build\.log/);
+  assert.match(textOf(nodes.attachments), /tool\.py/);
   nodes['composer-input'].value = 'see the log';
   nodes.composer.dispatch('submit');
   await waitFor(() => first.sent.length === 8, 'prompt with attachment');
   const withFile = await unseal(key, first.sent[7]);
-  assert.equal(withFile.images.length, 1);
+  assert.equal(withFile.images.length, 2);
   assert.equal(withFile.images[0].mime, 'text/plain');
+  assert.equal(withFile.images[0].extension, undefined, 'a typed file needs no extension');
   assert.equal(Buffer.from(withFile.images[0].data, 'base64').toString(),
                'log line\n');
+  assert.deepEqual([withFile.images[1].mime, withFile.images[1].extension], ['text/plain', 'py']);
   assert.equal(nodes.attachments.children.length, 0);
 
   // Name commits travel independently of the message draft.

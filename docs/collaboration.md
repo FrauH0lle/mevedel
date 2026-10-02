@@ -276,7 +276,10 @@ any discussion, the whiteboard and document **Ask the assistant** form, and the
 new-session first prompt. **Attach**, pasting into the message and dropping
 files onto the composer all add them. Comments and replies stay text-only.
 A prompt can carry up to three attachments totaling 1.25 MiB decoded: JPEG,
-PNG, WebP, PDF, plain text, Markdown, CSV, JSON, or patch text. The host generates
+PNG, WebP, PDF, plain text, Markdown, CSV, JSON, or patch text, and any other
+UTF-8 text such as source code or HTML, which reaches the model as text under
+its own extension. An extension Read treats as binary becomes `.txt`; content
+with NUL bytes or invalid UTF-8 is not text. The host generates
 filenames under workspace media storage and queues them through the normal
 file-mention path; a whiteboard question's own board snapshot rides beside them.
 The viewer can downscale images; non-image files cannot be

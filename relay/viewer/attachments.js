@@ -29,6 +29,19 @@
     return MIME_BY_EXTENSION[extension] || null;
   }
 
+  // Any other UTF-8 text -- source, markup, configuration -- goes as text
+  // and keeps its own extension, which the host checks again.
+  function textual(buffer) {
+    if (buffer.includes(0)) return false;
+    try { new TextDecoder('utf-8', {fatal: true}).decode(buffer); return true; }
+    catch (_error) { return false; }
+  }
+  function ownExtension(file) {
+    const name = (file.name || '').toLowerCase(), dot = name.lastIndexOf('.');
+    const extension = dot > 0 ? name.slice(dot + 1) : '';
+    return /^[a-z0-9]{1,12}$/.test(extension) ? extension : 'txt';
+  }
+
   function base64OfBytes(buffer) {
     let binary = '';
     buffer.forEach(byte => { binary += String.fromCharCode(byte); });
@@ -104,9 +117,14 @@
     async function addNow(files, current) {
       for (const file of files) {
         if (current !== generation) return;
-        const mime = attachmentMime(file);
+        let mime = attachmentMime(file), extension;
+        if (!mime && file.size <= FILE_BUDGET) {
+          const head = new Uint8Array(await file.arrayBuffer());
+          if (current !== generation) return;
+          if (textual(head)) [mime, extension] = ['text/plain', ownExtension(file)];
+        }
         if (!mime) {
-          notice(`${file.name || 'That file'} is not an accepted type.`);
+          notice(`${file.name || 'That file'} is neither text nor an accepted type.`);
           continue;
         }
         if (pending.length >= MAX_FILES) {
@@ -133,7 +151,8 @@
         }
         const buffer = new Uint8Array(await blob.arrayBuffer());
         if (current !== generation) return;
-        pending.push({mime: type, label, data: base64OfBytes(buffer), bytes: buffer.length});
+        pending.push({mime: type, label, data: base64OfBytes(buffer), bytes: buffer.length,
+                      ...(extension ? {extension} : {})});
       }
       render();
       onchange();
@@ -156,7 +175,10 @@
       busy() { return inFlight > 0; },
       items() { return pending.slice(); },
       // The frame representation of ITEMS.
-      frame(items) { return items.map(item => ({mime: item.mime, data: item.data})); },
+      frame(items) {
+        return items.map(item => ({mime: item.mime, data: item.data,
+                                   ...(item.extension ? {extension: item.extension} : {})}));
+      },
       remove(items) {
         items.forEach(item => {
           const index = pending.indexOf(item);
