@@ -150,7 +150,12 @@
       (should-not (string-match-p "secret" (car messages)))
       (clrhash mevedel-collaboration--rooms)
       (mevedel-collaboration-status)
-      (should (string-match-p "inactive" (car messages))))))
+      (should (string-match-p "inactive" (car messages)))
+      ;; A running lobby is collaboration too.
+      (cl-letf (((symbol-function 'mevedel-collaboration-lobby--status)
+                 (lambda () "Lobby: proj: relay connected; 0 guests")))
+        (mevedel-collaboration-status)
+        (should (string-match-p "active for Lobby: proj" (car messages)))))))
 
 (mevedel-deftest mevedel-collaboration-status--preserves-composer
   (:doc "preserves a multiline composer draft beginning with >")
@@ -247,7 +252,18 @@
   (cl-letf (((symbol-function 'mevedel-collaboration-view)
              (lambda () "http://127.0.0.1:1/#room.secret")))
     (should-not (mevedel-cmd--collab "view"))
-    (should-not (mevedel-cmd--collab ""))))
+    (should-not (mevedel-cmd--collab ""))
+    (let (called)
+      (cl-letf (((symbol-function 'mevedel-collaboration-lobby)
+                 (lambda () (push 'lobby called) "http://x/#room.secret"))
+                ((symbol-function 'mevedel-collaboration-lobby-stop)
+                 (lambda () (push 'stop called)))
+                ((symbol-function 'mevedel-collaboration-lobby-rotate)
+                 (lambda () (push 'rotate called))))
+        (should-not (mevedel-cmd--collab "lobby"))
+        (should-not (mevedel-cmd--collab "lobby stop"))
+        (should-not (mevedel-cmd--collab " lobby rotate "))
+        (should (equal '(rotate stop lobby) called))))))
 
 (mevedel-deftest mevedel-skills--dispatch-slash-command
   (:doc "dispatches /collab without copying its bearer URL into messages")

@@ -26,6 +26,8 @@
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
+(declare-function mevedel-collaboration--guest-link
+                  "mevedel-collaboration" (room guest))
 (declare-function mevedel-collaboration--guest-text
                   "mevedel-collaboration" (value))
 (declare-function mevedel-collaboration--publish-status
@@ -36,6 +38,11 @@
                   "mevedel-collaboration" (data-buffer))
 (declare-function mevedel-collaboration--start
                   "mevedel-collaboration" (session data-buffer))
+
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--save-guest-files
+                  "mevedel-collaboration-guest" (data-buffer images))
+(autoload 'mevedel-collaboration--save-guest-files "mevedel-collaboration-guest")
 (declare-function mevedel-collaboration--stop-internal
                   "mevedel-collaboration" (room reason))
 (defvar mevedel-collaboration--duplicate-prompt-window)
@@ -143,17 +150,23 @@ requester is skipped because its own reply already carried a link."
       (mevedel-collaboration--offer-room room owner-peer name link))))
 
 (defun mevedel-collaboration--create-guest-session
-    (room peer guest request-id name prompt)
+    (room peer guest request-id name prompt &optional images)
   "Create session NAME for GUEST and reply to PEER's REQUEST-ID.
 
-The new room shares only ROOM's workspace and working directory.  GUEST
-receives the same authority tier it already holds, and ROOM's other
-owner guests are offered an owner link to it.  PROMPT, when given,
-is queued only after the new room starts; a failed start or enqueue
-discards the partial session and reports failure without stopping ROOM."
+The new room shares only ROOM's workspace and working directory, or a
+lobby's workspace and root.  GUEST receives the same authority tier it
+already holds, and ROOM's other owner guests are offered an owner link
+to it.  PROMPT, when given,
+is queued with attachment IMAGES only after the new room starts; a failed
+start, save or enqueue discards the partial session and reports failure
+without stopping ROOM."
   (let* ((session (plist-get room :session))
-         (workspace (and session (mevedel-session-workspace session)))
-         (directory (and session (mevedel-session-working-directory session))))
+         ;; A lobby has no session; it carries its workspace instead.
+         (workspace (or (plist-get room :workspace)
+                        (and session (mevedel-session-workspace session))))
+         (directory (or (plist-get room :directory)
+                        (and session
+                             (mevedel-session-working-directory session)))))
     (cond
      ((not (and workspace directory))
       (mevedel-collaboration--new-session-reply
@@ -173,12 +186,16 @@ discards the partial session and reports failure without stopping ROOM."
               (setq buffer created-buffer
                     new-room
                     (mevedel-collaboration--start new-session created-buffer))
-              (when (and prompt
-                         (not (mevedel-view-enqueue-external-follow-up
-                               created-buffer prompt
-                               :guest-name (plist-get guest :name)
-                               :guest-id (plist-get guest :guest-id))))
-                (error "Could not queue the approved first prompt")))
+              (when prompt
+                (let ((paths (mevedel-collaboration--save-guest-files
+                              created-buffer images)))
+                  (unless (mevedel-view-enqueue-external-follow-up
+                           created-buffer prompt
+                           :guest-name (plist-get guest :name)
+                           :guest-id (plist-get guest :guest-id)
+                           :paths paths)
+                    (dolist (path paths) (ignore-errors (delete-file path)))
+                    (error "Could not queue the approved first prompt")))))
           (error (setq failure (error-message-string err))))
         (if failure
             (progn
@@ -188,10 +205,7 @@ discards the partial session and reports failure without stopping ROOM."
                :message (format "Session could not be created: %s" failure)))
           (if (mevedel-collaboration--new-session-reply
                room peer request-id name :ok t
-               :link (plist-get new-room
-                                (if (plist-get guest :owner)
-                                    :link-owner
-                                  :link-full)))
+               :link (mevedel-collaboration--guest-link new-room guest))
               (progn
                 ;; Offering is incidental too: an owner that cannot be
                 ;; told still has a room the requester can reach.
@@ -209,8 +223,9 @@ discards the partial session and reports failure without stopping ROOM."
              new-room buffer))))))))
 
 (defun mevedel-collaboration--ask-host-new-session
-    (room peer guest request-id name prompt)
+    (room peer guest request-id name prompt &optional images)
   "Ask the host to approve GUEST's REQUEST-ID for a session named NAME.
+PROMPT and its attachment IMAGES start the session once approved.
 
 The prompt reaches Emacs and ROOM's owner-link guests.  An owner may
 create a session outright, so approving someone else's request is no new
@@ -233,7 +248,9 @@ fails on the name that the first one took."
           (format "Guest:  %s\n" (plist-get guest :name))
           (format "Name:   %s\n" name)
           (format "Prompt: %s\n"
-                  (or prompt "(none -- the session starts empty)")))
+                  (or prompt "(none -- the session starts empty)"))
+          (when (> (length images) 0)
+            (format "Files:  %d attached\n" (length images))))
          (format "Create session \"%s\" for %s?"
                  name (plist-get guest :name))
          nil
@@ -245,7 +262,7 @@ fails on the name that the first one took."
              (pcase outcome
                ('approve
                 (mevedel-collaboration--create-guest-session
-                 room peer guest request-id name prompt))
+                 room peer guest request-id name prompt images))
                (`(feedback . ,text)
                 (mevedel-collaboration--new-session-reply
                  room peer request-id name :ok :json-false :message text))
@@ -270,8 +287,11 @@ fails on the name that the first one took."
                      (truncate-string-to-width
                       raw mevedel-collaboration--max-session-name-chars)))
               ((string-match-p "[A-Za-z0-9]" name)))
-    (let* ((prompt (mevedel-collaboration--guest-text
-                    (plist-get frame :prompt)))
+    (let* ((images (plist-get frame :images))
+           (prompt (or (mevedel-collaboration--guest-text
+                        (plist-get frame :prompt))
+                       ;; Files alone still say what the session is for.
+                       (and images "See the attached file.")))
            (waiting (plist-get guest :pending-new-session))
            (last (plist-get guest :last-new-session))
            (now (float-time)))
@@ -296,9 +316,9 @@ fails on the name that the first one took."
         (plist-put guest :last-new-session (cons request-id now))
         (if (plist-get guest :owner)
             (mevedel-collaboration--create-guest-session
-             room peer guest request-id name prompt)
+             room peer guest request-id name prompt images)
           (mevedel-collaboration--ask-host-new-session
-           room peer guest request-id name prompt)))))))
+           room peer guest request-id name prompt images)))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

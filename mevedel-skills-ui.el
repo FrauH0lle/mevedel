@@ -42,6 +42,17 @@
 (autoload 'mevedel-collaboration-stop "mevedel-collaboration")
 (autoload 'mevedel-collaboration-view "mevedel-collaboration")
 
+;; `mevedel-collaboration-lobby'
+(declare-function mevedel-collaboration-lobby
+                  "mevedel-collaboration-lobby" nil)
+(declare-function mevedel-collaboration-lobby-rotate
+                  "mevedel-collaboration-lobby" nil)
+(declare-function mevedel-collaboration-lobby-stop
+                  "mevedel-collaboration-lobby" nil)
+(autoload 'mevedel-collaboration-lobby "mevedel-collaboration-lobby")
+(autoload 'mevedel-collaboration-lobby-rotate "mevedel-collaboration-lobby")
+(autoload 'mevedel-collaboration-lobby-stop "mevedel-collaboration-lobby")
+
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
                   "mevedel-cockpit" (&optional context))
@@ -835,7 +846,10 @@ Routes through the lifecycle-aware permission transition path."
     ((or "" "view") (mevedel-collaboration-view) nil)
     ("status" (mevedel-collaboration-status) nil)
     ("stop" (mevedel-collaboration-stop) nil)
-    (_ (message "Usage: /collab [status|stop]") nil)))
+    ("lobby" (mevedel-collaboration-lobby) nil)
+    ("lobby stop" (mevedel-collaboration-lobby-stop) nil)
+    ("lobby rotate" (mevedel-collaboration-lobby-rotate) nil)
+    (_ (message "Usage: /collab [status|stop|lobby [stop|rotate]]") nil)))
 
 (defvar mevedel-slash-commands
   '(("btw"     . mevedel-cmd--btw)

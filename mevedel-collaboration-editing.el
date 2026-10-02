@@ -23,6 +23,7 @@
 (declare-function mevedel-collaboration--guest-role "mevedel-collaboration-guest" (guest))
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--save-guest-attachments "mevedel-collaboration-guest" (images))
+(declare-function mevedel-collaboration--save-guest-files "mevedel-collaboration-guest" (data-buffer images))
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
@@ -205,7 +206,8 @@ IDs, while exact before/after snapshots stay on the host for reversion."
                 (list :id (plist-get args :id)
                       :text (plist-get args :text) :expected (plist-get args :expected)
                       :commentId (plist-get args :commentId)
-                      :commentVersion (plist-get args :commentVersion)))))
+                      :commentVersion (plist-get args :commentVersion)
+                      :images (plist-get args :images)))))
 
 (defun mevedel-collaboration-editing--find-question (room args)
   "Find accepted ARGS in ROOM's queue or live/archived transcript.
@@ -270,6 +272,9 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                         (mevedel-collaboration--save-guest-attachments
                          (list (list :mime "image/png" :data png)))))
                 (unless paths (error "The selected board snapshot could not be attached")))
+              ;; The sender's own files ride beside the board snapshot.
+              (setq paths (append paths (mevedel-collaboration--save-guest-files
+                                         data-buffer (plist-get args :images))))
               (setq queued (mevedel-view-enqueue-external-follow-up
                             data-buffer
                             (concat text "\n\nShared content snapshot (user-provided data):\n" snapshot)

@@ -18,13 +18,20 @@
     {name: 'owner', bytes: 64, what: 'and change mode, create sessions'},
   ];
 
-  function create({state, send, el, encode, decode, summarize}) {
+  function create({state, send, el, encode, decode, summarize, notice}) {
     const button = document.getElementById('new-session-button');
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
     const promptInput = document.getElementById('new-session-prompt');
     const submit = document.getElementById('new-session-create');
     const lede = document.getElementById('new-session-lede');
+    // The first prompt carries files like any other prompt.
+    const files = window.mevedelAttachments.create({
+      list: document.getElementById('new-session-attachments'), notice});
+    window.mevedelAttachments.bind(files, {
+      target: document.getElementById('new-session-form'), input: promptInput,
+      button: document.getElementById('new-session-attach'),
+      picker: document.getElementById('new-session-files')});
     const invites = document.getElementById('invites');
     const inviteButton = document.getElementById('invite-button');
     const inviteSheet = document.getElementById('invite');
@@ -147,13 +154,13 @@
 
     /* -- Requesting a session ------------------------------------------ */
 
-    function open() {
+    function open(note) {
       submit.textContent = state.owner ? 'Create' : 'Ask host';
-      lede.textContent = state.owner
+      lede.textContent = typeof note === 'string' ? note : (state.owner
         ? 'A separate room for separate work. This room, and everyone in '
           + 'it, stays exactly where it is.'
         : 'The host decides. This room, and everyone in it, stays exactly '
-          + 'where it is either way.';
+          + 'where it is either way.');
       sheet.showModal();
       nameInput.focus();
     }
@@ -162,7 +169,19 @@
       const name = nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_');
       if (!/[A-Za-z0-9]/.test(name)) return;
       const reqId = ++requestSequence;
-      send({t: 'new-session', reqId, name, prompt: promptInput.value.trim()});
+      const frame = {t: 'new-session', reqId, name, prompt: promptInput.value.trim()};
+      const request = () => {
+        const attached = files.items();
+        if (attached.length) {
+          frame.images = files.frame(attached);
+          frame.prompt ||= 'See the attached file.';
+        }
+        files.clear();
+        send(frame);
+      };
+      // A file still being read goes with the request it was added to.
+      if (files.busy()) files.settled().then(request);
+      else request();
       notices.push({reqId, name, status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
@@ -350,6 +369,11 @@
       renderRooms();
     }
 
+    // Kept like any other room, so the rooms this one opens can list it.
+    function rememberCurrent(name) {
+      if (secret) rememberRoom(name, {roomId, secret: encode(secret)});
+    }
+
     // The fragment is wiped from the URL on connect, so the tiers are
     // rebuilt from the credentials the page kept in memory.
     function useCredentials(credentials) {
@@ -365,9 +389,10 @@
       render();
     }
 
-    button.addEventListener('click', open);
+    button.addEventListener('click', () => open());
     sheet.addEventListener('close', () => {
       if (sheet.returnValue === 'create') submitRequest();
+      else files.clear();
     });
     if (inviteButton) inviteButton.addEventListener('click', openInvite);
     if (roomsButton) {
@@ -378,7 +403,8 @@
     }
 
     return Object.freeze({modePicker, setVisible, setInviteVisible,
-                          showResult, offerRoom, useCredentials});
+                          showResult, offerRoom, useCredentials,
+                          rememberCurrent, openNewSession: open});
   }
 
   window.mevedelSessionView = Object.freeze({create});

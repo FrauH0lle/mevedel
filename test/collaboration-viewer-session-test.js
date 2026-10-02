@@ -48,6 +48,7 @@ function build(tierBytes, seed) {
     navigator: {clipboard: {writeText: async text => { copied.push(text); }}},
   };
   const context = {window, document, console, localStorage: window.localStorage};
+  load('relay/viewer/attachments.js', context);
   load('relay/viewer/viewer-session.js', context);
   const sent = [];
   const controller = window.mevedelSessionView.create({
@@ -210,6 +211,29 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
                          message: 'Another request is still waiting'});
   assert.deepEqual(cards(nodes),
                    ['same_name · waiting for the host', 'same_name · refused']);
+}
+
+// A lobby keeps itself among the rooms, so the rooms it opens list it;
+// the tab standing in it does not.
+{
+  const {controller, nodes} = build(48);
+  controller.rememberCurrent('Lobby · mevedel');
+  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
+                   [{room: 'here', name: 'Lobby · mevedel',
+                     secret: secretOf(1, 48)}]);
+  assert.deepEqual(rooms(nodes), []);
+}
+
+// The lobby opens the same sheet with its own explanation.
+{
+  const {controller, nodes} = build(64);
+  controller.openNewSession('Starts a separate session in this project.');
+  assert.equal(nodes['new-session'].open, true);
+  assert.equal(textOf(nodes['new-session-lede']),
+               'Starts a separate session in this project.');
+  nodes['new-session'].close('cancel');
+  nodes['new-session-button'].dispatch('click');
+  assert.match(textOf(nodes['new-session-lede']), /separate room/);
 }
 
 console.log('viewer session controller passed');

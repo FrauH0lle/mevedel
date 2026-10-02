@@ -152,6 +152,35 @@
 ;;
 ;;; Inbound guest frames
 
+(mevedel-deftest mevedel-collaboration--admit-hello
+  (:doc "registers a guest at the tier its tokens prove, or refuses it")
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :transport 'transport :guests guests
+                     :write-token (make-string 16 ?w)
+                     :owner-token (make-string 16 ?o)))
+         sent)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+      (should-not (mevedel-collaboration--admit-hello
+                   room 1 '(:proto 0 :name "old")))
+      (should (equal "error" (plist-get (cdar sent) :t)))
+      (should (= 0 (hash-table-count guests)))
+      (let ((guest (mevedel-collaboration--admit-hello
+                    room 2
+                    (list :proto mevedel-collaboration--protocol-version
+                          :name "Phone" :guestId "browser-1"
+                          :writeToken (mevedel-collaboration--base64url
+                                       (make-string 16 ?w))
+                          :ownerToken (mevedel-collaboration--base64url
+                                       (make-string 16 ?o))))))
+        (should (eq guest (gethash 2 guests)))
+        (should (equal "Phone" (plist-get guest :name)))
+        (should (plist-get guest :writable))
+        (should (plist-get guest :owner)))
+      ;; Admission alone sends nothing: what a guest is told depends on
+      ;; whether it joined a room or a lobby.
+      (should (= 1 (length sent))))))
+
 (mevedel-deftest mevedel-collaboration--handle-hello
   (:doc "rejects a protocol mismatch and classifies write-token possession")
   (let* ((guests (make-hash-table :test #'eql))
