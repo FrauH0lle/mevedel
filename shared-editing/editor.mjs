@@ -487,6 +487,11 @@ function drawCommentMarkers(scene, scale) {
     const working = assistant?.working(c.id);
     return `<g class="comment-marker" data-comment-id="${escape(c.id)}" data-status="${escape(c.anchorStatus)}"${working ? ' data-working="true"' : ''}><rect class="comment-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="comment-pin" role="button" aria-label="Comment ${index + 1} by ${escape(c.actor.replace(/^Guest: /, ''))}${working ? ', assistant working' : ''}" transform="translate(${x + w} ${y}) scale(${1 / scale})">${working ? `<circle class="comment-spin" r="15" style="animation-delay:-${(performance.now() % 900) / 1000}s"/>` : ''}<circle r="11"/><text>${index + 1}</text></g></g>`;
   }).join('');
+  // A pin removed under the pointer never reports the pointer leaving, so a
+  // peek at a comment resolved or removed elsewhere closes with its marker.
+  const peek = $('comment-peek');
+  if (!peek.hidden && ![...$('comment-markers').children].some((m) => m.dataset.commentId === peek.dataset.commentId))
+    peek.hidden = true;
 }
 function revealObjects(comment) {
   const scene = currentScene(), box = commentAnchor(comment, scene);
@@ -1810,6 +1815,7 @@ function board() {
     peek.replaceChildren(line('small', comment.actor.replace(/^Guest: /, '')), line('p', comment.text),
       line('small', [replies ? `${replies} repl${replies === 1 ? 'y' : 'ies'}` : '',
         comment.anchorStatus === 'changed' ? 'Objects changed since posting' : ''].filter(Boolean).join(' · ')));
+    peek.dataset.commentId = comment.id;
     peek.hidden = false;
     const pin = marker.querySelector('.comment-pin').getBoundingClientRect(), host = $('board').getBoundingClientRect();
     peek.style.left = `${Math.max(8, Math.min(pin.right + 6 - host.left, host.width - peek.offsetWidth - 8))}px`;
