@@ -20,14 +20,15 @@ import {
   ySyncPluginKey,
 } from '@tiptap/y-tiptap';
 import { extensions, schema, seedEmptyText, selectionPositions, validateDocument } from './document.mjs';
-import { restore, encode, inspect, filesOf, putElement, putFile, validateElement, validate, compareOrder } from './model.mjs';
+import { restore, encode, inspect, filesOf, putElement, putFile, validateElement, validate, compareOrder, GEOMETRY } from './model.mjs';
 import { validateImage } from './image.mjs';
 import { sceneSVG, elementSVG, escape, resolveScene, bounds, extent, shapesInRegion } from './render.mjs';
 import { CONTAINERS, LINEAR, pointBounds } from './scene.mjs';
 import { containerTextBox, containerSizeFor, fontStack, measure, FONT_FILES } from './text.mjs';
-import { serializeScene } from './excalidraw.mjs';
+import { serializeScene, placeElements } from './excalidraw.mjs';
 import { recognize } from './autoshape.mjs';
-import { libraryPanel, placeElements } from './library.mjs';
+import { handlePositions, resizeBox, scaleBoxes, rotationDelta, normalizeAngle, rotate } from './transform.mjs';
+import { libraryPanel } from './library.mjs';
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import Excalifont from './Excalifont.woff2';
 import Nunito from './Nunito.woff2';
@@ -60,6 +61,9 @@ let port,
   initialized = false;
 let tool = 'select',
   selected = new Set(),
+  /* The group a double-click entered, whose members select individually. */
+  editingGroup = null,
+  autoStyle = () => {},
   /* Board area [x, y, w, h] from the last box selection, kept with that selection. */
   selectionRegion = null,
   view = [-40, -40, 1000, 650],
@@ -88,6 +92,7 @@ const current = {
   textAlign: 'left',
   startArrowhead: null,
   endArrowhead: 'arrow',
+  arrowType: 'round',
 };
 const drawable = ['rectangle', 'diamond', 'ellipse', 'stickynote', 'arrow', 'line', 'freedraw', 'autoshape', 'text'];
 const SHAPES = ['rectangle', 'diamond', 'ellipse'];
@@ -97,7 +102,7 @@ function applies(key, type) {
   if (key === 'roundness') return ['rectangle', 'diamond', 'line', 'image', 'stickynote', 'autoshape'].includes(type);
   if (['fontSize', 'fontFamily'].includes(key)) return ['text', 'stickynote', ...SHAPES].includes(type);
   if (key === 'textAlign') return type === 'text';
-  if (key === 'startArrowhead' || key === 'endArrowhead') return type === 'arrow';
+  if (['startArrowhead', 'endArrowhead', 'arrowType'].includes(key)) return type === 'arrow';
   if (key === 'strokeWidth') return [...SHAPES, 'arrow', 'line', 'freedraw', 'autoshape'].includes(type);
   if (key === 'strokeStyle') return [...SHAPES, 'arrow', 'line', 'autoshape'].includes(type);
   if (key === 'roughness') return [...SHAPES, 'arrow', 'line', 'stickynote', 'autoshape'].includes(type);
@@ -312,14 +317,56 @@ function transformGeometry(g, [x, y, w, h]) {
   const sx = x2 - x1 ? w / (x2 - x1) : 1, sy = y2 - y1 ? h / (y2 - y1) : 1;
   return { ...g, x, y, width: w, height: h, points: g.points.map(([px, py]) => [(px - x1) * sx, (py - y1) * sy]) };
 }
+/* Changes [id, changes] a move, transform or point drag D produces now.
+   Changes hold geometry and, for text, font size or auto-resizing. */
 function dragGeometry(d) {
-  if (!d?.end || !['move', 'resize'].includes(d.mode)) return [];
-  return (d.mode === 'move' ? d.boxes : [[d.id, d.before]]).map(([id, g]) => {
-    const box = geometryBox(g);
-    return [id, transformGeometry(g, d.mode === 'move'
-      ? [box[0] + d.end[0] - d.start[0], box[1] + d.end[1] - d.start[1], box[2], box[3]]
-      : [box[0], box[1], Math.max(10, d.end[0] - box[0]), Math.max(10, d.end[1] - box[1])])];
-  });
+  if (!d?.end || !['move', 'transform', 'point'].includes(d.mode)) return [];
+  if (d.mode === 'move')
+    return d.boxes.map(([id, g]) => {
+      const box = geometryBox(g);
+      return [id, transformGeometry(g, [box[0] + d.end[0] - d.start[0], box[1] + d.end[1] - d.start[1], box[2], box[3]])];
+    });
+  if (d.mode === 'point') {
+    const points = d.base.points.map((p) => p.slice());
+    points[d.index] = [d.end[0] - d.base.x, d.end[1] - d.base.y];
+    const [x1, y1, x2, y2] = pointBounds(points);
+    return [[d.id, { ...d.base, points, width: x2 - x1, height: y2 - y1 }]];
+  }
+  const end = [d.end[0] - d.offset[0], d.end[1] - d.offset[1]];
+  if (d.handle === 'rotation') {
+    let delta = rotationDelta(d.center, d.start, d.end);
+    const step = Math.PI / 12;
+    if (d.snap && !d.single) delta = Math.round(delta / step) * step;
+    return d.entries.map(([id, e]) => {
+      const b = geometryBox(e.g), c = [b[0] + b[2] / 2, b[1] + b[3] / 2];
+      let angle = (e.g.angle || 0) + delta;
+      if (d.snap && d.single) angle = Math.round(angle / step) * step;
+      const [cx, cy] = d.single ? c : rotate(c, d.center, angle - (e.g.angle || 0));
+      return [id, { ...transformGeometry(e.g, [cx - b[2] / 2, cy - b[3] / 2, b[2], b[3]]), angle: normalizeAngle(angle) }];
+    });
+  }
+  if (d.single) {
+    const [[id, e]] = d.entries, box = resizeBox(d.frame, d.angle, d.handle, end, d.keepAspect);
+    const changes = transformGeometry(e.g, box);
+    // Text scales its font from a corner and wraps to a dragged side, as in Excalidraw.
+    if (e.type === 'text' && d.handle.length === 2) changes.fontSize = e.fontSize * box[3] / d.frame[3];
+    if (e.type === 'text' && d.handle.length === 1) changes.autoResize = false;
+    return [[id, changes]];
+  }
+  const { boxes, scale } = scaleBoxes(new Map(d.entries.map(([id, e]) => [id, geometryBox(e.g)])),
+    d.frame, d.handle, end, d.keepAspect);
+  return d.entries.map(([id, e]) => [id, { ...transformGeometry(e.g, boxes.get(id)),
+    ...(e.type === 'text' ? { fontSize: e.fontSize * scale[1] } : {}) }]);
+}
+/* Apply drag CHANGES to element ID: geometry as one property, the rest as fields. */
+function applyChanges(id, changes) {
+  const element = elementMap().get(id);
+  if (!element) return;
+  const geometry = {};
+  for (const [key, value] of Object.entries(changes))
+    if (GEOMETRY.includes(key)) geometry[key] = value;
+    else element.set(key, value);
+  element.set('geometry', geometry);
 }
 function visibleGeometry(id) {
   const geometry = geometryOf(id);
@@ -388,20 +435,16 @@ function draw() {
   const selectedImage = selected.size === 1 && shapes.find(s => selected.has(s.id) && s.type === 'image');
   $('image-tools').hidden = readOnly || !selectedImage;
   $('image-size').textContent = selectedImage ? `${Math.round(selectedImage.width)} × ${Math.round(selectedImage.height)} px` : '';
-  $('selection').innerHTML = shapes
-    .filter((s) => selected.has(s.id))
-    .map((s) => {
-      const [x, y, w, h] = s.box;
-      const gap = 4 / scale, handle = 10 / scale;
-      // Group members move together; only a lone element resizes.
-      return `<rect data-selected="${escape(s.id)}" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" fill="none" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>${selected.size === 1 ? `<rect data-resize="${escape(s.id)}" x="${x + w - handle / 2}" y="${y + h - handle / 2}" width="${handle}" height="${handle}" fill="white" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"/>` : ''}`;
-    })
-    .join('') + regionSVG(drag?.mode === 'marquee' ? drag.region : selectionRegion, drag?.mode === 'marquee')
+  $('selection').dataset.selected = [...selected].sort().join(' ');
+  // A box selection's area shows while drawn and while a draft carries it.
+  $('selection').innerHTML = selectionSVG(scene, scale)
+    + regionSVG(drag?.mode === 'marquee' ? drag.region : attachedRegion(), drag?.mode === 'marquee')
     + hoverSVG(tool === 'comment' && !drag && scene.byId.get(hoverShape), scale)
     + (drag?.mode === 'draw' ? drawingPreview(drag) : '');
   drawCommentMarkers(scene, scale);
   boardPresence?.animate();
   $('selection-question').disabled = $('comment-selection').disabled = readOnly || !(selected.size || selectionRegion);
+  autoStyle();
   refresh();
 }
 function hoverSVG(item, scale) {
@@ -453,11 +496,72 @@ function marqueeSelection(d) {
     .filter((s) => !s.locked).flatMap((s) => [...withGroup(s.id)]);
   return new Set(d.additive ? [...d.base, ...hits] : hits);
 }
-/* The selectable unit for element ID: its outermost group, if any. */
+/* The group an element moves with: its outermost group or, inside the
+   entered group, the next group inward. Null for an ungrouped element. */
+function unitGroup(element) {
+  const groups = element?.groupIds || [], at = editingGroup ? groups.indexOf(editingGroup) : -1;
+  return at > 0 ? groups[at - 1] : at === 0 ? null : groups.at(-1) ?? null;
+}
+/* The selectable unit for element ID: its group's members, or itself. */
 function withGroup(id) {
-  const element = currentScene().byId.get(id);
-  const group = element?.groupIds?.at(-1);
+  const group = unitGroup(currentScene().byId.get(id));
   return new Set(group ? shapeList().filter((s) => s.groupIds?.includes(group)).map((s) => s.id) : [id]);
+}
+/* The selection's frame: its units by group, and the box handles act on. */
+function selectionFrame(scene) {
+  const items = [...selected].map((id) => scene.byId.get(id)).filter(Boolean);
+  if (!items.length) return null;
+  const units = new Map();
+  for (const e of items) {
+    const key = unitGroup(e) ?? e.id;
+    units.set(key, [...(units.get(key) || []), e]);
+  }
+  const single = items.length === 1 ? items[0] : null;
+  return single ? { units, single, box: geometryBox(single), angle: single.angle || 0 }
+    : { units, box: extent(items, scene), angle: 0 };
+}
+const SELECTION = 'fill="none" stroke="var(--board-selection)" vector-effect="non-scaling-stroke"';
+const outlineSVG = ([x, y, w, h], angle, gap, extra = '') =>
+  `<rect x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}"${angle ? ` transform="rotate(${(angle * 180) / Math.PI} ${x + w / 2} ${y + h / 2})"` : ''} ${SELECTION} ${extra}/>`;
+/* Selection outlines and handles, following Excalidraw: one outline per
+   element or group, eight resize handles and a rotation handle on the
+   frame, and point handles on a lone arrow or line. */
+function selectionSVG(scene, scale) {
+  const frame = selectionFrame(scene);
+  let svg = '';
+  if (editingGroup) {
+    const members = scene.order.filter((e) => e.groupIds?.includes(editingGroup));
+    if (members.length) svg += outlineSVG(extent(members, scene), 0, 8 / scale, 'stroke-dasharray="6 4" stroke-width="1"');
+  }
+  if (!frame) return svg;
+  const gap = 4 / scale;
+  for (const members of frame.units.values())
+    svg += members.length === 1 && !(frame.single && LINEAR.includes(frame.single.type))
+      ? outlineSVG(geometryBox(members[0]), members[0].angle || 0, gap, 'stroke-width="1.5"')
+      : members.length > 1 ? outlineSVG(extent(members, scene), 0, gap, 'stroke-width="1" stroke-dasharray="5 3"') : '';
+  if (frame.units.size > 1) svg += outlineSVG(frame.box, 0, gap * 2, 'stroke-width="1" stroke-dasharray="3 3"');
+  if (readOnly) return svg;
+  const line = frame.single && LINEAR.includes(frame.single.type) && !frame.single.angle ? frame.single : null;
+  if (line) {
+    const r = 5 / scale, path = line.path;
+    svg += path.map(([x, y], i) => `<circle data-point="${i}" cx="${x}" cy="${y}" r="${r}" fill="#fff" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`).join('');
+    if (!line.elbowed)
+      svg += path.slice(1).map((p, i) => `<circle data-mid="${i}" cx="${(p[0] + path[i][0]) / 2}" cy="${(p[1] + path[i][1]) / 2}" r="${r * 0.8}" fill="var(--board-selection)" fill-opacity=".55" stroke="none"/>`).join('');
+    return svg;
+  }
+  const pad = frame.units.size > 1 ? gap * 2 : gap, [x, y, w, h] = frame.box;
+  const size = 8 / scale;
+  for (const { name, point: [hx, hy], cursor } of handlePositions([x - pad, y - pad, w + pad * 2, h + pad * 2], frame.angle, scale))
+    svg += name === 'rotation'
+      ? `<circle data-handle="rotation" cx="${hx}" cy="${hy}" r="${size * 0.6}" fill="#fff" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:${cursor}"/>`
+      : `<rect data-handle="${name}" x="${hx - size / 2}" y="${hy - size / 2}" width="${size}" height="${size}" rx="${size / 4}" fill="#fff" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:${cursor}"${frame.angle ? ` transform="rotate(${(frame.angle * 180) / Math.PI} ${hx} ${hy})"` : ''}/>`;
+  return svg;
+}
+/* The board area attached to the open question or comment draft. */
+function attachedRegion() {
+  if (!assistant || $('assistant').hidden) return null;
+  const draft = assistant.drafts[assistant.drafts.view === 'comments' ? 'comment' : 'question'];
+  return draft?.attachment?.snapshot?.scope === 'selection' ? draft.attachment.region || null : null;
 }
 /* Bound labels of the elements IDS. */
 const labelsOf = (ids) => shapeList().filter((s) => s.type === 'text' && ids.has(s.containerId)).map((s) => s.id);
@@ -470,7 +574,9 @@ function styledElement(type, geometry) {
   for (const [key, value] of Object.entries(current)) {
     // Text style reaches labels through their own text elements.
     const textual = ['fontSize', 'fontFamily', 'textAlign'].includes(key);
-    if (textual ? type === 'text' : applies(key, type))
+    if (key === 'arrowType') Object.assign(element, type !== 'arrow' ? {} : value === 'elbow' ? { elbowed: true }
+      : value === 'round' ? { roundness: { type: 2 } } : {});
+    else if (textual ? type === 'text' : applies(key, type))
       element[key] = key === 'roundness' ? roundnessFor(type, value) : value;
   }
   if (type === 'stickynote' && [undefined, 'transparent'].includes(element.backgroundColor)) element.backgroundColor = '#ffdf6b';
@@ -561,7 +667,7 @@ function selectTool(value) {
     .forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === value)));
   $('canvas').style.cursor =
     value === 'pan' ? 'grab' : value === 'select' ? 'default' : 'crosshair';
-  if (drawable.includes(value)) { selected.clear(); selectionRegion = null; }
+  if (drawable.includes(value)) { selected.clear(); selectionRegion = null; editingGroup = null; }
   draw();
 }
 function button(parent, label, action) {
@@ -681,7 +787,8 @@ async function insertImages(files, position) {
     const binding = editor && ySyncPluginKey.getState(editor.state).binding;
     const anchor = binding && absolutePositionToRelativePosition(
       position ?? editor.state.selection.from, binding.type, binding.mapping);
-    const origin = editor ? null : position || [view[0] + 50, view[1] + 50];
+    // Without a drop point, images arrive at the view's centre, clear of the panels.
+    const origin = editor ? null : position || [view[0] + view[2] / 2, view[1] + view[3] / 2];
     const images = [];
     for (const file of files) {
       if (file.size > 4 * 1024 * 1024 || !/^image\/(png|jpeg|webp)$/.test(file.type))
@@ -713,7 +820,8 @@ async function insertImages(files, position) {
       const indices = nextIndices(images.length);
       const shapes = images.map((image, index) => ({
         id: crypto.randomUUID(), type: 'image', fileId: image.fileId, status: 'saved', scale: [1, 1],
-        x: origin[0] + index * 24, y: origin[1] + index * 24, width: image.width, height: image.height,
+        x: origin[0] + index * 24 - (position ? 0 : image.width / 2), y: origin[1] + index * 24 - (position ? 0 : image.height / 2),
+        width: image.width, height: image.height,
         seed: randomSeed(), index: indices[index],
       }));
       doc.transact(() => images.forEach((image, index) => {
@@ -949,6 +1057,7 @@ function board() {
     const target = styleTargets(key)[0];
     if (!target) return current[key];
     const full = currentScene().byId.get(target.id);
+    if (key === 'arrowType') return full.elbowed ? 'elbow' : full.roundness ? 'round' : 'sharp';
     return key === 'roundness' ? (full.roundness ? 'round' : 'sharp') : full[key];
   };
   const style = (key, v) => {
@@ -959,6 +1068,18 @@ function board() {
         if (key === 'roundness') {
           const roundness = roundnessFor(target.type, v);
           roundness ? element.set('roundness', roundness) : element.delete('roundness');
+        } else if (key === 'arrowType') {
+          v === 'round' ? element.set('roundness', { type: 2 }) : element.delete('roundness');
+          v === 'elbow' ? element.set('elbowed', true) : element.delete('elbowed');
+          // A straight two-point arrow gains a bend, so a curve is visible to adjust.
+          const g = detachedGeometry(target.id);
+          if (v === 'round' && g.points?.length === 2) {
+            const [[ax, ay], [bx, by]] = g.points, k = 0.15;
+            const mid = [(ax + bx) / 2 - (by - ay) * k, (ay + by) / 2 + (bx - ax) * k];
+            const points = [g.points[0], mid, g.points[1]], [x1, y1, x2, y2] = pointBounds(points);
+            element.set('geometry', { ...g, points, width: x2 - x1, height: y2 - y1 });
+          }
+          if (v !== 'round' && g.points) element.set('geometry', { ...g, points: [g.points[0], g.points.at(-1)] });
         } else element.set(key, v);
         if (key === 'fontFamily' && element.has('lineHeight')) element.delete('lineHeight');
       }
@@ -1087,6 +1208,13 @@ function board() {
         option('roundness', 'sharp', 'Sharp', icon('<path d="M5 19V5h14"/>')) +
           option('roundness', 'round', 'Round', icon('<path d="M5 19v-8a6 6 0 0 1 6-6h8"/>')),
       ) +
+      section(
+        'arrowType',
+        'Arrow type',
+        option('arrowType', 'sharp', 'Sharp arrow', icon('<path d="M5 19 19 5M12 5h7v7"/>')) +
+          option('arrowType', 'round', 'Curved arrow', icon('<path d="M5 19C5 11 11 6 19 6M14 3l5 3-4 4"/>')) +
+          option('arrowType', 'elbow', 'Elbow arrow', icon('<path d="M5 19v-7h14V5M16 8l3-3 3 3" transform="translate(-2 0)"/>')),
+      ) +
       section('startArrowhead', 'Start arrowhead', heads('startArrowhead')) +
       section('endArrowhead', 'End arrowhead', heads('endArrowhead')) +
       section(
@@ -1167,7 +1295,7 @@ function board() {
   const canvas = $('canvas');
   const actions = [];
   const all = () => { selected = new Set(shapeList().filter(s => !s.locked && !(s.containerId && s.type === 'text')).map(s => s.id)); selectionRegion = null; selectTool('select'); };
-  const clear = () => { selected.clear(); selectionRegion = null; selectTool('select'); };
+  const clear = () => { selected.clear(); selectionRegion = null; editingGroup = null; selectTool('select'); };
   const move = (dx, dy, step = 1) => doc.transact(() => {
     selectionRegion = null;
     detachArrows(selected);
@@ -1247,18 +1375,40 @@ function board() {
     },
   });
   const menus = [objectMenu, properties, ...(library ? [library] : [])];
+  const place = (menu) => {
+    const body = menu.lastElementChild;
+    body.style.marginLeft = '0px';
+    const rect = body.getBoundingClientRect();
+    body.style.marginLeft = `${Math.max(8 - rect.left, Math.min(0, innerWidth - 8 - rect.right))}px`;
+  };
+  // Style opens with a new selection on wide screens, as Excalidraw's panel
+  // does, and closes with it; closing it keeps it closed for that selection.
+  let styleKey = '', styleAuto = false, styleDismissed = false;
+  autoStyle = () => {
+    if (drag) return;
+    const key = [...selected].sort().join(' ');
+    if (key === styleKey) return;
+    styleKey = key;
+    if (!key) {
+      if (styleAuto) properties.open = false;
+      styleAuto = styleDismissed = false;
+      return;
+    }
+    if (readOnly || styleDismissed || properties.open || menus.some((m) => m.open)
+        || !matchMedia('(min-width: 1100px)').matches) return;
+    properties.open = styleAuto = true;
+    place(properties);
+  };
   for (const menu of menus) {
     const summary = menu.firstElementChild;
     summary.addEventListener('click', event => {
       event.preventDefault();
       if (summary.getAttribute('aria-disabled') === 'true') return;
       menu.open = !menu.open;
+      if (menu === properties) { styleAuto = false; styleDismissed = !menu.open && selected.size > 0; }
       if (!menu.open) return;
       for (const other of menus) if (other !== menu) other.open = false;
-      const body = menu.lastElementChild;
-      body.style.marginLeft = '0px';
-      const rect = body.getBoundingClientRect();
-      body.style.marginLeft = `${Math.max(8 - rect.left, Math.min(0, innerWidth - 8 - rect.right))}px`;
+      place(menu);
     });
     menu.addEventListener('keydown', event => {
       if (event.key === 'Escape') { event.stopPropagation(); menu.open = false; summary.focus(); }
@@ -1304,6 +1454,16 @@ function board() {
     const target = item.bound ? currentScene().byId.get(item.containerId) : item;
     return target && !target.locked ? target.id : undefined;
   };
+  /* The selectable element under EVENT other than element EXCEPT. */
+  const hitAtExcept = (event, except) => {
+    for (const node of document.elementsFromPoint(event.clientX, event.clientY)) {
+      const id = node.closest?.('#scene [data-shape]')?.dataset.shape;
+      const item = id && currentScene().byId.get(id);
+      const target = item && (item.bound ? currentScene().byId.get(item.containerId) : item);
+      if (target && target.id !== except && !target.locked) return target.id;
+    }
+    return undefined;
+  };
   const bindingTo = (id) => {
     const target = id && currentScene().byId.get(id);
     return target && !['arrow', 'line', 'freedraw'].includes(target.type)
@@ -1323,7 +1483,8 @@ function board() {
     undo?.stopCapturing();
     const point = world(event),
       id = hitAt(event),
-      resize = event.target.dataset.resize;
+      handle = event.target.dataset.handle,
+      pointHandle = event.target.dataset.point ?? event.target.dataset.mid;
     if (tool === 'laser' && !readOnly) {
       drag = { mode: 'laser' };
       presence(point, 'laser');
@@ -1347,16 +1508,38 @@ function board() {
       return;
     }
     if (tool === 'select') {
-      if (resize && !readOnly) {
-        drag = {
-          mode: 'resize',
-          id: resize,
-          start: point,
-          before: visibleGeometry(resize),
-        };
+      const scene = currentScene();
+      if (handle && !readOnly) {
+        const frame = selectionFrame(scene), ids = [...selected];
+        const entries = ids.map((key) => {
+          const stored = shapeList().find((s) => s.id === key);
+          return [key, { g: visibleGeometry(key), type: stored?.type, fontSize: stored?.fontSize ?? 20 }];
+        });
+        const [x, y, w, h] = frame.box, center = [x + w / 2, y + h / 2];
+        const anchor = handle === 'rotation' ? point
+          : rotate([handle.includes('w') ? x : handle.includes('e') ? x + w : x + w / 2,
+            handle.includes('n') ? y : handle.includes('s') ? y + h : y + h / 2], center, frame.angle);
+        const fixedAspect = entries.some(([, e]) => ['image', 'text'].includes(e.type)) && handle.length === 2;
+        drag = { mode: 'transform', handle, start: point, offset: [point[0] - anchor[0], point[1] - anchor[1]],
+          entries, frame: frame.box, angle: frame.angle, center, single: Boolean(frame.single), fixedAspect };
+        return;
+      }
+      if (pointHandle !== undefined && !readOnly) {
+        const [lineId] = selected, base = detachedGeometry(lineId), index = Number(pointHandle);
+        const points = base.points.map((p) => p.slice());
+        let at = index;
+        if (event.target.dataset.mid !== undefined) {
+          // Dragging a segment's midpoint adds a bend there, as in Excalidraw.
+          at = index + 1;
+          points.splice(at, 0, points[index].map((v, axis) => (v + points[index + 1][axis]) / 2));
+        }
+        const end = at === 0 ? 'startBinding' : at === points.length - 1 ? 'endBinding' : null;
+        drag = { mode: 'point', id: lineId, index: at, start: point, base: { ...base, points },
+          loose: end ? new Map([[lineId, [end]]]) : new Map(), end: undefined };
         return;
       }
       selectionRegion = null;
+      if (editingGroup && !(id && scene.byId.get(id)?.groupIds?.includes(editingGroup))) editingGroup = null;
       if (!id) {
         // Empty canvas starts a box selection; a click without movement clears.
         drag = { mode: 'marquee', start: point, screen: [event.clientX, event.clientY],
@@ -1396,8 +1579,10 @@ function board() {
   };
   canvas.onpointermove = (event) => {
     const point = world(event);
-    if (drag && ['move','resize'].includes(drag.mode)) {
+    if (drag && ['move', 'transform', 'point'].includes(drag.mode)) {
       drag.end = point;
+      drag.snap = event.shiftKey;
+      drag.keepAspect = event.shiftKey !== Boolean(drag.fixedAspect);
       outgoingPreview = {shapes:dragGeometry(drag).slice(0,100).map(([id,g])=>({id,box:geometryBox(g)}))};
     }
     if (event.pointerType !== 'touch' || drag)
@@ -1429,10 +1614,14 @@ function board() {
       drag.end = point;
       const e = drag.element, [sx, sy] = drag.start;
       if (e.points && !LINEAR.includes(e.type)) {
-        if (e.points.length < 3999) {
-          e.points.push([point[0] - sx, point[1] - sy]);
-          drag.points.push(point);
-          if (e.pressures) e.pressures.push(event.pressure);
+        // Coalesced events carry every pen sample between frames, with its pressure.
+        const samples = event.getCoalescedEvents?.().filter(Boolean) || [];
+        for (const sample of samples.length ? samples : [event]) {
+          if (e.points.length >= 3999) break;
+          const at = world(sample);
+          e.points.push([at[0] - sx, at[1] - sy]);
+          drag.points.push(at);
+          if (e.pressures) e.pressures.push(sample.pressure);
         }
         const [x1, y1, x2, y2] = pointBounds(e.points);
         Object.assign(e, { width: x2 - x1, height: y2 - y1 });
@@ -1442,10 +1631,7 @@ function board() {
       } else Object.assign(e, { x: Math.min(point[0], sx), y: Math.min(point[1], sy),
         width: Math.abs(point[0] - sx), height: Math.abs(point[1] - sy) });
       draw();
-    } else if (drag.mode === 'move' || drag.mode === 'resize') {
-      drag.end = point;
-      draw();
-    }
+    } else if (['move', 'transform', 'point'].includes(drag.mode)) draw();
   };
   /* The element a finished drawing gesture D creates. */
   const finishedElement = (d, event) => {
@@ -1506,7 +1692,14 @@ function board() {
     } else if (d.end) {
       doc.transact(() => {
         for (const [id, keys] of d.loose || []) for (const key of keys) elementMap().get(id)?.delete(key);
-        for (const [id, geometry] of dragGeometry(d)) elementMap().get(id)?.set('geometry', geometry);
+        for (const [id, changes] of dragGeometry(d)) applyChanges(id, changes);
+        // A dragged arrow end binds to the shape it is dropped on.
+        const arrow = d.mode === 'point' && elementMap().get(d.id);
+        const key = d.loose?.get(d.id)?.[0];
+        if (arrow?.get('type') === 'arrow' && key) {
+          const binding = bindingTo(hitAtExcept(event, d.id));
+          if (binding) arrow.set(key, binding);
+        }
       }, local);
       if (outgoingPreview) outgoingPreview.opId = bufferedId;
       if (event.pointerType === 'touch') {
@@ -1546,6 +1739,14 @@ function board() {
   canvas.ondblclick = (event) => {
     if (tool !== 'select' || readOnly) return;
     const id = hitAt(event);
+    const group = id && unitGroup(currentScene().byId.get(id));
+    if (group) {
+      // Double-clicking a group enters it; its members then select one by one.
+      editingGroup = group;
+      selected = withGroup(id);
+      draw();
+      return;
+    }
     if (id) { editText(id); return; }
     // Double-clicking empty canvas starts text there, as in Excalidraw.
     const [x, y] = world(event), text = styledElement('text', { x, y, width: 0, height: current.fontSize * 1.25, text: '' });
@@ -1616,7 +1817,13 @@ function board() {
       $('board-image').click();
     }
     if (event.key === 'Escape') {
-      clear();
+      // Escape leaves an entered group with the group selected, then clears.
+      if (editingGroup) {
+        const group = editingGroup;
+        editingGroup = null;
+        selected = new Set(shapeList().filter((s) => s.groupIds?.includes(group)).map((s) => s.id));
+        draw();
+      } else clear();
     }
     if (readOnly) return;
     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -2055,7 +2262,7 @@ async function start(event) {
         ].attachment;
         editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false)
           .setMeta(discussionHighlight, attachment?.range || null));
-      }
+      } else if (doc) draw();
     },
     reveal: comment => editor ? revealPassage(comment.range) : revealObjects(comment), state: () => ({ readOnly, online }), restored: recovery?.assistant,
     onConversation: () => { if (!editor && doc) draw(); },

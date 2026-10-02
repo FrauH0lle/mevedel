@@ -194,7 +194,8 @@ test('shared image transformations', async t => {
     assert.match(await viewer.frame.locator('#scene clipPath').first().innerHTML(),/<rect width="40" height="40"/);
     assert.equal(await viewer.frame.locator('#image-tools').isVisible(),false);await viewer.page.close();
     // An update while the crop dialog is open must not be overwritten.
-    await image.click();await frame.getByRole('button',{name:'Crop image',exact:true}).click();await dialog.waitFor();
+    // The image element spans the uncropped source; click its visible part.
+    await image.click({position:{x:4,y:4}});await frame.getByRole('button',{name:'Crop image',exact:true}).click();await dialog.waitFor();
     await page.evaluate(async () => {
       const before=(await window.apply({action:'read'})).content.find(s=>s.type==='image');
       const result=await window.apply({action:'patch',opId:'concurrent-image',changes:[{id:before.id,before,after:{...before,width:100,height:100}}]});

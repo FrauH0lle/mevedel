@@ -95,9 +95,25 @@ movement, Delete, and resizing. Dragging across empty canvas with the
 selection tool, including by touch, draws a selection box: releasing selects
 the objects it fully contains, Alt selects every object it touches, and Shift
 adds them to the current selection. Connectors are tested by their drawn path.
-A press without movement clears the selection. The box stays outlined as the
-selected area, even when it contains no objects, until the selection changes
-or an object moves; box selection never edits content.
+A press without movement clears the selection. The box disappears on release,
+but its area stays attached to the selection, even when it contains no
+objects, until the selection changes or an object moves: **Ask about
+selection** and **Add comment** use it, and the area shows again while a
+question or comment draft carries it. Box selection never edits content.
+
+Selection follows Excalidraw's handles. A lone element shows an outline with
+eight resize handles and a rotation handle above it; a group or several
+elements share one frame with the same handles, and each group is outlined
+once. Corner handles keep the opposite corner in place and side handles the
+opposite side, in the element's rotated frame; Shift keeps the proportions,
+which images and text keep by default. Dragging a text corner scales its font;
+dragging its side wraps it to that width. Several elements scale from their
+common frame. The rotation handle turns the selection about its centre,
+snapping to 15° with Shift. A lone arrow or line shows its points instead:
+dragging a point moves it, dragging a segment's midpoint adds a bend there,
+and dropping an arrow end on a shape binds it. Double-clicking a group enters
+it, so its members select and edit one by one; Escape or clicking outside
+leaves it.
 Moving and resizing show a preview while the pointer is held, including
 selection handles and bound connectors. Geometry previews also travel over the
 existing presence channel, so other participants see movement before the save
@@ -129,12 +145,21 @@ stroke. Strokes smaller than 25 screen pixels are not converted.
 
 The **Style** panel follows Excalidraw: stroke and background colours,
 hachure/cross-hatch/solid fill, stroke width, solid/dashed/dotted strokes,
-sloppiness (architect, artist, cartoonist), sharp or round edges, start and
-end arrowheads (none, arrow, triangle, circle, bar), font (hand-drawn
+sloppiness (architect, artist, cartoonist), sharp or round edges, the arrow
+type (sharp, curved or elbow), start and end arrowheads (none, arrow,
+triangle, circle, bar), font (hand-drawn
 Excalifont, normal Nunito, code Comic Shanns), font size, text alignment and
 opacity. It shows only the sections that apply to the selection or the active
 drawing tool, changes the selected objects and their labels, and remembers the
-choices for new ones. Elements imported with other Excalidraw values, such as
+choices for new ones. On screens at least 1,100 pixels wide it opens by itself
+when something is selected and closes when the selection is cleared; closing
+it keeps it closed until then.
+A curved arrow runs through its points; switching a straight arrow to curved
+adds a bend to drag. An elbow arrow leaves and enters its bound shapes at the
+facing side and runs in horizontal and vertical segments between them,
+rerouted as the shapes move. The route does not avoid other shapes.
+Freehand drawing records a pen's pressure for every sample the browser
+reports; mouse and touch strokes simulate pressure from their speed. Elements imported with other Excalidraw values, such as
 the cardinality arrowheads, keep and draw them.
 **Objects** exposes Select all, Clear selection, Edit text, Duplicate
 (Ctrl/Command+D), Group (Ctrl/Command+G), Ungroup (Ctrl/Command+Shift+G), Lock,
@@ -182,25 +207,29 @@ geometry; a binding to a deleted element is drawn unbound.
 
 ## Element library
 
-**Library** offers the session host's personal Excalidraw library, built-in
-items and the public collection at
-[libraries.excalidraw.com](https://libraries.excalidraw.com). Clicking an
-item inserts copies with fresh identities at the centre of the view, selected
-for moving; groups, labels and bindings within the item are kept.
+**Library** offers the libraries kept on the session host: **My library**,
+installed libraries, and mevedel's **Built-in** library. Clicking an item
+inserts copies with fresh identities at the centre of the view, selected for
+moving; groups, labels and bindings within the item are kept.
 
-**Add selection** stores the selected objects and their labels as an item;
-**Import file…** adds the items of an `.excalidrawlib` file; **Download** saves
-the personal library as one. Items are removed with ×. The library is the file
-named by `mevedel-shared-library-file`, by default
-`~/.emacs.d/mevedel/library.excalidrawlib`, so it can be shared with
-excalidraw.com and other Excalidraw editors. It belongs to the host's Emacs,
-not to a session: every writable participant in every room sees and changes the
-same library. View links have no library.
+Each library is an `.excalidrawlib` file in `mevedel-shared-library-directory`,
+by default `~/.emacs.d/mevedel/libraries/`, named after the file. **Add
+selection** stores the selected objects and their labels in **My library**;
+**Import file…** adds the items of an `.excalidrawlib` file there;
+**Download** saves it. Items are removed with ×. Copying any Excalidraw
+library file into the directory installs it as well. The libraries belong to
+the host's Emacs, not to a session or board: every writable participant in
+every room, and the assistant, sees the same libraries. Inserted items are
+ordinary elements, so a board carries them without its libraries, as an
+Excalidraw scene does. View links have no library.
 
-**Browse public libraries** lists the public collection with a search field;
-opening one shows its items, and **Add all to my library** copies them. The
-editor has no network access, so Emacs fetches the index and library files
-from `mevedel-shared-library-catalog-url`, and only library files listed there.
+**Browse public libraries** lists the collection at
+[libraries.excalidraw.com](https://libraries.excalidraw.com) with a search
+field, sorted by downloads, recent updates, age or name. Opening one previews
+its items; **Install library** saves it in the directory, where it stays
+available in every whiteboard until its **Remove**. The editor has no network
+access, so Emacs fetches the index, download counts and library files from
+`mevedel-shared-library-catalog-url`, and only library files listed there.
 The built-in **Database** item replaces the former cylinder shape: a group of
 an ellipse and lines, as Excalidraw has no cylinder element.
 
@@ -248,7 +277,11 @@ elements with a `containerId`, and connections are arrows with
 `startBinding`/`endBinding`. The derived Excalidraw fields `version`,
 `versionNonce`, `updated`, `isDeleted` and `boundElements` are refused. An
 image element must reference an existing file; the assistant cannot add image
-bytes. Whiteboard edits also return a PNG of the resulting
+bytes. `SharedRead` with `library` lists the host's library items as
+`LIBRARY/ITEM-ID` references with a numbered PNG sheet of their appearance,
+optionally only for the libraries named in `selection`. `SharedEdit`'s
+`insert` places such an item with its top-left corner at `x`, `y` as new
+elements and returns their IDs, so the assistant can label or connect them. Whiteboard edits also return a PNG of the resulting
 canonical revision through the normal tool-media path, so the model can inspect
 the visual result without a separate read or a connected browser. A patch carries exact `before` values from a read and
 new `after` values; null adds or deletes. Documents target top-level blocks

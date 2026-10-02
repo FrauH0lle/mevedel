@@ -113,6 +113,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                     "shared-editing/Excalifont.ttf"
                     "shared-editing/Nunito.ttf"
                     "shared-editing/ComicShanns.ttf"
+                    "shared-editing/builtin.excalidrawlib"
                     "shared-editing/FONT-LICENSE"
                     "shared-editing/RESVG-LICENSE"
                     "shared-editing/THIRD-PARTY-NOTICES.txt")

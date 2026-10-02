@@ -304,8 +304,14 @@ header {
 #presence {
   pointer-events: none;
 }
-#selection [data-resize] {
+#selection [data-handle],
+#selection [data-point],
+#selection [data-mid] {
   pointer-events: all;
+}
+#selection [data-point],
+#selection [data-mid] {
+  cursor: move;
 }
 #selection .selection-region {
   fill: color-mix(in srgb, var(--board-selection) 7%, transparent);

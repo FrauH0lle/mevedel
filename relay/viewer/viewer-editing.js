@@ -317,7 +317,8 @@ window.mevedelEditingView = {
         if (
           !args ||
           !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'reply-comment', 'resolve-comment',
-            'library', 'library-add', 'library-remove', 'library-catalog', 'library-fetch'].includes(args.action) ||
+            'library', 'library-add', 'library-remove', 'library-install', 'library-uninstall',
+            'library-catalog', 'library-fetch'].includes(args.action) ||
           (state.readOnly && !['read', 'export'].includes(args.action))
         ) {
           channel.port1.postMessage({
