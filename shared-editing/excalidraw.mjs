@@ -3,7 +3,7 @@
    export completes every element and derives Excalidraw's reconciliation
    fields, so excalidraw.com and other editors open the result directly. */
 import { generateNKeysBetween } from 'fractional-indexing';
-import { check, identifier, validateElement, validateFile, fieldValid, TYPES, ARROWHEADS } from './model.mjs';
+import { check, identifier, validateElement, validateFile, fieldValid, validBackground, TYPES, ARROWHEADS } from './model.mjs';
 import { complete, resolveScene, seedOf, pointBounds, LINEAR } from './scene.mjs';
 import { lineHeightOf } from './text.mjs';
 
@@ -123,10 +123,18 @@ export function parseScene(text) {
       notes.push(`Image ${e.fileId.slice(0, 12)}: ${error.message}; shown as a placeholder`);
     }
   }
-  return { elements, files, notes };
+  // Only an opaque colour is a canvas; others keep the theme's.
+  const background = validBackground(data.appState?.viewBackgroundColor) ? data.appState.viewBackgroundColor : undefined;
+  return { elements, files, notes, background };
 }
 
 /* Excalidraw library items, from version 1 or 2 .excalidrawlib JSON. */
+const contentId = (value) => {
+  let hash = 0x811c9dc5;
+  for (const c of JSON.stringify(value)) hash = Math.imul(hash ^ c.codePointAt(0), 0x01000193) >>> 0;
+  return `item-${hash.toString(36)}`;
+};
+
 export function parseLibrary(text) {
   const data = typeof text === 'string' ? JSON.parse(text) : text;
   check(data && data.type === 'excalidrawlib' && [1, 2].includes(data.version), 'Not an Excalidraw library');
@@ -136,7 +144,9 @@ export function parseLibrary(text) {
     const raw = Array.isArray(item) ? { elements: item } : item;
     const elements = restoreElements(raw?.elements || []);
     return elements.length ? {
-      id: typeof raw.id === 'string' && raw.id.length <= 80 ? raw.id : crypto.randomUUID(),
+      // Version 1 items have no id; one derived from their content keeps
+      // references stable across reads and dedupes identical items.
+      id: typeof raw.id === 'string' && raw.id.length <= 80 ? raw.id : contentId(raw.elements),
       status: raw.status === 'published' ? 'published' : 'unpublished',
       created: Number.isFinite(raw.created) ? raw.created : Date.now(),
       ...(typeof raw.name === 'string' ? { name: raw.name.slice(0, 200) } : {}),
@@ -178,12 +188,12 @@ export function exportElements(elements, now = Date.now()) {
       isDeleted: false, boundElements: bound.get(e.id) || null, updated: now, created: e.created ?? null };
   });
 }
-export function serializeScene(elements, files, now = Date.now()) {
+export function serializeScene(elements, files, { now = Date.now(), background = '#ffffff' } = {}) {
   const exported = exportElements(elements, now);
   const used = new Set(exported.map((e) => e.fileId).filter(Boolean));
   return JSON.stringify({
     type: 'excalidraw', version: 2, source: SOURCE, elements: exported,
-    appState: { gridSize: 20, gridStep: 5, gridModeEnabled: false, viewBackgroundColor: '#ffffff', lockedMultiSelections: {} },
+    appState: { gridSize: 20, gridStep: 5, gridModeEnabled: false, viewBackgroundColor: background, lockedMultiSelections: {} },
     files: Object.fromEntries(Object.entries(files).filter(([id]) => used.has(id))
       .map(([id, file]) => [id, { mimeType: file.mimeType, id, dataURL: file.dataURL, created: file.created ?? now }])),
   }, null, 2);

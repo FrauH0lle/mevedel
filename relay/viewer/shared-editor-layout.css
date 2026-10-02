@@ -123,7 +123,7 @@ body.editor #ask:focus-within { border-color:var(--accent); }
 body.editor #compose-label { color:var(--ink); font-size:12px; }
 body.editor #question { border:0; padding:0; min-height:72px; font-size:14px; line-height:1.6; background:transparent; }
 body.editor #question:focus-visible { outline:none; }
-body.editor #question-send { align-self:flex-end; padding:7px 12px; min-height:34px; font-size:12px; font-weight:500; }
+body.editor #question-send,body.editor #question-attach { padding:7px 12px; min-height:34px; font-size:12px; font-weight:500; }
 body.editor .shared-notice { font-size:12px; line-height:1.5; margin:0; order:3; }
 body.editor #comment-form { font-size:14px; }
 body.editor #comment-form label { color:var(--ink); font-size:13px; }
@@ -260,7 +260,7 @@ body.editor[data-kind="whiteboard"].assistant-open .drawing-tools { grid-column:
   body.editor .shared-notice { font-size:11px; }
 }
 
-body.editor #board { background-color:var(--board-bg); background-image:radial-gradient(var(--board-dot) .7px,transparent .7px); }
+body.editor #board::before { background-color:var(--canvas, var(--board-bg)); background-image:radial-gradient(var(--board-dot) .7px,transparent .7px); }
 
 /* Shared image tools keep the original and preview the resulting crop. */
 body.editor #image-tools { flex-wrap:wrap; }

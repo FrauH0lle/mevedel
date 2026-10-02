@@ -47,7 +47,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
     } else if (name === 'menu') {
       res.end((await readFile(new URL('../../relay/viewer/index.html', import.meta.url), 'utf8'))
         .replace(/<script[\s\S]*?<\/script>/g, ''));
-    } else if (/^(?:viewer[\w-]*|transport|notifications)\.(?:css|js)$/.test(name) || ['shared-editor.html', 'shared-editor.css', 'shared-editor-layout.css', 'shared-editor.js', 'renderer.js'].includes(name)) {
+    } else if (/^(?:viewer[\w-]*|transport|notifications|attachments)\.(?:css|js)$/.test(name) || ['shared-editor.html', 'shared-editor.css', 'shared-editor-layout.css', 'shared-editor.js', 'renderer.js'].includes(name)) {
       res.setHeader(
         'Content-Type',
         name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html',

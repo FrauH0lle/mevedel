@@ -31,6 +31,22 @@ Ctrl/Command+Enter submits its composer.
 Downloads, recovery, retry, contribution history, and assistant highlighting
 are in the editor's **☰** menu.
 
+A whiteboard's **Canvas background** in that menu offers the theme's board
+colour, Excalidraw's white, grey, blue, yellow and rose canvases, and a custom
+opaque colour; the model sets it with `SharedEdit`'s `background` action. The
+colour belongs to the board: every participant sees it,
+it is an attributed, revertible contribution and follows local Undo/Redo, and
+PNG, SVG and `.excalidraw` exports and the model's board images carry it as
+Excalidraw's `viewBackgroundColor`. Importing an Excalidraw file keeps its
+canvas colour. Without a choice the board follows the room theme and exports
+stay white. Outlined arrowheads are filled with the canvas colour.
+
+A dark theme shows the canvas, its grid and its elements as Excalidraw does,
+through `invert(93%) hue-rotate(180deg)`, which keeps hues; images are
+inverted back to their own pixels. The swatches preview the colours as the
+board will show them. Stored colours, exports, and the model's board images
+stay as authored.
+
 ## Runtime and build
 
 Shared editing requires Node 22.4 or newer on the Emacs host. Set
@@ -125,8 +141,8 @@ and a five-second expiry remove remote previews. A preview packet contains only
 up to 100 object IDs and bounding boxes, with the pending operation ID after
 release. New shapes, text, style, and keyboard edits use normal committed
 updates.
-Click inside a shape to select it, filled or not; lines have a wider invisible
-hit area. Double-click a shape or press Enter to edit its label in place, with
+Click inside a shape or a closed line to select it, filled or not; lines have
+a wider invisible hit area. Double-click a shape or press Enter to edit its label in place, with
 the label's font, size, alignment and line height; double-clicking empty canvas
 starts free text there. A label is an Excalidraw text element bound to its
 container: it wraps to the container, centres in it, moves with it, and grows
@@ -139,21 +155,26 @@ Finishing with no text removes the label or text element.
 
 **Shape from drawing** turns a stroke drawn by hand into a clean rectangle,
 diamond, ellipse, arrow or line when it matches one, using Excalidraw's
-recognizer; other strokes stay freehand drawings. The result takes the current
+recognizer; other strokes stay freehand drawings. A finished stroke waits
+0.7 seconds for another, and strokes drawn within that pause are recognized
+together, so an arrow's head may be drawn after its shaft. An unrecognized
+group keeps each stroke as its own drawing. A recognized arrow binds its start
+to the shape the first stroke began on and its end to the shape under its tip,
+wherever the pen lifted. The result takes the current
 style and is an ordinary edit, so Undo restores the board as it was before the
-stroke. Strokes smaller than 25 screen pixels are not converted.
+strokes. Strokes smaller than 25 screen pixels are not converted.
 
 The **Style** panel follows Excalidraw: stroke and background colours,
 hachure/cross-hatch/solid fill, stroke width, solid/dashed/dotted strokes,
 sloppiness (architect, artist, cartoonist), sharp or round edges, the arrow
 type (sharp, curved or elbow), start and end arrowheads (none, arrow,
-triangle, circle, bar), font (hand-drawn
-Excalifont, normal Nunito, code Comic Shanns), font size, text alignment and
-opacity. It shows only the sections that apply to the selection or the active
-drawing tool, changes the selected objects and their labels, and remembers the
-choices for new ones. On screens at least 1,100 pixels wide it opens by itself
-when something is selected and closes when the selection is cleared; closing
-it keeps it closed until then.
+triangle, circle, bar), font (hand-drawn Excalifont, normal Nunito, code Comic
+Shanns), font size, text alignment, vertical alignment for a label inside a
+shape, and opacity. It shows only the sections that apply to the selection or
+the active drawing tool, changes the selected objects and their labels, and
+remembers the choices for new ones. On screens at least 1,100 pixels wide it
+opens by itself when something is selected and closes when the selection is
+cleared; closing it keeps it closed until then.
 A curved arrow runs through its points; switching a straight arrow to curved
 adds a bend to drag. An elbow arrow leaves and enters its bound shapes at the
 facing side and runs in horizontal and vertical segments between them,
@@ -213,7 +234,7 @@ inserts copies with fresh identities at the centre of the view, selected for
 moving; groups, labels and bindings within the item are kept.
 
 Each library is an `.excalidrawlib` file in `mevedel-shared-library-directory`,
-by default `~/.emacs.d/mevedel/libraries/`, named after the file. **Add
+by default `~/.mevedel/whiteboard-libraries/`, named after the file. **Add
 selection** stores the selected objects and their labels in **My library**;
 **Import file…** adds the items of an `.excalidrawlib` file there;
 **Download** saves it. Items are removed with ×. Copying any Excalidraw

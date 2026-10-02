@@ -58,9 +58,9 @@
           (should (equal '(("My library" . "personal") ("Shapes" . "installed") ("Built-in" . "builtin"))
                          (test-mevedel-shared-library--names
                           (test-mevedel-shared-library--call '(:action "library")))))
-          (should (string-match-p "\"box\"" (mevedel-shared-library-item "Shapes" "box")))
-          (should-error (mevedel-shared-library-item "Shapes" "missing"))
-          (should (string-match-p "builtin-database" (mevedel-shared-library-item "Built-in" "builtin-database")))
+          (should (string-match-p "\"box\"" (mevedel-shared-library-text "Shapes")))
+          (should-error (mevedel-shared-library-text "Missing"))
+          (should (string-match-p "builtin-database" (mevedel-shared-library-text "Built-in")))
           (should (equal '(("My library" . "personal") ("Built-in" . "builtin"))
                          (test-mevedel-shared-library--names
                           (test-mevedel-shared-library--call '(:action "library-uninstall" :name "Shapes")))))
@@ -89,7 +89,7 @@
            (cond
             ((string-match-p " /libraries.json " request)
              '("200 OK" "Content-Type: application/json\r\n"
-               "[{\"name\":\"Boxes\",\"description\":\"Shapes\",\"authors\":[{\"name\":\"Ann\"},{\"name\":\"Bo\"}],\"source\":\"ann/boxes.excalidrawlib\",\"created\":\"2021-01-02\",\"updated\":\"2022-03-04\"},{\"name\":\"Broken\"}]"))
+               "[{\"name\":\" Boxes\",\"description\":\"Shapes\",\"authors\":[{\"name\":\"Ann\"},{\"name\":\"Bo\"}],\"source\":\"ann/boxes.excalidrawlib\",\"created\":\"2021-01-02\",\"updated\":\"2022-03-04\"},{\"name\":\"Broken\"}]"))
             ((string-match-p " /stats.json " request)
              '("200 OK" "Content-Type: application/json\r\n" "{\"ann-boxes\":{\"total\":42,\"week\":3}}"))
             ((string-match-p " /libraries/ann/boxes.excalidrawlib " request)

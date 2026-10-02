@@ -440,7 +440,7 @@ test(
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#whole-question').click();
       await frame(pages[0]).locator('#question').fill('Review the current notes');
-      await frame(pages[0]).locator('#ask button').click();
+      await frame(pages[0]).locator('#question-send').click();
       const queued = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 1 ? info : null;
@@ -1049,12 +1049,21 @@ test(
         };
       });
       await frame(ownerPage).locator('#question').fill('Explain this stroke');
-      await frame(ownerPage).locator('#ask button').click();
+      // A file dropped on the form rides beside the board snapshot.
+      await frame(ownerPage).locator('#ask').evaluate((form) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(['stroke notes'], 'notes.txt', { type: 'text/plain' }));
+        for (const type of ['dragenter', 'dragover', 'drop'])
+          form.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      });
+      await frame(ownerPage).locator('#question-attachments .attachment').waitFor();
+      await frame(ownerPage).locator('#question-send').click();
       const asked = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 2 ? info : null;
       });
-      assert.deepEqual(asked.attachments, [0, 1]);
+      assert.deepEqual(asked.attachments, [0, 2]);
+      assert.equal(await frame(ownerPage).locator('#question-attachments .attachment').count(), 0);
       assert.match(asked.queue[1], /"type":"freedraw"/);
       assert.doesNotMatch(asked.queue[1], /"type":"diamond"/);
       await frame(ownerPage).locator('body').evaluate(() => window.retryQuestion());

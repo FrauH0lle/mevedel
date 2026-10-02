@@ -158,8 +158,10 @@ light-only document surface beside the room's dark theme. Room and editor now
 share CSS color and typography tokens. The trusted viewer sends its initial
 theme and subsequent choices through the existing item-scoped port; the editor
 accepts only light, dark, or system fallback. Theme changes do not reload the
-editor or alter content, presence, or exported colors. The whiteboard keeps its
-light drawing substrate so authored stroke and image colors remain faithful.
+editor or alter content, presence, or exported colors. The whiteboard stores
+and exports authored colors as drawn; a dark theme displays the canvas and its
+elements through Excalidraw's inversion, `invert(93%) hue-rotate(180deg)`,
+which keeps hues, while images are inverted back to their own pixels.
 The document uses the selected theme. A real parent/iframe phone test caught
 the taller header consuming typing space with the keyboard open; compact
 short-viewport spacing retains at least 150px of document viewport in that test.
@@ -186,6 +188,13 @@ collapsed those lines and omitted marker arrowheads. PNG and SVG now share
 an opaque white background, independent of UI theme. Explicit text baselines
 and path arrowheads render in the browser, resvg, and Qt without sacrificing
 editable SVG text or blank-line spacing.
+
+The whiteboard originally kept its light drawing substrate in a dark theme,
+so authored stroke and image colors would remain faithful. With per-board
+canvas colors the light board read as out of place inside the dark room. A
+display-only inversion keeps hues, re-inverts images, and changes neither
+stored colors, exports, nor the model's board images, so faithfulness no
+longer needs a light substrate.
 
 
 ## Pointing and menu refinement

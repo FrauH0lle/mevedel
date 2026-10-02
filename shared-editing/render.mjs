@@ -127,7 +127,7 @@ function headPoints(e, points, curve, position, head, offset = 0) {
   }
   return [tx, ty, ...a, ...b];
 }
-function arrowheads(e, points, curve, options, position, head) {
+function arrowheads(e, points, curve, options, position, head, paper) {
   const line = { ...options, roughness: Math.min(1, options.roughness || 0) };
   if (e.strokeStyle === 'dotted') line.strokeLineDash = [1.5, 6 + e.strokeWidth - 1 - 1];
   else delete line.strokeLineDash;
@@ -145,7 +145,6 @@ function arrowheads(e, points, curve, options, position, head) {
     return [generator.circle(p[0], p[1], p[2] * scale, o)];
   };
   const pts = (h, offset) => headPoints(e, points, curve, position, h, offset);
-  const paper = '#ffffff';
   switch (head) {
     case 'circle': case 'circle_outline':
       return circle(pts(head), head === 'circle' ? e.strokeColor : paper);
@@ -181,15 +180,16 @@ function elbowPath(points, radius = 16) {
   }
   return `${d} L ${points.at(-1)[0]} ${points.at(-1)[1]}`;
 }
-function linearSVG(e, label) {
+/* PAPER is the canvas colour an outlined arrowhead is filled with. */
+function linearSVG(e, label, paper) {
   const points = e.path, options = roughOptions(e);
   const curve = e.elbowed ? generator.path(elbowPath(points), roughOptions(e, true))
     : !e.roundness ? (options.fill ? generator.polygon(points, options) : generator.linearPath(points, options))
     : generator.curve(points, options);
   const shapes = [curve];
   if (e.type === 'arrow') {
-    if (e.startArrowhead) shapes.push(...arrowheads(e, points, curve, options, 'start', e.startArrowhead));
-    if (e.endArrowhead) shapes.push(...arrowheads(e, points, curve, options, 'end', e.endArrowhead));
+    if (e.startArrowhead) shapes.push(...arrowheads(e, points, curve, options, 'start', e.startArrowhead, paper));
+    if (e.endArrowhead) shapes.push(...arrowheads(e, points, curve, options, 'end', e.endArrowhead, paper));
   }
   let body = shapes.map((s) => draw(s)).join(''), defs = '';
   if (label) {
@@ -317,9 +317,11 @@ function silhouette(e) {
 }
 const cache = new Map();
 /* SVG group for one resolved element. INTERACTIVE adds editor hit areas. */
+/* SCENE.paper, white by default, is the canvas colour under the elements. */
 export function elementSVG(e, scene, files, interactive = false) {
   const label = e.type === 'arrow' && scene.labels.get(e.id)?.[0];
-  const key = JSON.stringify([e, interactive, e.fileId ? Boolean(files?.[e.fileId]) : 0,
+  const paper = scene.paper || '#ffffff';
+  const key = JSON.stringify([e, interactive, e.fileId ? Boolean(files?.[e.fileId]) : 0, LINEAR.includes(e.type) && paper,
     e.frameId && scene.byId.get(e.frameId)?.opacity, label && [label.x, label.y, label.width, label.height]]);
   const hit = cache.get(key);
   if (hit) return hit;
@@ -327,11 +329,15 @@ export function elementSVG(e, scene, files, interactive = false) {
   const deg = n((e.angle * 180) / Math.PI);
   const local = (body) => `<g transform="translate(${n(e.x)} ${n(e.y)})${e.angle ? ` rotate(${deg} ${n(e.width / 2)} ${n(e.height / 2)})` : ''}">${body}</g>`;
   if (LINEAR.includes(e.type)) {
-    svg = linearSVG(e, label);
-    if (interactive) svg = `<path class="hit" d="M${e.path.map((p) => `${n(p[0])} ${n(p[1])}`).join('L')}" stroke="transparent" stroke-width="14" vector-effect="non-scaling-stroke" fill="none"/>` + svg;
+    svg = linearSVG(e, label, paper);
+    // A closed line is picked by its interior too, like the shapes' silhouettes.
+    const closed = e.type === 'line' && isLoop(e.points);
+    if (interactive) svg = `<path class="hit" d="M${e.path.map((p) => `${n(p[0])} ${n(p[1])}`).join('L')}${closed ? 'Z' : ''}" stroke="transparent" stroke-width="14" vector-effect="non-scaling-stroke" fill="${closed ? 'transparent' : 'none'}"/>` + svg;
   } else if (e.type === 'freedraw') {
     const [x1, y1, x2, y2] = pointBounds(e.points);
-    svg = `<g transform="translate(${n(e.x)} ${n(e.y)})${e.angle ? ` rotate(${deg} ${n((x1 + x2) / 2)} ${n((y1 + y2) / 2)})` : ''}">${freedrawSVG(e)}</g>`;
+    const hitArea = interactive && isLoop(e.points)
+      ? `<path class="hit" d="M${e.points.map((p) => `${n(p[0])} ${n(p[1])}`).join('L')}Z" fill="transparent"/>` : '';
+    svg = `<g transform="translate(${n(e.x)} ${n(e.y)})${e.angle ? ` rotate(${deg} ${n((x1 + x2) / 2)} ${n((y1 + y2) / 2)})` : ''}">${hitArea}${freedrawSVG(e)}</g>`;
   } else if (e.type === 'text')
     svg = local((interactive ? `<rect class="hit" width="${n(e.width)}" height="${n(e.height)}" fill="transparent"/>` : '') + textSVG(e));
   else if (e.type === 'image') svg = local(imageSVG(e, files));
@@ -358,16 +364,16 @@ export function sceneSVG(scene, files, interactive = false) {
     return frame && ['frame', 'magicframe'].includes(frame.type) ? `<g clip-path="url(#frame-${escape(frame.id)})">${svg}</g>` : svg;
   }).join('');
 }
-/* A standalone board SVG with an opaque white background. FONTS maps a
-   font family to an embeddable data URL for viewers without the fonts. */
-export function boardSVG(elements, { files = {}, maxEdge = 2048, box, maxScale = 1, context = elements, fonts } = {}) {
+/* A standalone board SVG on an opaque BACKGROUND, white by default. FONTS
+   maps a font family to an embeddable data URL for viewers without the fonts. */
+export function boardSVG(elements, { files = {}, maxEdge = 2048, box, maxScale = 1, context = elements, fonts, background = '#ffffff' } = {}) {
   const scene = resolveScene(context);
   const shown = new Set(elements.flatMap((e) => [e.id, ...(scene.labels.get(e.id) || []).map((t) => t.id)]));
-  const subset = { ...scene, order: scene.order.filter((e) => shown.has(e.id)) };
+  const subset = { ...scene, order: scene.order.filter((e) => shown.has(e.id)), paper: background };
   box ||= bounds(elements, scene);
   const scale = Math.min(maxScale, maxEdge / Math.max(box[2], box[3]));
   const faces = fonts ? Object.entries(fonts).map(([family, url]) => `@font-face{font-family:"${family}";src:url(${url})}`).join('') : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.map(n).join(' ')}">${faces ? `<style>${faces}</style>` : ''}<rect x="${n(box[0])}" y="${n(box[1])}" width="${n(box[2])}" height="${n(box[3])}" fill="#ffffff"/>${sceneSVG(subset, files)}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(box[2] * scale)}" height="${Math.ceil(box[3] * scale)}" viewBox="${box.map(n).join(' ')}">${faces ? `<style>${faces}</style>` : ''}<rect x="${n(box[0])}" y="${n(box[1])}" width="${n(box[2])}" height="${n(box[3])}" fill="${escape(background)}"/>${sceneSVG(subset, files)}</svg>`;
 }
 /* Families a scene's text uses, for embedding fonts in exports. */
 export function usedFonts(elements) {

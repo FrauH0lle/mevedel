@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/viewer-theme.css">
     <title>Shared editor</title>
     <link rel="stylesheet" href="/shared-editor.css" />
+    <link rel="stylesheet" href="/attachments.css">
     <link rel="stylesheet" href="/shared-editor-layout.css">
   </head>
   <body class="editor">
@@ -27,6 +28,7 @@
           <button id="recovery">Recovery copy</button>
           <button id="retry">Retry save</button>
           <label><input id="show-agent" type="checkbox" checked /> Highlight recent assistant edits</label>
+          <div id="canvas-background" class="canvas-section" hidden><h4>Canvas background</h4><div class="row"></div></div>
           <details id="history">
             <summary>Contributions</summary>
             <div id="contributions"></div>
@@ -80,7 +82,14 @@
         <form id="ask" autocomplete="off">
           <label id="compose-label" for="question">Ask the assistant</label>
           <textarea id="question" aria-label="Question for the assistant" placeholder="Ask a question or give an instruction…" maxlength="10000" rows="3" required></textarea>
-          <button id="question-send" type="submit">Send to assistant</button>
+          <div id="question-attachments" class="attachments"></div>
+          <div class="ask-row">
+            <input id="question-files" type="file" multiple hidden
+                   accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
+            <button id="question-attach" type="button" title="Attach files — images, PDFs, logs and patches"
+                    aria-label="Attach files">Attach</button>
+            <button id="question-send" type="submit">Send to assistant</button>
+          </div>
         </form>
         <small class="shared-notice">Questions and answers are shared with everyone in this room.</small>
       </div>
@@ -118,6 +127,7 @@
       </form>
     </dialog>
     <script src="/renderer.js" defer></script>
+    <script src="/attachments.js" defer></script>
     <script src="/shared-editor.js" defer></script>
   </body>
 </html>
