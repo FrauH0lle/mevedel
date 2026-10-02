@@ -4,6 +4,11 @@ import {editorFixture, libraryHost} from './editor-fixture.mjs';
 
 const read = (page) => page.evaluate(async () => (await window.apply({action:'read'})).content);
 const saved = (frame) => frame.locator('#saved').getByText('Saved on host', {exact:true}).waitFor();
+/* Autoshape strokes settle after a pause, handing the board back to Select. */
+const shaped = async (frame) => {
+  await frame.locator('[data-tool="select"][aria-pressed="true"]').waitFor();
+  await saved(frame);
+};
 /* Screen position of board point [x, y] in the page. */
 async function at(page, frame, x, y) {
   const offset = await page.locator('iframe').boundingBox();
@@ -23,6 +28,11 @@ async function stroke(page, frame, corners, steps = 18) {
     }
   await page.mouse.up();
 }
+const until = async (check, ms = 5000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise(r => setTimeout(r, 50)))
+    if (await check()) return;
+  throw new Error('Timed out');
+};
 const selectedIds = (frame) => frame.locator('#selection').evaluate(n => n.dataset.selected ? n.dataset.selected.split(' ') : []);
 
 test('board tools', async (t) => {
@@ -40,16 +50,76 @@ test('board tools', async (t) => {
     await page.keyboard.press('Shift+X');
     assert.equal(await frame.locator('[data-tool="autoshape"]').getAttribute('aria-pressed'), 'true');
     await stroke(page, frame, [[100, 100], [300, 100], [300, 220], [100, 220], [100, 102]]);
-    await saved(frame);
+    await shaped(frame);
     let content = await read(page);
     assert.deepEqual(content.map(e => e.type), ['rectangle']);
     const [x, y, w, h] = [content[0].x, content[0].y, content[0].width, content[0].height];
     assert.ok(Math.abs(x - 100) < 6 && Math.abs(y - 100) < 6 && Math.abs(w - 200) < 8 && Math.abs(h - 120) < 8, JSON.stringify(content[0]));
     await frame.locator('[data-tool="autoshape"]').click();
     await stroke(page, frame, [[100, 300], [180, 390], [110, 440], [260, 320], [140, 500], [300, 480]], 8);
-    await saved(frame);
+    await shaped(frame);
     content = await read(page);
     assert.deepEqual(content.map(e => e.type).sort(), ['freedraw', 'rectangle']);
+    await page.close();
+  });
+
+  await t.test('the menu sets the board canvas background, shared and undoable', async () => {
+    const {page, frame} = await open({content:[{id:'a', type:'rectangle', x:0, y:0, width:100, height:60}]});
+    const background = async () => (await page.evaluate(() => window.apply({action:'read'}))).background;
+    await frame.locator('#menu > summary').click();
+    await frame.getByRole('button', {name:'Canvas background: Yellow', exact:true}).click();
+    await saved(frame);
+    assert.equal(await background(), '#fffce8');
+    assert.equal(await frame.locator('#board').evaluate(n => getComputedStyle(n, '::before').backgroundColor), 'rgb(255, 252, 232)');
+    assert.equal(await frame.getByRole('button', {name:'Canvas background: Yellow', exact:true}).getAttribute('aria-pressed'), 'true');
+    await frame.locator('#canvas').focus();
+    await page.keyboard.press('Control+z');
+    await until(async () => (await background()) === undefined);
+    assert.equal(await frame.locator('#board').evaluate(n => n.style.getPropertyValue('--canvas')), '');
+    await page.close();
+  });
+
+  await t.test('a dark theme shows the light canvas and its content dark, as Excalidraw does', async () => {
+    const {page, frame} = await open({content:[{id:'ink', type:'rectangle', x:0, y:0, width:200, height:120,
+      backgroundColor:'#1e1e1e', fillStyle:'solid', roughness:0}]});
+    // The colour at the middle of the board area and of the shape, as rendered.
+    const pixels = async () => {
+      const shot = await page.screenshot();
+      const [board, ink] = await Promise.all([frame.locator('#board'), frame.locator('#scene [data-shape="ink"]')]
+        .map(async (l) => { const b = await l.boundingBox(); return [b.x + 10, b.y + b.height / 2]; }));
+      return page.evaluate(async ([png, points]) => {
+        const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+        const canvas = new OffscreenCanvas(image.width, image.height), context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0);
+        return points.map(([x, y]) => [...context.getImageData(Math.round(x), Math.round(y), 1, 1).data.slice(0, 3)]);
+      }, [shot.toString('base64'), [board, ink]]);
+    };
+    const light = (rgb) => rgb.every(v => v > 180), dark = (rgb) => rgb.every(v => v < 80);
+    let [board, ink] = await pixels();
+    assert.ok(light(board) && dark(ink), JSON.stringify([board, ink]));
+    await frame.locator('html').evaluate(root => { root.dataset.theme = 'dark'; });
+    [board, ink] = await pixels();
+    assert.ok(dark(board) && light(ink), JSON.stringify([board, ink]));
+    // Stored colours and exports stay as authored.
+    assert.equal((await read(page))[0].backgroundColor, '#1e1e1e');
+    await page.close();
+  });
+
+  await t.test('an arrow drawn shaft first, head second, binds to the shapes at its ends', async () => {
+    const {page, frame} = await open({content:[
+      {id:'a', type:'rectangle', x:100, y:100, width:100, height:60},
+      {id:'b', type:'rectangle', x:400, y:100, width:100, height:60}]});
+    await frame.locator('[data-tool="autoshape"]').click();
+    await stroke(page, frame, [[150, 130], [410, 130]]);
+    // The head's barbs end left of B: the tip, not the lift-off, picks the target.
+    await stroke(page, frame, [[385, 112], [410, 130], [385, 148]], 8);
+    await shaped(frame);
+    const content = await read(page);
+    const arrows = content.filter(e => e.type === 'arrow');
+    assert.equal(content.length, 3, JSON.stringify(content.map(e => e.type)));
+    assert.equal(arrows.length, 1);
+    assert.equal(arrows[0].startBinding?.elementId, 'a');
+    assert.equal(arrows[0].endBinding?.elementId, 'b');
     await page.close();
   });
 
@@ -249,6 +319,32 @@ test('board tools', async (t) => {
     await saved(frame);
     const curved = await element('link');
     assert.deepEqual([curved.elbowed, curved.roundness], [undefined, {type:2}]);
+    await page.close();
+  });
+
+  await t.test('closed lines are picked inside; labels align in their shape', async () => {
+    const {page, frame} = await open({viewport:{width:1280, height:700}, content:[
+      {id:'hex', type:'line', x:0, y:0, width:200, height:180, backgroundColor:'#be4bdb', fillStyle:'hachure',
+        points:[[50, 0], [150, 0], [200, 90], [150, 180], [50, 180], [0, 90], [50, 0]]},
+      {id:'box', type:'rectangle', x:300, y:0, width:200, height:120},
+      {id:'label', type:'text', x:0, y:0, width:0, height:0, text:'Hi', containerId:'box'},
+      {id:'free', type:'text', x:0, y:300, width:0, height:0, text:'Free'},
+    ]});
+    await frame.getByRole('button', {name:'Fit', exact:true}).click();
+    await page.mouse.click(...await at(page, frame, 103, 91));
+    assert.deepEqual(await selectedIds(frame), ['hex'], 'a click between the hatch lines picks the line');
+    await page.mouse.click(...await at(page, frame, 400, 60));
+    const section = (key) => frame.locator(`#properties [data-sec="${key}"]`);
+    assert.deepEqual([await section('textAlign').isVisible(), await section('verticalAlign').isVisible()], [true, true]);
+    await frame.getByRole('button', {name:'Align right', exact:true}).click();
+    await frame.getByRole('button', {name:'Align bottom', exact:true}).click();
+    await saved(frame);
+    const label = (await read(page)).find(e => e.id === 'label');
+    assert.deepEqual([label.textAlign, label.verticalAlign], ['right', 'bottom']);
+    await page.mouse.click(...await at(page, frame, 10, 310));
+    assert.deepEqual(await selectedIds(frame), ['free']);
+    assert.deepEqual([await section('textAlign').isVisible(), await section('verticalAlign').isVisible()], [true, false],
+      'free text has no container to align in');
     await page.close();
   });
 

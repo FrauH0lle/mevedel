@@ -112,7 +112,7 @@ encode these as vectors so the host does not mistake them for objects."
 
 (defun mevedel-tool-editing--edit (callback args)
   "Apply a targeted mutation using CALLBACK and ARGS."
-  (unless (member (plist-get args :action) '("patch" "insert" "rename" "revert"))
+  (unless (member (plist-get args :action) '("patch" "insert" "rename" "background" "revert"))
     (error "Unknown editing action"))
   (let ((args (plist-put (copy-sequence args) :image t)))
     (when (equal (plist-get args :action) "insert")
@@ -121,7 +121,7 @@ encode these as vectors so the host does not mistake them for objects."
              (slash (and (stringp ref) (string-search "/" ref))))
         (unless slash (error "insert needs item as LIBRARY/ITEM-ID from SharedRead :library t"))
         (setq args (plist-put args :library
-                              (mevedel-shared-library-item (substring ref 0 slash) (substring ref (1+ slash))))
+                              (mevedel-shared-library-text (substring ref 0 slash)))
               args (plist-put args :item (substring ref (1+ slash))))))
     (mevedel-tool-editing--call callback args)))
 
@@ -143,11 +143,12 @@ encode these as vectors so the host does not mistake them for objects."
    :async-p t :groups (edit))
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit
-   :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y. Elements draw in fractional index order; one without an index draws on top. Images reference an existing fileId. insert places library item (LIBRARY/ITEM-ID from SharedRead library) with its top-left at x,y as new elements and returns their ids. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host. Whiteboard edits return the resulting PNG for visual inspection."
+   :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y. Elements draw in fractional index order; one without an index draws on top. Images reference an existing fileId. insert places library item (LIBRARY/ITEM-ID from SharedRead library) with its top-left at x,y as new elements and returns their ids. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. background sets a whiteboard's canvas colour (#rrggbb; empty for the room theme). revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host. Whiteboard edits return the resulting PNG for visual inspection."
    :args ((id string :required "Item ID.")
-          (action string :required "Operation." :enum ["patch" "insert" "rename" "revert"])
+          (action string :required "Operation." :enum ["patch" "insert" "rename" "background" "revert"])
           (changes array :optional "Targeted changes." :items (:type object))
           (title string :optional "New title for rename.")
+          (background string :optional "Canvas colour for background: #rrggbb, or empty for the room theme.")
           (transaction string :optional "Contribution ID for revert.")
           (item string :optional "Library item reference for insert.")
           (x number :optional "Left edge for insert.")
