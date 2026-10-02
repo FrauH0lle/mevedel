@@ -10,9 +10,9 @@
 ;; credentials persist in the workspace state directory, so its links
 ;; survive Emacs restarts; every session room it hands out keeps the
 ;; ordinary share lifetime.  Link tiers keep their meaning: a view link
-;; lists sessions, a full link also opens them, and an owner link also
-;; creates them.  A guest is always handed a session room at its own
-;; tier.
+;; lists sessions, a full link also opens them and works with the project
+;; files (`mevedel-collaboration-files'), and an owner link also creates
+;; sessions.  A guest is always handed a session room at its own tier.
 ;;
 ;; Guest frames arrive while nobody may be at the keyboard, so lobby work
 ;; runs with `inhibit-interaction': a step that would ask in Emacs is
@@ -24,6 +24,7 @@
   (require 'cl-lib))
 
 (require 'mevedel-collaboration)
+(require 'mevedel-collaboration-files)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-collaboration-projection)
@@ -298,7 +299,17 @@ whose link is meant to keep working."
             ("open-session"
              (mevedel-collaboration-lobby--handle-open lobby peer frame))
             ("new-session"
-             (mevedel-collaboration--handle-new-session lobby peer frame))))
+             (mevedel-collaboration--handle-new-session lobby peer frame))
+            ("files"
+             (mevedel-collaboration-files-handle-list lobby peer frame root))
+            ("file-get"
+             (mevedel-collaboration-files-handle-get lobby peer frame root))
+            ("file-upload"
+             (mevedel-collaboration-files-handle-upload
+              lobby peer frame root))
+            ("file-remove"
+             (mevedel-collaboration-files-handle-remove
+              lobby peer frame root))))
       (error
        (message "mevedel: lobby frame failed: %s"
                 (error-message-string err))))))
@@ -450,7 +461,9 @@ Its credentials stay stored, so starting it again revives its links."
                  (concat
                   "Share this project's session list through the relay? "
                   "Its links stay valid across restarts until rotated, and "
-                  "a full or owner link can open and create sessions. ")))
+                  "a full or owner link can open sessions and read, upload "
+                  "and remove project files; an owner link can also create "
+                  "sessions. ")))
       (user-error "Lobby not started"))
     (mevedel-collaboration-share-present
      (mevedel-collaboration-lobby-start root))))

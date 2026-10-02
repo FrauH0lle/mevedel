@@ -9,7 +9,7 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts',
              'artifact-panel', 'artifact-title', 'artifact-meta',
              'artifact-tab', 'artifact-download', 'artifact-delete', 'artifact-close',
-             'artifact-body'];
+             'artifact-body', 'artifact-ask'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
 nodes['artifacts-box'].hidden = true;
 nodes['artifact-panel'].hidden = true;
@@ -23,6 +23,8 @@ const links = [];
 const opened = [];
 const flashes = [];
 let blockPopup = false;
+let askAvailable = true;
+const asked = [];
 const document = {
   getElementById: id => nodes[id],
   createElement(tag) {
@@ -70,6 +72,7 @@ const controller = window.mevedelArtifactView.create({
   flash: message => flashes.push(message),
   summarize: (key, text) => { summary = {key, text}; },
   canDelete: () => true,
+  ask: {available: () => askAvailable, run: path => asked.push(path)},
 });
 
 controller.render([
@@ -177,6 +180,33 @@ assert.equal(flashes.at(-1), 'notes.md deleted.');
 assert.equal(nodes['artifact-panel'].hidden, true);
 controller.handleDelete({reqId: 2, ok: true});
 assert.equal(flashes.at(-1), 'notes.md deleted.', 'a stale reply is ignored');
+
+// A project file opens by path in the same panel. It is neither deleted
+// nor commented here, but it can seed a new session.
+controller.openFile('src/page.html');
+assert.deepEqual({...sent.at(-1)}, {t: 'file-get', reqId: 5, path: 'src/page.html'});
+assert.equal(textOf(nodes['artifact-title']), 'src/page.html');
+controller.handle({t: 'file', reqId: 5, mime: 'text/html', size: 4,
+                   data: Buffer.from('<p>x').toString('base64'), final: true});
+assert.equal(nodes['artifact-body'].children[0].tagName, 'iframe');
+assert.equal(nodes['artifact-delete'].hidden, true);
+assert.equal(nodes['artifact-ask'].hidden, false);
+nodes['artifact-ask'].dispatch('click');
+assert.deepEqual(asked, ['src/page.html']);
+assert.equal(nodes['artifact-panel'].hidden, true);
+askAvailable = false;
+controller.openFile('main.py');
+controller.handle({t: 'file', reqId: 6, mime: 'text/plain', size: 1,
+                   data: Buffer.from('x').toString('base64'), final: true});
+assert.equal(nodes['artifact-body'].children[0].tagName, 'pre');
+assert.equal(nodes['artifact-ask'].hidden, true);
+// An artifact never offers Ask.
+askAvailable = true;
+controller.open({id: 'markdown', artifact: 'notes.md'});
+controller.handle({reqId: 7, mime: 'text/markdown', size: markdown.length,
+                   data: Buffer.from(markdown).toString('base64'), final: true});
+assert.equal(nodes['artifact-ask'].hidden, true);
+controller.close();
 
 controller.render([]);
 assert.equal(nodes['artifacts-box'].hidden, true);

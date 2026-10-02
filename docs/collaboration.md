@@ -223,7 +223,8 @@ ordinary rooms with the ordinary share lifetime
 ([ADR 0114](adr/0114-tie-collaboration-room-lifetime-to-host-share.md)).
 
 Link tiers keep their meaning. A view link lists sessions; a full link can
-also open them; an owner link can also create them. Opening a session resumes
+also open them and use the [project files](#project-files); an owner link can
+also create sessions. Opening a session resumes
 it when it is not live, shares it when it is not already shared, and returns
 its room's link at the requester's own tier, so the lobby never grants more
 than the link that reached it. The session id in an open request only selects
@@ -248,7 +249,62 @@ session locks.
 In the browser, a lobby link renders the session list in place of the
 conversation and composer. Open replaces the page with the session's room.
 The lobby stores itself in the browser's room list, so every room it opens
-lists it under Rooms as the way back.
+lists it under Rooms as the way back. A full or owner link adds a **Files**
+tab beside **Sessions**: the [project files](#project-files). Refresh and a
+return to the foreground reload whichever tab is shown.
+
+## Project files
+
+A lobby is the project's view, so it also shows the project's files: the
+material every session in the workspace can read, which in a whiteboard or
+chat project may be nothing but uploaded reference data. Browsing, reading,
+uploading and removing all need a full or owner link; a view link gets no
+**Files** tab and its requests are refused, so it still reveals only the
+session list. The host owns this in `mevedel-collaboration-files.el`.
+
+The project's own listing is the authority. It is `project-files` for the
+lobby's workspace root -- the VC backend's tracked and untracked files minus
+ignored ones in a repository, the transient project's ignores elsewhere --
+with the workspace state under `.mevedel/` removed, because it holds the
+lobby credentials, permissions and memory. A guest names files and folders by
+their path relative to the root, but a path is accepted only when the
+listing shows it: a file must be listed, and a folder must hold a listed
+file. The resolved name is then re-verified beneath the root with
+`mevedel-resource-within-root-p` before any I/O, which also refuses a
+symlinked file or folder. An ignored, private or linked file is therefore
+neither readable nor writable from a browser.
+
+The browser lists one folder at a time (`files`), folders first; a listing
+holds at most 1000 entries and reports how many it left out. Opening a file
+(`file-get`) uses the [artifact panel](#artifact-viewing) and its transfer:
+bytes on demand, at most 16 MiB, in base64 chunk frames under the wire bound,
+rendered by the same sandboxed and XSS-safe renderers. A file with no type
+of its own previews as plain text when its content is UTF-8, so source and
+configuration files read in place. A project file has no comments and no
+Delete there; for an owner link, **Ask** opens the new-session dialog with
+the file's path in the first prompt.
+
+**Upload** adds files to the folder on screen, from the picker or dropped on
+the tree. A file travels in acknowledged chunks of 512 KiB (`file-upload`):
+the first announces folder, name and size, and the browser sends the next
+only after the host took the previous one, so a refusal stops the transfer
+and the socket never queues a whole file. The host keeps one unfinished
+upload per guest, and a new request id replaces it. An upload is at most
+16 MiB. The name must be one path component that is neither hidden nor a
+`~` reference, and the file must not exist: an upload never replaces one.
+The file is written with an exclusive create. If the project's ignore rules
+would hide the new file, it is deleted again and the upload refused, since
+the browser could neither list nor remove it.
+
+**Remove** (`file-remove`) asks for confirmation, then moves the file to the
+trash with `move-file-to-trash`; on a TRAMP workspace that is this Emacs's
+trash, which still keeps the bytes. A file with unsaved changes in an Emacs
+buffer is refused, because the buffer would save it straight back. Only
+files are removed, never folders. After an upload or removal the host tells
+every writable guest of that lobby which folder changed (`files-changed`),
+and a tree showing that folder reloads. These are direct changes by the
+link holder, outside the model's permission checks and patch review; the
+trash is their safety net.
 
 ## Scoped prompts and attachments
 
@@ -283,7 +339,13 @@ with NUL bytes or invalid UTF-8 is not text. The host generates
 filenames under workspace media storage and queues them through the normal
 file-mention path; a whiteboard question's own board snapshot rides beside them.
 The viewer can downscale images; non-image files cannot be
-resampled to fit. On a main-chat prompt an invalid attachment set is omitted
+resampled to fit. In a room's composer, each attachment chip has a
+**＋ project** toggle. A marked file is also uploaded to the project root
+through the [project file upload](#project-files), as its original bytes
+rather than the prompt's downscaled copy, after the prompt is sent. The
+prompt keeps its own copy either way. A taken name is numbered instead of
+refused (`image.png` becomes `image-2.png`), because pasted images share a
+name; a room accepts uploads but no other project file request. On a main-chat prompt an invalid attachment set is omitted
 as a whole and its text may still be queued; an item, artifact or new-session
 question with an invalid set is refused, so it never reaches the model without
 the files its sender chose. A storage error refuses that prompt without ending
@@ -515,8 +577,9 @@ synchronously from the click -- the bytes are already in hand, so no
 popup blocker races the transfer -- whose only content is the same
 sandboxed frame. Guests author artifacts through the model: they ask,
 the model writes, everyone gets the card. There is no guest upload
-path, and the relay is untouched -- artifact frames are sealed like
-every other frame.
+path into the artifacts folder -- guests add files to the
+[project](#project-files) instead -- and the relay is untouched:
+artifact frames are sealed like every other frame.
 
 Full and owner links can **Delete** an open artifact after confirming. The
 host resolves the file from its own published record of the card, never from
