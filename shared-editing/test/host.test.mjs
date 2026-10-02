@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as Y from 'yjs';
 import { handle } from '../host.mjs';
+import { restore } from '../model.mjs';
 import { resolveScene } from '../scene.mjs';
 const rect = (id, x, y, extra = {}) => ({ id, type: 'rectangle', x, y, width: 100, height: 50, ...extra });
 const scene = (elements, files = {}) => JSON.stringify({ type: 'excalidraw', version: 2, elements, files });
@@ -341,3 +343,45 @@ test('board image crops, flips and rotations are Excalidraw fields that validate
     assert.deepEqual(inspect(peers[0]),inspect(peers[1]),'concurrent image edits converge');
   } finally {peers.forEach(peer=>peer.destroy());}
 });
+
+test('a board keeps its canvas background through edits, history, export and import', async () => {
+  let { state } = await handle({ action: 'create', id: 'canvas', kind: 'whiteboard', title: 'Canvas',
+    content: [rect('a', 0, 0)], actor: 'Guest: Alice', opId: 'create' });
+  // The editor changes it as a shared edit, which history records.
+  const recolor = async (opId, value) => {
+    const doc = restore(Buffer.from(state.crdt, 'base64'));
+    doc.transact(() => value ? doc.getMap('meta').set('background', value) : doc.getMap('meta').delete('background'));
+    return handle({ action: 'update', opId, actor: 'Guest: Bob', state,
+      update: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64') });
+  };
+  let result;
+  ({ state, result } = await recolor('yellow', '#fffce8'));
+  assert.equal(result.background, '#fffce8');
+  assert.deepEqual(state.transactions[0].background, { before: null, after: '#fffce8' });
+  await assert.rejects(recolor('bad', 'red'), /Invalid canvas background/);
+  const native = JSON.parse((await handle({ action: 'export', state, format: 'native' })).result.text);
+  assert.equal(native.appState.viewBackgroundColor, '#fffce8');
+  const svg = (await handle({ action: 'export', state, format: 'svg' })).result.text;
+  assert.match(svg, /fill="#fffce8"/);
+  const imported = await handle({ action: 'import', id: 'copy', format: 'excalidraw', data: JSON.stringify(native),
+    actor: 'Guest: Alice', opId: 'import' });
+  assert.equal(imported.result.background, '#fffce8');
+  // Reverting the change restores the theme's colour.
+  ({ state, result } = await handle({ action: 'revert', state, actor: 'Guest: Bob', opId: 'undo', transaction: 'yellow' }));
+  assert.equal(result.background, undefined);
+  // The model sets it by action, with the same rules.
+  ({ state, result } = await handle({ action: 'background', state, actor: 'Agent: /root', opId: 'tint', background: '#f5faff' }));
+  assert.equal(result.background, '#f5faff');
+  assert.equal(state.transactions[0].actor, 'Agent: /root');
+  await assert.rejects(handle({ action: 'background', state, actor: 'Agent: /root', opId: 'bad-tint', background: '#fff' }),
+    /opaque #rrggbb/);
+  // Documents have no canvas.
+  const doc = await handle({ action: 'create', id: 'notes', kind: 'document', title: 'Notes', actor: 'Guest: Alice', opId: 'notes' });
+  await assert.rejects(handle({ action: 'background', state: doc.state, actor: 'Agent: /root', opId: 'doc-tint',
+    background: '#ffffff' }), /Only whiteboards/);
+  const notes = restore(Buffer.from(doc.state.crdt, 'base64'));
+  notes.getMap('meta').set('background', '#ffffff');
+  await assert.rejects(handle({ action: 'update', opId: 'paper', actor: 'Guest: Alice', state: doc.state,
+    update: Buffer.from(Y.encodeStateAsUpdate(notes)).toString('base64') }), /Invalid canvas background/);
+});
+

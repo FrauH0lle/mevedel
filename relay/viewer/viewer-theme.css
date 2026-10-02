@@ -1,4 +1,4 @@
-/* Shared room/editor appearance. Cool is the default; authored canvas colors stay light. */
+/* Shared room/editor appearance. Cool is the default; authored canvas colors are stored light, and the editor inverts their display in a dark theme. */
 :root {
   --font-ui:"Aptos","SF Pro Text","Segoe UI","Noto Sans",system-ui,sans-serif;
   --font-mono:"SF Mono","Cascadia Code",ui-monospace,monospace;

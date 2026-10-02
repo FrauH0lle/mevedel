@@ -109,19 +109,40 @@
                               (accept-process-output nil 0.05)))
                           (should (eq 'success (plist-get reply :status)))
                           reply)))
+            ;; Version 1 libraries hold bare element lists without item ids.
+            (make-directory mevedel-shared-library-directory t)
+            (with-temp-file (file-name-concat mevedel-shared-library-directory "Legacy.excalidrawlib")
+              (insert "{\"type\":\"excalidrawlib\",\"version\":1,\"library\":[[{\"id\":\"r\",\"type\":\"rectangle\",\"x\":0,\"y\":0,\"width\":80,\"height\":40}]]}"))
             (let* ((listed (run "SharedRead" '(:library t)))
-                   (items (plist-get (mevedel-shared-editing--parse (plist-get listed :result)) :items)))
-              (should (equal "Built-in/builtin-database" (plist-get (aref items 0) :ref)))
-              (should (plist-get listed :media)))
-            (let* ((board (mevedel-shared-editing--parse
-                           (plist-get (run "SharedCreate" '(:kind "whiteboard" :title "Stores")) :result)))
-                   (inserted (mevedel-shared-editing--parse
-                              (plist-get (run "SharedEdit" (list :id (plist-get board :id) :action "insert"
-                                                                 :item "Built-in/builtin-database" :x 40 :y 60))
-                                         :result))))
-              (should (= 4 (length (plist-get inserted :inserted))))
-              (should (= 40 (apply #'min (mapcar (lambda (e) (plist-get e :x))
-                                                 (append (plist-get inserted :content) nil))))))))
+                   (items (append (plist-get (mevedel-shared-editing--parse (plist-get listed :result)) :items) nil))
+                   (legacy (plist-get (cl-find "Legacy" items :key (lambda (i) (plist-get i :library)) :test #'equal) :ref)))
+              (should (member "Built-in/builtin-database" (mapcar (lambda (i) (plist-get i :ref)) items)))
+              (should (plist-get listed :media))
+              (let ((board (mevedel-shared-editing--parse
+                            (plist-get (run "SharedCreate" '(:kind "whiteboard" :title "Stores")) :result))))
+                (let ((inserted (mevedel-shared-editing--parse
+                                 (plist-get (run "SharedEdit" (list :id (plist-get board :id) :action "insert"
+                                                                    :item "Built-in/builtin-database" :x 40 :y 60))
+                                            :result))))
+                  (should (= 4 (length (plist-get inserted :inserted))))
+                  (should (= 40 (apply #'min (mapcar (lambda (e) (plist-get e :x))
+                                                     (append (plist-get inserted :content) nil))))))
+                (should (= 1 (length (plist-get (mevedel-shared-editing--parse
+                                                 (plist-get (run "SharedEdit" (list :id (plist-get board :id) :action "insert"
+                                                                                    :item legacy :x 300 :y 60))
+                                                            :result))
+                                                :inserted))))
+                ;; The model colours the canvas and sees the board on it.
+                (let ((tinted (run "SharedEdit" (list :id (plist-get board :id) :action "background"
+                                                      :background "#fffce8"))))
+                  (should (equal "#fffce8" (plist-get (mevedel-shared-editing--parse (plist-get tinted :result))
+                                                      :background)))
+                  (should (plist-get tinted :media)))
+                (should-not (plist-get (mevedel-shared-editing--parse
+                                        (plist-get (run "SharedEdit" (list :id (plist-get board :id) :action "background"
+                                                                           :background ""))
+                                                   :result))
+                                       :background))))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (mevedel-shared-editing-stop))
         (kill-buffer buffer))
@@ -154,7 +175,7 @@
           ("SharedEdit"
            (should (equal (plist-get (plist-get properties :changes) :items) '(:type "object")))
            (should (equal (plist-get (plist-get properties :action) :enum)
-                          ["patch" "insert" "rename" "revert"]))))))))
+                          ["patch" "insert" "rename" "background" "revert"]))))))))
 
 (mevedel-deftest mevedel-tool-editing--restore-nulls
   (:doc "Lower gptel's lossless null marker in model-supplied args before host encoding")

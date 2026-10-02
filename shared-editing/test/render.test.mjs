@@ -36,6 +36,10 @@ test('arrows carry every Excalidraw arrowhead and freedraw strokes are filled ou
   for (const head of ['triangle', 'circle', 'diamond', 'bar', 'cardinality_one_or_many', 'cardinality_zero_or_many'])
     assert.ok(svgOf([arrow({ endArrowhead: head })]) !== plain, head);
   assert.match(svgOf([arrow({ endArrowhead: 'triangle_outline' })]), /fill="#ffffff"/, 'outline heads fill with the paper');
+  // On a coloured canvas they fill with that colour, never a white patch.
+  const tinted = boardSVG([arrow({ endArrowhead: 'circle_outline' })], { background: '#fffce8' });
+  assert.match(tinted, /<path [^>]*fill="#fffce8"/);
+  assert.doesNotMatch(tinted, /fill="#ffffff"/);
   assert.equal(svgOf([arrow({ endArrowhead: null })]).match(/<path /g).length, 1);
   const line = svgOf([{ ...arrow(), type: 'line', id: 'l' }]);
   assert.match(line, /data-linear="true"/);

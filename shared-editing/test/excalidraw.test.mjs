@@ -44,7 +44,7 @@ test('Excalidraw restore migrations apply, unknown and derived fields drop, invi
 
 test('exported scenes are complete Excalidraw files that import back to the same elements', () => {
   const { elements } = parseScene(JSON.stringify(legacy));
-  const file = JSON.parse(serializeScene(elements, {}, 1000));
+  const file = JSON.parse(serializeScene(elements, {}, { now: 1000 }));
   assert.deepEqual(Object.keys(file), ['type', 'version', 'source', 'elements', 'appState', 'files']);
   const byId = (id) => file.elements.find((e) => e.id === id);
   const [box, label, arrow] = ['box', 'label', 'arrow'].map(byId);
@@ -65,6 +65,8 @@ test('libraries read versions 1 and 2 and place copies with fresh identities', (
   const v1 = parseLibrary({ type: 'excalidrawlib', version: 1, library: [[legacy.elements[0]], []] });
   assert.equal(v1.length, 1, 'empty items are dropped');
   assert.equal(v1[0].status, 'unpublished');
+  const again = parseLibrary({ type: 'excalidrawlib', version: 1, library: [[legacy.elements[0]]] });
+  assert.equal(again[0].id, v1[0].id, 'id-less items keep one reference across reads');
   const v2 = parseLibrary(serializeLibrary([...BUILTIN, { id: 'mine', name: 'Mine', elements: v1[0].elements }], 5));
   assert.deepEqual(v2.map((item) => item.name), ['Database', 'Mine']);
   assert.throws(() => parseLibrary({ type: 'excalidrawlib', version: 3, libraryItems: [] }), /Not an Excalidraw library/);
