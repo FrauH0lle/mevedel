@@ -1017,7 +1017,11 @@
   (:doc "dispatches known frames and stops the room on handler failure")
   (with-temp-buffer
     (let* ((room (list :data-buffer (current-buffer)
-                       :guests (make-hash-table :test #'eql)))
+                       :guests (make-hash-table :test #'eql)
+                       :session (mevedel-session--create
+                                 :name "s"
+                                 :workspace (mevedel-workspace--create
+                                             :root "/proj/"))))
            (mevedel-collaboration--rooms (mevedel-test-room-registry room))
            handled stopped)
       (cl-letf (((symbol-function 'mevedel-collaboration--handle-hello)
@@ -1045,6 +1049,19 @@
       ;; Unknown frame types are tolerated.
       (mevedel-collaboration--on-frame (current-buffer) 5
                                        (list :t "future-frame"))
+      ;; A room takes uploads into its session's project root, and no
+      ;; other project file frame.
+      (let (uploaded)
+        (cl-letf (((symbol-function 'mevedel-collaboration-files-handle-upload)
+                   (lambda (_room peer _frame root)
+                     (setq uploaded (list peer root))))
+                  ((symbol-function 'mevedel-collaboration-files-handle-list)
+                   (lambda (&rest _) (error "Not routed"))))
+          (mevedel-collaboration--on-frame (current-buffer) 5
+                                           (list :t "file-upload"))
+          (mevedel-collaboration--on-frame (current-buffer) 5
+                                           (list :t "files"))
+          (should (equal '(5 "/proj/") uploaded))))
       (cl-letf (((symbol-function 'mevedel-collaboration--handle-prompt)
                  (lambda (&rest _) (error "Handler fault")))
                 ((symbol-function 'mevedel-collaboration--stop-internal)

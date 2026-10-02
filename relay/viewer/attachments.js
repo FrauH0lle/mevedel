@@ -73,10 +73,13 @@
 
   /* A tray of pending files rendered as chips into LIST.  NOTICE reports a
      refused file; ONCHANGE runs when the person adds or removes one.
+     SHAREABLE gives each chip a toggle marking it to be added to the
+     project too; a marked item keeps its original FILE for that, since
+     the prompt's copy of a photo is downscaled.
      Thumbnails are data: URLs, which the editor frame's policy admits where
      blob: URLs are not. */
-  function create({list, notice, onchange = () => {}}) {
-    const pending = []; // {mime, label, data (base64), bytes}
+  function create({list, notice, onchange = () => {}, shareable = false}) {
+    const pending = []; // {mime, label, data (base64), bytes, file, share}
     let generation = 0;
     let work = Promise.resolve();
     let inFlight = 0;
@@ -98,6 +101,20 @@
           name.className = 'attachment-name';
           name.textContent = item.label;
           chip.append(name);
+        }
+        if (shareable) {
+          const share = document.createElement('button');
+          share.className = 'attachment-share';
+          share.type = 'button';
+          share.textContent = item.share ? '✓ project' : '＋ project';
+          share.setAttribute('aria-pressed', String(item.share));
+          share.setAttribute('aria-label', `Also add ${item.label} to the project files`);
+          share.title = 'Also add this file to the project, where every session can read it';
+          share.addEventListener('click', () => {
+            item.share = !item.share;
+            render();
+          });
+          chip.append(share);
         }
         const remove = document.createElement('button');
         remove.className = 'attachment-remove';
@@ -152,7 +169,7 @@
         const buffer = new Uint8Array(await blob.arrayBuffer());
         if (current !== generation) return;
         pending.push({mime: type, label, data: base64OfBytes(buffer), bytes: buffer.length,
-                      ...(extension ? {extension} : {})});
+                      file, share: false, ...(extension ? {extension} : {})});
       }
       render();
       onchange();

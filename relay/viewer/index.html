@@ -49,9 +49,24 @@
         <button id="lobby-refresh" class="btn quiet" type="button">Refresh</button>
         <button id="lobby-new" class="btn" type="button" hidden><span aria-hidden="true">＋</span> New session</button>
       </div>
-      <p id="lobby-empty" class="lobby-empty" hidden>No sessions in this project yet.</p>
-      <ul id="lobby-list" class="lobby-list"></ul>
-      <p id="lobby-omitted" class="lobby-empty" hidden></p>
+      <div id="lobby-tabs" class="lobby-tabs" role="tablist" aria-label="Project" hidden>
+        <button id="lobby-tab-sessions" class="lobby-tab" type="button" role="tab" aria-selected="true" aria-controls="lobby-sessions">Sessions</button>
+        <button id="lobby-tab-files" class="lobby-tab" type="button" role="tab" aria-selected="false" aria-controls="lobby-files">Files</button>
+      </div>
+      <div id="lobby-sessions" role="tabpanel" aria-labelledby="lobby-tab-sessions">
+        <p id="lobby-empty" class="lobby-empty" hidden>No sessions in this project yet.</p>
+        <ul id="lobby-list" class="lobby-list"></ul>
+        <p id="lobby-omitted" class="lobby-empty" hidden></p>
+      </div>
+      <div id="lobby-files" class="lobby-files" role="tabpanel" aria-labelledby="lobby-tab-files" hidden>
+        <div class="files-head">
+          <nav id="files-path" class="files-path" aria-label="Folder"></nav>
+          <button id="files-upload" class="btn" type="button" title="Add files to this folder — or drop them here">Upload</button>
+          <input id="files-input" type="file" multiple hidden>
+        </div>
+        <p id="files-status" class="lobby-empty" role="status" hidden></p>
+        <ul id="files-list" class="lobby-list"></ul>
+      </div>
     </section>
     <section id="empty-state" class="empty-state" aria-label="Empty conversation" hidden>
       <h1>No messages yet</h1>
@@ -84,6 +99,8 @@
         </div>
         <button id="artifact-comment" class="btn quiet" type="button" hidden
                 aria-pressed="false">Comment</button>
+        <button id="artifact-ask" class="btn quiet" type="button" hidden
+                title="Start a new session with this file in its first prompt">Ask</button>
         <button id="artifact-tab" class="btn quiet" type="button" hidden
                 title="Open this artifact in its own browser tab, beside the chat">Open in tab</button>
         <button id="artifact-download" class="btn quiet" type="button" hidden
@@ -153,7 +170,9 @@
         and tool results, which may contain secrets; a full-control link
         can also prompt, interrupt, and answer pending interactions; and an
         owner link can additionally change the permission mode and create
-        sessions. Frames
+        sessions. A full or owner link can also add a prompt&rsquo;s
+        attachments to the project, and in a project lobby read, upload and
+        remove the project&rsquo;s files. Frames
         are sealed end to end with a key that lives only in the link; the
         relay sees ciphertext. This tab keeps the link for as long as it is
         open, so a reload lands back in the room; closing the tab forgets
@@ -276,6 +295,7 @@
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
     <script src="/viewer-session.js" defer></script>
+    <script src="/viewer-files.js" defer></script>
     <script src="/viewer-lobby.js" defer></script>
     <script src="/viewer-editing.js" defer></script>
     <script src="/viewer.js" defer></script>
