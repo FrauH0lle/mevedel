@@ -294,7 +294,7 @@
 
   :doc "Library requests reach the host's library only for writable links"
   (let* ((directory (make-temp-file "mevedel-editing-library-" t))
-         (mevedel-shared-library-file (file-name-concat directory "library.excalidrawlib"))
+         (mevedel-shared-library-directory directory)
          (session (mevedel-session--create))
          (guests (make-hash-table :test #'eql))
          (guest (list :name "Alice" :writable t))
@@ -314,12 +314,14 @@
                               (mevedel-shared-editing--parse
                                (base64-decode-string (plist-get (car frames) :data))))
                           (error (list :error (error-message-string err))))))
-            (should (string-match-p "\"libraryItems\":\\[\\]"
-                                    (plist-get (plist-get (reply '(:action "library")) :result) :text)))
+            (should (equal "Built-in"
+                           (plist-get (aref (plist-get (plist-get (reply '(:action "library")) :result)
+                                                       :libraries) 0)
+                                      :name)))
             (plist-put guest :writable nil)
             (should (string-match-p "does not permit"
                                     (plist-get (reply '(:action "library")) :error)))
-            (should-not (file-exists-p mevedel-shared-library-file))))
+            (should-not (directory-files directory nil "excalidrawlib"))))
       (delete-directory directory t))))
 
 (provide 'test-mevedel-collaboration-editing)

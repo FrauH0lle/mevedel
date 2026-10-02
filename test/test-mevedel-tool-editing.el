@@ -85,6 +85,48 @@
 		       (kill-buffer buffer))
 		     (delete-directory directory t))))
 
+(mevedel-deftest mevedel-tool-editing--edit
+  (:doc "The model lists library items with a sheet and inserts one into a board" :quiet t)
+  (let* ((directory (make-temp-file "mevedel-editing-library-tools-" t))
+         (workspace (mevedel-workspace--create :root directory))
+         (session (mevedel-session--create :save-path directory
+                                           :workspace workspace :working-directory directory
+                                           :permission-mode 'full-auto :authority-mode 'pid-lock))
+         (buffer (generate-new-buffer " *editing-library-tools-test*"))
+         (mevedel-shared-library-directory (file-name-concat directory "libraries"))
+         (mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (mevedel-tool-editing--register)
+          (cl-labels ((run (name args)
+                        (let (reply)
+                          (mevedel-pipeline-run-tool-outcome
+                           (mevedel-tool-get name) (lambda (value) (setq reply value)) args)
+                          (let ((deadline (+ (float-time) 10)))
+                            (while (and (not reply) (< (float-time) deadline))
+                              (accept-process-output nil 0.05)))
+                          (should (eq 'success (plist-get reply :status)))
+                          reply)))
+            (let* ((listed (run "SharedRead" '(:library t)))
+                   (items (plist-get (mevedel-shared-editing--parse (plist-get listed :result)) :items)))
+              (should (equal "Built-in/builtin-database" (plist-get (aref items 0) :ref)))
+              (should (plist-get listed :media)))
+            (let* ((board (mevedel-shared-editing--parse
+                           (plist-get (run "SharedCreate" '(:kind "whiteboard" :title "Stores")) :result)))
+                   (inserted (mevedel-shared-editing--parse
+                              (plist-get (run "SharedEdit" (list :id (plist-get board :id) :action "insert"
+                                                                 :item "Built-in/builtin-database" :x 40 :y 60))
+                                         :result))))
+              (should (= 4 (length (plist-get inserted :inserted))))
+              (should (= 40 (apply #'min (mapcar (lambda (e) (plist-get e :x))
+                                                 (append (plist-get inserted :content) nil))))))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (mevedel-shared-editing-stop))
+        (kill-buffer buffer))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-tool-editing--register
   (:doc "Shared tools serialize through the provider schema with correct optional arguments")
   (let ((mevedel-tool--registry (make-hash-table :test #'equal))
@@ -112,7 +154,7 @@
           ("SharedEdit"
            (should (equal (plist-get (plist-get properties :changes) :items) '(:type "object")))
            (should (equal (plist-get (plist-get properties :action) :enum)
-                          ["patch" "rename" "revert"]))))))))
+                          ["patch" "insert" "rename" "revert"]))))))))
 
 (mevedel-deftest mevedel-tool-editing--restore-nulls
   (:doc "Lower gptel's lossless null marker in model-supplied args before host encoding")

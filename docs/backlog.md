@@ -35,11 +35,11 @@ prevent suspend after work ends.
 
 [ADR 0121](adr/0121-store-whiteboards-as-excalidraw-elements.md) stores and
 draws Excalidraw elements but cherry-picks interaction. Not yet implemented:
-elbow-arrow routing (stored points are drawn and preserved), a rotation
-handle, object and grid snapping, a frame tool and moving children with their
+obstacle avoidance and segment dragging for elbow arrows (Excalidraw's A*
+router), object and grid snapping, a frame tool and moving children with their
 frame, sticky-note font auto-fit with its lifted corner and date footer, the
-constant-width laser-pointer stroke, editing of line points, and embedding the
-scene in PNG/SVG downloads. Add each when a board needs it; Excalidraw's
+constant-width laser-pointer stroke, and embedding the scene in PNG/SVG
+downloads. Add each when a board needs it; Excalidraw's
 behavior is compiled in excali-mode's `docs/excalidraw-spec.md`
 (https://github.com/yibie/excali-mode).
 

@@ -1,0 +1,192 @@
+{
+  "type": "excalidrawlib",
+  "version": 2,
+  "source": "https://github.com/FrauH0lle/mevedel",
+  "libraryItems": [
+    {
+      "id": "builtin-database",
+      "status": "published",
+      "created": 0,
+      "name": "Database",
+      "elements": [
+        {
+          "strokeColor": "#1e1e1e",
+          "backgroundColor": "transparent",
+          "fillStyle": "solid",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "roughness": 1,
+          "opacity": 100,
+          "angle": 0,
+          "roundness": {
+            "type": 2
+          },
+          "groupIds": [
+            "builtin-cylinder"
+          ],
+          "frameId": null,
+          "link": null,
+          "locked": false,
+          "seed": 695347901,
+          "startArrowhead": null,
+          "endArrowhead": null,
+          "polygon": false,
+          "id": "cylinder-bottom",
+          "type": "line",
+          "x": 0,
+          "y": 124,
+          "width": 120,
+          "height": 16,
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              18,
+              10
+            ],
+            [
+              60,
+              16
+            ],
+            [
+              102,
+              10
+            ],
+            [
+              120,
+              0
+            ]
+          ],
+          "index": "a0",
+          "version": 1,
+          "versionNonce": 1998983919,
+          "isDeleted": false,
+          "boundElements": null,
+          "updated": 0,
+          "created": null
+        },
+        {
+          "strokeColor": "#1e1e1e",
+          "backgroundColor": "transparent",
+          "fillStyle": "solid",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "roughness": 1,
+          "opacity": 100,
+          "angle": 0,
+          "roundness": null,
+          "groupIds": [
+            "builtin-cylinder"
+          ],
+          "frameId": null,
+          "link": null,
+          "locked": false,
+          "seed": 690196803,
+          "startArrowhead": null,
+          "endArrowhead": null,
+          "polygon": false,
+          "id": "cylinder-left",
+          "type": "line",
+          "x": 0,
+          "y": 16,
+          "width": 0,
+          "height": 108,
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              108
+            ]
+          ],
+          "index": "a1",
+          "version": 1,
+          "versionNonce": 1004275985,
+          "isDeleted": false,
+          "boundElements": null,
+          "updated": 0,
+          "created": null
+        },
+        {
+          "strokeColor": "#1e1e1e",
+          "backgroundColor": "transparent",
+          "fillStyle": "solid",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "roughness": 1,
+          "opacity": 100,
+          "angle": 0,
+          "roundness": null,
+          "groupIds": [
+            "builtin-cylinder"
+          ],
+          "frameId": null,
+          "link": null,
+          "locked": false,
+          "seed": 1348696652,
+          "startArrowhead": null,
+          "endArrowhead": null,
+          "polygon": false,
+          "id": "cylinder-right",
+          "type": "line",
+          "x": 120,
+          "y": 16,
+          "width": 0,
+          "height": 108,
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              108
+            ]
+          ],
+          "index": "a2",
+          "version": 1,
+          "versionNonce": 169198070,
+          "isDeleted": false,
+          "boundElements": null,
+          "updated": 0,
+          "created": null
+        },
+        {
+          "strokeColor": "#1e1e1e",
+          "backgroundColor": "transparent",
+          "fillStyle": "solid",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "roughness": 1,
+          "opacity": 100,
+          "angle": 0,
+          "roundness": null,
+          "groupIds": [
+            "builtin-cylinder"
+          ],
+          "frameId": null,
+          "link": null,
+          "locked": false,
+          "seed": 1134092433,
+          "id": "cylinder-top",
+          "type": "ellipse",
+          "x": 0,
+          "y": 0,
+          "width": 120,
+          "height": 32,
+          "index": "a3",
+          "version": 1,
+          "versionNonce": 136009875,
+          "isDeleted": false,
+          "boundElements": null,
+          "updated": 0,
+          "created": null
+        }
+      ]
+    }
+  ]
+}

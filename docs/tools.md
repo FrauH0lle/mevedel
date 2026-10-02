@@ -36,7 +36,8 @@ ToolSearch delivers current contracts; the dialect manual lists pure operations.
 `SharedRead`, `SharedCreate`, and `SharedEdit` expose session-owned collaborative
 whiteboards and documents. Reads return revisioned targets and matching board
 media; mutations use exact target preconditions and the normal permission
-pipeline. Whiteboard targets are Excalidraw elements. An atomic commit and its result delivery defer cancellation
+pipeline. Whiteboard targets are Excalidraw elements; `SharedRead` also lists
+the host's element libraries, whose items `SharedEdit` inserts. An atomic commit and its result delivery defer cancellation
 settlement until the actual durable outcome is known. See
 [shared editing](shared-editing.md) for schemas, reversion, and host ownership.
 

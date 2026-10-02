@@ -1,27 +1,38 @@
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
 import {chromium,firefox} from 'playwright';
 import {handle} from '../host.mjs';
 
 // Packaged iframe and its real host API, connected over the native item port.
-/* An in-memory stand-in for the host's library requests. CATALOG lists
-   public libraries; LIBRARIES maps a source to its file text. */
-export function libraryHost(catalog = [], libraries = {}) {
-  let items = [];
-  const text = () => ({ text: JSON.stringify({ type: 'excalidrawlib', version: 2, libraryItems: items }) });
+/* An in-memory stand-in for mevedel-shared-library: the personal, installed
+   and built-in libraries. CATALOG lists public libraries; SOURCES maps a
+   public library's source to its file text. */
+export function libraryHost(catalog = [], sources = {}) {
+  const lib = (items) => JSON.stringify({ type: 'excalidrawlib', version: 2, libraryItems: items });
+  const builtin = readFileSync(new URL('../builtin.excalidrawlib', import.meta.url), 'utf8');
+  let personal = [];
+  const installed = new Map();
+  const listing = () => ({ libraries: [
+    ...(personal.length ? [{ name: 'My library', kind: 'personal', text: lib(personal) }] : []),
+    ...[...installed].map(([name, text]) => ({ name, kind: 'installed', text })),
+    { name: 'Built-in', kind: 'builtin', text: builtin },
+  ] });
+  const fetch = (source) => {
+    if (!sources[source]) throw new Error('Library request failed: 404');
+    return sources[source];
+  };
   const handlers = {
-    library: () => text(),
-    'library-add': ({ text: added }) => {
-      const fresh = JSON.parse(added).libraryItems.filter((item) => !items.some((known) => known.id === item.id));
-      items = [...fresh, ...items];
-      return text();
+    library: listing,
+    'library-add': ({ text }) => {
+      personal = [...JSON.parse(text).libraryItems.filter((item) => !personal.some((known) => known.id === item.id)), ...personal];
+      return listing();
     },
-    'library-remove': ({ ids }) => { items = items.filter((item) => !ids.includes(item.id)); return text(); },
+    'library-remove': ({ ids }) => { personal = personal.filter((item) => !ids.includes(item.id)); return listing(); },
+    'library-install': ({ source, name }) => { installed.set(name, fetch(source)); return listing(); },
+    'library-uninstall': ({ name }) => { installed.delete(name); return listing(); },
     'library-catalog': () => ({ libraries: catalog }),
-    'library-fetch': ({ source }) => {
-      if (!libraries[source]) throw new Error('Library request failed: 404');
-      return { text: libraries[source] };
-    },
+    'library-fetch': ({ source }) => ({ text: fetch(source) }),
   };
   const handle = (args) => { handle.requests.push(args); return handlers[args.action](args); };
   handle.requests = [];

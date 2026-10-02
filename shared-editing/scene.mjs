@@ -94,6 +94,7 @@ export function linearPath(e, byId) {
       ? { target, binding, focus: fixedPointOf(target, binding) } : null;
   });
   const last = points.length - 1;
+  if (e.elbowed && !e.fixedSegments?.length) return elbowPath(points[0], points[last], ends);
   const reference = (i) => {
     const other = i ? 0 : last;
     if (points.length === 2) return ends[i ? 0 : 1]?.focus || points[other];
@@ -104,6 +105,49 @@ export function linearPath(e, byId) {
   if (resolved[0]) points[0] = resolved[0];
   if (resolved[1]) points[last] = resolved[1];
   return points;
+}
+// Elbow arrows (Excalidraw's elbowArrow.ts routes with A* around obstacles).
+// ponytail: a fixed orthogonal route between side anchors that does not avoid
+// other shapes; port Excalidraw's router when boards need obstacle avoidance.
+const STUB = 20;
+const dominant = ([dx, dy]) => (Math.abs(dx) >= Math.abs(dy) ? [Math.sign(dx) || 1, 0] : [0, Math.sign(dy) || 1]);
+/* The midpoint of TARGET's side facing TOWARD, offset by the binding gap,
+   and the outward heading there. */
+function sideAnchor(target, toward) {
+  const c = center(target), gap = 5 + target.strokeWidth / 2;
+  const [lx, ly] = rotate(toward, c, -target.angle);
+  const horizontal = Math.abs(lx - c[0]) / (target.width || 1) >= Math.abs(ly - c[1]) / (target.height || 1);
+  const heading = horizontal ? [Math.sign(lx - c[0]) || 1, 0] : [0, Math.sign(ly - c[1]) || 1];
+  const side = [c[0] + heading[0] * (target.width / 2 + gap), c[1] + heading[1] * (target.height / 2 + gap)];
+  return { point: rotate(side, c, target.angle), heading: rotate(heading, [0, 0], target.angle) };
+}
+/* An orthogonal route from START to END; ENDS are the bound targets. */
+function elbowPath(start, end, ends) {
+  const anchors = [0, 1].map((i) => {
+    const target = ends[i]?.target, other = ends[1 - i]?.target;
+    const toward = other ? center(other) : i ? start : end;
+    return target ? { ...sideAnchor(target, toward), stub: STUB } : null;
+  });
+  const [s, t] = [anchors[0]?.point || start, anchors[1]?.point || end];
+  const hs = anchors[0]?.heading || dominant([t[0] - s[0], t[1] - s[1]]);
+  const he = anchors[1]?.heading || dominant([s[0] - t[0], s[1] - t[1]]);
+  const s1 = [s[0] + hs[0] * (anchors[0]?.stub || 0), s[1] + hs[1] * (anchors[0]?.stub || 0)];
+  const e1 = [t[0] + he[0] * (anchors[1]?.stub || 0), t[1] + he[1] * (anchors[1]?.stub || 0)];
+  const across = Math.abs(hs[0]) >= Math.abs(hs[1]), arrive = Math.abs(he[0]) >= Math.abs(he[1]);
+  const middle = across && arrive ? [[(s1[0] + e1[0]) / 2, s1[1]], [(s1[0] + e1[0]) / 2, e1[1]]]
+    : !across && !arrive ? [[s1[0], (s1[1] + e1[1]) / 2], [e1[0], (s1[1] + e1[1]) / 2]]
+    : across ? [[e1[0], s1[1]]] : [[s1[0], e1[1]]];
+  const route = [];
+  for (const p of [s, s1, ...middle, e1, t]) {
+    const prev = route.at(-1);
+    if (prev && Math.hypot(p[0] - prev[0], p[1] - prev[1]) < 0.5) continue;
+    // Drop a middle point that continues a straight run.
+    const before = route.at(-2);
+    if (before && prev && ((Math.abs(before[0] - prev[0]) < 0.5 && Math.abs(prev[0] - p[0]) < 0.5) ||
+        (Math.abs(before[1] - prev[1]) < 0.5 && Math.abs(prev[1] - p[1]) < 0.5))) route.pop();
+    route.push(p);
+  }
+  return route.length >= 2 ? route : [s, t];
 }
 /* Axis-aligned [x, y, w, h] of a resolved element. */
 export function elementBox(e) {
