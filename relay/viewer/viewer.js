@@ -61,6 +61,8 @@
     // host re-checks the token on every owner frame, so a page that
     // sets this by hand gains nothing but buttons that get refused.
     owner: false,
+    // Whether this link carried the write token; cosmetic like `owner'.
+    writable: false,
   };
 
   let transport = null;
@@ -180,7 +182,9 @@
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession, onVisibility: window.mevedelAppearance.editorVisible});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
-     summarize: summarizeSession});
+     summarize: summarizeSession, notice: flashNotice});
+  const lobby = window.mevedelLobbyView.create(
+    {state, send, el, notice: flashNotice, sessions});
 
   let executionResultSequence = 0;
   let pendingExecutionResult = null;
@@ -375,13 +379,14 @@
     return `◆ ${id.slice(0, 8)}`;
   }
 
-  // Send TEXT into item ID's conversation; say why when that fails.
-  async function discussItem(id, text) {
+  // Send TEXT and attachment IMAGES into item ID's conversation; say why
+  // when that fails.
+  async function discussItem(id, text, images = []) {
     try {
       if (id.startsWith('artifact:')) {
-        await artifacts.discuss(id.slice('artifact:'.length), text);
+        await artifacts.discuss(id.slice('artifact:'.length), text, images);
       } else {
-        await editing.ask(id, text);
+        await editing.ask(id, text, images);
       }
       flashNotice(`Sent to ${directiveLabel(`item:${id}`)}.`);
       return true;
@@ -680,172 +685,10 @@
   }
 
   /* -- Attachments --------------------------------------------------- */
-  // Photos are downscaled client-side to fit the sealed prompt frame under
-  // the relay's read limit; other files are refused when they overrun it,
-  // because a log cannot be made smaller by resampling. The host enforces
-  // the same allowlist and budget.
 
-  const MAX_FILES = 3;
-  // Decoded bytes, all attachments. Base64 costs a third and the prompt
-  // text shares the frame, so this leaves the 2 MiB relay limit ~85 KiB
-  // of headroom even with a maximum-length prompt beside it.
-  const FILE_BUDGET = 1280 * 1024;
-  // Mirrors the host's allowlist. Read decides text or media downstream.
-  const MIME_BY_EXTENSION = {
-    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
-    webp: 'image/webp', pdf: 'application/pdf', txt: 'text/plain',
-    log: 'text/plain', text: 'text/plain', md: 'text/markdown',
-    csv: 'text/csv', json: 'application/json',
-    patch: 'text/x-patch', diff: 'text/x-patch',
-  };
-  const ALLOWED_MIME = new Set(Object.values(MIME_BY_EXTENSION));
-  const pendingFiles = []; // {mime, label, data (base64), bytes, url}
-  let attachmentGeneration = 0;
-  let attachmentWork = Promise.resolve();
+  const tray = window.mevedelAttachments.create({list: attachments, notice: flashNotice});
+  const addFiles = files => tray.add(files);
   let submitting = false;
-
-  function disposeAttachment(item) {
-    if (item && item.url) {
-      URL.revokeObjectURL(item.url);
-      item.url = null;
-    }
-  }
-
-  function clearAttachments() {
-    attachmentGeneration++;
-    pendingFiles.splice(0).forEach(disposeAttachment);
-    renderAttachments();
-  }
-
-  function removeAttachments(items) {
-    for (const item of items) {
-      const index = pendingFiles.indexOf(item);
-      if (index >= 0) disposeAttachment(pendingFiles.splice(index, 1)[0]);
-    }
-    renderAttachments();
-  }
-
-  // Browsers report "" or application/octet-stream for .log, .patch, and
-  // friends, so the extension decides whenever the type is not one we take.
-  function attachmentMime(file) {
-    if (ALLOWED_MIME.has(file.type)) return file.type;
-    const extension = (file.name || '').split('.').pop().toLowerCase();
-    return MIME_BY_EXTENSION[extension] || null;
-  }
-
-  function renderAttachments() {
-    if (!attachments) return;
-    attachments.replaceChildren();
-    pendingFiles.forEach((item, index) => {
-      const chip = el('span', 'attachment');
-      if (item.url) {
-        const thumb = el('img', 'attachment-thumb');
-        thumb.src = item.url;
-        thumb.alt = `attachment ${index + 1}`;
-        chip.append(thumb);
-      } else {
-        chip.append(el('span', 'attachment-name', item.label));
-      }
-      const removeButton = el('button', 'attachment-remove', '✕');
-      removeButton.type = 'button';
-      removeButton.setAttribute('aria-label', `Remove attachment ${index + 1}`);
-      removeButton.addEventListener('click', () => {
-        disposeAttachment(pendingFiles.splice(index, 1)[0]);
-        renderAttachments();
-      });
-      chip.append(removeButton);
-      attachments.append(chip);
-    });
-  }
-
-  function pendingFileBytes() {
-    return pendingFiles.reduce((sum, item) => sum + item.bytes, 0);
-  }
-
-  function base64OfBytes(buffer) {
-    let binary = '';
-    buffer.forEach(byte => { binary += String.fromCharCode(byte); });
-    return btoa(binary);
-  }
-
-  async function downscaleImage(file, budget) {
-    const bitmap = await createImageBitmap(file);
-    try {
-      const longest = Math.max(bitmap.width, bitmap.height);
-      let scale = Math.min(1, 1568 / longest);
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-        canvas.getContext('2d').drawImage(bitmap, 0, 0,
-                                          canvas.width, canvas.height);
-        const quality = Math.max(0.4, 0.85 - attempt * 0.15);
-        const blob = await new Promise(resolve =>
-          canvas.toBlob(resolve, 'image/jpeg', quality));
-        if (blob && blob.size <= budget) return blob;
-        if (attempt >= 2) scale *= 0.7;
-      }
-      return null;
-    } finally {
-      bitmap.close();
-    }
-  }
-
-  async function addFilesNow(files, generation) {
-    for (const file of files) {
-      if (generation !== attachmentGeneration) return;
-      const mime = attachmentMime(file);
-      if (!mime) {
-        flashNotice(`${file.name || 'That file'} is not an accepted type.`);
-        continue;
-      }
-      if (pendingFiles.length >= MAX_FILES) {
-        flashNotice(`At most ${MAX_FILES} attachments per prompt.`);
-        break;
-      }
-      const budget = FILE_BUDGET - pendingFileBytes();
-      if (mime.startsWith('image/')) {
-        const blob = await downscaleImage(file, budget).catch(() => null);
-        if (generation !== attachmentGeneration) return;
-        if (!blob) {
-          flashNotice('Image too large for the frame budget.');
-          continue;
-        }
-        const buffer = new Uint8Array(await blob.arrayBuffer());
-        if (generation !== attachmentGeneration) return;
-        pendingFiles.push({
-          mime: 'image/jpeg',
-          label: file.name || 'photo',
-          data: base64OfBytes(buffer),
-          bytes: buffer.length,
-          url: URL.createObjectURL(blob),
-        });
-      } else {
-        if (file.size > budget) {
-          flashNotice(`${file.name || 'That file'} is over the `
-                      + `${Math.floor(budget / 1024)} KB left in this prompt.`);
-          continue;
-        }
-        const buffer = new Uint8Array(await file.arrayBuffer());
-        if (generation !== attachmentGeneration) return;
-        pendingFiles.push({
-          mime,
-          label: file.name || 'attachment',
-          data: base64OfBytes(buffer),
-          bytes: buffer.length,
-          url: null,
-        });
-      }
-    }
-    renderAttachments();
-  }
-
-  function addFiles(files) {
-    const generation = attachmentGeneration;
-    const work = attachmentWork.then(() => addFilesNow(files, generation));
-    attachmentWork = work.catch(() => {});
-    return work;
-  }
 
   /* -- Composer ------------------------------------------------------ */
 
@@ -1051,7 +894,7 @@
     try { sessionStorage.removeItem('mevedel-tab-share'); }
     catch (_error) { /* storage unavailable */ }
     notifications.render();
-    clearAttachments();
+    tray.clear();
     clearRequests();
     showOwnQueue([]);
     agents.close();
@@ -1062,6 +905,7 @@
     showSkillChips([]);
     setComposerVisible(false);
     sessions.setInviteVisible(false);
+    document.getElementById('lobby').hidden = true;
     refreshFilter();
     renderModeline();
     setConnection(connectionText, 'ended');
@@ -1166,11 +1010,20 @@
       renderModeline();
       editing.conversation();
       artifacts.activity();
+    } else if (frame.t === 'lobby') {
+      lobby.show(frame);
+      if (sessionLabel && typeof frame.project === 'string') {
+        sessionLabel.textContent = `Lobby · ${frame.project}`;
+      }
+      setConnection('Connected', 'connected');
+    } else if (frame.t === 'open-session') {
+      lobby.opened(frame);
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,
         link: frame.link, name: frame.name,
       });
+      lobby.created(frame);
     } else if (frame.t === 'room') {
       sessions.offerRoom({name: frame.name, link: frame.link});
     } else if (frame.t === 'bye') {
@@ -1195,23 +1048,28 @@
       const filter = state.filter;
       const name = guestName(true);
       try {
-        await attachmentWork;
+        await tray.settled();
+        const submittedFiles = tray.items();
         // An armed invocation may legitimately carry no arguments.
-        if (!text.trim() && !pendingFiles.length && !armed.length) return;
+        if (!text.trim() && !submittedFiles.length && !armed.length) return;
         if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
           flashNotice('Prompt too large.');
           return;
         }
         if (itemScope(filter)) {
           // An item discussion is its own conversation about that item;
-          // commands and attachments belong to the main chat.
-          if (armed.length || pendingFiles.length) {
-            flashNotice('Commands and attachments go to the main chat; select Main chat to send them.');
+          // commands belong to the main chat.
+          if (armed.length) {
+            flashNotice('Commands go to the main chat; select Main chat to send them.');
             return;
           }
           if (!text.trim()) return;
-          const sent = await discussItem(filter.slice('item:'.length), text.trim());
-          if (sent && composerInput.value === text) composerInput.value = '';
+          const sent = await discussItem(filter.slice('item:'.length), text.trim(),
+                                         tray.frame(submittedFiles));
+          if (sent) {
+            if (composerInput.value === text) composerInput.value = '';
+            tray.remove(submittedFiles);
+          }
           return;
         }
         const frame = {t: 'prompt', name};
@@ -1230,17 +1088,13 @@
             frame.directive = filter;
           }
         }
-        const submittedFiles = pendingFiles.slice();
-        if (submittedFiles.length) {
-          frame.images = submittedFiles.map(
-            item => ({mime: item.mime, data: item.data}));
-        }
+        if (submittedFiles.length) frame.images = tray.frame(submittedFiles);
         if (!await send(frame)) {
           flashNotice('Connection lost; prompt kept.');
           return;
         }
         if (composerInput.value === text) composerInput.value = '';
-        removeAttachments(submittedFiles);
+        tray.remove(submittedFiles);
         // One tap, one invocation: disarm so the next send is a prompt.
         if (state.armed === armed && armed.length) setArmedInvocation(null);
       } finally {
@@ -1250,22 +1104,8 @@
     // The Send button is type="submit", so the form's submit event already
     // covers it; a click handler here would double-send every prompt.
     stopButton.addEventListener('click', () => send({t: 'abort'}));
-    if (attachButton && imageInput) {
-      attachButton.addEventListener('click', () => imageInput.click());
-      imageInput.addEventListener('change', () => {
-        addFiles([...imageInput.files]);
-        imageInput.value = '';
-      });
-    }
-    if (composerInput) {
-      composerInput.addEventListener('paste', event => {
-        const files = [...(event.clipboardData?.items || [])]
-          .filter(item => item.kind === 'file')
-          .map(item => item.getAsFile())
-          .filter(Boolean);
-        if (files.length) addFiles(files);
-      });
-    }
+    window.mevedelAttachments.bind(tray, {
+      target: composer, input: composerInput, button: attachButton, picker: imageInput});
     if (composerName) {
       composerName.value = guestName();
       const commitName = () => {
@@ -1316,6 +1156,7 @@
   } else {
     state.fragment = rawFragment;
     state.owner = Boolean(credentials.ownerToken);
+    state.writable = Boolean(credentials.writeToken);
     try { sessionStorage.setItem('mevedel-tab-share', rawFragment); }
     catch (_error) { /* storage unavailable */ }
     // Handing on access is derived from the secret this page holds, so

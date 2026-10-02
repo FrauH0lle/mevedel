@@ -37,6 +37,8 @@
                   "mevedel-collaboration-artifact" (room guest id))
 
 ;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--save-guest-files
+                  "mevedel-collaboration-guest" (data-buffer images))
 (declare-function mevedel-collaboration--guest-role
                   "mevedel-collaboration-guest" (guest))
 (declare-function mevedel-collaboration--request-id-p
@@ -302,13 +304,17 @@ A retried send then succeeds without queueing the message twice."
                           (funcall known (plist-get (cdr attribution) :shared)))
                         (mevedel-transcript-audit-guest-prompts)))))))
 
-(defun mevedel-collaboration--artifact-ask (room guest record question-id text comment)
+(defun mevedel-collaboration--artifact-ask
+    (room guest record question-id text comment &optional images)
   "Queue GUEST's TEXT about artifact RECORD into its conversation in ROOM.
 QUESTION-ID identifies the request; COMMENT is the thread it belongs to, or
-nil for a message about the whole artifact.  Return the reply fields."
+nil for a message about the whole artifact.  IMAGES are the sender's
+attachment frames.  Return the reply fields."
   (if (mevedel-collaboration--artifact-question-known-p room question-id)
       (list :queued t :questionId question-id)
-    (let* ((name (plist-get record :artifact))
+    (let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
+           (paths (mevedel-collaboration--save-guest-files data-buffer images))
+           (name (plist-get record :artifact))
            (shared (append (list :kind "artifact"
                                  :itemId (concat "artifact:" name)
                                  :title name
@@ -319,15 +325,22 @@ nil for a message about the whole artifact.  Return the reply fields."
                            (when comment
                              (list :commentId (plist-get comment :id)
                                    :anchor (plist-get comment :anchor)))))
-           (queued (mevedel-view-enqueue-external-follow-up
-                    (mevedel-collaboration--room-data-buffer room)
-                    (concat text mevedel-collaboration--artifact-comment-snapshot-heading
-                            (mevedel-collaboration--artifact-comment-snapshot
-                             record comment))
-                    :guest-name (plist-get guest :name)
-                    :guest-id (plist-get guest :guest-id)
-                    :guest-role (mevedel-collaboration--guest-role guest)
-                    :shared-question shared)))
+           queued)
+      (unwind-protect
+          (setq queued
+                (mevedel-view-enqueue-external-follow-up
+                 data-buffer
+                 (concat text mevedel-collaboration--artifact-comment-snapshot-heading
+                         (mevedel-collaboration--artifact-comment-snapshot
+                          record comment))
+                 :guest-name (plist-get guest :name)
+                 :guest-id (plist-get guest :guest-id)
+                 :guest-role (mevedel-collaboration--guest-role guest)
+                 :paths paths
+                 :shared-question shared))
+        ;; Files of a message that was not queued leave with it.
+        (unless queued
+          (dolist (path paths) (ignore-errors (delete-file path)))))
       (unless queued (error "The session cannot accept a message right now"))
       (append (list :queued t :questionId question-id)
               (when-let* ((position (mevedel-collaboration--queue-position room queued)))
@@ -394,7 +407,7 @@ Signal an error with a message for the guest when the action is refused."
           room guest record
           (mevedel-collaboration--artifact-comment-id (plist-get frame :questionId))
           (mevedel-collaboration--artifact-comment-message (plist-get frame :text))
-          nil))
+          nil (plist-get frame :images)))
         ("post"
          (let* ((id (mevedel-collaboration--artifact-comment-id (plist-get frame :commentId)))
                 (existing (funcall find id))

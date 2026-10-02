@@ -60,6 +60,10 @@
 (declare-function mevedel-collaboration--publish-history "mevedel-collaboration-history" (room &optional peer))
 (autoload 'mevedel-collaboration--publish-history "mevedel-collaboration-history")
 
+;; `mevedel-collaboration-lobby'
+(declare-function mevedel-collaboration-lobby--status
+                  "mevedel-collaboration-lobby" ())
+
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection" (data-buffer))
@@ -387,6 +391,26 @@ parent session's room, reached through the side data buffer's parent."
       (condition-case nil
           (base64-decode-string padded)
         (error nil)))))
+
+(defun mevedel-collaboration--links
+    (web-origin room-id key write-token owner-token)
+  "Return the view, full and owner links for ROOM-ID at WEB-ORIGIN.
+The result is a plist of `:link-view', `:link-full' and `:link-owner'.
+Each tier's secret is a prefix of the next: KEY, then WRITE-TOKEN, then
+OWNER-TOKEN."
+  (let ((link (lambda (secret)
+                (format "%s/#%s.%s" web-origin room-id
+                        (mevedel-collaboration--base64url secret)))))
+    (list :link-view (funcall link key)
+          :link-full (funcall link (concat key write-token))
+          :link-owner (funcall link (concat key write-token owner-token)))))
+
+(defun mevedel-collaboration--guest-link (room guest)
+  "Return ROOM's link at GUEST's own tier.
+Handing a guest a room is never a way to gain authority."
+  (plist-get room (cond ((plist-get guest :owner) :link-owner)
+                        ((plist-get guest :writable) :link-full)
+                        (t :link-view))))
 
 (defun mevedel-collaboration--host-headers ()
   "Return the extra handshake headers for this host's relay dial."
@@ -760,36 +784,28 @@ returning the live room."
                                (mevedel-collaboration--on-state
                                 data-buffer state))))
             (puthash data-buffer
-                  (list :transport transport
-                        :session session
-                        :data-buffer data-buffer
-                        :session-label
-                        (mevedel-collaboration--session-label
-                         session data-buffer)
-                        :room-id room-id
-                        :key key
-                        :write-token write-token
-                        :owner-token owner-token
-                        :link-view
-                        (format "%s/#%s.%s" web-origin room-id
-                                (mevedel-collaboration--base64url key))
-                        :link-full
-                        (format "%s/#%s.%s" web-origin room-id
-                                (mevedel-collaboration--base64url
-                                 (concat key write-token)))
-                        :link-owner
-                        (format "%s/#%s.%s" web-origin room-id
-                                (mevedel-collaboration--base64url
-                                 (concat key write-token owner-token)))
-                        :records records
-                        :queue nil
-                        :pending-tools nil
-                        :tool-call-occurrences
-                        (make-hash-table :test #'equal)
-                        :guests (make-hash-table :test #'eql)
-                        :push-guests (make-hash-table :test #'equal)
-                        :ui-requests (make-hash-table :test #'eql)
-                        :publish-timer nil)
+                  (append
+                   (list :transport transport
+                         :session session
+                         :data-buffer data-buffer
+                         :session-label
+                         (mevedel-collaboration--session-label
+                          session data-buffer)
+                         :room-id room-id
+                         :key key
+                         :write-token write-token
+                         :owner-token owner-token
+                         :records records
+                         :queue nil
+                         :pending-tools nil
+                         :tool-call-occurrences
+                         (make-hash-table :test #'equal)
+                         :guests (make-hash-table :test #'eql)
+                         :push-guests (make-hash-table :test #'equal)
+                         :ui-requests (make-hash-table :test #'eql)
+                         :publish-timer nil)
+                   (mevedel-collaboration--links
+                    web-origin room-id key write-token owner-token))
                   mevedel-collaboration--rooms)
             (with-current-buffer data-buffer
               (add-hook 'kill-buffer-hook
@@ -891,12 +907,19 @@ never touched: that is a report, not a teardown."
               "no guest connected"))))
 
 (defun mevedel-collaboration-status ()
-  "Report every active share's status without exposing its secrets."
+  "Report every active share and lobby without exposing secrets."
   (interactive)
-  (if-let* ((rooms (mevedel-collaboration--room-list)))
-      (message "mevedel: collaboration active for %s"
-               (mapconcat #'mevedel-collaboration--room-status rooms "; "))
-    (message "mevedel: collaboration inactive")))
+  (let ((lines (delq nil
+                     (append
+                      (mapcar #'mevedel-collaboration--room-status
+                              (mevedel-collaboration--room-list))
+                      ;; A lobby exists only once its module is loaded.
+                      (list (and (fboundp 'mevedel-collaboration-lobby--status)
+                                 (mevedel-collaboration-lobby--status)))))))
+    (if lines
+        (message "mevedel: collaboration active for %s"
+                 (mapconcat #'identity lines "; "))
+      (message "mevedel: collaboration inactive"))))
 
 
 ;;

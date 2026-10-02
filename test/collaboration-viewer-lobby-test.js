@@ -1,0 +1,194 @@
+/* Focused lobby controller assertions.
+ * Run: node test/collaboration-viewer-lobby-test.js
+ */
+'use strict';
+
+const assert = require('node:assert/strict');
+const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
+
+// Frames are built inside the page's own realm; compare their content.
+const plain = value => JSON.parse(JSON.stringify(value));
+
+const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
+             'lobby-title', 'lobby-new', 'lobby-refresh'];
+
+function build({writable = true, owner = false} = {}) {
+  const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
+  nodes.lobby.hidden = true;
+  const body = new Element('body');
+  const document = {
+    body,
+    title: '',
+    visibilityState: 'visible',
+    listeners: {},
+    addEventListener(type, callback) {
+      (this.listeners[type] ||= []).push(callback);
+    },
+    getElementById: id => nodes[id],
+    createElement: tag => new Element(tag),
+  };
+  const window = {};
+  const context = {window, document, console, Date};
+  load('relay/viewer/viewer-lobby.js', context);
+  const sent = [];
+  const notices = [];
+  const followed = [];
+  const remembered = [];
+  const newSession = [];
+  const lobby = window.mevedelLobbyView.create({
+    state: {writable, owner},
+    send: frame => sent.push(frame),
+    el: (tag, className, text) => element(document, tag, className, text),
+    notice: text => notices.push(text),
+    sessions: {
+      rememberCurrent: name => remembered.push(name),
+      openNewSession: note => newSession.push(note),
+    },
+    navigate: link => followed.push(link),
+  });
+  return {lobby, nodes, body, document, sent, notices, followed,
+          remembered, newSession, age: window.mevedelLobbyView.age};
+}
+
+const now = Math.floor(Date.now() / 1000);
+const listing = {
+  t: 'lobby', project: 'mevedel', omitted: 0,
+  sessions: [
+    {id: 'a', name: 'design', updated: now - 120, preview: 'Sketch the lobby',
+     live: true, shared: true},
+    {id: 'b', name: 'notes', updated: now - 7200, live: true, shared: false},
+    {id: 'c', name: 'old', updated: null, live: false, shared: false},
+  ],
+};
+
+function openButton(nodes, index) {
+  const row = nodes['lobby-list'].children[index];
+  return row.children[row.children.length - 1];
+}
+
+// The first listing turns the page into the lobby and keeps it among the
+// rooms this browser can return to.
+{
+  const {lobby, nodes, body, document, remembered} = build();
+  assert.equal(lobby.active(), false);
+  lobby.show(listing);
+  assert.equal(lobby.active(), true);
+  assert.equal(body.dataset.lobby, '');
+  assert.equal(nodes.lobby.hidden, false);
+  assert.equal(textOf(nodes['lobby-title']), 'mevedel sessions');
+  assert.equal(document.title, 'mevedel · mevedel');
+  assert.deepEqual(remembered, ['Lobby · mevedel']);
+  const rows = nodes['lobby-list'].children.map(row => textOf(row.children[0]));
+  assert.equal(rows.length, 3);
+  assert.match(rows[0], /design2m ago · sharedSketch the lobby/);
+  assert.match(rows[1], /notes2h ago · open in Emacs/);
+  assert.match(rows[2], /^old$/);
+  assert.equal(nodes['lobby-empty'].hidden, true);
+  assert.equal(nodes['lobby-omitted'].hidden, true);
+  // A refresh is not a second arrival.
+  lobby.show(listing);
+  assert.deepEqual(remembered, ['Lobby · mevedel']);
+}
+
+// Opening asks the host once and follows the link it returns.
+{
+  const {lobby, nodes, sent, followed} = build();
+  lobby.show(listing);
+  const button = openButton(nodes, 1);
+  button.dispatch('click');
+  assert.deepEqual(plain(sent), [{t: 'open-session', reqId: 1, id: 'b'}]);
+  assert.equal(button.disabled, true);
+  assert.equal(textOf(button), 'Opening…');
+  lobby.opened({t: 'open-session', reqId: 1, ok: true,
+                link: 'https://relay.example/#room.secret'});
+  assert.deepEqual(followed, ['https://relay.example/#room.secret']);
+  // A reply to nothing this page asked for is ignored.
+  lobby.opened({t: 'open-session', reqId: 9, ok: true, link: 'x'});
+  assert.equal(followed.length, 1);
+}
+
+// A refusal leaves the list usable and says why.
+{
+  const {lobby, nodes, notices, followed} = build();
+  lobby.show(listing);
+  const button = openButton(nodes, 0);
+  button.dispatch('click');
+  lobby.opened({t: 'open-session', reqId: 1, ok: false,
+                message: 'This session needs a decision in Emacs first'});
+  assert.deepEqual(followed, []);
+  assert.equal(button.disabled, false);
+  assert.equal(textOf(button), 'Open');
+  assert.deepEqual(notices, ['This session needs a decision in Emacs first']);
+}
+
+// Tiers keep their meaning: a view link lists, a full link opens, and
+// only an owner link creates.
+{
+  const view = build({writable: false});
+  view.lobby.show(listing);
+  assert.equal(view.nodes['lobby-list'].children[0].children.length, 1);
+  assert.equal(view.nodes['lobby-new'].hidden, true);
+  const full = build({writable: true});
+  full.lobby.show(listing);
+  assert.equal(full.nodes['lobby-new'].hidden, true);
+  const owner = build({writable: true, owner: true});
+  owner.lobby.show(listing);
+  assert.equal(owner.nodes['lobby-new'].hidden, false);
+  owner.nodes['lobby-new'].dispatch('click');
+  assert.equal(owner.newSession.length, 1);
+  assert.match(owner.newSession[0], /this project/);
+}
+
+// A session created from the lobby is joined; one created from a room is
+// only announced there.
+{
+  const {lobby, followed} = build({owner: true});
+  lobby.created({t: 'new-session', ok: true, link: 'early'});
+  assert.deepEqual(followed, []);
+  lobby.show(listing);
+  lobby.created({t: 'new-session', ok: false, message: 'taken'});
+  lobby.created({t: 'new-session', ok: true, link: 'fresh'});
+  assert.deepEqual(followed, ['fresh']);
+}
+
+// Refresh asks again; an empty or truncated listing says so.
+{
+  const {lobby, nodes, sent} = build();
+  nodes['lobby-refresh'].dispatch('click');
+  assert.deepEqual(plain(sent), [{t: 'lobby-refresh'}]);
+  lobby.show({t: 'lobby', project: 'p', sessions: [], omitted: 0});
+  assert.equal(nodes['lobby-empty'].hidden, false);
+  lobby.show({t: 'lobby', project: 'p', sessions: listing.sessions, omitted: 5});
+  assert.equal(nodes['lobby-empty'].hidden, true);
+  assert.equal(nodes['lobby-omitted'].hidden, false);
+  assert.equal(textOf(nodes['lobby-omitted']), '5 older sessions not shown.');
+}
+
+// Coming back to the foreground refreshes a lobby, and nothing else.
+{
+  const {lobby, document, sent} = build();
+  const wake = () => document.listeners.visibilitychange.forEach(f => f());
+  wake();
+  assert.deepEqual(sent, []);
+  lobby.show(listing);
+  document.visibilityState = 'hidden';
+  wake();
+  assert.deepEqual(sent, []);
+  document.visibilityState = 'visible';
+  wake();
+  assert.deepEqual(plain(sent), [{t: 'lobby-refresh'}]);
+}
+
+// Ages read at a glance.
+{
+  const {age} = build();
+  const at = 1_000_000_000_000;
+  assert.equal(age(null, at), '');
+  assert.equal(age(at / 1000 - 30, at), 'just now');
+  assert.equal(age(at / 1000 - 600, at), '10m ago');
+  assert.equal(age(at / 1000 - 3 * 3600, at), '3h ago');
+  assert.equal(age(at / 1000 - 30 * 3600, at), 'yesterday');
+  assert.equal(age(at / 1000 - 3 * 86400, at), '3d ago');
+}
+
+console.log('viewer lobby controller passed');
