@@ -156,3 +156,5 @@ to the decision bearing that ID.
 
 - [ADR 0121: Store whiteboards as Excalidraw elements](0121-store-whiteboards-as-excalidraw-elements.md)
   amends ADR 0120's whiteboard schema, image transforms and connector rendering.
+
+- [ADR 0122: Let full links change project files directly](0122-let-full-links-change-project-files-directly.md).

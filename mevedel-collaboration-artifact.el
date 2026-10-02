@@ -150,40 +150,43 @@
                      (format
                       "Artifact too large to send (%d MB); open it on the host"
                       (/ size 1024 1024)))
-                  (let* ((data (base64-encode-string content t))
-                         (meta
-                          (list :t "artifact" :reqId req-id
-                                :id (plist-get record :id)
-                                :name (plist-get record :artifact)
-                                :mime (mevedel-collaboration--artifact-mime
-                                       (plist-get record :artifact))
-                                :size size))
-                         ;; Budget the metadata actually sent, with the longer
-                         ;; non-final marker and an empty data string.
-                         (overhead
-                          (string-bytes
-                           (json-encode
-                            (append meta '(:data "" :final :json-false)))))
-                         (chunk
-                          (max
-                           1
-                           (- mevedel-collaboration--max-frame-json-bytes
-                              overhead)))
-                         (total (length data))
-                         (start 0)
-                         (sent t)
-                         done)
-                    (while (and sent (not done))
-                      (let ((end (min total (+ start chunk))))
-                        (setq done (= end total)
-                              sent
-                              (mevedel-collaboration--transport-send
-                               transport peer
-                               (append
-                                meta
-                                (list :data (substring data start end)
-                                      :final (if done t :json-false))))
-                              start end))))))))))))))
+                  (mevedel-collaboration--send-chunked
+                   transport peer
+                   (list :t "artifact" :reqId req-id
+                         :id (plist-get record :id)
+                         :name (plist-get record :artifact)
+                         :mime (mevedel-collaboration--artifact-mime
+                                (plist-get record :artifact))
+                         :size size)
+                   content)))))))))))
+
+(defun mevedel-collaboration--send-chunked (transport peer meta content)
+  "Send unibyte CONTENT to PEER through TRANSPORT as base64 chunk frames.
+Every frame carries the plist META, a `:data' slice, and `:final', true
+on the last one; each stays under the wire bound.  Return non-nil when
+every frame was written."
+  (let* ((data (base64-encode-string content t))
+         ;; Budget the metadata actually sent, with the longer non-final
+         ;; marker and an empty data string.
+         (overhead (string-bytes
+                    (json-encode
+                     (append meta '(:data "" :final :json-false)))))
+         (chunk (max 1 (- mevedel-collaboration--max-frame-json-bytes
+                          overhead)))
+         (total (length data))
+         (start 0)
+         (sent t)
+         done)
+    (while (and sent (not done))
+      (let ((end (min total (+ start chunk))))
+        (setq done (= end total)
+              sent (mevedel-collaboration--transport-send
+                    transport peer
+                    (append meta
+                            (list :data (substring data start end)
+                                  :final (if done t :json-false))))
+              start end)))
+    sent))
 
 (defun mevedel-collaboration-delete-artifact (session name)
   "Delete SESSION's artifact NAME with its comments and update its room.

@@ -10,9 +10,11 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 const plain = value => JSON.parse(JSON.stringify(value));
 
 const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
-             'lobby-title', 'lobby-new', 'lobby-refresh'];
+             'lobby-title', 'lobby-new', 'lobby-refresh', 'lobby-tabs',
+             'lobby-tab-sessions', 'lobby-tab-files', 'lobby-sessions',
+             'lobby-files'];
 
-function build({writable = true, owner = false} = {}) {
+function build({writable = true, owner = false, withFiles = false} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.lobby.hidden = true;
   const body = new Element('body');
@@ -35,7 +37,13 @@ function build({writable = true, owner = false} = {}) {
   const followed = [];
   const remembered = [];
   const newSession = [];
+  const filesCalls = [];
+  const files = withFiles ? {
+    show: project => filesCalls.push(['show', project]),
+    refresh: () => filesCalls.push(['refresh']),
+  } : null;
   const lobby = window.mevedelLobbyView.create({
+    files,
     state: {writable, owner},
     send: frame => sent.push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
@@ -47,7 +55,7 @@ function build({writable = true, owner = false} = {}) {
     navigate: link => followed.push(link),
   });
   return {lobby, nodes, body, document, sent, notices, followed,
-          remembered, newSession, age: window.mevedelLobbyView.age};
+          remembered, newSession, filesCalls, age: window.mevedelLobbyView.age};
 }
 
 const now = Math.floor(Date.now() / 1000);
@@ -189,6 +197,39 @@ function openButton(nodes, index) {
   assert.equal(age(at / 1000 - 3 * 3600, at), '3h ago');
   assert.equal(age(at / 1000 - 30 * 3600, at), 'yesterday');
   assert.equal(age(at / 1000 - 3 * 86400, at), '3d ago');
+}
+
+// Project files are a tab for full links; a view link sees sessions only.
+{
+  const view = build({writable: false, withFiles: true});
+  view.lobby.show(listing);
+  assert.equal(view.nodes['lobby-tabs'].hidden, true);
+  view.nodes['lobby-tab-files'].dispatch('click');
+  assert.deepEqual(view.filesCalls, []);
+  assert.equal(view.nodes['lobby-files'].hidden, true);
+
+  const {lobby, nodes, sent, filesCalls, document} = build({owner: true, withFiles: true});
+  lobby.show(listing);
+  assert.equal(nodes['lobby-tabs'].hidden, false);
+  assert.equal(nodes['lobby-new'].hidden, false);
+  nodes['lobby-tab-files'].dispatch('click');
+  assert.deepEqual(filesCalls, [['show', 'mevedel']]);
+  assert.equal(nodes['lobby-sessions'].hidden, true);
+  assert.equal(nodes['lobby-files'].hidden, false);
+  assert.equal(nodes['lobby-tab-files'].attributes['aria-selected'], 'true');
+  assert.equal(textOf(nodes['lobby-title']), 'mevedel files');
+  // New sessions belong to the session list.
+  assert.equal(nodes['lobby-new'].hidden, true);
+  // Refresh and a return to the foreground reload the tab on screen.
+  nodes['lobby-refresh'].dispatch('click');
+  document.listeners.visibilitychange.forEach(f => f());
+  assert.deepEqual(filesCalls.slice(1), [['refresh'], ['refresh']]);
+  assert.deepEqual(sent, []);
+  nodes['lobby-tab-sessions'].dispatch('click');
+  assert.equal(nodes['lobby-files'].hidden, true);
+  assert.equal(textOf(nodes['lobby-title']), 'mevedel sessions');
+  nodes['lobby-refresh'].dispatch('click');
+  assert.deepEqual(plain(sent), [{t: 'lobby-refresh'}]);
 }
 
 console.log('viewer lobby controller passed');

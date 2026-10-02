@@ -75,6 +75,10 @@
 (declare-function mevedel-collaboration--handle-artifact-delete
                   "mevedel-collaboration-artifact" (room peer frame))
 
+;; `mevedel-collaboration-files'
+(declare-function mevedel-collaboration-files-handle-upload
+                  "mevedel-collaboration-files" (owner peer frame root))
+
 ;; `mevedel-collaboration-history'
 (declare-function mevedel-collaboration--handle-history-get
                   "mevedel-collaboration-history" (room peer frame))
@@ -148,6 +152,7 @@
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (session))
 (declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-sanitize
@@ -871,6 +876,12 @@ sends to main chat instead of failing the prompt."
                         :key #'mevedel-directive-id :test #'equal)))
     id))
 
+(defun mevedel-collaboration--utf8-text-p (bytes)
+  "Return non-nil when unibyte BYTES are UTF-8 text without NUL bytes."
+  (and (not (string-search "\0" bytes))
+       (not (string-match-p "[\200-\377]"
+                            (decode-coding-string bytes 'utf-8 t)))))
+
 (defun mevedel-collaboration--attachment-extension (image bytes)
   "Return the extension guest attachment IMAGE with BYTES is saved under.
 A typed attachment takes its type's extension.  A plain-text one -- a
@@ -880,9 +891,7 @@ Return nil for anything else."
   (let ((mime (plist-get image :mime))
         (own (plist-get image :extension)))
     (if (and (equal mime "text/plain") own)
-        (and (not (string-search "\0" bytes))
-             (not (string-match-p "[\200-\377]"
-                                  (decode-coding-string bytes 'utf-8 t)))
+        (and (mevedel-collaboration--utf8-text-p bytes)
              (if (and (stringp own)
                       (string-match-p "\\`[a-z0-9]\\{1,12\\}\\'" own)
                       (not (mevedel-tool-fs-read--binary-extension-p
@@ -1048,6 +1057,11 @@ handling stops the room instead of leaking into the session."
            (mevedel-collaboration--handle-artifact-delete room peer frame))
           ("artifact-comment"
            (mevedel-collaboration--handle-artifact-comment room peer frame))
+          ("file-upload"
+           (mevedel-collaboration-files-handle-upload
+            room peer frame
+            (mevedel-workspace-root
+             (mevedel-session-workspace (plist-get room :session)))))
           ("history-get"
            (mevedel-collaboration--handle-history-get room peer frame))
           ((or "editing" "editing-presence")
@@ -1106,6 +1120,7 @@ handling stops the room instead of leaking into the session."
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-artifact-comments)
 (require 'mevedel-collaboration-editing)
+(require 'mevedel-collaboration-files)
 
 (provide 'mevedel-collaboration-guest)
 ;;; mevedel-collaboration-guest.el ends here

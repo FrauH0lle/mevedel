@@ -154,7 +154,10 @@
 
     /* -- Requesting a session ------------------------------------------ */
 
-    function open(note) {
+    // NOTE replaces the dialog's lede; PROMPT, when given, starts the
+    // first prompt, as asking about a project file does.
+    function open(note, prompt) {
+      if (typeof prompt === 'string') promptInput.value = prompt;
       submit.textContent = state.owner ? 'Create' : 'Ask host';
       lede.textContent = typeof note === 'string' ? note : (state.owner
         ? 'A separate room for separate work. This room, and everyone in '

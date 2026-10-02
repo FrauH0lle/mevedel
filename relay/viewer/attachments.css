@@ -50,6 +50,23 @@
   border-radius: .5rem;
 }
 
+/* Marks a prompt attachment to be added to the project as well. */
+.attachment { flex-direction: column; align-items: center; gap: .2rem; }
+.attachment-share {
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .66rem;
+  padding: .05rem .4rem;
+  cursor: pointer;
+}
+.attachment-share[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 [data-dropping] {
   border-color: var(--accent);
   background: var(--accent-soft);

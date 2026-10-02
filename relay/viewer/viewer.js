@@ -153,6 +153,13 @@
     canComment: () => state.connected && !state.readOnly,
     canDelete: () => state.connected && !state.readOnly,
     busy: () => state.connected && state.busy === true,
+    // A project file opened from the lobby can seed a new session; only an
+    // owner link may create one there.
+    ask: {
+      available: () => state.owner && lobby.active(),
+      run: path => sessions.openNewSession(
+        'Starts a separate session in this project.', `About \`${path}\`: `),
+    },
     reveal: id => {
       const turn = state.elements.get(id);
       if (!turn) {
@@ -184,8 +191,11 @@
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession, notice: flashNotice});
+  const uploads = window.mevedelFilesView.uploader({send});
+  const files = window.mevedelFilesView.create(
+    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile});
   const lobby = window.mevedelLobbyView.create(
-    {state, send, el, notice: flashNotice, sessions});
+    {state, send, el, notice: flashNotice, sessions, files});
 
   let executionResultSequence = 0;
   let pendingExecutionResult = null;
@@ -687,7 +697,17 @@
 
   /* -- Attachments --------------------------------------------------- */
 
-  const tray = window.mevedelAttachments.create({list: attachments, notice: flashNotice});
+  const tray = window.mevedelAttachments.create(
+    {list: attachments, notice: flashNotice, shareable: true});
+  // Attachments marked for the project go there as their original files,
+  // beside the prompt, which carries its own copies.
+  function shareToProject(items) {
+    items.filter(item => item.share && item.file).forEach(item => {
+      uploads.upload(item.file, '', {rename: true})
+        .then(path => flashNotice(`${path} added to the project.`))
+        .catch(error => flashNotice(error.message));
+    });
+  }
   const addFiles = files => tray.add(files);
   let submitting = false;
 
@@ -1021,6 +1041,16 @@
       setConnection('Connected', 'connected');
     } else if (frame.t === 'open-session') {
       lobby.opened(frame);
+    } else if (frame.t === 'files') {
+      files.listed(frame);
+    } else if (frame.t === 'file') {
+      artifacts.handle(frame);
+    } else if (frame.t === 'file-upload') {
+      uploads.handle(frame);
+    } else if (frame.t === 'file-remove') {
+      files.removed(frame);
+    } else if (frame.t === 'files-changed') {
+      files.changed(frame);
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,
@@ -1072,6 +1102,7 @@
           if (sent) {
             if (composerInput.value === text) composerInput.value = '';
             tray.remove(submittedFiles);
+            shareToProject(submittedFiles);
           }
           return;
         }
@@ -1098,6 +1129,7 @@
         }
         if (composerInput.value === text) composerInput.value = '';
         tray.remove(submittedFiles);
+        shareToProject(submittedFiles);
         // One tap, one invocation: disarm so the next send is a prompt.
         if (state.armed === armed && armed.length) setArmedInvocation(null);
       } finally {
