@@ -1428,10 +1428,11 @@ function createArtifactCommentController(options) {
         publishMarkers();
       }
     },
-    // A room message about the whole artifact record ID, into its
-    // conversation.
-    discuss(id, text) {
-      return request({action: 'ask', id, questionId: newId(), text});
+    // A room message about the whole artifact record ID, with attachment
+    // IMAGES, into its conversation.
+    discuss(id, text, images = []) {
+      return request({action: 'ask', id, questionId: newId(), text,
+                      ...(images.length ? {images} : {})});
     },
     // The host's answer to an artifact-comment frame.
     handle(frame) {

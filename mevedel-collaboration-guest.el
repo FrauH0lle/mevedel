@@ -600,15 +600,19 @@ answer can execute the same path the host key binding would."
 ;;
 ;;; Inbound guest frames
 
-(defun mevedel-collaboration--handle-hello (room peer frame)
-  "Register guest PEER from its hello FRAME and send the snapshot."
+(defun mevedel-collaboration--admit-hello (room peer frame)
+  "Register PEER in ROOM from its hello FRAME and return its guest plist.
+A protocol mismatch is answered with an error frame and returns nil.
+Authority comes only from the tokens FRAME proves it holds."
   (let ((proto (plist-get frame :proto)))
     (if (not (equal proto mevedel-collaboration--protocol-version))
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (list :t "error"
-               :message (format "protocol mismatch: host speaks %d"
-                                mevedel-collaboration--protocol-version)))
+        (progn
+          (mevedel-collaboration--transport-send
+           (plist-get room :transport) peer
+           (list :t "error"
+                 :message (format "protocol mismatch: host speaks %d"
+                                  mevedel-collaboration--protocol-version)))
+          nil)
       (let* ((name (mevedel-collaboration--sanitize-guest-name
                     (plist-get frame :name)))
              (claimed (mevedel-collaboration--base64url-decode
@@ -627,26 +631,32 @@ answer can execute the same path the host key binding would."
                           :guest-id (mevedel-collaboration--sanitize-guest-id
                                      (plist-get frame :guestId)))))
         (puthash peer guest (plist-get room :guests))
-        (mevedel-collaboration--send-snapshot room peer)
-        (mevedel-collaboration--publish-history room peer)
-        ;; Queue and busy state travel only on change, so a joining
-        ;; guest is told the current ones directly.
-        (mevedel-collaboration--send-queue-state room peer guest t)
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (mevedel-collaboration--status-frame room))
-        ;; The roster broadcast is latched on change, so a joining guest
-        ;; is told the current one directly -- an empty roster included,
-        ;; because a reconnecting viewer must clear stale rows.
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (mevedel-collaboration--agents-frame room))
-        ;; The task list is latched the same way.
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (mevedel-collaboration--tasks-frame room))
-        (when (and writable mevedel-collaboration-remote-interactions)
-          (mevedel-collaboration--send-ui-requests room peer))))))
+        guest))))
+
+(defun mevedel-collaboration--handle-hello (room peer frame)
+  "Register guest PEER from its hello FRAME and send the snapshot."
+  (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
+    (mevedel-collaboration--send-snapshot room peer)
+    (mevedel-collaboration--publish-history room peer)
+    ;; Queue and busy state travel only on change, so a joining
+    ;; guest is told the current ones directly.
+    (mevedel-collaboration--send-queue-state room peer guest t)
+    (mevedel-collaboration--transport-send
+     (plist-get room :transport) peer
+     (mevedel-collaboration--status-frame room))
+    ;; The roster broadcast is latched on change, so a joining guest
+    ;; is told the current one directly -- an empty roster included,
+    ;; because a reconnecting viewer must clear stale rows.
+    (mevedel-collaboration--transport-send
+     (plist-get room :transport) peer
+     (mevedel-collaboration--agents-frame room))
+    ;; The task list is latched the same way.
+    (mevedel-collaboration--transport-send
+     (plist-get room :transport) peer
+     (mevedel-collaboration--tasks-frame room))
+    (when (and (plist-get guest :writable)
+               mevedel-collaboration-remote-interactions)
+      (mevedel-collaboration--send-ui-requests room peer))))
 
 (defconst mevedel-collaboration--max-push-endpoint-bytes 2048
   "Maximum encoded bytes accepted for a browser push endpoint.")
@@ -915,6 +925,21 @@ budget -- drops the whole set rather than attaching a partial one."
               (dolist (path paths)
                 (when (file-exists-p path)
                   (ignore-errors (delete-file path)))))))))))
+
+(defun mevedel-collaboration--save-guest-files (data-buffer images)
+  "Save guest attachment IMAGES for DATA-BUFFER's session; return their paths.
+IMAGES is a frame list or vector of (:mime STRING :data BASE64) plists.
+Return nil when there are none, and signal when a set cannot be attached
+whole, so a question never queues without the files its sender chose.
+The caller deletes the paths when its own enqueue fails."
+  (when (and images (> (length images) 0))
+    (let ((view (and (buffer-live-p data-buffer)
+                     (buffer-local-value 'mevedel--view-buffer data-buffer))))
+      (or (and (buffer-live-p view)
+               (with-current-buffer view
+                 (mevedel-collaboration--save-guest-attachments
+                  (append images nil))))
+          (error "The attachments could not be attached; check their type and size")))))
 
 (defun mevedel-collaboration--handle-retract (room peer frame)
   "Remove the pending entry FRAME names when guest PEER queued it.

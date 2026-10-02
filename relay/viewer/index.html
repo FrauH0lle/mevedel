@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/viewer-theme.css">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
+    <link rel="stylesheet" href="/attachments.css">
     <link rel="stylesheet" href="/viewer-session.css">
     <link rel="stylesheet" href="/viewer-panel.css">
     <link rel="stylesheet" href="/viewer-agent.css">
@@ -41,6 +42,16 @@
     <section id="terminal-state" class="terminal-state" role="status" aria-atomic="true" hidden>
       <h2 id="terminal-title"></h2>
       <p id="terminal-message"></p>
+    </section>
+    <section id="lobby" class="lobby" aria-labelledby="lobby-title" hidden>
+      <div class="lobby-head">
+        <h2 id="lobby-title">Sessions</h2>
+        <button id="lobby-refresh" class="btn quiet" type="button">Refresh</button>
+        <button id="lobby-new" class="btn" type="button" hidden><span aria-hidden="true">＋</span> New session</button>
+      </div>
+      <p id="lobby-empty" class="lobby-empty" hidden>No sessions in this project yet.</p>
+      <ul id="lobby-list" class="lobby-list"></ul>
+      <p id="lobby-omitted" class="lobby-empty" hidden></p>
     </section>
     <section id="empty-state" class="empty-state" aria-label="Empty conversation" hidden>
       <h1>No messages yet</h1>
@@ -200,7 +211,13 @@
           </label>
           <textarea id="new-session-prompt" class="sheet-input sheet-area"
                     rows="4" placeholder="What should this session do?"></textarea>
+          <div id="new-session-attachments" class="attachments"></div>
+          <input id="new-session-files" type="file" multiple hidden
+                 accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
           <menu class="sheet-actions">
+            <button id="new-session-attach" class="btn quiet" type="button"
+                    title="Attach files — images, PDFs, logs and patches"
+                    aria-label="Attach files">Attach</button>
             <button value="cancel" class="btn quiet" type="submit"
                     formnovalidate>Cancel</button>
             <button id="new-session-create" value="create" class="btn"
@@ -239,12 +256,14 @@
     <script src="/transport.js" defer></script>
     <script src="/notifications.js" defer></script>
     <script src="/renderer.js" defer></script>
+    <script src="/attachments.js" defer></script>
     <script src="/viewer-artifact-comments.js" defer></script>
     <script src="/viewer-artifact.js" defer></script>
     <script src="/viewer-history.js" defer></script>
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
     <script src="/viewer-session.js" defer></script>
+    <script src="/viewer-lobby.js" defer></script>
     <script src="/viewer-editing.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>

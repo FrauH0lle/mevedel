@@ -19,12 +19,25 @@ and uses WebSocket keepalive to detect dead peers. The host sends its own period
 suspend becomes observable and reconnects. Relay pings alone are answered inside
 websocket.el and do not notify the host application.
 
+A workspace lobby is the one deliberate exception. Its purpose is a
+bookmark that survives restarts, which a share-scoped credential cannot be,
+so its credentials persist in the workspace state directory and a restarted
+Emacs recreates the same relay room. Rotating the credentials, not stopping
+the lobby, is its revocation operation. The rooms a lobby opens follow the
+ordinary share lifecycle; the lobby hands out a fresh link to each one on
+request, so they need no persistence of their own.
+
 ## Consequences
 
 The accepted cost is that a bearer remains valid for the entire host share,
 even across periods with no guests. Explicitly stopping the share is the
 revocation operation. Artifacts inherit the same room lifetime and need no
 separate retention policy.
+
+A lobby link is a long-lived bearer: it stays valid across restarts and
+periods without guests until rotated. A full or owner lobby link can open,
+and an owner link create, sessions in that workspace, so it carries more
+standing authority than any single room link.
 
 Shared whiteboards and documents follow the same access lifetime. Their
 accepted content is durable session state and survives the room; ending a
@@ -33,6 +46,12 @@ drafts retain a recovery download but do not authorize writes into a later
 share. See [ADR 0120](0120-edit-shared-content-through-the-session-host.md).
 
 ## Decision history
+
+The lobby exception was added when a phone needed one stable entry point to
+a host's sessions. Every session room got a fresh link per share, and the
+browser's stored room list held only links that died with their shares, so
+there was no address to bookmark. Persisting one per-workspace credential
+gave that address while every session room kept its share-scoped bearer.
 
 Two real collaboration sessions ended while still in use because the
 host-side one-hour timer measured absolute room age, not inactivity. An idle

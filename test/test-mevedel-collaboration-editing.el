@@ -253,6 +253,43 @@
         (should (plist-get (mevedel-collaboration-editing--ask room guest args result) :delivered))
         (should-not (mevedel-session-pending-follow-ups session))))))
 
+(mevedel-deftest mevedel-collaboration-editing--ask/attachments
+  (:doc "A question carries the sender's files beside the board snapshot, or queues nothing")
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory (make-temp-file "mevedel-ask-files-" t)))
+           (workspace (mevedel-workspace--create :type 'file :id "shared-ask" :root "/tmp"))
+           (session (mevedel-session-create "main" workspace))
+           (room (list :session session :data-buffer data-buf))
+           (guest '(:name "Alice" :guest-id "alice" :role "full"))
+           (log (list :mime "text/plain" :data (base64-encode-string "log line\n" t)))
+           (result (list :id "board" :title "Board" :revision 3
+                         :png (base64-encode-string "\211PNG\r\n" t)
+                         :snapshot '(:id "board" :kind "whiteboard" :scope "whole"))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--media-dir) (lambda () root)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session mevedel--workspace workspace))
+            (mevedel-session-set-pending-input-paused session t)
+            (mevedel-collaboration-editing--ask
+             room guest (list :id "board" :questionId "with-files" :text "See this"
+                              :images (vector log))
+             result)
+            (let ((paths (plist-get (car (mevedel-session-pending-follow-ups session))
+                                    :guest-paths)))
+              (should (equal '("png" "txt") (mapcar #'file-name-extension paths)))
+              (should (equal "log line\n" (with-temp-buffer
+                                             (insert-file-contents (cadr paths))
+                                             (buffer-string)))))
+            ;; A refused set takes the board snapshot with it.
+            (should-error (mevedel-collaboration-editing--ask
+                           room guest (list :id "board" :questionId "bad-files" :text "See this"
+                                            :images (vector (list :mime "application/x-msdownload"
+                                                                  :data "eA==")))
+                           result))
+            (should (= 1 (length (mevedel-session-pending-follow-ups session))))
+            (should (= 2 (length (directory-files root nil "\\`guest-")))))
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-collaboration-editing--dispatch
   ()
   ,test

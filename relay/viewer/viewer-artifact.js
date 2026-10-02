@@ -285,15 +285,16 @@
       if (comments) comments.activity();
     }
 
-    // A room message about artifact NAME as a whole, sent into the
-    // artifact's own conversation through its latest published record.
-    function discuss(name, text) {
+    // A room message about artifact NAME as a whole, with attachment
+    // IMAGES, sent into the artifact's own conversation through its latest
+    // published record.
+    function discuss(name, text, images = []) {
       const record = published.filter(item => item && item.artifact === name && !item.missing)
         .at(-1);
       if (!comments || !record) {
         return Promise.reject(new Error(`${name} is not published in this room.`));
       }
-      return comments.discuss(record.id, text);
+      return comments.discuss(record.id, text, images);
     }
 
     return Object.freeze({open, render, handle, close, setTheme, queue, handleComment,

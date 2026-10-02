@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'cl-lib)
+(require 'mevedel-chat)
 (require 'mevedel-collaboration-agent)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
@@ -147,19 +148,27 @@
   (:doc "grants owners, asks for writers, and deduplicates exact requests")
   (let* ((guests (make-hash-table :test #'eql))
          (room (list :transport 'transport :guests guests))
-         created asked)
+         created asked created-images)
     (puthash 1 (list :name "Owner" :writable t :owner t :ready t) guests)
     (puthash 2 (list :name "Writer" :writable t :ready t) guests)
     (puthash 3 (list :name "Reader" :ready t) guests)
     (cl-letf (((symbol-function 'mevedel-collaboration--create-guest-session)
-               (lambda (_room _peer _guest _request-id name prompt)
-                 (push (cons name prompt) created)))
+               (lambda (_room _peer _guest _request-id name prompt &optional images)
+                 (push (cons name prompt) created)
+                 (setq created-images images)))
               ((symbol-function 'mevedel-collaboration--ask-host-new-session)
-               (lambda (_room _peer _guest _request-id name prompt)
+               (lambda (_room _peer _guest _request-id name prompt &optional _images)
                  (push (cons name prompt) asked))))
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId 1 :name "onboarding" :prompt "Design the flow"))
       (should (equal '(("onboarding" . "Design the flow")) created))
+      ;; Files alone still start the session with a prompt that names them.
+      (let ((images (list (list :mime "text/plain" :data "bG9n"))))
+        (mevedel-collaboration--handle-new-session
+         room 1 (list :reqId 9 :name "triage" :images images))
+        (should (equal '("triage" . "See the attached file.") (car created)))
+        (should (equal images created-images)))
+      (pop created)
       (mevedel-collaboration--handle-new-session
        room 2 '(:reqId 2 :name "auth work" :prompt ""))
       ;; The name is sanitized the way a session name typed in Emacs is,
@@ -265,7 +274,7 @@
       (puthash 7 guest guests)
       (funcall (plist-get captured :callback) 'approve)
       (should (eq 'created (car (car sent))))
-      (should (equal '("flow" "go") (last (cdr (car sent)) 2))))))
+      (should (equal '("flow" "go" nil) (last (cdr (car sent)) 3))))))
 
 (mevedel-deftest mevedel-collaboration--offer-room-to-owners
   (:doc "offers a created room to the other owners, never to the requester")
@@ -326,12 +335,36 @@
         ;; The approved prompt goes straight into the pending queue,
         ;; which drains on idle -- nothing further to press.
         (should (equal '("go") enqueued))
+        ;; Its files are saved into the new session and queued with it.
+        (let (saved queued-paths)
+          (setq existing nil sent nil)
+          (cl-letf (((symbol-function 'mevedel-collaboration--save-guest-files)
+                     (lambda (buffer images) (setq saved (cons buffer images)) '("/media/a.txt")))
+                    ((symbol-function 'mevedel-view-enqueue-external-follow-up)
+                     (lambda (_buffer _text &rest keys)
+                       (setq queued-paths (plist-get keys :paths)))))
+            (mevedel-collaboration--create-guest-session
+             room 1 '(:name "Writer" :writable t) 6 "files" "see" '((:mime "text/plain" :data "eA=="))))
+          (should (equal (cons (current-buffer) '((:mime "text/plain" :data "eA=="))) saved))
+          (should (equal '("/media/a.txt") queued-paths)))
         (setq sent nil enqueued nil)
         (mevedel-collaboration--create-guest-session
          room 1 '(:name "Owner" :writable t :owner t) 3 "fresh" nil)
         (should (equal "owner-link" (plist-get (car sent) :link)))
         (should (eq t (plist-get (car sent) :ok)))
         (should-not enqueued)
+        ;; A lobby has no session and creates in its own workspace.
+        (let (created-in)
+          (setq sent nil)
+          (cl-letf (((symbol-function 'mevedel--chat-buffer)
+                     (lambda (_name _create workspace directory)
+                       (setq created-in (list workspace directory))
+                       (current-buffer))))
+            (mevedel-collaboration--create-guest-session
+             '(:transport transport :workspace lobby-ws :directory "/lobby/")
+             1 '(:name "Owner" :writable t :owner t) 7 "from-lobby" nil))
+          (should (equal '(lobby-ws "/lobby/") created-in))
+          (should (equal "owner-link" (plist-get (car sent) :link))))
         ;; Host presentation is incidental: it cannot revoke a room or
         ;; suppress the successful protocol reply.
         (setq sent nil stopped nil)

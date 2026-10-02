@@ -354,9 +354,9 @@ async function testItemConversations() {
   const answer = (id, text) => ({id,kind:'assistant',text});
   const old = [user('old','doc','old-q'),answer('old-a','Archived answer')];
   const tail = [user('tail','doc','tail-q'),answer('tail-a','Old tail answer')];
-  let archived = [...old,...tail], failure = false, api;
+  let archived = [...old,...tail], failure = false, api, lastArgs;
   const context = {
-    URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
+    URL, crypto, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
     window:{location:{href:'http://localhost/?shared=doc',hash:''},history:{replaceState(){}},
@@ -367,6 +367,7 @@ async function testItemConversations() {
   api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
     send:async frame=>{
       const args=JSON.parse(Buffer.from(frame.data,'base64').toString());
+      lastArgs=args;
       const result=args.action==='status' ? {available:true} : args.action==='list' ? [{id:'doc',kind:'document',title:'Notes'}]
         : {id:'doc',kind:'document',title:'Notes',conversation:archived,
            conversationError:failure?'Missing archive':null,conversationTruncated:failure};
@@ -390,6 +391,13 @@ async function testItemConversations() {
   await api.refreshConversation();
   assert.equal(latest().conversationError,'Missing archive');
   assert.equal(latest().conversationTruncated,true);
+  // A room message in the item's tab carries its attachments to the host.
+  const files=[{mime:'text/plain',data:'bG9n'}];
+  await api.ask('doc','See the log',files);
+  assert.equal(lastArgs.action,'ask');
+  assert.deepEqual(lastArgs.images,files);
+  await api.ask('doc','Plain');
+  assert.equal(lastArgs.images,undefined);
   api.connection(false);
   assert.equal(latest().connected,false);
 }
@@ -529,6 +537,8 @@ async function main() {
                'new-session-prompt',
                'new-session-create', 'new-session-lede',
                'invites', 'invite-button', 'invite', 'invite-tiers',
+               'lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
+               'lobby-title', 'lobby-new', 'lobby-refresh',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
                'editing-title', 'editing-file', 'editing-import', 'editing-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
@@ -559,8 +569,6 @@ async function main() {
   let bitmapCloseCount = 0;
   let holdBitmap = false;
   let releaseBitmap = null;
-  const createdUrls = [];
-  const revokedUrls = [];
   const pushKey = new Uint8Array(65);
   pushKey[0] = 4;
   let currentPushSubscription = null;
@@ -617,13 +625,6 @@ async function main() {
     scrollTo(options) { this.scrollY = options.top; },
     open() { return null; },
   };
-  class ViewerURL extends URL {}
-  ViewerURL.createObjectURL = () => {
-    const value = `blob:attachment-${createdUrls.length + 1}`;
-    createdUrls.push(value);
-    return value;
-  };
-  ViewerURL.revokeObjectURL = value => revokedUrls.push(value);
   const document = {
     listeners: {},
     addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
@@ -677,7 +678,7 @@ async function main() {
   }
   window.matchMedia = () => ({matches:false, addEventListener(){}});
   const context = {
-    document, window, WebSocket: TestWebSocket, URL: ViewerURL, console,
+    document, window, WebSocket: TestWebSocket, URL, console,
     crypto, TextEncoder, TextDecoder, atob, btoa, Date, Blob: FakeBlob,
     Event: FakeEvent, Notification: FakeNotification,
     PushManager: class PushManager {},
@@ -723,11 +724,13 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/attachments.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-lobby.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
@@ -737,7 +740,8 @@ async function main() {
   // write token, anything else is rejected.
   const api = context.window.mevedelViewer;
   assert.equal((window.listeners.visibilitychange || []).length, 0);
-  assert.equal(document.listeners.visibilitychange.length, 1);
+  // Notification presence and the lobby's foreground refresh.
+  assert.equal(document.listeners.visibilitychange.length, 2);
   const view = api.parseFragment(`#${roomId}.${base64url(keyBytes)}`);
   assert.equal(view.roomId, roomId);
   assert.equal(view.writeToken, null);
@@ -1143,8 +1147,21 @@ async function main() {
   assert.match(textOf(nodes.attachments), /recovered\.log/);
   nodes.attachments.children[0].children.at(-1).dispatch('click');
 
-  await api2.addFiles([fakeFile('build.log', '', 'log line\n'),
-                       fakeFile('notes.exe', 'application/x-msdownload', 'x')]);
+  // Dropping files on the composer takes the Attach path; other drags pass.
+  const files = (...list) => ({types: ['Files'], files: list});
+  let dropped = false;
+  nodes.composer.dispatch('dragenter', {dataTransfer: files()});
+  assert.equal(nodes.composer.dataset.dropping, '', 'the composer marks a file drag');
+  nodes.composer.dispatch('dragover', {dataTransfer: {types: ['text/plain']},
+                                       preventDefault: () => { dropped = true; }});
+  assert.equal(dropped, false, 'a text drag keeps the browser default');
+  nodes.composer.dispatch('drop', {
+    dataTransfer: files(fakeFile('build.log', '', 'log line\n'),
+                        fakeFile('notes.exe', 'application/x-msdownload', 'x')),
+    preventDefault: () => { dropped = true; }});
+  assert.equal(dropped, true);
+  assert.equal(nodes.composer.dataset.dropping, undefined);
+  await api2.addFiles([]);
   assert.equal(nodes.attachments.children.length, 1);
   assert.match(textOf(nodes.attachments), /build\.log/);
   nodes['composer-input'].value = 'see the log';
@@ -1229,7 +1246,6 @@ async function main() {
   assert.equal(nodes.attachments.children.length, 1);
   const removeAttachment = nodes.attachments.children[0].children.at(-1);
   removeAttachment.dispatch('click');
-  assert.deepEqual(revokedUrls, [createdUrls[0], createdUrls[1]]);
   assert.equal(nodes.attachments.children.length, 0);
 
   // Routed agent frames cross the sealed transport into the controller,
@@ -1773,10 +1789,8 @@ async function main() {
   assert.equal(nodes['own-queue'].hidden, false);
 
   await api2.addFiles([fakeFile('pending.png', 'image/png', 'pixels')]);
-  const pendingUrl = createdUrls.at(-1);
   holdBitmap = true;
   releaseBitmap = null;
-  const urlsBeforeStaleAttachment = createdUrls.length;
   const staleAttachment = api2.addFiles([
     fakeFile('stale.png', 'image/png', 'pixels'),
   ]);
@@ -1939,9 +1953,7 @@ async function main() {
   assert.equal(nodes['queue-state'].hidden, true);
   assert.equal(nodes.filter.hidden, true);
   assert.equal(nodes['commands-box'].hidden, true);
-  assert.ok(revokedUrls.includes(pendingUrl));
   assert.equal(nodes.attachments.children.length, 0);
-  assert.equal(createdUrls.length, urlsBeforeStaleAttachment);
   assert.equal(nodes['notify-button'].hidden, true);
   // A dead room's persisted credentials die with it.
   assert.equal(storage.has('mevedel-last-share'), false);

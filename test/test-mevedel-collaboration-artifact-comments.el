@@ -282,6 +282,22 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
                                 :label)
                      "Artifact · schema.html · Whole artifact")))
     (should-not (mevedel-collaboration--artifact-comments-read session "schema.html")))
+  :doc "carries the sender's files with a message about the whole artifact"
+  (mevedel-test--with-artifact-comment-room
+    (let ((media (file-name-as-directory (make-temp-file "mevedel-artifact-files-" t))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--media-dir) (lambda () media)))
+            (with-current-buffer data-buf (setq-local mevedel--view-buffer view-buf))
+            (mevedel-collaboration--artifact-comment-action
+             room guest (list :action "ask" :id "tool-1" :questionId "abcdefabcdefabcdef34"
+                              :text "Match this" :images
+                              (list (list :mime "text/plain"
+                                          :data (base64-encode-string "notes" t)))))
+            (let ((paths (plist-get (car (mevedel-session-pending-follow-ups session))
+                                    :guest-paths)))
+              (should (= 1 (length paths)))
+              (should (string-prefix-p media (car paths)))))
+        (delete-directory media t))))
   :doc "lists for view links but refuses their writes, bad input and non-HTML artifacts"
   (mevedel-test--with-artifact-comment-room
     (let ((viewer '(:name "V" :writable nil)))

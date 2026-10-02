@@ -661,9 +661,10 @@ window.mevedelEditingView = {
     };
     // A room message in an item's discussion asks about the whole item as
     // currently committed; the reply lands in that item's conversation.
-    function ask(id, text) {
+    function ask(id, text, images = []) {
       const questionId = crypto.randomUUID();
-      return request({ action: 'ask', id, opId: questionId, questionId, text, whole: true });
+      return request({ action: 'ask', id, opId: questionId, questionId, text, whole: true,
+        ...(images.length ? { images } : {}) });
     }
     return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance, ask };
   },
