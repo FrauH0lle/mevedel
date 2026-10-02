@@ -196,3 +196,30 @@ export function serializeLibrary(items, now = Date.now()) {
       elements: exportElements(item.elements, now) })),
   }, null, 2);
 }
+
+/* Copies of library ELEMENTS centred on CENTER with fresh ids, seeds and
+   groups; references among the copies follow, others are dropped. */
+export function placeElements(elements, center, indices, seed) {
+  const boxes = elements.map((e) => e.points
+    ? (([x1, y1, x2, y2]) => [e.x + x1, e.y + y1, e.x + x2, e.y + y2])(pointBounds(e.points))
+    : [e.x, e.y, e.x + e.width, e.y + e.height]);
+  const left = Math.min(...boxes.map((b) => b[0])), top = Math.min(...boxes.map((b) => b[1]));
+  const width = Math.max(...boxes.map((b) => b[2])) - left, height = Math.max(...boxes.map((b) => b[3])) - top;
+  const fresh = new Map(elements.map((e) => [e.id, crypto.randomUUID()]));
+  const groups = new Map();
+  const group = (g) => (groups.has(g) || groups.set(g, crypto.randomUUID().replace(/-/g, '')), groups.get(g));
+  return elements.map((e, i) => {
+    const copy = { ...e, id: fresh.get(e.id), seed: seed(), index: indices[i],
+      x: e.x - left + center[0] - width / 2, y: e.y - top + center[1] - height / 2 };
+    if (copy.groupIds) copy.groupIds = copy.groupIds.map(group);
+    if (copy.containerId) copy.containerId = fresh.get(copy.containerId) ?? null;
+    if (copy.containerId === null) delete copy.containerId;
+    if (copy.frameId) copy.frameId = fresh.get(copy.frameId) ?? null;
+    for (const key of ['startBinding', 'endBinding']) {
+      if (!copy[key]) continue;
+      if (fresh.has(copy[key].elementId)) copy[key] = { ...copy[key], elementId: fresh.get(copy[key].elementId) };
+      else delete copy[key];
+    }
+    return copy;
+  });
+}

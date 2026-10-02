@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScene, parseLibrary, serializeScene, serializeLibrary, exportElements } from '../excalidraw.mjs';
-import { placeElements, BUILTIN } from '../library.mjs';
+import { readFileSync } from 'node:fs';
+import { parseScene, parseLibrary, serializeScene, serializeLibrary, exportElements, placeElements } from '../excalidraw.mjs';
+const BUILTIN = parseLibrary(readFileSync(new URL('../builtin.excalidrawlib', import.meta.url), 'utf8'));
 import { validateElement } from '../model.mjs';
 
 // A scene as older Excalidraw versions and other editors wrote it.

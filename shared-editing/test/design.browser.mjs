@@ -186,7 +186,7 @@ test('approved editor controls on the production bundle', async t => {
     await frame.locator('#undo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),1);
     await frame.locator('#redo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),2);
     await frame.locator('#canvas').focus();await page.keyboard.press('Control+a');
-    assert.equal(await frame.locator('#selection [data-selected]').count(),2);
+    assert.equal((await frame.locator('#selection').getAttribute('data-selected')).split(' ').length,2);
     await page.keyboard.press('Delete');assert.equal(await frame.locator('#scene [data-shape]').count(),0);
     await frame.locator('#undo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),2);
     await frame.getByRole('button',{name:'Zoom in',exact:true}).click();

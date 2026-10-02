@@ -308,7 +308,8 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                            (or read-only (plist-get guest :writable))))))
     (unless (and (member action '("list" "status" "read" "create" "import" "update"
                                   "rename" "revert" "export" "ask" "comment" "reply-comment" "resolve-comment"
-                                  "library" "library-add" "library-remove" "library-catalog" "library-fetch"))
+                                  "library" "library-add" "library-remove" "library-install" "library-uninstall"
+                                  "library-catalog" "library-fetch"))
                  (funcall authorize))
       (error "This link does not permit that editing operation"))
     ;; The element library belongs to the host, not to a session item.

@@ -256,7 +256,7 @@ test('editor interaction regressions', async (t) => {
       assert.ok(Math.abs((await shape.boundingBox()).x - preview.x) < 2, 'release keeps the preview position');
       await frame.locator('#undo').click();
       assert.ok(Math.abs((await shape.boundingBox()).x - before.x) < 2, 'one undo restores the move');
-      const handle = await frame.locator('[data-resize="ellipse"]').boundingBox();
+      const handle = await frame.locator('#selection [data-handle="se"]').boundingBox();
       await page.mouse.move(handle.x + handle.width/2,handle.y + handle.height/2);
       await page.mouse.down();
       await page.mouse.move(handle.x + handle.width/2 + 60,handle.y + handle.height/2 + 30);
@@ -325,7 +325,7 @@ test('editor interaction regressions', async (t) => {
       await frame
         .locator('#scene [data-shape="ellipse"] path')
         .click({ position: { x: 150, y: 80 }, force: true });
-      assert.equal(await frame.locator('#selection [data-resize="ellipse"]').count(), 1);
+      assert.equal(await frame.locator('#selection').getAttribute('data-selected'), 'ellipse');
       await frame.locator('#scene [data-shape="ellipse"] path').dblclick({ force: true });
       await frame.locator('#shape-text').waitFor({ state: 'visible', timeout: 1000 });
       await frame.locator('#shape-text').fill('Database');
@@ -368,10 +368,10 @@ test('editor interaction regressions', async (t) => {
         await page.mouse.up();
         if (modifier) await page.keyboard.up(modifier);
       };
-      const chosen = () => frame.locator('#selection [data-selected]').evaluateAll(n => n.map(e => e.dataset.selected).sort());
+      const chosen = () => frame.locator('#selection').evaluate(n => n.dataset.selected ? n.dataset.selected.split(' ') : []);
       await drag([-20,-20], [200,150]);
       assert.deepEqual(await chosen(), ['a']);
-      assert.equal(await frame.locator('#selection .selection-region').count(), 1);
+      assert.equal(await frame.locator('#selection .selection-region').count(), 0, 'the box disappears on release');
       assert.equal(await frame.locator('#selection-question').isDisabled(), false);
       await drag([-20,-20], [320,150], 'Alt');
       assert.deepEqual(await chosen(), ['a','b']);
@@ -379,12 +379,10 @@ test('editor interaction regressions', async (t) => {
       assert.deepEqual(await chosen(), ['a','b','c']);
       await drag([140,140], [260,260]);
       assert.deepEqual(await chosen(), []);
-      assert.equal(await frame.locator('#selection .selection-region').count(), 1,
+      assert.equal(await frame.locator('#selection-question').isDisabled(), false,
         'an empty area remains selected for questions');
-      assert.equal(await frame.locator('#selection-question').isDisabled(), false);
       const [x, y] = await at(200, 200);
       await page.mouse.click(offset.x + x, offset.y + y);
-      assert.equal(await frame.locator('#selection .selection-region').count(), 0);
       assert.equal(await frame.locator('#selection-question').isDisabled(), true);
       const content = await page.evaluate(async () => (await window.apply({action:'read'})).content);
       assert.deepEqual(content.filter(s => s.type !== 'text').map(geometry), [[0,0,100,100],[300,0,100,100],[0,300,100,100]],
@@ -407,6 +405,7 @@ test('editor interaction regressions', async (t) => {
       await page.mouse.move(offset.x + x1, offset.y + y1, {steps: 4});
       await page.mouse.up();
       await frame.locator('#selection-question').click();
+      assert.equal(await frame.locator('#selection .selection-region').count(), 1, 'the attached area shows again');
       assert.match(await frame.locator('#context-title').innerText(), /Selected area/);
       assert.equal(await frame.locator('#selected-question').innerText(), 'Selected area');
       assert.match(await frame.locator('#context-quote').textContent(), /^Area \d+ × \d+ at -2\d, -2\d\n1 object\nrectangle: A$/);
@@ -482,7 +481,7 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#ask-toggle').click();
       await frame.locator('#comments-tab').click();
       await card.locator('.comment-passage').click();
-      assert.deepEqual(await frame.locator('#selection [data-resize]').evaluateAll(n => n.map(e => e.dataset.resize)), ['a']);
+      assert.equal(await frame.locator('#selection').getAttribute('data-selected'), 'a');
       // Sending the thread asks about its objects; resolving removes its marker.
       await card.getByText('Send thread to assistant', {exact: true}).click();
       await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
@@ -628,10 +627,10 @@ test('editor interaction regressions', async (t) => {
       await page.close();
     });
     await t.test('style panel changes selected shapes and subsequent drawings', async () => {
-      const { page, frame } = await open();
+      const { page, frame } = await open({viewport:{width:1280,height:700}});
       assert.equal(await frame.locator('#properties > summary').getAttribute('aria-disabled'), 'true', 'nothing to style');
       await frame.locator('#scene [data-shape="ellipse"] path').click({ force: true });
-      await frame.locator('#properties > summary').click();
+      assert.equal(await frame.locator('#properties').evaluate(e => e.open), true, 'selecting opens Style');
       const shown = async () =>
         frame.locator('.sec:not([hidden]) h4').allTextContents();
       assert.deepEqual(await shown(), [
