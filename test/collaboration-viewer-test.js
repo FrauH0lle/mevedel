@@ -443,6 +443,54 @@ async function testEditingAvailability() {
   assert.equal(node('editing-items').children[0].disabled,true);
 }
 
+// An item deleted anywhere leaves every list; a browser keeps its local
+// draft only while it holds edits that never reached the host.
+async function testEditingDeletion() {
+  const nodes = new Map(), flashes = [], store = new Map();
+  const node = id => { if (!nodes.has(id)) nodes.set(id,new Element('div')); return nodes.get(id); };
+  const draft = (id, kind, pending) => store.set(`mevedel-editing::${id}`,
+    JSON.stringify({id, kind, title:id, crdt:'', pending}));
+  draft('stale', 'whiteboard', []);
+  draft('board', 'whiteboard', []);
+  draft('doc', 'document', [{opId:'unsent', update:''}]);
+  const context = {
+    URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
+    localStorage:{get length() { return store.size; }, key:i => [...store.keys()][i],
+      getItem:k => store.get(k) ?? null, setItem:(k, v) => store.set(k, v), removeItem:k => store.delete(k)},
+    document:{getElementById:node,querySelectorAll:()=>[]},
+    window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
+  let api;
+  api=context.window.mevedelEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},
+    el:tag=>new Element(tag),flash:message=>flashes.push(message),summarize(){},
+    send:async frame=>{
+      const args=JSON.parse(atob(frame.data));
+      const reply=args.action==='list' ? {result:[{id:'board',kind:'whiteboard',title:'Board'},
+                                                 {id:'doc',kind:'document',title:'Notes'}]}
+        : {result:{available:true}};
+      const data=btoa(JSON.stringify(reply));
+      api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
+      return true;
+    }});
+  await api.welcome();
+  assert.equal(store.has('mevedel-editing::stale'), false, 'a stale draft without edits is dropped');
+  const event = value => { const data=btoa(JSON.stringify(value));
+    api.receive({t:'editing',reqId:'event',offset:0,total:data.length,data}); };
+  event({event:'deleted', id:'board', actor:'Ann'});
+  assert.deepEqual(node('editing-items').children.map(b => b.dataset.itemId), ['doc']);
+  assert.equal(flashes.at(-1), '“Board” was deleted by Ann.');
+  assert.equal(store.has('mevedel-editing::board'), false);
+  event({event:'deleted', id:'doc', actor:'Ann'});
+  assert.equal(store.has('mevedel-editing::doc'), true, 'unsaved edits stay recoverable');
+  assert.deepEqual(node('editing-items').children.map(b => b.dataset.itemId), ['doc'],
+                   'listed again as a local recovery');
+  // A disconnected browser knows nothing about what the host still has.
+  draft('unlisted', 'whiteboard', []);
+  api.connection(false);
+  assert.equal(store.has('mevedel-editing::unlisted'), true);
+}
+
 // A room message in an item's discussion asks about the whole item, with a
 // fresh question identity, and resolves with the host's receipt.
 async function testItemDiscussionAsk() {
@@ -483,6 +531,7 @@ async function main() {
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();
+  await testEditingDeletion();
   await testItemDiscussionAsk();
   await testTransportLifecycle();
   await testTransportGiveUp();

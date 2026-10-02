@@ -380,3 +380,18 @@ is the outline offset by Excalidraw's binding gap, toward the fixed point. Both 
 resizing in the browser and in host snapshots. Hand-drawn wobble remains a
 visual decoration rather than changing attachment geometry. Existing boards
 benefit without content rewrites; unbound endpoints keep their explicit points.
+
+## Deleting shared content
+
+Items could not be deleted, and session artifacts only from the Emacs
+cockpit. Every writable link can now delete both, as can the host. Full links
+qualify because they can already edit an item down to nothing; deletion
+additionally removes comments and history, which the confirmation states.
+Deletion is final: a trash would add a second lifecycle state that listing,
+Fork, Save As, Rewind, publication and the model would all have to honor, so
+the confirmation offers a downloadable copy for re-import instead. The model
+gets no delete action; removing work stays a human decision. Item deletion
+runs in the editing queue so it cannot overtake a save in progress, and one
+artifact-folder deletion helper commits a project session's tombstone at
+once, which also fixed the cockpit's deletions only becoming durable at the
+next full save.

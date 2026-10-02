@@ -8,13 +8,15 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts',
              'artifact-panel', 'artifact-title', 'artifact-meta',
-             'artifact-tab', 'artifact-download', 'artifact-close',
+             'artifact-tab', 'artifact-download', 'artifact-delete', 'artifact-close',
              'artifact-body'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
 nodes['artifacts-box'].hidden = true;
 nodes['artifact-panel'].hidden = true;
 nodes['artifact-tab'].hidden = true;
 nodes['artifact-download'].hidden = true;
+nodes['artifact-delete'].hidden = true;
+let confirmAnswer = true;
 const created = [];
 const revoked = [];
 const links = [];
@@ -40,6 +42,7 @@ class TestBlob {
   constructor(parts, options = {}) { this.parts = parts; this.type = options.type; }
 }
 const window = {
+  confirm: () => confirmAnswer,
   mevedelTranscriptRenderer: {
     formatBytes: size => `${size} B`,
     renderMarkdown: text => element(document, 'article', 'prose', text),
@@ -66,6 +69,7 @@ const controller = window.mevedelArtifactView.create({
   el: (tag, className, text) => element(document, tag, className, text),
   flash: message => flashes.push(message),
   summarize: (key, text) => { summary = {key, text}; },
+  canDelete: () => true,
 });
 
 controller.render([
@@ -147,8 +151,36 @@ nodes['artifact-close'].dispatch('click');
 assert.equal(nodes['artifact-panel'].hidden, true);
 assert.deepEqual(revoked, created);
 
+(async () => {
+// Writable links delete a loaded artifact; the host answers by request id.
+controller.open({id: 'markdown', artifact: 'notes.md'});
+assert.equal(nodes['artifact-delete'].hidden, true, 'nothing to delete while loading');
+controller.handle({reqId: 4, mime: 'text/markdown', size: markdown.length,
+                   data: Buffer.from(markdown).toString('base64'), final: true});
+assert.equal(nodes['artifact-delete'].hidden, false);
+const before = sent.length;
+confirmAnswer = false;
+nodes['artifact-delete'].dispatch('click');
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(sent.length, before, 'a declined confirmation sends nothing');
+confirmAnswer = true;
+nodes['artifact-delete'].dispatch('click');
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual({...sent.at(-1)}, {t: 'artifact-delete', reqId: 1, id: 'markdown'});
+controller.handleDelete({reqId: 1, error: 'This artifact is no longer on the host'});
+assert.equal(flashes.at(-1), 'This artifact is no longer on the host');
+assert.equal(nodes['artifact-panel'].hidden, false);
+nodes['artifact-delete'].dispatch('click');
+await new Promise(resolve => setImmediate(resolve));
+controller.handleDelete({reqId: 2, ok: true});
+assert.equal(flashes.at(-1), 'notes.md deleted.');
+assert.equal(nodes['artifact-panel'].hidden, true);
+controller.handleDelete({reqId: 2, ok: true});
+assert.equal(flashes.at(-1), 'notes.md deleted.', 'a stale reply is ignored');
+
 controller.render([]);
 assert.equal(nodes['artifacts-box'].hidden, true);
 assert.deepEqual(summary, {key: 'artifacts', text: ''});
 
 console.log('viewer artifact passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

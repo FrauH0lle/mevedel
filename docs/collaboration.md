@@ -518,6 +518,12 @@ the model writes, everyone gets the card. There is no guest upload
 path, and the relay is untouched -- artifact frames are sealed like
 every other frame.
 
+Full and owner links can **Delete** an open artifact after confirming. The
+host resolves the file from its own published record of the card, never from
+the request, deletes it with its artifact comments through the same path as
+the Emacs cockpit, and the card then reads as deleted on the host. Files
+below `artifacts/shared-editing/` are items, deleted from Shared work.
+
 ### Artifact comments
 
 Writable guests can comment on part of an HTML artifact in the panel.

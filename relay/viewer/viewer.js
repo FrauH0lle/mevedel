@@ -151,6 +151,7 @@
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
     canComment: () => state.connected && !state.readOnly,
+    canDelete: () => state.connected && !state.readOnly,
     busy: () => state.connected && state.busy === true,
     reveal: id => {
       const turn = state.elements.get(id);
@@ -983,6 +984,8 @@
       artifacts.handle(frame);
     } else if (frame.t === 'artifact-comment') {
       artifacts.handleComment(frame);
+    } else if (frame.t === 'artifact-delete') {
+      artifacts.handleDelete(frame);
     } else if (frame.t === 'artifact-comments') {
       artifacts.storedComments(frame);
     } else if (frame.t === 'ui-request') {

@@ -217,5 +217,42 @@
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-shared-editing--delete
+  (:doc "Deleting through the editing queue commits the removal and names who deleted it" :quiet t)
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-shared-delete-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buf (generate-new-buffer " *test-shared-delete*"))
+         (logical "artifacts/shared-editing/board.json")
+         observed)
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (setq-local mevedel--session session)
+          (mevedel-shared-editing-commit-file
+           session logical "{\"kind\":\"whiteboard\",\"title\":\"Board\",\"revision\":1}")
+          (let ((mevedel-shared-editing-change-hook
+                 (list (lambda (_session state _result) (push state observed))))
+                (call (lambda (args)
+                        (let (reply)
+                          (mevedel-shared-editing-call session args (lambda (value) (setq reply value)))
+                          (let ((deadline (+ (float-time) 5)))
+                            (while (and (not reply) (< (float-time) deadline))
+                              (accept-process-output nil 0.02)))
+                          reply))))
+            (should (equal '(:id "board" :deleted t)
+                           (plist-get (funcall call '(:action "delete" :id "board" :actor "Guest: Ann"))
+                                      :result)))
+            (should-not (mevedel-session-artifacts-artifact-present-p session logical t))
+            (should (equal '(:id "board" :deleted t :actor "Guest: Ann") (car observed)))
+            (should-not (mevedel-shared-editing-list session))
+            (should (equal "This item no longer exists"
+                           (plist-get (funcall call '(:action "delete" :id "board")) :error)))))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf (mevedel-shared-editing-stop)))
+      (test-mevedel-session-persistence--release-and-kill buf session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
 (provide 'test-mevedel-shared-editing)
 ;;; test-mevedel-shared-editing.el ends here

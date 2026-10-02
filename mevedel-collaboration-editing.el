@@ -84,10 +84,20 @@ IDs, while exact before/after snapshots stay on the host for reversion."
         (setq offset end)))))
 
 (defun mevedel-collaboration-editing--changed (session state result)
-  "Publish SESSION's committed STATE and RESULT to its current guests."
+  "Publish SESSION's committed STATE and RESULT to its current guests.
+A deleted item reaches every guest as a `deleted' event naming who
+deleted it; a guest viewing it is no longer in it."
   (when-let* ((room (mevedel-collaboration--room-for-session session)))
     (maphash
      (lambda (peer guest)
+       (if (plist-get state :deleted)
+           (progn
+             (when (equal (plist-get guest :editing-item) (plist-get state :id))
+               (plist-put guest :editing-item nil))
+             (mevedel-collaboration-editing--send
+              room peer "event"
+              (list :event "deleted" :id (plist-get state :id)
+                    :actor (string-remove-prefix "Guest: " (or (plist-get state :actor) "")))))
        (mevedel-collaboration-editing--send
         room peer "event"
         (append (list :event "changed" :id (plist-get state :id)
@@ -96,7 +106,7 @@ IDs, while exact before/after snapshots stay on the host for reversion."
                 (when (equal (plist-get guest :editing-item) (plist-get state :id))
                   (list :update (plist-get result :update)
                         :comments (plist-get result :comments)
-                        :transactions (plist-get state :transactions))))))
+                        :transactions (plist-get state :transactions)))))))
      (plist-get room :guests))))
 
 (defun mevedel-collaboration-editing--presence (room peer guest args)
@@ -312,7 +322,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                            (eq guest (mevedel-collaboration--guest room peer))
                            (or read-only (plist-get guest :writable))))))
     (unless (and (member action '("list" "status" "read" "create" "import" "update"
-                                  "rename" "revert" "export" "ask" "comment" "reply-comment" "resolve-comment"
+                                  "rename" "revert" "delete" "export" "ask" "comment" "reply-comment" "resolve-comment"
                                   "library" "library-add" "library-remove" "library-install" "library-uninstall"
                                   "library-catalog" "library-fetch"))
                  (funcall authorize))

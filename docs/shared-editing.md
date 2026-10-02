@@ -2,7 +2,7 @@
 
 The room's **Shared work** section separates creation and import controls from its list
 of named whiteboards and documents. Full and
-owner links can create, rename, import, and edit them concurrently. View
+owner links can create, rename, import, edit and delete them concurrently. View
 links can observe and download. Opening an item affects that browser only;
 other participants get a followable entry. Each editor opens in its own
 browser tab, leaving the room and its composer draft in the original tab.
@@ -500,6 +500,21 @@ commands before retrying browser saves.
 After a reload, locally retained items remain available as **local recovery**
 entries even when their share or host item is gone. They open read-only for
 recovery download until the host supplies valid current content and authority.
+
+## Deleting
+
+**Delete whiteboard/document…** in the editor's **☰** menu, or `d` on its row
+in the Emacs artifacts cockpit, deletes an item for everyone: its content,
+embedded images, comments and contribution history. There is no undo; the
+browser's confirmation offers **Download a copy**, which can be imported
+again. The deletion runs in the session's editing queue, so it lands after
+any save in progress, and a project session commits it at once, so Resume,
+Save As and Fork do not bring the item back. An editor showing the item in
+another browser closes and names who deleted it; a later save to it fails
+with "This item no longer exists". A browser keeps its local draft of a
+deleted item only while it holds edits that never reached the host, listed
+as a local recovery. The transcript keeps the item's discussion. The model
+cannot delete items.
 
 ## Downloads and imports
 

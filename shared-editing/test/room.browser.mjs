@@ -399,6 +399,27 @@ test(
       const documentId = JSON.parse((await agent('SharedRead')).result).find(
         (i) => i.kind === 'document',
       ).id;
+      // Deleting an item removes it for everyone; an editor showing it closes.
+      await pages[0].locator('#editing-close').click();
+      await pages[0].locator('[data-create-editor="whiteboard"]').click();
+      await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
+      const throwaway = JSON.parse((await agent('SharedRead')).result)
+        .find((i) => i.id !== boardId && i.id !== documentId).id;
+      await pages[1].locator('#editing-close').click();
+      await pages[1].locator(`#editing-items [data-item-id="${throwaway}"]`).click();
+      await frame(pages[1]).locator('#canvas').waitFor({ state: 'visible' });
+      await frame(pages[0]).locator('#menu').evaluate((e) => (e.open = true));
+      await frame(pages[0]).locator('#delete-item').click();
+      await pages[0].locator('#delete-shared').waitFor({ state: 'visible' });
+      await pages[0].locator('#delete-shared').getByRole('button', { name: 'Delete', exact: true }).click();
+      await pages[1].locator('#editing-panel').waitFor({ state: 'hidden' });
+      await until(async () =>
+        (await pages[1].locator(`#editing-items [data-item-id="${throwaway}"]`).count()) === 0);
+      assert.equal(JSON.parse((await agent('SharedRead')).result).some((i) => i.id === throwaway), false);
+      for (const p of pages.slice(0, 2)) {
+        await p.locator(`#editing-items [data-item-id="${documentId}"]`).click();
+        await frame(p).locator('.tiptap').waitFor({ state: 'visible' });
+      }
       const docRead = JSON.parse((await agent('SharedRead', { id: documentId })).result);
       const formattedBefore = docRead.content.content[0],
         formattedAfter = structuredClone(formattedBefore);

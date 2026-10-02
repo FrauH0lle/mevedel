@@ -2288,6 +2288,10 @@ async function start(event) {
   $('show-agent').onchange = refreshAgentHighlights;
   $('undo').disabled = readOnly;
   $('redo').disabled = readOnly;
+  // The room confirms and deletes; the editor only asks.
+  $('delete-item').hidden = readOnly;
+  $('delete-item').textContent = item.kind === 'whiteboard' ? 'Delete whiteboard…' : 'Delete document…';
+  $('delete-item').onclick = () => { $('menu').open = false; port.postMessage({ type: 'delete' }); };
   $('retry').onclick = async () => {
     try {
       const current = await request({ action: 'read' });

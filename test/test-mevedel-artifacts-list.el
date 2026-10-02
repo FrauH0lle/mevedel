@@ -36,7 +36,8 @@
   (let* ((save-path (make-temp-file "mevedel-artifacts-cockpit-" t))
          (dir (mevedel-session-artifacts-artifacts-dir save-path))
          (session (mevedel-session--create :name "main"
-                                           :save-path save-path))
+                                           :save-path save-path
+                                           :authority-mode 'pid-lock))
          (view (generate-new-buffer " *artifacts-list-view*"))
          (data (generate-new-buffer " *artifacts-list-data*")))
     (unwind-protect
@@ -87,7 +88,7 @@
 
 (mevedel-deftest mevedel-artifacts-list-count ()
   (let* ((directory (make-temp-file "mevedel-artifact-count-" t))
-         (session (mevedel-session--create :save-path directory))
+         (session (mevedel-session--create :save-path directory :authority-mode 'pid-lock))
          (artifacts (mevedel-session-artifacts-artifacts-dir directory)))
     (unwind-protect
         (progn
@@ -130,7 +131,8 @@
   (let* ((save-path (make-temp-file "mevedel-artifacts-delete-" t))
          (dir (mevedel-session-artifacts-artifacts-dir save-path))
          (session (mevedel-session--create :name "main"
-                                           :save-path save-path))
+                                           :save-path save-path
+                                           :authority-mode 'pid-lock))
          (view (generate-new-buffer " *artifacts-delete-view*"))
          (data (generate-new-buffer " *artifacts-delete-data*"))
          (path (file-name-concat dir "mockup.html"))
