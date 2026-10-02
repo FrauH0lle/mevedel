@@ -27,7 +27,8 @@
 
 (defvar mevedel-shared-editing-change-hook nil
   "Functions called with SESSION, STATE, RESULT after an editing commit.
-Observers cannot change whether the preceding commit succeeded.")
+A deleted item arrives as a STATE with `:deleted' and `:actor' and a nil
+RESULT.  Observers cannot change whether the preceding commit succeeded.")
 
 (defvar-local mevedel-shared-editing--runtime nil
   "Session-local helper process, operation queue, and active operation.")
@@ -69,14 +70,34 @@ Observers cannot change whether the preceding commit succeeded.")
 
 (defun mevedel-shared-editing--read (session id)
   "Read committed shared item ID in SESSION."
+  (unless (mevedel-session-artifacts-artifact-present-p
+           session (mevedel-shared-editing--logical id) t)
+    (error "This item no longer exists"))
   (mevedel-shared-editing--parse
    (decode-coding-string
     (mevedel-session-artifacts-read-artifact
      session (mevedel-shared-editing--logical id) t)
     'utf-8-unix)))
 
-(defun mevedel-shared-editing-list (session)
-  "Return SESSION's committed shared item catalog."
+(defun mevedel-shared-editing--delete (session args)
+  "Delete SESSION's shared item named by ARGS and return the reply.
+The item's whole state goes with it: content, images, comments and
+history.  Observers learn of it as a state with `:deleted' and the
+deleting `:actor'."
+  (let* ((id (plist-get args :id))
+         (logical (mevedel-shared-editing--logical id)))
+    (unless (mevedel-session-artifacts-artifact-present-p session logical t)
+      (error "This item no longer exists"))
+    (mevedel-session-artifacts-delete-files
+     session (list (file-name-concat (mevedel-session-save-path session) logical)))
+    (let ((state (list :id id :deleted t :actor (plist-get args :actor))))
+      (dolist (observer mevedel-shared-editing-change-hook)
+        (condition-case nil (funcall observer session state nil)
+          (error nil))))
+    (list :result (list :id id :deleted t))))
+
+(defun mevedel-shared-editing-ids (session)
+  "Return the ids of SESSION's committed shared items, without reading them."
   (when-let* ((root (mevedel-session-save-path session)))
     (let* ((prefix "artifacts/shared-editing/")
            (names
@@ -96,11 +117,16 @@ Observers cannot change whether the preceding commit succeeded.")
         (when (and (string-prefix-p prefix name)
                    (not (string-search "/" (substring name (length prefix))))
                    (string-match-p "\\.json\\'" name))
-          (let* ((id (file-name-base name))
-                 (state (mevedel-shared-editing--read session id)))
-            (push (list :id id :kind (plist-get state :kind)
-                        :title (plist-get state :title)
-                        :revision (plist-get state :revision)) result)))))))
+          (push (file-name-base name) result))))))
+
+(defun mevedel-shared-editing-list (session)
+  "Return SESSION's committed shared item catalog."
+  (mapcar (lambda (id)
+            (let ((state (mevedel-shared-editing--read session id)))
+              (list :id id :kind (plist-get state :kind)
+                    :title (plist-get state :title)
+                    :revision (plist-get state :revision))))
+          (mevedel-shared-editing-ids session)))
 
 (defun mevedel-shared-editing--commit (session state)
   "Durably commit candidate STATE while SESSION still owns authority."
@@ -323,9 +349,15 @@ characters so UTF-8 encoding never splits a character between writes."
                     (when buffer-read-only (error "Session is read-only"))
                     (unless (mevedel-session-save-path session)
                       (mevedel-session-artifacts-save session buffer)))
-                  (if (equal action "list")
-                      (mevedel-shared-editing--finish
-                       buffer job (list :result (vconcat (mevedel-shared-editing-list session))))
+                  (cond
+                   ((equal action "list")
+                    (mevedel-shared-editing--finish
+                     buffer job (list :result (vconcat (mevedel-shared-editing-list session)))))
+                   ;; Deleting needs no helper; queued, it cannot overtake a save.
+                   ((equal action "delete")
+                    (mevedel-shared-editing--finish
+                     buffer job (mevedel-shared-editing--delete session args)))
+                   (t
                     (unless (member action '("create" "import" "status" "library-sheet"))
                       (setq args (plist-put args :state
                                             (mevedel-shared-editing--read
@@ -350,7 +382,7 @@ characters so UTF-8 encoding never splits a character between writes."
                                 30 nil (lambda ()
                                          (when (buffer-live-p buffer)
                                            (with-current-buffer buffer
-                                             (mevedel-shared-editing-stop))))))))
+                                             (mevedel-shared-editing-stop)))))))))
               (error (mevedel-shared-editing--finish
                       buffer job (list :error (error-message-string err)))))))))))
 

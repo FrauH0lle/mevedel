@@ -72,6 +72,8 @@
                   "mevedel-collaboration-artifact-comments" (room peer frame))
 (declare-function mevedel-collaboration--handle-artifact-get
                   "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--handle-artifact-delete
+                  "mevedel-collaboration-artifact" (room peer frame))
 
 ;; `mevedel-collaboration-history'
 (declare-function mevedel-collaboration--handle-history-get
@@ -1042,6 +1044,8 @@ handling stops the room instead of leaking into the session."
            (mevedel-collaboration--handle-execution-result-get room peer frame))
           ("artifact-get"
            (mevedel-collaboration--handle-artifact-get room peer frame))
+          ("artifact-delete"
+           (mevedel-collaboration--handle-artifact-delete room peer frame))
           ("artifact-comment"
            (mevedel-collaboration--handle-artifact-comment room peer frame))
           ("history-get"

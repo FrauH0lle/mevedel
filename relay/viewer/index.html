@@ -88,6 +88,8 @@
                 title="Open this artifact in its own browser tab, beside the chat">Open in tab</button>
         <button id="artifact-download" class="btn quiet" type="button" hidden
                 title="Save this artifact as a file">Download</button>
+        <button id="artifact-delete" class="btn quiet danger" type="button" hidden
+                title="Delete this artifact from the session for everyone">Delete</button>
         <button id="artifact-close" class="btn quiet" type="button"
                 title="Close this artifact">Close</button>
       </header>
@@ -197,6 +199,17 @@
                   title="Queue this for the session">Send</button>
         </div>
       </form>
+      <dialog id="delete-shared" class="sheet" aria-labelledby="delete-shared-title">
+        <form method="dialog" class="sheet-form">
+          <h2 id="delete-shared-title" class="sheet-title">Delete</h2>
+          <p id="delete-shared-note" class="sheet-note"></p>
+          <menu class="sheet-actions">
+            <button id="delete-shared-copy" class="btn quiet" type="button">Download a copy</button>
+            <button value="cancel" class="btn quiet" type="submit" formnovalidate>Cancel</button>
+            <button value="delete" class="btn danger" type="submit">Delete</button>
+          </menu>
+        </form>
+      </dialog>
       <dialog id="new-session" class="sheet" aria-labelledby="new-session-title">
         <form id="new-session-form" method="dialog" class="sheet-form" autocomplete="off">
           <h2 id="new-session-title" class="sheet-title">New session</h2>

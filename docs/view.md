@@ -1015,9 +1015,14 @@ mutation tool or artifact registry.
 The bundled `artifact` skill carries the conventions (write there,
 self-contained, keep it small) and resolves the concrete directory at
 invocation. In Emacs, the artifacts cockpit (cockpit `A`) lists the
-folder, opens a file locally, and deletes it, telling a live room
-through `mevedel-collaboration-notify-artifacts-changed`. All of this
-works with no room and no relay.
+folder's files and the session's whiteboards and documents, opens a file
+locally, and deletes either. A file goes with its artifact comments; a
+whiteboard or document is deleted as a shared item (see
+[deleting](shared-editing.md#deleting)). A project session commits each
+deletion at once, so Resume, Save As and Fork cannot bring it back before the
+next full save. A live room learns of it; the item state below
+`artifacts/shared-editing/` never lists as files. All of this works with no
+room and no relay.
 
 See [Browser artifact viewing](collaboration.md#artifact-viewing) for cards,
 on-demand transfer, sandboxed HTML, and supported formats.
