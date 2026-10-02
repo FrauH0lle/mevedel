@@ -11,6 +11,9 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-session-test-support
+         (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                           "mevedel-session-test-support"))
 (require 'mevedel-shared-editing)
 
 (mevedel-deftest mevedel-shared-editing--send
@@ -191,6 +194,28 @@
     (should (multibyte-string-p text))
     (should (equal (plist-get (json-parse-string envelope :object-type 'plist) :text) text))
     (should (equal value (mevedel-shared-editing--parse text)))))
+
+(mevedel-deftest mevedel-shared-editing-commit-file
+  (:doc "A fresh portable session's first shared write publishes its live segment" :quiet t)
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-shared-commit-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buf (generate-new-buffer " *test-shared-commit*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (setq-local mevedel--session session)
+          (mevedel-shared-editing-commit-file
+           session "artifacts/shared-editing/board.json" "{}")
+          ;; Resume opens the live segment from the publication.
+          (should (mevedel-session-artifacts-artifact-present-p
+                   session "segment-0001.chat.org" t))
+          (should (equal "{}" (mevedel-session-artifacts-read-artifact
+                               session "artifacts/shared-editing/board.json" t))))
+      (test-mevedel-session-persistence--release-and-kill buf session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-shared-editing)
 ;;; test-mevedel-shared-editing.el ends here
