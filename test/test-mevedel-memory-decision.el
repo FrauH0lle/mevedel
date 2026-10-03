@@ -124,7 +124,7 @@
         (should (<= (string-bytes text) 8192))
         (should (= 1 (gethash "omitted" data)))
         (should (= 0 (length (gethash "rejections" data)))))))
-  :doc "one pending proposal retains shared pass evidence until the last rejection"
+  :doc "one pending proposal retains shared pass evidence, unsettled and unrepublished, until the last rejection"
   (progn
     (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
     (let* ((extra (format (concat "## Promote\n```proposal\nroot: %S\nfile: \"new.md\"\ntype: \"project\"\n"
@@ -139,7 +139,14 @@
       (mevedel-memory-store-publish workspace id)
       (mevedel-memory-decision-reject workspace id (plist-get (car items) :id))
       (should (file-exists-p pin))
+      (should-not (mevedel-memory-decision--settled-p workspace batch))
+      (let ((publish (symbol-function 'mevedel-memory-decision--publish)) (calls 0))
+        (cl-letf (((symbol-function 'mevedel-memory-decision--publish)
+                   (lambda (&rest args) (cl-incf calls) (apply publish args))))
+          (mevedel-memory-decision-recover workspace))
+        (should (= 0 calls)))
       (mevedel-memory-decision-reject workspace id (plist-get (cadr items) :id))
+      (should (mevedel-memory-decision--settled-p workspace batch))
       (should-not (file-exists-p pin))
       (should (file-exists-p (mevedel-memory-store--pin workspace pass (plist-get digest :id))))))
   :doc "a decision waits for this client's active cleanup to release ownership"

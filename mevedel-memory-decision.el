@@ -48,12 +48,14 @@
   "Return the private decision directory for WORKSPACE."
   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "decisions"))
 
-(defun mevedel-memory-decision-status (workspace proposal)
+(defun mevedel-memory-decision-status (workspace proposal &optional entries passes)
   "Return the latest accepted public decision for PROPOSAL in WORKSPACE.
 Verify its immutable acceptance evidence; public text alone cannot authorize
-a decision. Recover accepted decisions before using this to decide or apply."
-  (let ((generation 0) (passes (make-hash-table :test #'equal)) latest)
-    (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+a decision. Recover accepted decisions before using this to decide or apply.
+ENTRIES and PASSES, when non-nil, are one current public observation and its
+pass table, shared across a scan as `mevedel-memory-decision--read' describes."
+  (let ((generation 0) (passes (or passes (make-hash-table :test #'equal))) latest)
+    (dolist (entry (or entries (mevedel-journal-store-entries (mevedel-workspace-root workspace))))
       (when (and (eq (plist-get entry :kind) 'decision) (equal proposal (plist-get entry :proposal-id))
                  (not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get entry :pass-id))))
         (let* ((accepted (mevedel-memory-decision--published workspace entry passes))
@@ -135,6 +137,17 @@ must discard the table after mutations and never retain it between operations."
       (list :claim claim :metadata metadata :accepted accepted :intent intent
             :hash (plist-get data :hash)))))
 
+(defun mevedel-memory-decision--settled-p (workspace accepted)
+  "Return non-nil when every proposal of ACCEPTED is terminal in WORKSPACE.
+Read the public journal once for the whole pass."
+  (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+        (passes (make-hash-table :test #'equal)))
+    (puthash (plist-get (plist-get accepted :prepared) :id) accepted passes)
+    (cl-every (lambda (id)
+                (mevedel-memory-decision-terminal-status-p
+                 (plist-get (mevedel-memory-decision-status workspace id entries passes) :status)))
+              (plist-get (plist-get accepted :review) :proposals))))
+
 (defun mevedel-memory-decision--publish (workspace decision)
   "Publish accepted DECISION in WORKSPACE, then release unneeded evidence.
 Public pass metadata stays immutable. All proposals must be terminal before
@@ -148,10 +161,7 @@ their pass can release its remaining digest pins."
        (mevedel-memory-store--assert-owned mutation)
        (let ((published (mevedel-journal-store-publish-decision
                          (mevedel-workspace-root workspace) (plist-get decision :metadata))))
-         (when (cl-every
-                (lambda (id)
-                  (mevedel-memory-decision-terminal-status-p (plist-get (mevedel-memory-decision-status workspace id) :status)))
-                (plist-get (plist-get accepted :review) :proposals))
+         (when (mevedel-memory-decision--settled-p workspace accepted)
            (mevedel-memory-store--release-pins workspace prepared nil mutation))
          (setf (mevedel-workspace-journal-observation workspace) nil)
          (mevedel-journal-cleanup-schedule workspace t)
@@ -177,11 +187,14 @@ evidence-release check per pass, not repeated republication per decision."
                (pass (plist-get prepared :id))
                (file (mevedel-journal-store--filename metadata 'decision))
                (expected (mevedel-journal-store--encode metadata nil 'decision))
+               ;; Pins outlive the pass until all its proposals are terminal;
+               ;; republishing earlier cannot release them.
                (release (and (not (gethash pass checked))
                              (seq-some (lambda (entry)
                                          (mevedel-session-control-fs-path-exists-p
                                           (mevedel-memory-store--pin workspace pass (plist-get entry :id))))
-                                       (plist-get prepared :entries)))))
+                                       (plist-get prepared :entries))
+                             (mevedel-memory-decision--settled-p workspace (plist-get decision :accepted)))))
           (puthash pass t checked)
           (when (or release (not (equal expected (gethash file published)))
                     (not (equal review-text (gethash review-file published))))
