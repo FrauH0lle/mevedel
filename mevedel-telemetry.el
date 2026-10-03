@@ -160,9 +160,9 @@ profile file larger and cost a little more per sample."
     :artifact-count
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
     :artifacts-local :attempt-generation :backend :baseline-marker-position
-    :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
+    :backend-type :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
     :budget-kind :budget-status :buffer-chars-total
-    :buffers :cache-identity :cached-tokens :call-source :candidate-count :capture-id
+    :buffers :cache-identity :cache-write-tokens :cached-tokens :call-id :call-source :candidate-count :capture-id
     :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
     :command-class :command-hash :command-name :context :context-chars :cpu-ms
@@ -207,7 +207,7 @@ profile file larger and cost a little more per sample."
     :target-threshold :termination :test-scope :threshold :threshold-ms
     :timed-out :timeout-ms :timer-callback :timer-gc-count :timer-gc-ms :timer-ms :token-source :tokens-after :tokens-before
     :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
-    :trigger :tty :turns-run :updated-file-count :via
+    :trigger :tty :turns-run :updated-file-count :usage-status :via
     :workload :yield-time-ms)
   "Metadata keys telemetry may persist.
 
@@ -333,6 +333,10 @@ by, and every caller derives the same answer."
 Bound by `mevedel-telemetry--envelope' so a nested drop is reported once on
 the event rather than inside the structure it was removed from.")
 
+(defvar mevedel-telemetry--event-turn nil
+  "Frozen turn for a delayed per-call event, dynamically bound by its emitter.
+Ordinary event callers cannot override envelope identity through properties.")
+
 (defun mevedel-telemetry--truncate-string (value)
   "Return VALUE bounded to `mevedel-telemetry-max-string-length'."
   (if (> (length value) mevedel-telemetry-max-string-length)
@@ -421,8 +425,8 @@ supplies them itself."
            :event event
            :session-id (ignore-errors
                          (mevedel-session-session-id session))
-           :turn (or (ignore-errors
-                       (mevedel-session-turn-count session))
+           :turn (or mevedel-telemetry--event-turn
+                     (ignore-errors (mevedel-session-turn-count session))
                      0)
            :profiler-run-id
            (and (eq session mevedel-telemetry--profiler-session)

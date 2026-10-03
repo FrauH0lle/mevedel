@@ -18,6 +18,14 @@ view logs, with selected credential headers redacted and owner-only file modes.
 Those logs retain other sensitive contents and are not covered by a claim of
 complete payload redaction.
 
+Normal telemetry includes one start and at most one finish per mevedel-owned
+provider dispatch. These sparse events retain frozen call identity, duration,
+and gptel-normalized token counts, not payloads. Root turns, retained agents,
+and session-owned helpers are distinguishable; sessionless background work
+keeps its workspace ownership and transient `/btw` conversations remain excluded.
+The offline cache analyzer consumes only these per-call events, never adds
+cumulative settlement counts, and reports missing and incomplete evidence.
+
 Native profiler artifacts describe the client Emacs. Local sessions store them
 under their diagnostics directory; remote sessions store them in a client-local
 temporary directory and record its absolute path. They are not portable session
@@ -60,3 +68,9 @@ environment capture and reports success only after nonempty artifacts exist.
   that snapshot; start also rolls back setup failures after sampling begins.
   The same ordering keeps snapshot Git and hashing work out of the measured
   profile.
+- Saved session settlement counts demonstrated substantial cache reuse, but
+  cumulative turn totals hid individual misses and omitted agent usage. Nested
+  usage was also lost through the recursive field filter. Sparse per-call
+  observations and explicitly normalized nested fields replace reliance on
+  cumulative totals or raw debug logs for cache analysis. Cache-write input is
+  reported as a subset, not added again, and unavailable usage stays unknown.

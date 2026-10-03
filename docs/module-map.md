@@ -52,6 +52,7 @@ Data model
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   FD-backed grant mounts and the protected-path mount plan
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
+  mevedel-telemetry-usage.el  frozen per-provider-call identity and normalized usage
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
   mevedel-permission-mode.el  mode normalization, session scoping, lifecycle

@@ -330,6 +330,35 @@
       (insert "abcdefgh")
       (should (= (mevedel-compact-estimation-estimate-tokens) 24))))
 
+  :doc "normalizes nested diagnostic usage without changing the active baseline"
+  (with-temp-buffer
+    (let* ((mevedel-telemetry-enabled t)
+           (session (mevedel-session--create :session-id "baseline-usage"
+                                             :turn-count 5))
+           (tokens '(:input 10 :cached 50 :cache 3 :output 4
+                            :payload "DO NOT RETAIN"))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer (current-buffer) :model 'provider-model
+                             :tokens tokens
+                             :tokens-full '(:input 20 :cached 100 :output 8)))))
+      (setq-local mevedel--session session)
+      (mevedel-compact-estimation-record-token-baseline fsm)
+      (let* ((event (car (mevedel-session-telemetry-pending session)))
+             (latest (plist-get event :provider-context-usage))
+             (cumulative (plist-get event :cumulative-usage)))
+        (should (= 10 (plist-get latest :input-tokens)))
+        (should (= 50 (plist-get latest :cached-tokens)))
+        (should (= 3 (plist-get latest :cache-write-tokens)))
+        (should (= 4 (plist-get latest :output-tokens)))
+        (should (eq 'complete (plist-get latest :usage-status)))
+        (should (= 100 (plist-get cumulative :cached-tokens)))
+        (should-not (plist-get event :dropped-keys))
+        (should-not (string-match-p "DO NOT RETAIN" (prin1-to-string event)))
+        ;; Estimation still uses the original normalized gptel data.
+        (should (equal tokens
+                       (plist-get mevedel-compact-estimation--known-token-baseline
+                                  :provider-context-usage))))))
+
   :doc "prefers latest request tokens over cumulative tokens-full"
   (with-temp-buffer
     (let* ((chat-buffer (current-buffer))
@@ -530,10 +559,15 @@ missing or zero prompt-side usage cannot become the active baseline"
                       25 (list :model target-model :kind 'target))))
           (should (= 21 (plist-get facts :provider-context-tokens)))
           (should (= 25 (plist-get facts :cumulative-usage-tokens)))
-          (should (equal '(:input 18 :output 3)
+          (should (equal '(:input-tokens 18 :cached-tokens nil
+                          :cache-write-tokens nil :output-tokens 3 :usage-status partial)
                          (plist-get facts :provider-context-usage)))
-          (should (equal '(:input 20 :output 5)
+          (should (equal '(:input-tokens 20 :cached-tokens nil
+                          :cache-write-tokens nil :output-tokens 5 :usage-status partial)
                          (plist-get facts :cumulative-usage)))
+          (should (equal '(:input 18 :output 3)
+                         (plist-get mevedel-compact-estimation--known-token-baseline
+                                    :provider-context-usage)))
           (should (eq 'valid (plist-get facts :provider-context-status)))
           (should (eq 'provider-model
                       (plist-get facts :provider-context-model)))

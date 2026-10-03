@@ -260,6 +260,9 @@ considered again until reset by clear."
                              (gptel-request input :buffer request-buffer
                                             :system gptel-system-prompt
                                             :transforms nil :stream stream
+                                            :context
+                                            (list :mevedel-telemetry-session session
+                                                  :mevedel-telemetry-workload 'naming)
                                             :callback #'receive))))
                      (error
                       (finish)

@@ -1,23 +1,31 @@
 ---
 name: "Put shareable working notes in work:// and memories, not .scratch"
-description: "User wants authored notes in work:// and memories; .scratch is PC-local and gitignored"
+description: "Authored notes/handoffs go to work://shared/ and memory; .scratch stays untracked and PC-local, plugin workflows untouched"
 type: feedback
 ---
 
 # Put shareable working notes in work:// and memories, not .scratch
 
-User statement (captured 2026-09-21 final message, repeated in each 2026-09-22 session): the model tends to store/share information in ".sratch"; that location is local to this PC and ignored by Git. The intended destinations are `work://` and memories. Each session was a thorough read-only investigation requested with "No code changes yet."
+User statement (captured 2026-09-21 final message, repeated in each 2026-09-22 session): the model tends to store and share information in ".sratch"; that location is local to this PC and ignored by Git. The intended destinations are `work://` and memories. Storage capability was never the problem — `Read("work://")` listed shared notes in every session that tried it.
 
-**Why this matters.** Storage capability was already present; `Read("work://")` listed shared notes in every session that tried it. The recurring problem is where authored notes end up, and what that destination actually guarantees.
+**2026-09-24 user corrections (user statements, `segment-0001.chat.org`, completed turns 1–3).**
 
-- Observed result (source inspection): `work://shared/...` resolves under the workspace's `.mevedel/shared/`, survives session deletion, and is shared by sessions retaining that workspace, including mevedel-created worktree sessions. Other `work://` descendants are session-owned. Shared notes are not injected into context automatically; they require discovery/read or an explicit handoff address.
-- Observed result: `.mevedel/shared/` is gitignored just as `.scratch/` is, while curated `.mevedel/memory/` is explicitly exempted and tracked. Model inference: switching to `work://shared/` fixes ownership, discovery, and retention integration, but is not by itself synchronization between independent PCs or Git clones.
-- Model inference, repeatedly reached, never experimentally isolated: the strongest explanation is conflicting routing guidance rather than a missing capability. Repository guidance sends plans, investigations, reviews, coordination, and PRDs to `.scratch/`; harness guidance sends factual working notes to `work://shared/` and lasting lessons to memory. How much each source contributes to the observed usage frequency was not measured.
-- Observed result: `.scratch/directive-workflow-redesign/` already holds 12 tracked PRD/issue files despite the directory's ignore rule, and existing shared notes/handoffs still point into `.scratch` for full evidence. The blanket description "untracked scratch" is inaccurate, and moving only a summary leaves the handoff dependent on material outside the intended storage.
+- `.scratch/` belongs to the https://github.com/mattpocock/skills plugin ecosystem; `work://` is mevedel machinery. Preserve the plugin workflows: "They are working really well and I dont want to break their workflow." The ordinary shared-notes default is not permission to rewrite plugin skills or relocate their workflow files.
+- Nothing under `.scratch/` should be Git-tracked; `.mevedel/shared/` should be. The user rejected the proposed migration of the tracked `.scratch/directive-workflow-redesign/` files into shared work — they should simply be removed from tracking.
+- For routing guidance the user wanted only `AGENTS.md` updated, leaving other documentation and the installed plugin skills alone. The model's broader "align repository docs and skill routing" proposal was declined; do not reintroduce it.
+
+**Observed state (this review, 2026-09-27 pass).** The captured `AGENTS.md` "Working material" section now states the `work://shared/` default, keeps `.scratch/` untracked and local-only, preserves invoked skills' configured destinations, and describes `.mevedel/shared/` as versioned material. In the workspace `.gitignore` read during this review, `.scratch/` is still ignored (line 17) while `.mevedel/shared/` is explicitly exempted (line 38). Git ignore rules alone do not untrack files that are already tracked, so the tracking policy is user-stated intent plus a plausible ignore-file change, not proof that the cleanup was completed; check `git ls-files` under `.scratch/` before relying on it.
+
+**Why this matters.** The recurring problem is where authored notes end up and what that destination guarantees, not missing capability.
+
+- `work://shared/...` resolves under the workspace's `.mevedel/shared/`, survives session deletion, and is shared by sessions retaining that workspace, including mevedel-created worktree sessions; other `work://` descendants are session-owned. Shared notes are not injected into context automatically and require discovery, a read, or an explicit handoff address.
+- Shared notes and memory are distinct destinations: curated memory is tracked and durable; `work://shared/` carries working material, and only Git commits and pulls move it between independent checkouts — the resource address itself does not.
+- Working-note capture visits shared files before session-local files within a combined budget and does not scan `.scratch/` itself, so moving a note changes what can enter evidence, not just where the file lives. `.scratch/directive-workflow-redesign/` held 12 tracked PRD/issue files despite the ignore rule, and existing shared notes or handoffs still point into `.scratch` for full evidence; the blanket description "untracked scratch" was inaccurate.
 
 **How to apply.**
-- Default authored, shareable working notes and handoffs to `work://shared/`; promote durable lessons to memory. Do not use `.scratch` as the storage for information meant to be shared.
-- Keep genuinely local, disposable material in `.scratch`: upstream dependency checkouts, raw test output, benchmark material, generated artifacts. Do not propose a blanket ban or bulk migration.
+
+- Default authored, shareable working notes and handoffs to `work://shared/`; promote durable lessons to memory. Do not use `.scratch/` as the storage for information meant to be shared.
+- Keep genuinely local, disposable material in `.scratch/`: issue-tracker and skill workflow files, upstream dependency checkouts, raw test output, screenshots, generated artifacts. Do not propose a blanket ban or bulk migration, and do not rewrite plugin skills or other docs to enforce routing — the user chose an `AGENTS.md`-only change.
+- Never track or commit anything under `.scratch/`; review `.mevedel/shared/` contents before committing, since that is the destination that is meant to be versioned.
 - Changing a note's destination does not make its handoff self-contained; move or duplicate the linked evidence too.
-- Prefer aligning the existing repository and skill routing over adding another reminder, and settle separately whether "shared" must extend across independent PCs or only across sessions/worktrees of one workspace.
-- Status: recommendation only. No guidance file, skill, resolver, or note was changed; which material should travel between machines, and by what transport or tracking policy, remained undecided.
+- Status: the routing policy is now recorded in `AGENTS.md` and the `.mevedel/shared/` ignore exemption is present; whether the previously tracked `.scratch/` files were actually removed from tracking was not verified, and which material should travel between machines by what transport remains undecided.

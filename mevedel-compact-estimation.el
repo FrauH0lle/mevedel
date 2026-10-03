@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-models)
+(require 'mevedel-telemetry-usage)
 (require 'mevedel-transcript-audit)
 
 ;; `gptel-request'
@@ -196,8 +197,8 @@ count never becomes the baseline for the chat buffer."
            mevedel--session 'token-baseline-recorded
            :request-id request-id
            :model model
-           :provider-context-usage provider-usage
-           :cumulative-usage cumulative-usage
+           :provider-context-usage (mevedel-telemetry-usage-normalize provider-usage)
+           :cumulative-usage (mevedel-telemetry-usage-normalize cumulative-usage)
            :provider-context-tokens provider-count
            :cumulative-usage-tokens cumulative-count
            :provider-context-status provider-status
@@ -281,8 +282,10 @@ joined by newlines; count that shape without building it."
      :baseline-request-id (plist-get baseline :request-id)
      :provider-context-model (plist-get baseline :model)
      :provider-context-window (plist-get baseline :model-context-window)
-     :provider-context-usage (plist-get baseline :provider-context-usage)
-     :cumulative-usage (plist-get baseline :cumulative-usage)
+     :provider-context-usage
+     (mevedel-telemetry-usage-normalize (plist-get baseline :provider-context-usage))
+     :cumulative-usage
+     (mevedel-telemetry-usage-normalize (plist-get baseline :cumulative-usage))
      :provider-context-tokens (plist-get baseline :provider-context-tokens)
      :cumulative-usage-tokens (plist-get baseline :cumulative-usage-tokens)
      :provider-context-status (plist-get baseline :provider-context-status)
