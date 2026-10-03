@@ -243,6 +243,19 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
           (gptel-backend-name (plist-get provider :backend))
           (gptel--model-name (plist-get provider :model))))
 
+(defun mevedel-model-candidates ()
+  "Return registered model candidates as (LABEL . PROVIDER) pairs."
+  (let (candidates)
+    (dolist (entry (and (boundp 'gptel--known-backends)
+                        gptel--known-backends))
+      (let ((backend (cdr entry)))
+        (dolist (model (and (fboundp 'gptel-backend-models)
+                            (gptel-backend-models backend)))
+          (let ((provider (list :backend backend :model model)))
+            (push (cons (mevedel-model--provider-label provider) provider)
+                  candidates)))))
+    (sort candidates (lambda (a b) (string< (car a) (car b))))))
+
 (defun mevedel-model-supported-efforts (model)
   "Return MODEL's declared reasoning effort symbols."
   (let ((type (and (symbolp model) (get model :reasoning-effort))))

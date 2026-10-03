@@ -125,6 +125,10 @@
                   (title content question help-echo-text callback
                          &optional host-only audience))
 
+;; `mevedel-models'
+(declare-function mevedel-model-candidates "mevedel-models" ())
+(autoload 'mevedel-model-candidates "mevedel-models")
+
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
                   "mevedel-pending-inputs"
@@ -340,6 +344,10 @@ than offered as a button that cannot work."
     ('command
      (cdr (assoc name mevedel-collaboration--command-hints)))))
 
+(defun mevedel-collaboration--model-labels ()
+  "Return the models a guest may pick for a new session, as labels."
+  (vconcat (mapcar #'car (mevedel-model-candidates))))
+
 (defun mevedel-collaboration--send-snapshot (room peer)
   "Send ROOM's welcome and chunked snapshot to guest PEER."
   (let* ((transport (plist-get room :transport))
@@ -361,7 +369,10 @@ than offered as a button that cannot work."
       ;; surface; a view link gets none, having no way to use it.
       (when-let* (((plist-get guest :writable))
                   (roster (mevedel-collaboration--guest-roster room guest)))
-        (list :commands (vconcat roster)))))
+        (list :commands (vconcat roster)))
+      ;; Only a writable guest can ask for a session to choose one for.
+      (when (plist-get guest :writable)
+        (list :models (mevedel-collaboration--model-labels)))))
     (cl-loop for rest on chunks do
              (mevedel-collaboration--transport-send
               transport peer

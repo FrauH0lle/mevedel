@@ -162,6 +162,19 @@ session still gets an independent ID; its display name does not name its directo
 A matching name among live root sessions in that workspace is refused; this is
 not a uniqueness check across all saved display names.
 
+A guest may also pick the session's model. The `welcome` frame lists every
+model registered with gptel, as exact `BACKEND:MODEL` labels, to writable guests;
+the request sheet offers them after a Default entry and sends the pick as the
+`new-session` frame's optional `model`. A label that no registered model
+resolves refuses the request instead of falling back to the default. The new
+session gets the default chat preset first and the picked model second, because
+a preset may name a model of its own that would otherwise replace the guest's
+choice. Only the lead model changes: the preset's model tiers and workloads,
+and so its agents, stay as configured. The choice is stored like `/model`'s and
+survives resume. Picking a preset stays host-only, because a preset carries
+tools, agents and arbitrary settings, not just a model. An approval prompt
+shows the requested model, or `default`.
+
 One creation request per guest waits at a time; another is refused while the
 first awaits approval. Outcomes repeat the request ID and sanitized name so the
 viewer can settle the matching request. Each completed request has its own dock
@@ -231,7 +244,8 @@ than the link that reached it. The session id in an open request only selects
 among the sessions the listing shows; it never becomes a path. Creation uses
 the [guest-requested session](#guest-requested-sessions) path with the
 lobby's workspace and root; a non-owner request is refused, because a lobby
-has no session in which to ask the host.
+has no session in which to ask the host. For the same reason only an owner's
+listing carries the models it may create a session on.
 
 Each row carries the session id, display name, last save time, a prompt
 preview of at most 160 characters, and whether the session is live in Emacs

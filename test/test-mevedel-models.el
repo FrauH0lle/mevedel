@@ -54,6 +54,18 @@
                      (gptel-backend-name (plist-get provider :backend))))
       (should (eq 'balanced-model (plist-get provider :model))))))
 
+(mevedel-deftest mevedel-model-candidates
+  (:doc "lists every registered model by its exact provider label, sorted")
+  (mevedel-models-test--with-backends
+    (let ((candidates (mevedel-model-candidates)))
+      (should (equal '("Balanced:balanced-model" "Fast:fast-model"
+                       "Ollama:llama3.1:8b")
+                     (mapcar #'car candidates)))
+      ;; Each label resolves back to the provider it stands for.
+      (dolist (candidate candidates)
+        (should (equal (cdr candidate)
+                       (mevedel-model-resolve-provider (car candidate))))))))
+
 (mevedel-deftest mevedel-model-resolve-tier ()
   ,test
   (test)

@@ -318,6 +318,8 @@
                (lambda (_transport peer frame) (push (cons peer frame) sent) t))
               ((symbol-function 'mevedel-collaboration-lobby--frame)
                (lambda (_lobby) '(:t "lobby")))
+              ((symbol-function 'mevedel-model-candidates)
+               (lambda () '(("Codex:gpt-6-luna" . provider))))
               ((symbol-function 'mevedel-collaboration-lobby--handle-open)
                (lambda (_lobby peer _frame)
                  (setq interaction inhibit-interaction)
@@ -351,6 +353,18 @@
       (should (plist-get (mevedel-collaboration--guest lobby 1) :writable))
       (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "lobby-refresh"))
       (should (= 2 (length sent)))
+      ;; Only an owner can create a session here, so only it learns the
+      ;; models to create one on.
+      (mevedel-collaboration-lobby--on-frame
+       "/root/" 2
+       (list :t "hello" :proto mevedel-collaboration--protocol-version
+             :name "Owner"
+             :writeToken (mevedel-collaboration--base64url
+                          (make-string 16 ?w))
+             :ownerToken (mevedel-collaboration--base64url
+                          (make-string 16 ?o))))
+      (should (equal '(2 :t "lobby" :models ["Codex:gpt-6-luna"]) (car sent)))
+      (setq sent (cdr sent))
       (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "open-session"))
       (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "new-session"))
       (should (equal '((new . 1) (open . 1)) routed))

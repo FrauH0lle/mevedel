@@ -1241,7 +1241,7 @@
       (dolist (buffer (list first second view agent other transient))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(mevedel-deftest mevedel--display-chat-buffer
+(mevedel-deftest mevedel--ensure-chat-preset
   ()
   ,test
   (test)
@@ -1255,9 +1255,8 @@
                         (mevedel-session--create
                          :name "test" :preset-name 'selected)))
           (cl-letf (((symbol-function 'mevedel-preset-apply)
-                     (lambda (&rest _) (setq applied t)))
-                    ((symbol-function 'display-buffer) #'ignore))
-            (mevedel--display-chat-buffer buf))
+                     (lambda (&rest _) (setq applied t))))
+            (mevedel--ensure-chat-preset buf))
           (should-not applied))
       (kill-buffer buf)))
   :doc "applies the default to a fresh session"
@@ -1270,9 +1269,8 @@
                         (mevedel-session--create :name "test")))
           (cl-letf (((symbol-function 'mevedel-preset-apply)
                      (lambda (name &optional _)
-                       (setq applied name)))
-                    ((symbol-function 'display-buffer) #'ignore))
-            (mevedel--display-chat-buffer buf))
+                       (setq applied name))))
+            (mevedel--ensure-chat-preset buf))
           (should (eq applied
                       (alist-get mevedel-default-chat-preset
                                  mevedel-action-preset-alist))))

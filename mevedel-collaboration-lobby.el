@@ -212,10 +212,13 @@ own order, marked live or shared when they are open here.  A row's
                              mevedel-collaboration-lobby--max-sessions)))))
 
 (defun mevedel-collaboration-lobby--send-listing (lobby peer)
-  "Send LOBBY's session listing to PEER."
+  "Send LOBBY's session listing to PEER.
+An owner also receives the models it may create a session on."
   (mevedel-collaboration--transport-send
    (plist-get lobby :transport) peer
-   (mevedel-collaboration-lobby--frame lobby)))
+   (append (mevedel-collaboration-lobby--frame lobby)
+           (when (plist-get (mevedel-collaboration--guest lobby peer) :owner)
+             (list :models (mevedel-collaboration--model-labels))))))
 
 
 ;;

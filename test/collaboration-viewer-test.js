@@ -584,7 +584,8 @@ async function main() {
                'tasks-list', 'agents-done-list',
                'new-session-button', 'new-session', 'new-session-form',
                'new-session-result', 'new-session-name',
-               'new-session-prompt',
+               'new-session-prompt', 'new-session-model',
+               'new-session-model-label',
                'new-session-create', 'new-session-lede',
                'invites', 'invite-button', 'invite', 'invite-tiers',
                'lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
@@ -900,7 +901,8 @@ async function main() {
   await deliver({t: 'welcome', proto: 3, readOnly: false, recordCount: 3,
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'},
-                            {name: 'design', kind: 'skill', hint: '[brief]'}]});
+                            {name: 'design', kind: 'skill', hint: '[brief]'}],
+                 models: ['Codex:gpt-6-astra', 'Codex:gpt-6-luna']});
   await waitFor(() => first.sent.length === 2, 'shared item catalog request');
   const catalogRequest = await unseal(key, first.sent[1]);
   assert.equal(catalogRequest.t, 'editing');
@@ -1579,15 +1581,20 @@ async function main() {
   assert.match(nodes['new-session-lede'].textContent, /separate room/);
   assert.equal(nodes['new-session-form'].hidden, false);
   assert.equal(nodes['new-session-name'].focused, true);
+  // The welcome's models fill the picker after the host's default.
+  assert.equal(nodes['new-session-model'].hidden, false);
+  assert.deepEqual(nodes['new-session-model'].children.map(textOf),
+                   ['Default', 'Codex:gpt-6-astra', 'Codex:gpt-6-luna']);
   nodes['new-session-name'].value = 'onboarding';
   nodes['new-session-prompt'].value = 'Design the flow';
+  nodes['new-session-model'].value = 'Codex:gpt-6-luna';
   const requestBefore = first.sent.length;
   nodes['new-session'].close('create');
   await waitFor(() => first.sent.length === requestBefore + 1,
                 'sealed new-session request');
   assert.deepEqual(await unseal(key, first.sent[requestBefore]),
                    {t: 'new-session', reqId: 1, name: 'onboarding',
-                    prompt: 'Design the flow'});
+                    prompt: 'Design the flow', model: 'Codex:gpt-6-luna'});
   // Sending closes the sheet and leaves a card in the dock: the approval
   // may land minutes later, and the sheet is not where it should wait.
   assert.equal(nodes['new-session'].open, false);

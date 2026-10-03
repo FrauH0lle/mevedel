@@ -17,13 +17,9 @@
 ;; `gptel'
 (declare-function gptel--model-name "ext:gptel" (model))
 (declare-function gptel-backend-name "ext:gptel" (cl-x) t)
-(defvar gptel--known-backends)
 (defvar gptel-backend)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
-
-;; `gptel-request'
-(declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-artifacts-list'
 (declare-function mevedel-artifacts-list-count
@@ -119,6 +115,7 @@
                   (session effort &optional buffer))
 (declare-function mevedel-model-set-session-provider "mevedel-models"
                   (session provider &optional buffer))
+(declare-function mevedel-model-candidates "mevedel-models" ())
 (declare-function mevedel-model-supported-efforts "mevedel-models" (model))
 (defvar mevedel-model-tiers)
 (defvar mevedel-model-workloads)
@@ -986,26 +983,10 @@ state rather than as a fourth permission choice."
              (fboundp 'mevedel-plan-approval-render))
     (mevedel-plan-approval-render session)))
 
-(defun mevedel-menu--model-candidates ()
-  "Return registered model candidates as (LABEL . PROVIDER) pairs."
-  (let (candidates)
-    (dolist (entry (and (boundp 'gptel--known-backends)
-                        gptel--known-backends))
-      (let ((backend (cdr entry)))
-        (dolist (model (and (fboundp 'gptel-backend-models)
-                            (gptel-backend-models backend)))
-          (push
-           (cons (format "%s:%s"
-                         (gptel-backend-name backend)
-                         (gptel--model-name model))
-                 (list :backend backend :model model))
-           candidates))))
-    (sort candidates (lambda (a b) (string< (car a) (car b))))))
-
 (defun mevedel-menu--model-selection-select-model ()
   "Select a model for the caller-owned model-selection scope."
   (interactive)
-  (let ((candidates (mevedel-menu--model-candidates)))
+  (let ((candidates (mevedel-model-candidates)))
     (unless candidates
       (user-error "No registered gptel models"))
     (let* ((scope (transient-scope))

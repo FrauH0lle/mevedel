@@ -820,12 +820,16 @@ Completion labels include identity, because display names need not be unique."
     (or (cdr (assoc choice choices))
         (unless (string-blank-p choice) choice))))
 
-(defun mevedel--display-chat-buffer (chat-buffer)
-  "Ensure CHAT-BUFFER has a preset and display its view."
+(defun mevedel--ensure-chat-preset (chat-buffer)
+  "Apply the default chat preset to CHAT-BUFFER unless it has one."
   (with-current-buffer chat-buffer
     (unless (mevedel-session-preset-name mevedel--session)
       (mevedel-preset-apply
-       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))))
+       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)))))
+
+(defun mevedel--display-chat-buffer (chat-buffer)
+  "Ensure CHAT-BUFFER has a preset and display its view."
+  (mevedel--ensure-chat-preset chat-buffer)
   (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
                       chat-buffer)
                   gptel-display-buffer-action))

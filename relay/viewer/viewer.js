@@ -51,6 +51,8 @@
     roster: [],
     armed: [],
     model: null,
+    // Models the host offers for a session this guest creates.
+    models: [],
     mode: null,
     plan: false,
     pending: 0,
@@ -947,6 +949,7 @@
       notifications.render();
       setComposerVisible(!state.readOnly);
       showSkillChips(state.readOnly ? [] : frame.commands);
+      state.models = Array.isArray(frame.models) ? frame.models : [];
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
       // The host sends `queue' only when it changes, so a reconnect
@@ -1034,6 +1037,7 @@
       editing.conversation();
       artifacts.activity();
     } else if (frame.t === 'lobby') {
+      state.models = Array.isArray(frame.models) ? frame.models : [];
       lobby.show(frame);
       if (sessionLabel && typeof frame.project === 'string') {
         sessionLabel.textContent = `Lobby · ${frame.project}`;
