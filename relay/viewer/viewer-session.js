@@ -23,6 +23,8 @@
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
     const promptInput = document.getElementById('new-session-prompt');
+    const modelInput = document.getElementById('new-session-model');
+    const modelLabel = document.getElementById('new-session-model-label');
     const submit = document.getElementById('new-session-create');
     const lede = document.getElementById('new-session-lede');
     // The first prompt carries files like any other prompt.
@@ -158,6 +160,7 @@
     // first prompt, as asking about a project file does.
     function open(note, prompt) {
       if (typeof prompt === 'string') promptInput.value = prompt;
+      showModels();
       submit.textContent = state.owner ? 'Create' : 'Ask host';
       lede.textContent = typeof note === 'string' ? note : (state.owner
         ? 'A separate room for separate work. This room, and everyone in '
@@ -168,11 +171,28 @@
       nameInput.focus();
     }
 
+    // Rebuilt on every open: the host's list arrives with each welcome.
+    // The empty value leaves the choice to the host's default preset.
+    function showModels() {
+      const models = state.models.filter(model => typeof model === 'string');
+      const wanted = modelInput.value;
+      const fallback = el('option', null, 'Default');
+      fallback.value = '';
+      modelInput.replaceChildren(fallback, ...models.map(model => {
+        const option = el('option', null, model);
+        option.value = model;
+        return option;
+      }));
+      modelInput.value = models.includes(wanted) ? wanted : '';
+      modelInput.hidden = modelLabel.hidden = models.length === 0;
+    }
+
     function submitRequest() {
       const name = nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_');
       if (!/[A-Za-z0-9]/.test(name)) return;
       const reqId = ++requestSequence;
       const frame = {t: 'new-session', reqId, name, prompt: promptInput.value.trim()};
+      if (!modelInput.hidden && modelInput.value) frame.model = modelInput.value;
       const request = () => {
         const attached = files.items();
         if (attached.length) {

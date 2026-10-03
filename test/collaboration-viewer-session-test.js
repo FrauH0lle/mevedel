@@ -8,6 +8,7 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
 const ids = ['new-session-button', 'new-session', 'new-session-form',
              'new-session-name', 'new-session-prompt', 'new-session-create',
+             'new-session-model', 'new-session-model-label',
              'new-session-lede', 'invites', 'invite-button', 'invite',
              'invite-tiers', 'rooms-button', 'rooms', 'rooms-list'];
 
@@ -30,7 +31,7 @@ function secretOf(seed, bytes) {
 
 const store = new Map();
 
-function build(tierBytes, seed) {
+function build(tierBytes, seed, models = []) {
   store.clear();
   if (seed) store.set('mevedel-rooms', JSON.stringify(seed));
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
@@ -52,7 +53,7 @@ function build(tierBytes, seed) {
   load('relay/viewer/viewer-session.js', context);
   const sent = [];
   const controller = window.mevedelSessionView.create({
-    state: {mode: 'ask', owner: tierBytes === 64},
+    state: {mode: 'ask', owner: tierBytes === 64, models},
     send: frame => sent.push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
     encode: base64urlEncode,
@@ -242,3 +243,36 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
 }
 
 console.log('viewer session controller passed');
+
+// The picked model travels with the request; Default leaves it to the
+// host, and a host that offers none shows no picker at all.
+{
+  const {nodes, sent} = build(64, null, ['Codex:gpt-6-astra']);
+  nodes['new-session-button'].dispatch('click');
+  assert.equal(nodes['new-session-model'].hidden, false);
+  assert.equal(nodes['new-session-model-label'].hidden, false);
+  nodes['new-session-name'].value = 'picked';
+  nodes['new-session-prompt'].value = '';
+  nodes['new-session-model'].value = 'Codex:gpt-6-astra';
+  nodes['new-session'].close('create');
+  nodes['new-session-button'].dispatch('click');
+  // The choice survives reopening while the host still offers it.
+  assert.equal(nodes['new-session-model'].value, 'Codex:gpt-6-astra');
+  nodes['new-session-name'].value = 'default';
+  nodes['new-session-prompt'].value = '';
+  nodes['new-session-model'].value = '';
+  nodes['new-session'].close('create');
+  assert.equal(sent[0].model, 'Codex:gpt-6-astra');
+  assert.equal('model' in sent[1], false);
+}
+{
+  const {nodes, sent} = build(64);
+  nodes['new-session-model'].value = 'Codex:gpt-6-astra';
+  nodes['new-session-button'].dispatch('click');
+  assert.equal(nodes['new-session-model'].hidden, true);
+  assert.equal(nodes['new-session-model-label'].hidden, true);
+  nodes['new-session-name'].value = 'none';
+  nodes['new-session-prompt'].value = '';
+  nodes['new-session'].close('create');
+  assert.equal('model' in sent[0], false);
+}

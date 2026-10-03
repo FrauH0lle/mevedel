@@ -115,7 +115,9 @@
     (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                (lambda (_transport peer frame)
                  (push (cons peer frame) sent)
-                 t)))
+                 t))
+              ((symbol-function 'mevedel-model-candidates)
+               (lambda () '(("Codex:gpt-6-luna" . provider)))))
       (mevedel-collaboration--send-snapshot room 7))
     (setq sent (nreverse sent))
     (should (equal '(7 7) (mapcar #'car sent)))
@@ -124,6 +126,8 @@
       (should (equal "welcome" (plist-get welcome :t)))
       (should (eq :json-false (plist-get welcome :readOnly)))
       (should (= 1 (plist-get welcome :recordCount)))
+      ;; A writable guest may ask for a session, so it learns the models.
+      (should (equal ["Codex:gpt-6-luna"] (plist-get welcome :models)))
       (should (equal "snapshot-chunk" (plist-get chunk :t)))
       (should (eq t (plist-get chunk :final)))
       (should (= 1 (length (plist-get chunk :records)))))
@@ -146,7 +150,8 @@
         (puthash 8 (list :name "viewer" :writable nil :ready t) guests)
         (setq sent nil)
         (mevedel-collaboration--send-snapshot room 8)
-        (should-not (plist-member (cdr (car (last sent))) :commands))))))
+        (should-not (plist-member (cdr (car (last sent))) :commands))
+        (should-not (plist-member (cdr (car (last sent))) :models))))))
 
 
 ;;

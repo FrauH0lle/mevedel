@@ -15,11 +15,13 @@
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
+(declare-function mevedel--ensure-chat-preset "mevedel-chat" (chat-buffer))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (declare-function mevedel-chat-discard-buffers
                   "mevedel-chat" (data-buffer &optional discard-modifications))
 (autoload 'mevedel--chat-buffer "mevedel-chat")
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
+(autoload 'mevedel--ensure-chat-preset "mevedel-chat")
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 (autoload 'mevedel-chat-discard-buffers "mevedel-chat")
 
@@ -62,6 +64,14 @@
                   "mevedel-interaction-prompt"
                   (title content question help-echo-text callback
                          &optional host-only audience))
+
+;; `mevedel-models'
+(declare-function mevedel-model-resolve-provider
+                  "mevedel-models" (spec &optional noerror))
+(declare-function mevedel-model-set-session-provider
+                  "mevedel-models" (session provider &optional buffer))
+(autoload 'mevedel-model-resolve-provider "mevedel-models")
+(autoload 'mevedel-model-set-session-provider "mevedel-models")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
@@ -150,16 +160,18 @@ requester is skipped because its own reply already carried a link."
       (mevedel-collaboration--offer-room room owner-peer name link))))
 
 (defun mevedel-collaboration--create-guest-session
-    (room peer guest request-id name prompt &optional images)
+    (room peer guest request-id name prompt &optional images model)
   "Create session NAME for GUEST and reply to PEER's REQUEST-ID.
 
 The new room shares only ROOM's workspace and working directory, or a
 lobby's workspace and root.  GUEST receives the same authority tier it
 already holds, and ROOM's other owner guests are offered an owner link
-to it.  PROMPT, when given,
-is queued with attachment IMAGES only after the new room starts; a failed
-start, save or enqueue discards the partial session and reports failure
-without stopping ROOM."
+to it.  The session gets the default chat preset and then MODEL, a
+\"BACKEND:MODEL\" label, when given: the preset may name a model of its
+own, which would otherwise replace the guest's choice.  PROMPT, when
+given, is queued with attachment IMAGES only after the new room starts;
+a failed start, save or enqueue discards the partial session and
+reports failure without stopping ROOM."
   (let* ((session (plist-get room :session))
          ;; A lobby has no session; it carries its workspace instead.
          (workspace (or (plist-get room :workspace)
@@ -180,11 +192,16 @@ without stopping ROOM."
       (let (buffer new-room failure)
         (condition-case err
             (let* ((created-buffer
-                    (mevedel--chat-buffer name t workspace directory))
+                    (setq buffer
+                          (mevedel--chat-buffer name t workspace directory)))
                    (new-session
                     (buffer-local-value 'mevedel--session created-buffer)))
-              (setq buffer created-buffer
-                    new-room
+              (mevedel--ensure-chat-preset created-buffer)
+              (when model
+                (mevedel-model-set-session-provider
+                 new-session (mevedel-model-resolve-provider model)
+                 created-buffer))
+              (setq new-room
                     (mevedel-collaboration--start new-session created-buffer))
               (when prompt
                 (let ((paths (mevedel-collaboration--save-guest-files
@@ -223,9 +240,10 @@ without stopping ROOM."
              new-room buffer))))))))
 
 (defun mevedel-collaboration--ask-host-new-session
-    (room peer guest request-id name prompt &optional images)
+    (room peer guest request-id name prompt &optional images model)
   "Ask the host to approve GUEST's REQUEST-ID for a session named NAME.
-PROMPT and its attachment IMAGES start the session once approved.
+PROMPT and its attachment IMAGES start the session once approved, on
+MODEL when given.
 
 The prompt reaches Emacs and ROOM's owner-link guests.  An owner may
 create a session outright, so approving someone else's request is no new
@@ -247,6 +265,7 @@ fails on the name that the first one took."
          (concat
           (format "Guest:  %s\n" (plist-get guest :name))
           (format "Name:   %s\n" name)
+          (format "Model:  %s\n" (or model "default"))
           (format "Prompt: %s\n"
                   (or prompt "(none -- the session starts empty)"))
           (when (> (length images) 0)
@@ -262,7 +281,7 @@ fails on the name that the first one took."
              (pcase outcome
                ('approve
                 (mevedel-collaboration--create-guest-session
-                 room peer guest request-id name prompt images))
+                 room peer guest request-id name prompt images model))
                (`(feedback . ,text)
                 (mevedel-collaboration--new-session-reply
                  room peer request-id name :ok :json-false :message text))
@@ -277,7 +296,9 @@ fails on the name that the first one took."
      :message "This room has no session")))
 
 (defun mevedel-collaboration--handle-new-session (room peer frame)
-  "Act on writable guest PEER's request in FRAME for a new session."
+  "Act on writable guest PEER's request in FRAME for a new session.
+FRAME may name the session's model; one this host has not registered
+refuses the request rather than falling back to the default."
   (when-let* ((guest (mevedel-collaboration--guest room peer))
               ((plist-get guest :writable))
               (request-id (plist-get frame :reqId))
@@ -292,6 +313,7 @@ fails on the name that the first one took."
                         (plist-get frame :prompt))
                        ;; Files alone still say what the session is for.
                        (and images "See the attached file.")))
+           (model (mevedel-collaboration--guest-text (plist-get frame :model)))
            (waiting (plist-get guest :pending-new-session))
            (last (plist-get guest :last-new-session))
            (now (float-time)))
@@ -312,13 +334,17 @@ fails on the name that the first one took."
              (< (- now (cdr last))
                 mevedel-collaboration--duplicate-prompt-window))
         nil)
+       ((and model (not (mevedel-model-resolve-provider model t)))
+        (mevedel-collaboration--new-session-reply
+         room peer request-id name :ok :json-false
+         :message (format "Unknown model %s" model)))
        (t
         (plist-put guest :last-new-session (cons request-id now))
         (if (plist-get guest :owner)
             (mevedel-collaboration--create-guest-session
-             room peer guest request-id name prompt images)
+             room peer guest request-id name prompt images model)
           (mevedel-collaboration--ask-host-new-session
-           room peer guest request-id name prompt images)))))))
+           room peer guest request-id name prompt images model)))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

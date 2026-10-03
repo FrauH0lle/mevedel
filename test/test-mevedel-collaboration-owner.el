@@ -148,17 +148,24 @@
   (:doc "grants owners, asks for writers, and deduplicates exact requests")
   (let* ((guests (make-hash-table :test #'eql))
          (room (list :transport 'transport :guests guests))
-         created asked created-images)
+         created asked created-images models)
     (puthash 1 (list :name "Owner" :writable t :owner t :ready t) guests)
     (puthash 2 (list :name "Writer" :writable t :ready t) guests)
     (puthash 3 (list :name "Reader" :ready t) guests)
     (cl-letf (((symbol-function 'mevedel-collaboration--create-guest-session)
-               (lambda (_room _peer _guest _request-id name prompt &optional images)
+               (lambda (_room _peer _guest _request-id name prompt
+                                &optional images model)
                  (push (cons name prompt) created)
+                 (push model models)
                  (setq created-images images)))
               ((symbol-function 'mevedel-collaboration--ask-host-new-session)
-               (lambda (_room _peer _guest _request-id name prompt &optional _images)
-                 (push (cons name prompt) asked))))
+               (lambda (_room _peer _guest _request-id name prompt
+                                &optional _images model)
+                 (push (cons name prompt) asked)
+                 (push model models)))
+              ((symbol-function 'mevedel-model-resolve-provider)
+               (lambda (spec &optional _noerror)
+                 (and (equal spec "Codex:gpt-6-luna") '(:backend b :model m)))))
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId 1 :name "onboarding" :prompt "Design the flow"))
       (should (equal '(("onboarding" . "Design the flow")) created))
@@ -218,7 +225,27 @@
           (plist-put (gethash 2 guests) :pending-new-session nil)
           (mevedel-collaboration--handle-new-session
            room 2 '(:reqId 10 :name "other work"))
-          (should (= 2 (length asked))))))))
+          (should (= 2 (length asked)))
+          ;; A registered model rides to either path; an absent one is
+          ;; the host's default.
+          (should-not (car models))
+          (plist-put (gethash 2 guests) :pending-new-session nil)
+          (mevedel-collaboration--handle-new-session
+           room 2 '(:reqId 11 :name "luna" :model " Codex:gpt-6-luna "))
+          (should (equal "Codex:gpt-6-luna" (car models)))
+          (mevedel-collaboration--handle-new-session
+           room 1 '(:reqId 12 :name "luna-owned" :model "Codex:gpt-6-luna"))
+          (should (equal "Codex:gpt-6-luna" (car models)))
+          ;; An unregistered one is refused, not quietly replaced.
+          (setq sent nil)
+          (let ((before (length models)))
+            (plist-put (gethash 2 guests) :pending-new-session nil)
+            (mevedel-collaboration--handle-new-session
+             room 2 '(:reqId 13 :name "nope" :model "Codex:missing"))
+            (should (= before (length models)))
+            (should (eq :json-false (plist-get (car sent) :ok)))
+            (should (equal "Unknown model Codex:missing"
+                           (plist-get (car sent) :message)))))))))
 
 (mevedel-deftest mevedel-collaboration--ask-host-new-session
   (:doc "asks the host and owners, never the guest the request is about")
@@ -238,14 +265,18 @@
               ((symbol-function 'mevedel-collaboration--create-guest-session)
                (lambda (&rest args) (push (cons 'created args) sent)))
               ((symbol-function 'mevedel--prompt-user-with-overlay)
-               (lambda (_title _content _question _echo callback &optional
+               (lambda (_title content _question _echo callback &optional
                                host-only audience)
                  (setq captured (list :callback callback
+                                      :content content
                                       :host-only host-only
                                       :audience audience))
                  'overlay)))
       (mevedel-collaboration--ask-host-new-session
-       room 7 guest 42 "flow" "go")
+       room 7 guest 42 "flow" "go" nil "Codex:gpt-6-luna")
+      ;; The host approves the model along with the session.
+      (should (string-match-p "^Model:  Codex:gpt-6-luna$"
+                              (plist-get captured :content)))
       ;; An owner may create a session outright, so approving someone
       ;; else's request is no new authority.  Only a non-owner ever gets
       ;; here, so restricting to owners already excludes the requester --
@@ -274,7 +305,8 @@
       (puthash 7 guest guests)
       (funcall (plist-get captured :callback) 'approve)
       (should (eq 'created (car (car sent))))
-      (should (equal '("flow" "go" nil) (last (cdr (car sent)) 3))))))
+      (should (equal '("flow" "go" nil "Codex:gpt-6-luna")
+                     (last (cdr (car sent)) 4))))))
 
 (mevedel-deftest mevedel-collaboration--offer-room-to-owners
   (:doc "offers a created room to the other owners, never to the requester")
@@ -303,7 +335,7 @@
   (let* ((session (mevedel-session--create :name "parent"))
          (room (list :transport 'transport :session session))
          (new-room (list :link-full "full-link" :link-owner "owner-link"))
-         existing sent enqueued stopped)
+         existing sent enqueued stopped steps)
     (setf (mevedel-session-workspace session) 'workspace)
     (setf (mevedel-session-working-directory session) "/tmp/ws/")
     (cl-letf (((symbol-function 'mevedel--workspace-sessions)
@@ -311,8 +343,15 @@
               ((symbol-function 'mevedel--chat-buffer)
                (lambda (&rest _) (current-buffer)))
               ((symbol-function 'mevedel--display-chat-buffer) #'ignore)
+              ((symbol-function 'mevedel--ensure-chat-preset)
+               (lambda (_buffer) (push 'preset steps)))
+              ((symbol-function 'mevedel-model-resolve-provider)
+               (lambda (spec &optional _noerror) (list :label spec)))
+              ((symbol-function 'mevedel-model-set-session-provider)
+               (lambda (_session provider &optional _buffer)
+                 (push (plist-get provider :label) steps)))
               ((symbol-function 'mevedel-collaboration--start)
-               (lambda (&rest _) new-room))
+               (lambda (&rest _) (push 'start steps) new-room))
               ((symbol-function 'mevedel-collaboration--stop-internal)
                (lambda (stopped-room _reason)
                  (push stopped-room stopped)))
@@ -353,6 +392,22 @@
         (should (equal "owner-link" (plist-get (car sent) :link)))
         (should (eq t (plist-get (car sent) :ok)))
         (should-not enqueued)
+        ;; The default preset lands first, so a model it names cannot
+        ;; replace the guest's choice; both precede the room and prompt.
+        (setq steps nil enqueued nil)
+        (cl-letf (((symbol-function 'mevedel-view-enqueue-external-follow-up)
+                   (lambda (_buffer text &rest _)
+                     (push 'enqueue steps) (push text enqueued))))
+          (mevedel-collaboration--create-guest-session
+           room 1 '(:name "Owner" :writable t :owner t) 8 "luna" "go" nil
+           "Codex:gpt-6-luna"))
+        (should (equal '(preset "Codex:gpt-6-luna" start enqueue)
+                       (reverse steps)))
+        ;; No choice keeps the preset's own model.
+        (setq steps nil)
+        (mevedel-collaboration--create-guest-session
+         room 1 '(:name "Owner" :writable t :owner t) 9 "plain" nil)
+        (should (equal '(preset start) (reverse steps)))
         ;; A lobby has no session and creates in its own workspace.
         (let (created-in)
           (setq sent nil)
