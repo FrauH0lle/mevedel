@@ -876,7 +876,12 @@ the full command, bounded output and execution details."
                    " · output truncated"))))
             :body body
             :body-mode 'sh-mode
-            :status status
+            ;; The call that started a still-live command succeeded, but the
+            ;; command has not: its row must not read as finished.
+            :status (if (and (null control) (eq state 'running)
+                             (not (memq status '(error failed denied blocked))))
+                        'running
+                      status)
             :execution-control-id
             (and (memq control '(input stop))
                  (or (plist-get render-data :execution-id)

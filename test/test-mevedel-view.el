@@ -1150,7 +1150,15 @@
     (cl-letf (((symbol-function 'mevedel-execution-count-user)
              (lambda (seen-session)
                (should (eq session seen-session))
-               2))
+               3))
+            ((symbol-function 'mevedel-execution-list-user)
+             (lambda (_)
+               '((:execution-id "e1" :owner "/root" :yielded t
+                  :command "make test")
+                 (:execution-id "e2" :owner "/root/child" :yielded t
+                  :command "make lint")
+                 (:execution-id "e3" :owner "/root" :yielded nil
+                  :command "ls"))))
             ((symbol-function 'mevedel-view-agent-status-fragment)
              (lambda ()
                '(:namespace status :id agents :priority 0
@@ -1179,8 +1187,10 @@
                  (plist-get executions :priority)))
       (should (> (plist-get executions :priority)
                  (plist-get agents :priority)))
-      (should (string-match-p "Executions: 2 live"
-                              (plist-get executions :body)))
+      (should (equal (concat "  ● make test\n"
+                             "  ● make lint · /root/child\n")
+                     (substring-no-properties
+                      (plist-get executions :body))))
       ;; The row needs a blank line under it or it reads as a caption
       ;; for the agents separator that follows.  A zone trims `:body'
       ;; to one newline, so the blank has to travel as a suffix.
@@ -1189,7 +1199,7 @@
 (mevedel-deftest mevedel-view--execution-state-changed ()
   ,test
   (test)
-  :doc "live-count redraw preserves a multiline leading-> composer draft"
+  :doc "live-execution redraw preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create :name "execution-status"))
           (draft "> quoted\nsecond line"))
@@ -1203,6 +1213,9 @@
                  (lambda (seen-session)
                    (should (eq session seen-session))
                    1))
+                ((symbol-function 'mevedel-execution-list-user)
+                 (lambda (_) '((:execution-id "e1" :owner "/root" :yielded t
+                                :command "make test"))))
                 ((symbol-function 'mevedel-view-agent-status-fragment)
                  #'ignore))
         (mevedel-view--execution-state-changed session data-buf))
@@ -1210,7 +1223,7 @@
         (should (string= draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (should (string-match-p
-                 "Executions: 1 live"
+                 "● make test"
                  (buffer-substring-no-properties
                   (point-min) (mevedel-view--input-start)))))))
   :doc "routes an agent execution update to its parent session view"
@@ -1230,15 +1243,40 @@
                        (lambda (seen-session)
                          (should (eq session seen-session))
                          1))
+                      ((symbol-function 'mevedel-execution-list-user)
+                       (lambda (_) '((:execution-id "e1" :owner "/root" :yielded t
+                                      :command "make test"))))
                       ((symbol-function 'mevedel-view-agent-status-fragment)
                        #'ignore))
               (mevedel-view--execution-state-changed session agent-data))
             (with-current-buffer view-buf
               (should (string-match-p
-                       "Executions: 1 live"
+                       "● make test"
                        (buffer-substring-no-properties
                         (point-min) (mevedel-view--input-start))))))
         (kill-buffer agent-data)))))
+
+(mevedel-deftest mevedel-view--status-executions-body ()
+  ,test
+  (test)
+  :doc "caps listed commands and jumps from a line to its Bash row"
+  (let ((mevedel-view--status-executions-visible-max 1)
+        shown)
+    (cl-letf (((symbol-function 'mevedel-execution-list-user)
+               (lambda (_)
+                 '((:execution-id "e1" :owner "/root" :yielded t
+                    :command "make test")
+                   (:execution-id "e2" :owner "/root" :yielded t
+                    :command "make lint"))))
+              ((symbol-function 'mevedel-view-audit-show-control-result)
+               (lambda (id) (setq shown id))))
+      (let ((body (mevedel-view--status-executions-body 'session)))
+        (should (equal "  ● make test\n  +1 more\n"
+                       (substring-no-properties body)))
+        (funcall (get-text-property 4 'mevedel-view-zone-activate body))
+        (should (equal "e1" shown))
+        (should-not (get-text-property (1- (length "  ● make test\n"))
+                                       'mouse-face body))))))
 
 (mevedel-deftest mevedel-view-open-executions ()
   ,test

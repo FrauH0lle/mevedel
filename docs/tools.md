@@ -1013,8 +1013,14 @@ unavailable, a read-only retained-evidence view reports what is available or
 explicitly identifies missing evidence. Parent transcripts keep their own
 child-attributed completion breadcrumb alongside the agent answer.
 
-Users have a separate session-wide control surface. `/ps`, the view's live
-execution status row, and the session cockpit's `Executions` row open a
+The view's status zone lists each background (yielded) command, with its
+owner when it is not `/root`, while it runs; RET on a line shows that
+command's Bash row, which alone carries its output. The lines disappear when
+the command finishes, and more than five collapse into a `+N more` line that
+opens the `/ps` list.
+
+Users have a separate session-wide control surface. `/ps` and the session
+cockpit's `Executions` row open a
 tabulated list containing foreground and yielded work from every model owner.
 It shows the opaque execution ID, canonical owner (`/root` or a retained agent
 path), command, PTY mode, elapsed

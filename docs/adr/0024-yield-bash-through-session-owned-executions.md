@@ -24,7 +24,12 @@ execution history. An execution that actually yielded gets one durable,
 chronological completion breadcrumb per receiving transcript, independent of
 whether completion was collected by polling or delivered through a mailbox.
 The breadcrumb links to the original row or retained evidence and does not
-duplicate output. Its identity is scoped to session, owner, and execution, not
+duplicate output. Inside an activity run it folds into that run's group as a
+counted completion rather than a line of its own: standalone breadcrumbs
+stacked up beside the groups they belonged to, several per turn, while the
+original rows already showed each outcome. The record stays durable, because
+it marks when the model learned of a completion it may react to. Running
+background commands are listed only transiently, in the view's status zone. Its identity is scoped to session, owner, and execution, not
 command text. Execution IDs carry a fresh per-state prefix so resumed sessions
 cannot reuse the earlier state's counter in durable records or output paths.
 Foreground completion never produces a breadcrumb. Execution

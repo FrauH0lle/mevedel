@@ -7496,6 +7496,110 @@
                  (mevedel-view--tool-group-header
                   '((:kind reasoning) (:tool "Read") (:kind reasoning))))))
 
+(mevedel-deftest mevedel-view--group-completions ()
+  ,test
+  (test)
+  :doc "completions are counted by outcome; own deliveries repeat a breadcrumb"
+  (let* ((mail (lambda (sender id outcome)
+                 (list :kind 'mailbox
+                       :rendering
+                       (list :mailbox-text
+                             (format (concat "<agent-message type=\"EXECUTION\" "
+                                             "sender=\"%s\">\nout\n"
+                                             "<bash-execution execution_id=\"%s\" "
+                                             "outcome=\"%s\" exit_code=\"1\"/>\n"
+                                             "</agent-message>")
+                                     sender id outcome)))))
+         (children
+          (list '(:tool "Read")
+                '(:kind completion
+                  :rendering (:completion-record
+                              (:type execution-breadcrumb :execution-id "e1"
+                               :owner "/root" :facts (:outcome success))))
+                (funcall mail "/root" "e1" "success")
+                (funcall mail "/root" "e9" "success")
+                (funcall mail "/root/child" "e2" "failure")
+                (funcall mail "/root/child" "e2" "failure")
+                '(:kind mailbox :rendering
+                  (:mailbox-text "<agent-message sender=\"/root/a\">hi</agent-message>"))))
+         (mevedel-view--agent-path nil)
+         (completions (mevedel-view--group-completions children)))
+    (should (equal '("e1" "e2")
+                   (mapcar (lambda (record) (plist-get record :execution-id))
+                           completions)))
+    (should (equal (concat "Read 1 file, 1 command finished, 1 failed, "
+                           "received 1 message")
+                   (mevedel-view--tool-group-header children completions)))))
+
+(mevedel-deftest mevedel-view--split-completion-entries ()
+  ,test
+  (test)
+  :doc "breadcrumbs fold into an activity group and stay out of view when folded"
+  (mevedel-view-test--with-buffers
+    (let ((crumb (lambda (id outcome code)
+                   (mevedel--format-hook-audit-record
+                    (list :type 'execution-breadcrumb :execution-id id
+                          :tool-use-id "call_0" :owner "/root"
+                          :command (concat "make " id)
+                          :facts (list :outcome outcome :termination 'exited
+                                       :exit-code code))))))
+      (dotimes (i 4)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format
+          "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+          i i)
+         `(tool . ,(format "call_%d" i)))
+        (when (memq i '(1 2))
+          (with-current-buffer data-buf
+            (goto-char (point-max))
+            (insert (if (= i 1)
+                        (funcall crumb "a" 'success 0)
+                      (funcall crumb "b" 'failure 1))))))
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p
+                   "Read 4 files, 1 command finished, 1 failed" text))
+          (should-not (string-match-p "↳" text)))
+        ;; The folded group still counts as projecting its completions.
+        (should (mevedel-view-audit-breadcrumb-present-p
+                 '(:execution-id "b" :owner "/root")
+                 mevedel-view--input-marker))
+        (goto-char (point-min))
+        (search-forward "Read 4 files")
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "↳ Finished: make a  \\[Show result\\]" text))
+          (should (string-match-p "↳ Failed: make b · exit 1  \\[Show result\\]"
+                                  text)))
+        (goto-char (point-min))
+        (search-forward "Read 4 files")
+        (mevedel-view-toggle-section)
+        (should-not (string-match-p
+                     "↳" (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))))))
+
+(mevedel-deftest mevedel-view--rendering-header-line/running ()
+  ,test
+  (test)
+  :doc "a still-running Bash command is marked running, not finished"
+  (let ((running '(:state running :status success :execution-id "e1")))
+    (should (string-match-p
+             "● Bash: sleep 9 · running"
+             (mevedel-view--rendering-header-line
+              (mevedel-tool-exec--render-bash
+               "Bash" '(:command "sleep 9") "" running))))
+    (should-not (eq 'running
+                    (plist-get (mevedel-tool-exec--render-bash
+                                "StopExecution" '(:execution_id "e1") ""
+                                running)
+                               :status)))))
+
 (mevedel-deftest mevedel-view--tool-group-entry-p ()
   ,test
   (test)

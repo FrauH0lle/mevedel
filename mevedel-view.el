@@ -49,6 +49,15 @@
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
+(declare-function mevedel-execution-list-user "mevedel-execution" (session))
+
+;; `mevedel-view-audit'
+(declare-function mevedel-view-audit-show-control-result
+                  "mevedel-view-audit" (execution-id))
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-open-agent-transcript
+                  "mevedel-view-agent" (agent-path))
 (declare-function mevedel-execution-teardown-session
                   "mevedel-execution" (session))
 (declare-function mevedel-execution-unsettled-mutation-p
@@ -1743,11 +1752,10 @@ the editable composer signal instead of settling queued interactions."
           (setq fragment (plist-put fragment :body-suffix suffix)))
         (push fragment fragments)))
     (when-let* ((session (plist-get model :session))
-                (count (mevedel-execution-count-user session))
-                ((> count 0)))
-      (let ((body (format "Executions: %d live\n" count)))
-        (add-text-properties 0 (length body)
-                             '(font-lock-face shadow) body)
+                ;; The count is O(1); this zone renders on every live update.
+                ((> (mevedel-execution-count-user session) 0))
+                (body (mevedel-view--status-executions-body session)))
+      (progn
         (push (list :namespace 'status
                     :id 'executions
                     :priority 50
@@ -1765,6 +1773,56 @@ the editable composer signal instead of settling queued interactions."
     (when-let* ((fragment (mevedel-view-agent-status-fragment)))
       (push fragment fragments))
     (nreverse fragments)))
+
+(defvar mevedel-view--status-executions-visible-max 5
+  "Most background executions listed by name in the status zone.")
+
+(defun mevedel-view--status-execution-line (snapshot)
+  "Return the status line for live execution SNAPSHOT.
+It names the command and owner without output: the original Bash row owns
+progress, and RET jumps there."
+  (let* ((id (plist-get snapshot :execution-id))
+         (owner (plist-get snapshot :owner))
+         (command (replace-regexp-in-string
+                   "[\n\r\t]+" " " (or (plist-get snapshot :command) "Bash")))
+         (line (concat
+                "  "
+                (propertize "●" 'font-lock-face 'mevedel-view-agent-running)
+                " "
+                (truncate-string-to-width command 72 nil nil "…")
+                (if (equal owner "/root") "" (format " · %s" owner))
+                "\n")))
+    (add-text-properties
+     2 (1- (length line))
+     (list 'mouse-face 'highlight
+           'help-echo "RET: show the running command's Bash row"
+           'mevedel-view-zone-activate
+           (lambda () (mevedel-view-show-live-execution id owner)))
+     line)
+    line))
+
+(defun mevedel-view--status-executions-body (session)
+  "Return status lines for SESSION's background executions, or nil.
+Foreground commands already show as the pending call they belong to."
+  (when-let* ((live (cl-remove-if-not
+                     (lambda (snapshot) (plist-get snapshot :yielded))
+                     (mevedel-execution-list-user session))))
+    (let ((hidden (- (length live) mevedel-view--status-executions-visible-max)))
+      (concat
+       (mapconcat #'mevedel-view--status-execution-line
+                  (seq-take live mevedel-view--status-executions-visible-max)
+                  "")
+       (when (> hidden 0)
+         (propertize (format "  +%d more\n" hidden)
+                     'font-lock-face 'shadow))))))
+
+(defun mevedel-view-show-live-execution (execution-id owner)
+  "Show the Bash row of live EXECUTION-ID owned by OWNER."
+  (if (equal owner "/root")
+      (mevedel-view-audit-show-control-result execution-id)
+    (mevedel-view-open-agent-transcript owner)
+    (with-current-buffer (window-buffer (selected-window))
+      (mevedel-view-audit-show-control-result execution-id))))
 
 (defun mevedel-view-open-executions ()
   "Open the current session's live execution cockpit."

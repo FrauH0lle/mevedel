@@ -1481,6 +1481,8 @@ process-filter appends use the published path."
       (mevedel-execution--publish-yielded-artifact record)
       (setf (mevedel-execution--record-yielded-p record) t
             (mevedel-execution--record-retained-p record) t)
+      ;; The command now runs in the background, where observers list it.
+      (mevedel-execution--notify-state-change record)
       (mevedel-execution--release-scheduler record)
       (mevedel-execution--emit-event
        (mevedel-execution--event record 'yield))

@@ -145,7 +145,7 @@
           (test-mevedel-execution--wait
            (lambda () (zerop (mevedel-execution-count-user session))))
           (test-mevedel-execution--wait (lambda () helper-done))
-          (should (= changes 4))
+          (should (= changes 5))
           (should-not (mevedel-execution-list-user session)))
       (delete-directory root t))))
 
