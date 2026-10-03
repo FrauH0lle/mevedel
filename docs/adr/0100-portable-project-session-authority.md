@@ -35,6 +35,16 @@ Incarnation fencing checks target identity and reachability independently of
 child confinement. A missing sandbox must not prevent permission-mode changes;
 request and execution admission enforce the chosen confinement requirement.
 
+Retention applies to both profiles with the same age cap and newest-session
+floor. A portable session is deleted only through its own lease protocol: an
+abandoned head (absent, released without a transfer reservation, or an expired
+active or claiming record without unsettled mutation) must also have its last
+renewal older than the cap. A head in another lease format is accepted only
+when its numeric expiry is itself older than the cap. Cleanup claims the next generation, rechecks
+recovery markers and journal pins, and deletes the directory in one program
+after proving the claim's bytes are still the newest generation. A competing
+claim from another client therefore always wins.
+
 A missing or contradictory authority profile is an error. The session codec
 accepts one current format without migrations or a dual reader. See
 [Sessions](../sessions.md) for the current storage contract.
@@ -120,3 +130,26 @@ cumulative string allocation from 131 million to 96 million characters. Worst
 input delay remained about 240 ms: synchronous lease checks and publication
 writes still occupy the final pipeline step. The measured benefit justified
 removing copies, but not weakening those proofs or changing the persisted format.
+
+Portable stores were originally exempt from auto-cleanup because the lease
+protocol had no deletion claim, so cleanup could have raced another client
+resuming the same session. On 2026-10-03 this repository's own project store
+held 128 sessions (4.6 GB), 63 of them past the 30-day cap (about 1.1 GB, back
+to 2026-07-19). None had pins, recovery markers, or a live lease. The
+exemption never reclaimed anything, and the generation election that already
+fences abandoned-storage recovery (plus the control program's `verify-latest`
+proof) supplies the missing deletion claim. Cleanup now treats both profiles
+alike and selects their ownership checks by profile.
+
+The first full test run with portable cleanup deleted 42 of those expired
+sessions from the real store. A cold-load test subprocess ran in the checkout,
+registered it as a workspace, and swept it from `kill-emacs-hook`. The
+project-store exemption had hidden this; file workspaces had the same hazard.
+Exit cleanup now runs only in an interactive Emacs, because a batch Emacs
+registers workspaces incidentally rather than through a user's session.
+
+That run also kept 24 expired sessions whose August lease records predate
+`:transfer-generation`. Current code cannot interpret or resume them, so
+treating every invalid head as owned would have kept them forever. Liveness in
+every lease format is an expiry renewed within minutes, so a numeric expiry a
+whole cap behind is accepted as abandoned; a head without one is still kept.

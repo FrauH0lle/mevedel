@@ -4930,6 +4930,86 @@
       (mevedel-session-durability-lease-release directory session)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-durability-delete-abandoned ()
+  (let* ((root (make-temp-file "mevedel-delete-abandoned-" t))
+         (directory (file-name-concat root "session"))
+         (lease-dir (file-name-concat directory ".lease"))
+         (foreign (make-string 64 ?f))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'y-or-n-p)
+                   (lambda (&rest _) (error "Cleanup must not prompt"))))
+          (make-directory directory t)
+          (mevedel-session-durability--ensure-lease-directory lease-dir)
+          ,test)
+      (delete-directory root t)))
+  (test)
+  :doc "deletes only sessions no client owned within the cap, without prompting"
+  (dolist (case '((nil 0 nil t)
+                  (released -2000 nil t)
+                  (active -2000 nil t)
+                  (claiming -2000 nil t)
+                  (released -500 nil nil)
+                  (active 0 nil nil)
+                  (publishing -2000 nil nil)
+                  (active -2000 t nil)))
+    (make-directory lease-dir t)
+    (let ((record
+           (when (nth 0 case)
+             (let ((mevedel-session-durability--client-id foreign))
+               (mevedel-session-durability--lease-record
+                "old owner" 1 (nth 0 case) nil (nth 2 case)
+                (+ (mevedel-session-durability--target-time lease-dir) (nth 1 case)))))))
+      (when record (mevedel-session-durability--write-generation lease-dir record))
+      (should (eq (nth 3 case)
+                  (and (mevedel-session-durability-delete-abandoned directory 1000) t)))
+      (should (eq (nth 3 case) (not (file-directory-p directory))))
+      (unless (nth 3 case)
+        (should (equal record (mevedel-session-durability--lease-head lease-dir)))
+        (delete-directory directory t))
+      (make-directory directory t)))
+  :doc "a head in another lease format is deleted only when its expiry is a whole cap behind"
+  (dolist (case '((-2000 t) (-500 nil)))
+    (let ((record (let ((mevedel-session-durability--client-id foreign))
+                    (mevedel-session-durability--lease-record
+                     "old owner" 1 'released nil nil
+                     (+ (mevedel-session-durability--target-time lease-dir) (car case))))))
+      (cl-remf record :transfer-generation)
+      (should-not (mevedel-session-durability--valid-lease-p record))
+      (mevedel-session-durability--write-generation lease-dir record)
+      (should (eq (cadr case)
+                  (and (mevedel-session-durability-delete-abandoned directory 1000) t)))
+      (should (eq (cadr case) (not (file-directory-p directory))))
+      (when (file-directory-p directory) (delete-directory directory t))
+      (make-directory lease-dir t)))
+  :doc "journal pins and recovery markers keep the session and release the claim"
+  (dolist (blocker (list (lambda ()
+                           (make-directory (file-name-concat directory ".journal-pins"))
+                           (write-region "" nil (file-name-concat directory ".journal-pins"
+                                                                  (concat (make-string 64 ?c) ".json"))))
+                         (lambda ()
+                           (write-region "" nil (mevedel-session-recovery--root directory)))))
+    (delete-directory directory t)
+    (make-directory lease-dir t)
+    (funcall blocker)
+    (should-not (mevedel-session-durability-delete-abandoned directory 1000))
+    (should (file-directory-p directory))
+    (should (eq 'released (plist-get (mevedel-session-durability--lease-head lease-dir) :status))))
+  :doc "a competing generation after the claim keeps the session"
+  (let ((claim (symbol-function 'mevedel-session-durability--claim-next)))
+    (cl-letf (((symbol-function 'mevedel-session-durability--claim-next)
+               (lambda (&rest args)
+                 (let ((lease (apply claim args)))
+                   (let ((mevedel-session-durability--client-id foreign))
+                     (mevedel-session-durability--write-generation
+                      lease-dir (mevedel-session-durability--lease-record
+                                 "*laptop*" (1+ (plist-get lease :generation)) 'active nil nil
+                                 (mevedel-session-durability--target-time lease-dir))))
+                   lease))))
+      (should-not (mevedel-session-durability-delete-abandoned directory 1000)))
+    (should (file-directory-p directory))
+    (should (equal foreign (plist-get (mevedel-session-durability--lease-head lease-dir) :client-id)))))
+
 (mevedel-deftest mevedel-session-recovery--local-temporary-p
   (:doc "accepts a temporary child even when a racing directory stat disagrees")
   (let* ((child (make-temp-file "mevedel-local-temporary-" t))
