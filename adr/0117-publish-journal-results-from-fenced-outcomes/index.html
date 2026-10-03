@@ -1,0 +1,2302 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/adr/0117-publish-journal-results-from-fenced-outcomes/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Publish journal results from fenced outcomes - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#publish-journal-results-from-fenced-outcomes" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Publish journal results from fenced outcomes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#current-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rationale-alternatives-and-consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rationale, alternatives, and consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision history
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision history">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#graphical-responsiveness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graphical responsiveness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ownership-and-safe-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership and safe application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evidence-and-request-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evidence and request boundaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capture-publication-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capture, publication, and recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention-and-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retention and cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-16-resolved-history-and-coordination-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-16: resolved history and coordination cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-16-collect-generated-workspace-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-16: collect generated workspace state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-19-keep-workspace-maintenance-out-of-session-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-19: keep workspace maintenance out of session startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-21-yield-during-scheduled-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-21: yield during scheduled cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-21-separate-completion-publication-from-checkpointing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-21: separate completion publication from checkpointing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-22-isolate-consolidation-storage-from-the-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-22: isolate consolidation storage from the editor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-22-include-recovery-and-admission-in-the-worker-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-22: include recovery and admission in the worker boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-22-bound-remaining-completion-inspections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-22: bound remaining completion inspections
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-22-prepare-root-checkpoints-and-digest-admission-outside-the-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-22: prepare root checkpoints and digest admission outside the editor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-23-reuse-unchanged-local-discovery-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-23: reuse unchanged local discovery snapshots
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2026-09-24-defer-decisions-behind-cleanup-and-allow-no-journal-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2026-09-24: defer decisions behind cleanup and allow no journal note
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/adr/0117-publish-journal-results-from-fenced-outcomes.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="publish-journal-results-from-fenced-outcomes">Publish journal results from fenced outcomes<a class="headerlink" href="#publish-journal-results-from-fenced-outcomes" title="Permanent link">&para;</a></h1>
+<p>Status: accepted</p>
+<h2 id="current-decision">Current decision<a class="headerlink" href="#current-decision" title="Permanent link">&para;</a></h2>
+<p>Journal and memory-consolidation work use workspace-owned, bounded claims on the
+existing pinned control filesystem, independently of session leases. A numbered
+claim is elected by exclusive creation with a fixed target-clock deadline.
+Completion, failure, cancellation, and expired-owner takeover compete for one
+immutable outcome. A successor requires that outcome first. Clock checks and
+process identity alone do not grant publication authority.</p>
+<p>Accepted outcomes retain exact payloads or hashes of immutable private bundles.
+Publication recovers an accepted unpublished result before replacement inference.
+Public digests, completed reviews, and proposal decisions expose only their closed
+record schemas; captured transcripts, memory bodies, before-state, and replacement
+content stay in private control storage. Public text alone cannot prove acceptance
+or decide a proposal. Source identities, original root/target/client authority,
+exact bytes, and accepted hashes remain binding through recovery.</p>
+<p>Successful completed-turn saves freeze one immutable evidence bundle and pin its
+source before marking it ready. Compaction, clear, or session-end sealing admits
+digest work without capturing incomplete responses. Clear sealing uses selected
+pre-clear checkpoints, preserving their evidence and captured session title.
+Capture, seal, and public metadata admit the same closed trigger vocabulary;
+repeated sealing preserves the first trigger. Stable fork-point identities define
+coverage, so Rewind's repeated turn numbers cannot alias old work. Capture coverage
+survives public digest expiry. Discovery batches fresh expiry probes and bounded
+public-entry reads in groups of 16; coverage reads are similarly batched and
+still fail closed. Storage authority observations do not survive their inspection
+call. Advisory prompt discovery separately reuses validated local entries while
+public-record and expiry-marker source attributes remain unchanged, with a
+ten-second refresh throttle and age filtering on every use. Remote discovery
+retains throttled fresh reads. Digest inference uses frozen model policy without
+a live session or tools. Only evidence supporting reusable user, feedback,
+enduring project, or reference knowledge becomes a public note. Tasks, blockers,
+deadlines, progress, and decisions belong in trackers or maintained documentation;
+session continuation belongs in compaction. Easily recovered facts and debugging
+fix recipes are excluded. Consolidation independently evaluates qualifying
+knowledge, even for older progress-oriented notes. An accepted,
+validated all-none digest instead records private turn coverage and retires its
+capture without publication or a consolidation opportunity. Both paths retain
+coverage before releasing source pins and recover without replacement inference.</p>
+<p>Consolidation captures bounded memory, instructions, source observations, and
+selected digest evidence. It uses scoped read-only tools in a sessionless request.
+Only a terminal validated reply can be accepted. A published general review
+advances coverage; focused reviews, failures, private results, and timestamps do
+not. Proposals retain exact before-state and evidence until their decisions and
+recovery dependencies are resolved. Propose is the default; auto uses the same
+checked application, while instruction changes always await approval.</p>
+<p>Completed, durably saved root turns provide automatic opportunities for journal
+recovery/cleanup and memory review/reconciliation. Publication and explicit
+memory operations retain their existing opportunities. Opening a conversation
+or the session chooser does not launch workspace-wide maintenance. For local
+Linux workspaces, deferred root-turn checkpoint preparation, scheduled journal
+recovery, digest discovery/admission and retention execute in short-lived batch
+Emacs workers. Checkpoint preparation reads a frozen committed publication without
+source mutation authority; the editor checks its live request and unchanged head
+before publishing and pinning under its own lease. Admission remains held through
+this continuation, with cancellation and a bounded preparation deadline. Explicit
+checkpointing and non-portable sessions remain synchronous. Scheduled memory publication recovery and local consolidation
+recovery, admission, scope preparation and accepted-result publication use the same
+boundary, with resolved roots, thresholds and original client identity supplied by
+the editor. Marked-write reconciliation retains live-buffer checks in the editor;
+root-turn consolidation is offered after that recovery finishes. They load no user init or serialized provider
+configuration. They reuse the same claims, validation, and publication
+paths. Digest preparation returns only the capture identity and fenced claims; the
+editor rechecks ownership before inference. Model requests retain the configured
+native backend. Remote scheduling remains
+in the editor. Live-buffer artifact cleanup also remains there because its
+retention proof includes active buffers and gptel context. Worker failure leaves
+fenced claims and retained evidence, rather than inferring completion.</p>
+<p>The main session menu only renders cached memory observations, explicitly marking missing
+or old counts. Opening or refreshing the Memory table collects current evidence.</p>
+<p>Application holds both workspace and original target-root claims. It persists
+complete private intent and a hash-only target marker before mutations. Curated
+writes, rollback, claim settlement, and marker retirement share a target-side
+<code>flock</code> and guarded pinned program. Claim expiry alone cannot remove an unresolved
+marker. Reconciliation compares exact before/after states; it does not infer a
+successful write from an unmarked intent. Reversal is a separate accepted intent
+and decision, preserving the original application as evidence.</p>
+<p>Index freshness is checked per affected destination: the proposal's topic and
+merge sources must retain their captured entries or absence. Unrelated manual
+edits and changes from other reviews are preserved without replaying write
+history. Application retains the complete current index snapshot as its expected
+before-state; exact file checks protect preparation through commit. Topics and
+instructions still require their original state, and reversal still requires
+the exact recorded after-state.</p>
+<p>Private journal records live at <code>.mevedel/state/journal/</code>, alongside other
+generated workspace state; public journal entries stay at <code>.mevedel/journal/</code>.
+Standard <code>.mevedel/memory/</code> roots coordinate through their sibling
+<code>state/memory-write/</code>. Other memory and instruction roots use
+<code>ROOT/.mevedel/state/memory-write/root/</code>. These locations depend only on the
+original target, so separate workspaces still share ownership. The <code>root/</code>
+child keeps workspace instruction claims separate from its standard memory
+claims. Memory inventory and proposal paths exclude nested <code>.mevedel/</code> state.</p>
+<p>Ordinary journal recall defaults to 14 days and is independent of physical
+retention. Unreviewed digests and unresolved proposal/recovery dependencies remain
+stored after recall ends. Fully reviewed public digests retire at idle once all
+proposals are terminal and references end, regardless of creation age. Private
+evidence and checked undo remain for <code>mevedel-memory-history-max-age-days</code>
+(default 14) after the latest terminal decision. No-action reviews use completion
+time; reversal restarts the window. The memory cockpit exposes Candidates,
+Memories, and History; confirmed topic deletion uses a structured <code>user</code> producer
+and the same accepted transaction/undo path without inference.</p>
+<p>Obsolete settled control pairs are pruned after their deadlines while preserving
+the newest generation and all retained references. Claim admission, settlement,
+and pruning share the target lock and verify the generation within it. Idle
+batches remove at most 200 pairs and 50 content groups, scheduling another batch
+only after progress. A fresh listing can rule out pruning in a directory that
+contains only the newest or referenced generations. It cannot authorize a deletion;
+candidates still require fresh claim/deadline checks and locked byte verification.
+Minimal coverage and retirement identities remain. Interactive decisions wait
+for this client's active cleanup batch to release its claims, bounded by its
+120-second lifetime and with quitting available. Bulk decisions defer further
+cleanup until completion; foreign ownership still prevents conflicting actions.</p>
+<p>Expiry accepts a hash-bound manifest before deletion,
+hides expired entries before removing bytes, and deletes complete dependency
+groups. Later mutations finish accepted expiry before pinning new evidence.
+Curated memory is outside journal expiry. Public retrieval uses <code>memory://journal/</code>.</p>
+<p>The <a href="../../memory/">memory manual</a> owns configuration, limits, scheduling, proposal
+syntax, commands, inspection, and recovery procedures. Control-program mechanics
+remain in <a href="../0101-carry-control-operations-as-one-pinned-program/">ADR 0101</a>.</p>
+<h2 id="rationale-alternatives-and-consequences">Rationale, alternatives, and consequences<a class="headerlink" href="#rationale-alternatives-and-consequences" title="Permanent link">&para;</a></h2>
+<p>Inference can outlive its source buffer or client. Checking a deadline and then
+writing leaves a stale-callback race. Session leases also own conversation
+mutation and transfer; manufacturing a session solely to hold journal work would
+couple unrelated lifecycles. Immutable outcome election separates acceptance from
+publication and permits recovery without the original provider or process.</p>
+<p>Claims do not renew. Expiration fences acceptance but cannot physically stop a
+provider request on an unreachable client. Local owners cancel timed-out work and
+ignore rejected callbacks. UI counts, scheduling caches, and telemetry remain
+observations, never authority. Failed or unavailable records remain inspectable.</p>
+<p>Private evidence can be sensitive despite credential-free claim records. Original
+root authority gates body inspection and application on another client. Target
+coordination requires Linux <code>flock</code> on the storage host. Retention is intentionally
+longer than ordinary recall when evidence or recovery still needs it; the recall
+limit is not an erasure guarantee.</p>
+<h2 id="decision-history">Decision history<a class="headerlink" href="#decision-history" title="Permanent link">&para;</a></h2>
+<ul>
+<li>
+<p><strong>Remote journal work ran one target program per check.</strong> A September 23
+  capture of a remote session found 117 control programs, about 12 s of
+  blocking, in the journal and memory work that follows a request's
+  completion. The user felt this as hangs while typing and scrolling. On a mock
+  remote target, the same flow issued 37 programs for the save and checkpoint,
+  14 for a seal, 40 for digest processing and 60 for a cleanup drain. Claim
+  acquisition had used six programs; it now uses three. One program ensures the
+  directory, lists it, and reads the target clock. A second reads the newest
+  claim with its outcome, and the election is the third. Settlement relies on
+  the election's own <code>verify</code> of the claim bytes instead of reading them first.
+  Capture markers and descriptors are observed in batched programs. Missing
+  parents are created in one program. Checkpoint and seal run as one durable
+  transaction, so they share a single clock reading. The replay went to 28,
+  11, 32 and 50 programs respectively. Proof cadence is unchanged: every
+  resumed step still checks claim ownership afresh, and elections remain
+  exclusive creates.</p>
+</li>
+<li>
+<p><strong>Retained-only claim directories caused needless cleanup work.</strong> A copied
+  September 22 multi-agent journal fixture took about 14 seconds per cleanup
+  pass, even after all eligible pairs were gone. Filtering retained generations
+  from a fresh listing before reading records and yielding removed 122 target
+  programs and about 2.3 seconds per pass in the isolated replay. The first pass
+  removed the same 17 pairs; later passes reported no further work. Ownership
+  checks before actual resumed work and locked deletion remain unchanged. This
+  reduces child-process work; it is not a measurement of editor input latency.</p>
+</li>
+</ul>
+<p>The amendments to <strong>ADR 0117</strong> are consolidated below. These are the failures,
+measurements, and constraints that explain the current boundaries; the manual
+contains the corresponding operational details.</p>
+<h3 id="graphical-responsiveness">Graphical responsiveness<a class="headerlink" href="#graphical-responsiveness" title="Permanent link">&para;</a></h3>
+<p>A shared graphical capture on 2026-09-22 measured an 891 ms journal checkpoint,
+1.30 s recovery, and 668 ms processing admission after a request. Merely scheduling
+work later still occupied the editor when callbacks ran. Isolated subprocess
+experiments kept the parent event loop responsive during multi-second maintenance.
+Local recovery and retention now run in separate Emacs processes, while native
+provider configuration and live-buffer retention remain with their existing owner.
+Batched marker discovery avoids per-marker process dispatch, and fully retired
+capture tombstones no longer enter recovery. Ownership checks use the existing
+target-side newest-generation proof rather than shipping full histories; claim
+pruning stops at its budget instead of checking the rest of an already-full batch.</p>
+<h3 id="ownership-and-safe-application">Ownership and safe application<a class="headerlink" href="#ownership-and-safe-application" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>An ownership check followed by a client-side write was insufficient.</strong> A
+  client could pause after the check, resume after recovery retired its marker,
+  and overwrite a successor. Workspace ownership also could not serialize two
+  workspaces sharing a global root. Independent root claims, a durable pending
+  marker, and target-side locking across guard plus mutation replaced that gap.
+  Independent Emacs tests paused writers inside the program and demonstrated
+  waiting takeover and rejection of later old writes/deletes locally and over
+  TRAMP. Replacement mode is applied before rename to preserve recognizable
+  crash states.</li>
+<li><strong>Unconditional rollback lost intervening edits.</strong> A synchronization hook could
+  write new content and fail, after which snapshot restoration erased it. Exact
+  expected-after matching replaced unconditional restore. An ownership-transfer
+  test admitted a successor during buffer synchronization and confirmed the old
+  transaction could not undo its files.</li>
+<li><strong>PID-lock recovery could delete a normal resume's replacement.</strong> Creation,
+  replacement, release, and stale sweeping now share native Emacs file locking
+  around expected-holder comparison and mutation, without prompting background
+  recovery to break a live mutation lock.</li>
+<li><strong>One proposal's index update made another proposal in the same pass stale.</strong>
+  Initially, confirmed, hash-verified same-pass index transitions advanced the
+  expected snapshot while external edits still blocked. On 2026-09-24, inspection
+  of six stale candidates showed that five were blocked solely by unrelated
+  index changes; bulk acceptance had made two older candidates stale itself.
+  Same-pass replay therefore failed at the user-facing cross-review boundary.
+  Entry-level comparisons replaced that replay: unrelated index changes from
+  any source survive, affected-entry and topic conflicts still block, and the
+  transaction retains exact current index bytes for commit, recovery, and undo.</li>
+<li><strong>A private intent alone could misattribute external writes.</strong> Recovery now
+  reconciles verified marked attempts after accepted publication recovery.
+  Complete applications, untouched attempts, partial writes, and foreign state
+  remain distinct. Reversal binds the original intent/hash and exact snapshots
+  rather than selecting a new target or baseline.</li>
+<li><strong>Public decisions alone were not acceptance evidence.</strong> A rejection's private
+  hash is accepted before publication. Tests inserted an unaccepted public record
+  and confirmed it could neither decide/reject a proposal nor enter later model
+  evidence. Rejection checks original root authority without requiring unchanged
+  topic bytes because it performs no edit.</li>
+<li><strong>Auto's old return value could count another call's idempotent result as new
+  work.</strong> A confirmation callback now reports paths written by that call; counts
+  deduplicate shared indexes. Cancellation completes the current checked operation
+  and holds the remaining proposals.</li>
+</ul>
+<h3 id="evidence-and-request-boundaries">Evidence and request boundaries<a class="headerlink" href="#evidence-and-request-boundaries" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Filename absence did not prove safe creation.</strong> A parent directory could be
+  a symlink into another root. Captured inventories now retain ordinary directory
+  names and reject non-directory parents. All configured memory roots remain
+  excluded from workspace investigation even when their own capture failed;
+  failed reads cannot enlarge source authority.</li>
+<li><strong>Ordinary ranged Read could accumulate a huge single line before truncation.</strong>
+  Source investigation now first obtains a pinned 512-KiB snapshot. Oversized
+  content stays unknown. The reserved coordination directory is excluded both
+  to avoid control-state disclosure and to prevent claim history exhausting the
+  bounded inventory.</li>
+<li><strong>Sessionless searches lacked individual cancellation.</strong> External helpers now
+  return the existing process owner's cancellation function. An empty synchronous
+  <code>.mevedel/**</code> Glob also left gptel's immediate follow-up in a deleted private
+  copy directory. Native callback and local HTTP tool-loop tests reproduced the
+  failure; restoring the caller directory fixed it without delayed callbacks,
+  retained copies, provider retries, or new model instructions.</li>
+<li><strong>Raw evidence size and HTTP completion were insufficient request boundaries.</strong>
+  Admission measures the prepared provider payload, including schemas and roles,
+  on initial and follow-up requests. Only terminal FSM completion validates the
+  final reply. Scoped read tools suppress inherited interactive confirmation,
+  which otherwise stalled sessionless work. A local HTTP test covered provider
+  parsing, Read, follow-up preparation, final validation, and cumulative usage.</li>
+<li><strong>The first configured-model evaluation failed at a Unicode boundary before
+  inference.</strong> Embedding JSON encoder UTF-8 bytes as prompt text broke gptel's
+  next serialization. Decoding to text fixes request input, rejection evidence,
+  journal headers/bodies, and quoted topic metadata without a new persisted
+  format. Regression cases check admission, inspection, metadata round trips,
+  and equality of patch text and decoded bytes.</li>
+<li><strong>A long digest request spent all 4,000 output tokens on reasoning and returned
+  no digest.</strong> New captures disable reasoning when the selected model supports
+  that control; otherwise they retain provider defaults. Existing captures keep
+  their frozen policy. This does not establish a server ceiling on providers
+  that lack an output-limit control.</li>
+</ul>
+<h3 id="capture-publication-and-recovery">Capture, publication, and recovery<a class="headerlink" href="#capture-publication-and-recovery" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Clear separates completed work without ending the session.</strong> Its distinct
+  <code>clear</code> seal preserves that boundary in published metadata without depending on
+  a later compaction or close. The existing frozen-checkpoint and first-seal
+  rules retain the pre-clear title and evidence, while stable turn coverage
+  prevents repeated clear, compaction, or close from duplicating that work.</li>
+<li><strong>Separate snapshot files could detach metadata from its notes after a crash.</strong>
+  One exclusively created descriptor/evidence/policy bundle replaced that
+  interval. Source-local capture pins let session cleanup honor evidence without
+  discovering a workspace journal. Pins precede readiness, and malformed pins
+  block collection.</li>
+<li><strong>Turn numbers repeat after Rewind.</strong> Coverage uses persisted fork-point
+  identities. Deriving it solely from surviving public digests also allowed
+  expired/deleted work to reappear in new captures. Identity-only coverage records
+  now survive expiry; accepted-result recovery repairs the interval between public
+  publication and coverage before releasing the source pin.</li>
+<li><strong>Relative deadlines could diverge.</strong> Workspace digest admission and the
+  capture's acceptance claim now share one exact target deadline, preventing a
+  capture from remaining eligible after workspace admission expired.</li>
+<li><strong>Accepted expiry could be undone by late evidence pinning.</strong> Preparation now
+  recovers expiry under journal mutation ownership before validating and pinning
+  selected bytes. A crash fixture with an accepted unapplied expiry confirms the
+  old selection is refused. Another fixture expires an inference owner, admits a
+  successor with its own pins, and delivers the old success; it cannot publish
+  or disturb the successor.</li>
+<li><strong>Retired captures could leave pins behind or be recreated.</strong> Recovery checks
+  a successor's retained turn coverage before old pin release and raw-bundle
+  deletion; retirement remains recorded. Discard accepts an omission containing
+  original source identity before releasing the pin. A marker alone could not
+  recover the source after descriptor corruption. Accepted digest output takes
+  precedence over later discard.</li>
+<li><strong>The 24-KiB public entry cap failed on complete long-session turn IDs</strong>, and
+  decoder separator whitespace exhausted an otherwise valid 16-KiB body budget.
+  Public entries now have an 8-MiB total bound, with full body allowance reserved
+  at metadata admission and separators excluded from the body budget. Oversized
+  descriptors are refused before pinning rather than dropping coverage IDs.</li>
+<li><strong>Interrupted write recovery initially depended on opening the proposal table.</strong>
+  Workspace activation then scheduled the same checked reconciliation independently
+  of capture settings. It coalesces, respects transport/live ownership, creates no
+  state in an unused workspace, and cancels queued work on exit. <code>/remember</code> uses
+  that sessionless review owner and cockpit, replacing the report-only remember
+  skill with one command route.</li>
+</ul>
+<h3 id="retention-and-cost">Retention and cost<a class="headerlink" href="#retention-and-cost" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Opening the main menu synchronously refreshed memory evidence after ten
+  seconds.</strong> The September 21 profile attributed 351 of 359 menu CPU samples
+  and about 65 MB of allocations to this collection. Cold checks took 3.36 s
+  from the view and 3.40 s from the data buffer; warm checks took microseconds.
+  The menu now reads observations only and labels unknown or stale counts.
+  Explicit memory inspection retains fresh collection and checked recovery.</p>
+</li>
+<li>
+<p><strong>One-year age-only retention could delete unreviewed evidence.</strong> A native
+  cleanup regression reproduced that loss. On 2026-09-13 ordinary recall changed
+  to 14 days while physical cleanup retained unreviewed work and recovery
+  dependencies. Source-session exclusion also blocked long-lived-session review;
+  completed immutable digests are now eligible without source-session authority.
+  Sparse work gains an opportunity one day before recall expiry, subject to the
+  general time gate. Manual mode and the propose default remain.</p>
+</li>
+<li><strong>Per-file expiry limits split dependencies.</strong> Reversal needs its original
+  intent and accepted pass. Expiry now selects complete groups, uses pre-deletion
+  observations for covering reviews, and records retirement before deletion.
+  Tests expire 53 public records as one group and interrupt deletion after pass
+  and decision bodies disappear. Accepted manifests finish the remaining work
+  without resurrecting history; the 4-MiB manifest cap bounds admission.</li>
+<li><strong>Recovery repeatedly republished already-present decisions.</strong> It now compares
+  accepted records with one public observation and replays only missing/mismatched
+  publications or incomplete pin release. Missing review recovery still requires
+  admitted pins and digest bytes; tests remove a publication and restore a pin
+  to exercise both paths.</li>
+<li><strong>The 52-decision cleanup fixture exposed redundant control round trips.</strong>
+  Setup/teardown, recovery, and cleanup calls fell from 2,131/321/632 to
+  1,693/269/576 after batched fresh preconditions and decision reads. Three-run
+  local medians fell from 14.10 to 12.35 seconds overall, 1.28 to 1.11 for
+  recovery, and 2.74 to 2.53 for cleanup, retaining all 52 validated decisions.
+  The settlement program's own deadline guard removed an earlier clock call.</li>
+<li><strong>A later 53-record profile found 4,068 control programs and 213
+  authentications of one accepted pass.</strong> Recovery/expiry took 2.72/5.56 seconds.
+  One authenticated immutable pass is now reused within an observation, discarded
+  after publication and between operations. Rejection evidence likewise reuses
+  the decision reader's authenticated bundle, removing a second authentication;
+  subsequent observations still detect changed bytes. Carrying authenticated hashes
+  and reading each public decision once reduced those times to 1.34/2.89 seconds
+  without shrinking history or parallelizing the test. Deletion still rechecks
+  accepted hashes; tests verify later corruption and edits remain errors.</li>
+<li><strong>Cancellation and storage rejection lost received usage.</strong> A read-only usage
+  snapshot preserves costs before terminal publication, including oversized
+  non-streaming replies. Telemetry retains counts and categorical outcomes, not
+  private evidence or authority.</li>
+<li><strong>Fixed <code>notes.md</code> preference was replaced by freeform shared working files.</strong>
+  The shared-file evaluation recovered corrections without prescribed names or
+  folders. Capture reads shared files before session files within one 32-KiB
+  bound, retaining provenance without attributing other sessions' notes to this
+  session. The journal namespace moved to <code>memory://journal/</code> without changing
+  storage or granting curated-memory write permission; see
+  <a href="../0104-keep-resource-addresses-closed-and-capability-neutral/">ADR 0104</a>.</li>
+</ul>
+<h3 id="2026-09-16-resolved-history-and-coordination-cleanup">2026-09-16: resolved history and coordination cleanup<a class="headerlink" href="#2026-09-16-resolved-history-and-coordination-cleanup" title="Permanent link">&para;</a></h3>
+<p>Inspection of the live journal found roughly 450 mutation records and processed
+source notes still occupying the public journal. Creation-age cleanup conflated
+recall with review completion, and coordination outcomes had no collector. The
+replacement separates immediate processed-note retirement, a resolution-based
+14-day evidence/undo window, and dependency-aware bounded control collection.
+The previous age gate for processed notes is removed. Native generation-race
+tests and a 1,000-generation fixture exercise fencing and the 200-pair batch
+limit. Shared tables remain; stored memory inspection and user deletion reuse
+the existing checked write protocol.</p>
+<h3 id="2026-09-16-collect-generated-workspace-state">2026-09-16: collect generated workspace state<a class="headerlink" href="#2026-09-16-collect-generated-workspace-state" title="Permanent link">&para;</a></h3>
+<p>The former <code>journal/state/</code> and <code>memory/.mevedel-memory-write/</code> locations mixed
+internal bookkeeping with browsable evidence and curated topics. Grouping them
+under <code>.mevedel/state/</code> makes their ownership explicit and supplies one generated
+state ignore entry. This changes storage paths and private expiry-manifest paths;
+old persisted control records are not read or automatically migrated. Public
+journal retrieval and its domain-specific retention rules remain unchanged.</p>
+<p>The state inventory also exposed missing cleanup owners for generated media,
+review packages, and workspace diagnostics. The hourly idle opportunity now
+collects old unreferenced generated artifacts after a complete retained-state
+search; foreign session owners and uncertain reads postpone it. Workspace
+diagnostics use size-based rotation with one archive. These policies do not
+expire recovery evidence or plugin-owned data. See the current
+<a href="../../architecture/#generated-workspace-state">storage and retention contract</a>.</p>
+<h3 id="2026-09-19-keep-workspace-maintenance-out-of-session-startup">2026-09-19: keep workspace maintenance out of session startup<a class="headerlink" href="#2026-09-19-keep-workspace-maintenance-out-of-session-startup" title="Permanent link">&para;</a></h3>
+<p>The startup profile attributed 12.2% of CPU samples to journal cleanup and 4.2%
+to memory decision recovery. Previously, the chooser and conversation setup
+scheduled workspace-wide maintenance on immediate timers; those callbacks still
+blocked the Emacs UI. These opportunities now run after completed, durably saved
+root turns. Explicit memory operations retain checked recovery, and publication
+still schedules its existing processing and cleanup. Merely opening a session
+no longer launches consolidation or workspace recovery scans.</p>
+<p>The 2026-09-22 follow-up found a remaining synchronous journal-retention call
+inside file-session expiry, also reached by project choosers and exit. A chooser
+with 56 retired captures spent 4.27 seconds there. Removing that unrelated call
+keeps file-session expiry intact and leaves journal retention to its own owner.</p>
+<h3 id="2026-09-21-yield-during-scheduled-cleanup">2026-09-21: yield during scheduled cleanup<a class="headerlink" href="#2026-09-21-yield-during-scheduled-cleanup" title="Permanent link">&para;</a></h3>
+<p>A real configured-provider patch request spent 272 ms in journal cleanup after
+its completion message. A separate backlog measurement showed that a bounded
+record count still permits seconds of consecutive filesystem work. Scheduled
+cleanup now advances native Lisp generators between ownership phases and
+coordination records, using the same main-thread pattern as saved-history search.
+Claim ownership is checked afresh before each resumption, including nested
+coordination steps. Closing a pending iterator settles its acquired claims.
+Explicit synchronous lifecycle cleanup drains those same steps.</p>
+<p>The artifact-retention phase still checks live buffers and deletes as one unit;
+yielding between its final live-reference check and deletion would permit loss
+of an artifact newly referenced by unsaved input. Individual filesystem
+operations and content dependency groups remain indivisible. This changes
+scheduling, not the accepted-manifest, retention, or target-lock contracts.</p>
+<h3 id="2026-09-21-separate-completion-publication-from-checkpointing">2026-09-21: separate completion publication from checkpointing<a class="headerlink" href="#2026-09-21-separate-completion-publication-from-checkpointing" title="Permanent link">&para;</a></h3>
+<p>After staged background cleanup, a second real patch request still delayed a
+20-ms timer by 375 ms: session save and journal checkpoint together consumed
+329 ms. Terminal settlement now returns to the event loop after an expensive
+step; publication and journal checkpointing are distinct steps under the same
+admission hold. The request and its file snapshots remain owned until the
+checkpoint and terminal hooks finish. Transport cancellation and source death
+retire the continuation. The existing durable publication and capture APIs keep
+their atomicity and authority checks; this changes the sequencing of their calls.
+Already-due journal and memory opportunities also yield between jobs instead of
+running in one consecutive timer batch.</p>
+<h3 id="2026-09-22-isolate-consolidation-storage-from-the-editor">2026-09-22: isolate consolidation storage from the editor<a class="headerlink" href="#2026-09-22-isolate-consolidation-storage-from-the-editor" title="Permanent link">&para;</a></h3>
+<p>Capturing 100 memory topics required 103 storage programs and 478 ms. Batching
+reduced this to 14 programs and 263 ms, still too long for foreground work.
+Local consolidation now hands explicitly resolved roots and instruction paths
+to the maintenance child for scope capture, immutable preparation and rejection
+history. The editor retains the originating buffer, configured provider and
+claim deadline and checks ownership again before inference.</p>
+<p>A 20-digest review then spent 930 ms accepting and publishing its result.
+That storage phase now uses the same isolated child. Cancellation may stop an
+unaccepted result; a completed claim remains durable recovery authority even
+if its child dies before returning publication. Checked proposal application
+remains in the editor. Remote roots keep their target-native path.</p>
+<h3 id="2026-09-22-include-recovery-and-admission-in-the-worker-boundary">2026-09-22: include recovery and admission in the worker boundary<a class="headerlink" href="#2026-09-22-include-recovery-and-admission-in-the-worker-boundary" title="Permanent link">&para;</a></h3>
+<p>The shared graphical replay still paused for roughly 4.6 and 4.5 seconds at
+completion. A copied store reproduced two publication-recovery scans at about
+4.5 seconds and 884 control programs each, including automatic opportunities
+that never started inference. Offloading scope capture alone left this work in
+the editor. Scheduled recovery now owns a cancellable child, and consolidation's
+existing preparation child also performs recovery, selection and automatic
+admission. Its deadline starts before those operations. Skipped admission
+returns a scheduling observation without a provider call.</p>
+<p>The editor rechecks ownership, reconciles marked writes using live buffers and
+only then offers root-turn consolidation. It releases ownership for that phase,
+so the later preparation claim still recovers fresh state; the two scans are not
+replaced with an unsafe completed-recovery cache. The first implementation still listed retained writes synchronously (about
+250 ms in the copied-store probe); the follow-up below divides that editor phase.
+Explicit recovery and remote workspaces keep their existing target-native path.</p>
+<p>A 20-digest, 90-KB memory fixture measured 2.47 seconds maximum timer delay on
+the synchronous path versus 36 ms with real preparation/publication children.
+End-to-end time increased from 2.67 to 3.28 seconds. These isolated measurements
+exclude provider inference and do not establish graphical typing latency.</p>
+<h3 id="2026-09-22-bound-remaining-completion-inspections">2026-09-22: bound remaining completion inspections<a class="headerlink" href="#2026-09-22-bound-remaining-completion-inspections" title="Permanent link">&para;</a></h3>
+<p>The rebuilt graphical run confirmed that the 3.95-second recovery scan ran in a
+child. Its remaining editor costs included a 681-ms checkpoint, 593-ms journal
+admission and 224-ms retained-write inspection. A copied store showed 32 control
+programs for 31 coverage records and 71 for 35 public entries. Fresh bounded
+batching reduced these to three and seven programs, with median times falling
+from 157 to 90 ms and 306 to 152 ms respectively. Existing path proofs, byte
+limits, expiry checks and schema validation remain in force.</p>
+<p>Scheduled recovery now checks one retained write per callback after settling the
+publication claim. Every record still gets fresh original-root and live-buffer
+checks; no child classifies unsaved editor state. The job retains cancellation
+ownership and its deadline until inspections finish. Quit and late replies cannot
+strand or restart it. Explicit synchronous recovery remains synchronous. The
+individual marked-write reconciliation can still be expensive; splitting records
+does not preempt an operation already in progress.</p>
+<p>The same capture exposed a queued journal-recovery offer colliding with memory
+recovery's claim. The busy return retained a ten-minute placeholder cooldown,
+which then suppressed the root-turn post-recovery offer. A busy opportunity now
+clears only its own placeholder; a fresh admission observation remains cached.
+A regression holds a real claim for the first offer, releases it, and verifies
+that the next activity opportunity admits exactly one review.</p>
+<p>In six alternating copied-store trials, inspecting the retained writes together
+produced a median 242-ms maximum timer delay; one record per callback reduced it
+to 44 ms. Total child recovery and inspection rose from 4.00 to 4.05 seconds.
+These are headless timer measurements, not graphical input-to-paint latency.</p>
+<h3 id="2026-09-22-prepare-root-checkpoints-and-digest-admission-outside-the-editor">2026-09-22: prepare root checkpoints and digest admission outside the editor<a class="headerlink" href="#2026-09-22-prepare-root-checkpoints-and-digest-admission-outside-the-editor" title="Permanent link">&para;</a></h3>
+<p>The rebuilt graphical request still measured a 636-ms checkpoint and 558-ms
+journal processing callback, with 251 and 181 ms of GC respectively. Deferring
+those whole functions to timers did not divide their blocking work. Deferred
+portable root settlement now suspends while a child prepares immutable evidence;
+only the owner publishes and pins it. Scheduled digest opportunities also perform
+discovery, accepted-outcome recovery and claim admission in the child. Live request
+identity, current publication and source authority remain editor-side checks.</p>
+<p>A three-trial replay of the captured 825,335-character transcript and copied public
+journal entries produced identical 301,157-character evidence on both paths.
+Median 20-ms timer delay fell from 182 to 110 ms, while warm editor allocation fell
+from 30.4 to 14.5 MB. End-to-end checkpoint time increased from 202 to 561 ms;
+publication and lease handling still run synchronously. A separate unsealed-capture
+digest-opportunity replay reduced median timer delay from 175 ms to below 1 ms,
+and editor allocation from 5.0 to 0.28 MB, while total time rose from 195 to 369 ms.
+These are isolated storage replays, not a new graphical typing measurement.</p>
+<h3 id="2026-09-23-reuse-unchanged-local-discovery-snapshots">2026-09-23: reuse unchanged local discovery snapshots<a class="headerlink" href="#2026-09-23-reuse-unchanged-local-discovery-snapshots" title="Permanent link">&para;</a></h3>
+<p>The next graphical capture recorded 79 journal-index refreshes with a median
+128 ms. The ten-second throttle prevented per-event reads but still reread an
+unchanged journal throughout long requests. Local discovery now compares source
+attributes for public records and expiry markers before refreshing validated
+entries; a second observation detects changes during the read. Access times are
+excluded so reading does not invalidate the snapshot. Missing observations and
+remote storage keep the ordinary read path. Age limits still apply on every use;
+evidence and mutation authority still read storage freshly.</p>
+<p>Alternating trials on a copied 40-entry journal reduced warm refreshes from
+134 ms to 0.33 ms with identical results. Cold reads remained about 134 ms.
+Regressions cover edits with restored modification times, replacements, expiry,
+corruption, read failures, source races, root changes and cached-only discovery.</p>
+<h3 id="2026-09-24-defer-decisions-behind-cleanup-and-allow-no-journal-note">2026-09-24: defer decisions behind cleanup and allow no journal note<a class="headerlink" href="#2026-09-24-defer-decisions-behind-cleanup-and-allow-no-journal-note" title="Permanent link">&para;</a></h3>
+<p>Accept/reject scheduled cleanup under the same consolidation claim needed by the
+next decision. The editor could report no running review yet fail that decision
+with "Memory consolidation is busy". A regression holding real cleanup claims
+reproduced this. Decisions now wait for this client's active batch to settle,
+without stealing claims or killing maintenance children; bulk commands defer
+new cleanup until they finish.</p>
+<p>The digest contract also encouraged a note on every eligible capture, and even
+four empty sections published a public record. Generation now explicitly selects
+noteworthy events. Validated all-none output is accepted completion without a
+note: turn coverage precedes source-pin release, and interrupted retirement
+recovers the accepted omission without another model call. Consolidation likewise
+prefers No action when dated activity supplies no useful lasting context.</p>
+<p>The initial selection rule included consequential decisions and unresolved
+blockers. User review identified these as tracker or documentation state, not
+persistent memory. Selection now retains evidence only for reusable knowledge
+in the user, feedback, enduring project, and reference categories. The direct-save
+prompt and manual follow the same boundary; the journal's Unfinished field holds
+uncertainty about qualifying knowledge rather than pending work. Existing records
+remain unchanged, while subsequent reviews apply the stricter criteria.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
