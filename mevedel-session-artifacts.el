@@ -770,6 +770,39 @@ current transcript; never substitute the parent session's root segments."
           (list (list :status 'readable :current-p t))
         (mevedel-session-artifacts-segments session live-buffer)))))
 
+(defun mevedel-session-artifacts-transcript-segment-identity
+    (session descriptor)
+  "Return a value that changes whenever DESCRIPTOR's bytes in SESSION do.
+It names the same source `mevedel-session-artifacts-read-transcript-segment'
+reads: a portable publication's verified hash, a live owner's staged write,
+or a PID-lock file's size and modification time.  Return nil when the
+source cannot be identified without reading it."
+  (let* ((save-path (mevedel-session-save-path session))
+         (number (plist-get descriptor :number))
+         (logical (or (plist-get descriptor :logical)
+                      (and (integerp number)
+                           (format "segment-%04d.chat.org" number))))
+         (stat (lambda (path)
+                 (when-let* ((attributes (and path (file-attributes path))))
+                   (list path
+                         (file-attribute-modification-time attributes)
+                         (file-attribute-size attributes))))))
+    (when (and save-path logical)
+      (if (not (mevedel-session-codec-portable-authority-p session))
+          (funcall stat (if (plist-get descriptor :logical)
+                            (expand-file-name logical save-path)
+                          (mevedel-session-artifacts-segment-path
+                           save-path number)))
+        (if-let* ((source (mevedel-session-publication-uncommitted-artifact
+                           session logical))
+                  ((mevedel-session-durability-lease-owned-p session)))
+            (funcall stat source)
+          (when-let* ((publication (mevedel-session-publication session))
+                      (entry (cdr (assoc logical
+                                         (plist-get publication :artifacts))))
+                      (hash (plist-get entry :sha256)))
+            (list logical hash)))))))
+
 (defun mevedel-session-artifacts-read-transcript-segment (session descriptor)
   "Read DESCRIPTOR from SESSION into a disposable, read-only transcript buffer."
   (if-let* ((logical (plist-get descriptor :logical)))

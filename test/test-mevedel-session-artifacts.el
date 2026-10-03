@@ -4689,5 +4689,61 @@ rotation never saves through a rebound temporary visited filename or prompts"
               (mevedel-request-end))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
+(mevedel-deftest mevedel-session-artifacts-transcript-segment-identity ()
+  ,test
+  (test)
+  :doc "PID-lock segments are identified by size and modification time"
+  (let* ((root (make-temp-file "mevedel-segment-identity-" t))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 2))
+         (descriptor '(:number 1 :status readable))
+         (path (mevedel-session-artifacts-segment-path root 1)))
+    (unwind-protect
+        (progn
+          (should-not (mevedel-session-artifacts-transcript-segment-identity
+                       session descriptor))
+          (with-temp-file path (insert "first"))
+          (let ((before (mevedel-session-artifacts-transcript-segment-identity
+                         session descriptor)))
+            (should (equal before
+                           (mevedel-session-artifacts-transcript-segment-identity
+                            session descriptor)))
+            (with-temp-file path (insert "rewritten"))
+            (should-not (equal before
+                               (mevedel-session-artifacts-transcript-segment-identity
+                                session descriptor)))))
+      (delete-directory root t)))
+  :doc "portable archives use the published hash, or a live owner's staging"
+  (let* ((root (make-temp-file "mevedel-segment-identity-" t))
+         (staged (file-name-concat root "staged"))
+         (logical "agents/a.compact-0001.chat.org")
+         (session (mevedel-session--create
+                   :save-path root :authority-mode 'portable
+                   :publication
+                   `(:artifacts ((,logical :sha256 "agent-hash")
+                                 ("segment-0001.chat.org" :sha256 "root-hash")))))
+         owner)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-durability-lease-owned-p)
+                   (lambda (_) owner))
+                  ((symbol-function
+                    'mevedel-session-publication-uncommitted-artifact)
+                   (lambda (_ name) (and (equal name logical) staged))))
+          (with-temp-file staged (insert "staged"))
+          (should (equal '("segment-0001.chat.org" "root-hash")
+                         (mevedel-session-artifacts-transcript-segment-identity
+                          session '(:number 1))))
+          (should (equal (list logical "agent-hash")
+                         (mevedel-session-artifacts-transcript-segment-identity
+                          session (list :number 1 :logical logical))))
+          (setq owner t)
+          (should (equal staged
+                         (car (mevedel-session-artifacts-transcript-segment-identity
+                               session (list :number 1 :logical logical)))))
+          (should-not (mevedel-session-artifacts-transcript-segment-identity
+                       session '(:number 2))))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-session-artifacts)
 ;;; test-mevedel-session-artifacts.el ends here

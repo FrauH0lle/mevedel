@@ -91,6 +91,9 @@
 (defvar-local mevedel-execution-transcript--pending-terminals nil
   "Tool render-data updates waiting for their transcript rows.")
 
+(defvar-local mevedel-execution-transcript--completion-index nil
+  "(TICK . TABLE) mapping tool-use ids to their newest recorded render data.")
+
 (defvar-local mevedel-execution-transcript--archived-rows nil
   "Execution tool-use ids whose rows were explicitly removed by compaction.")
 
@@ -507,18 +510,29 @@ Inspect archived records once per call, only when a live row is missing."
                  (gethash tool-use-id
                           mevedel-execution-transcript--pending-terminals)
                  :render-data)))
-          (save-restriction
-            (widen)
-            (copy-tree
-             (plist-get
-              (cl-find-if
-               (lambda (record)
-                 (equal tool-use-id (plist-get record :tool-use-id)))
-               (reverse
-                (mevedel-transcript-audit-records
-                 (buffer-substring (point-min) (point-max))
-                 'execution-completion)))
-              :render-data)))))))
+          (copy-tree
+           (gethash tool-use-id
+                    (mevedel-execution-transcript--completion-index)))))))
+
+(defun mevedel-execution-transcript--completion-index ()
+  "Return the current buffer's newest completion render data by tool-use id.
+A view asks once per Bash row on every streamed update; parsing the whole
+transcript for each question made long turns quadratic.  Rebuild only
+after the text changes."
+  (let ((tick (buffer-chars-modified-tick)))
+    (unless (eql tick (car mevedel-execution-transcript--completion-index))
+      (let ((table (make-hash-table :test #'equal)))
+        (save-restriction
+          (widen)
+          ;; Later records replace earlier ones: the newest completion wins.
+          (dolist (record (mevedel-transcript-audit-records
+                           (buffer-substring (point-min) (point-max))
+                           'execution-completion))
+            (puthash (plist-get record :tool-use-id)
+                     (plist-get record :render-data) table)))
+        (setq mevedel-execution-transcript--completion-index
+              (cons tick table))))
+    (cdr mevedel-execution-transcript--completion-index)))
 
 (defun mevedel-execution-transcript-store-pending-terminal
     (data-buffer event render-data)

@@ -63,6 +63,10 @@
                   (session live-buffer &optional agent-transcript-p))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-transcript-segment-identity
+                  "mevedel-session-artifacts" (session descriptor))
+(autoload 'mevedel-session-artifacts-transcript-segment-identity
+  "mevedel-session-artifacts")
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-open-agent-transcript
@@ -384,15 +388,25 @@ When EXPANDED is non-nil, include record details."
       (when expanded
         (format "    %S\n" record))))))
 
-(defun mevedel-view--insert-hook-audit-block
-    (record &optional source expanded)
+(defun mevedel-view-audit--hook-audit-state-key (record source)
+  "Return the disclosure key for hook audit RECORD at SOURCE."
+  (append (mevedel-view-disclosure-state-key source 'hook-audit)
+          (list (mevedel-view--hook-audit-key record))))
+
+(defun mevedel-view--insert-hook-audit-block (record &optional source)
   "Insert hook audit disclosure for RECORD.
-SOURCE, when non-nil, is the source range in the data buffer.
-EXPANDED means insert the disclosure body expanded."
+SOURCE, when non-nil, is the source range in the data buffer.  The body
+opens only when the reader expanded it: rendering in the remembered state
+leaves nothing for the post-render restore to toggle, which would otherwise
+rewrite the retained live tail and force a whole-turn rebuild per update."
   (when (and (listp record)
              (keywordp (car-safe record)))
-    (let ((start (point))
-          (source (and (consp source) (cons (car source) (cdr source)))))
+    (let* ((start (point))
+           (source (and (consp source) (cons (car source) (cdr source))))
+           (key (mevedel-view-audit--hook-audit-state-key record source))
+           (expanded (when-let* ((entry (mevedel-view-disclosure-state-for-key
+                                         key)))
+                       (not (cdr entry)))))
       (if (eq (plist-get record :type) 'execution-breadcrumb)
           (mevedel-view-audit--insert-breadcrumb record source)
         (insert (mevedel-view--format-hook-audit-block record expanded))
@@ -403,10 +417,7 @@ EXPANDED means insert the disclosure body expanded."
            mevedel-view-collapsed ,(not expanded)
            mevedel-view-hook-audit-record ,record
            mevedel-view-source ,source
-           mevedel-view-source-key
-           ,(append
-             (mevedel-view-disclosure-state-key source 'hook-audit)
-             (list (mevedel-view--hook-audit-key record)))))))))
+           mevedel-view-source-key ,key))))))
 
 (defun mevedel-view-audit--breadcrumb-label (record)
   "Return the compact terminal label for execution breadcrumb RECORD."
@@ -530,44 +541,68 @@ execution, so parent and child may each display their own breadcrumb."
                       ;; Agent archives have numbers; the live agent transcript
                       ;; is their successor but has no segment number of its own.
                       most-positive-fixnum)))
-            (catch 'found
-              (dolist (descriptor descriptors)
-                (when (and (eq (plist-get descriptor :status) 'readable)
-                           (not (plist-get descriptor :current-p))
-                           (integerp (plist-get descriptor :number))
-                           (< (plist-get descriptor :number) viewed-number))
-                  (when-let* ((older (condition-case nil
-                                        (mevedel-session-artifacts-read-transcript-segment
-                                         session descriptor)
-                                      (error nil))))
-                    (unwind-protect
-                        (with-current-buffer older
-                          (save-restriction
-                            (widen)
-                            (let* ((audits (mevedel-transcript-audit-records
-                                            (buffer-substring (point-min)
-                                                              (point-max))
-                                            'execution-breadcrumb))
-                                   (matches
-                                    (lambda (other)
-                                      (and (equal (plist-get other :execution-id)
-                                                  (plist-get record :execution-id))
-                                           (equal (plist-get other :owner)
-                                                  (plist-get record :owner))))))
-                              (when (or (cl-some matches audits)
-                                        (cl-some
-                                         (lambda (segment)
-                                           (and (eq (car segment) 'mailbox)
-                                                (funcall
-                                                 matches
-                                                 (mevedel-view-audit--mailbox-completion
-                                                  (buffer-substring-no-properties
-                                                   (cadr segment)
-                                                   (caddr segment))))))
-                                         (mevedel-transcript-segments
-                                          (point-min) (point-max))))
-                                (throw 'found t)))))
-                      (kill-buffer older)))))))))))
+            (let ((key (cons (plist-get record :execution-id)
+                             (plist-get record :owner))))
+              (cl-some
+               (lambda (descriptor)
+                 (and (eq (plist-get descriptor :status) 'readable)
+                      (not (plist-get descriptor :current-p))
+                      (integerp (plist-get descriptor :number))
+                      (< (plist-get descriptor :number) viewed-number)
+                      (member key (mevedel-view-audit--archived-breadcrumbs
+                                   session descriptor))))
+               descriptors)))))))
+
+(defvar-local mevedel-view-audit--archive-breadcrumbs nil
+  "Map an archived segment's content identity to its breadcrumb keys.")
+
+(defun mevedel-view-audit--archived-breadcrumbs (session descriptor)
+  "Return (EXECUTION-ID . OWNER) for each breadcrumb in SESSION's DESCRIPTOR.
+Count audit records and mailbox completions.  Every streamed update asks
+again for each fresh breadcrumb in the live turn; rereading and reparsing
+each archive per question made it most of a long session's render cost.
+Results are kept in the asking view until the archive's content identity
+changes."
+  (let* ((identity (mevedel-session-artifacts-transcript-segment-identity
+                    session descriptor))
+         (cache (or mevedel-view-audit--archive-breadcrumbs
+                    (setq mevedel-view-audit--archive-breadcrumbs
+                          (make-hash-table :test #'equal))))
+         (cached (if identity (gethash identity cache :missing) :missing)))
+    (if (not (eq cached :missing))
+        cached
+      (when-let* ((older (condition-case nil
+                             (mevedel-session-artifacts-read-transcript-segment
+                              session descriptor)
+                           (error nil))))
+        (let ((key (lambda (other)
+                     (cons (plist-get other :execution-id)
+                           (plist-get other :owner))))
+              keys)
+          (unwind-protect
+              (with-current-buffer older
+                (save-restriction
+                  (widen)
+                  (setq keys
+                        (append
+                         (mapcar key (mevedel-transcript-audit-records
+                                      (buffer-substring (point-min) (point-max))
+                                      'execution-breadcrumb))
+                         (delq nil
+                               (mapcar
+                                (lambda (segment)
+                                  (when-let* (((eq (car segment) 'mailbox))
+                                              (completion
+                                               (mevedel-view-audit--mailbox-completion
+                                                (buffer-substring-no-properties
+                                                 (cadr segment) (caddr segment)))))
+                                    (funcall key completion)))
+                                (mevedel-transcript-segments
+                                 (point-min) (point-max))))))))
+            (kill-buffer older))
+          (when identity
+            (puthash identity keys cache))
+          keys)))))
 
 (defun mevedel-view-audit--source-has-tool-p (source tool-use-id)
   "Return non-nil if SOURCE contains a call owning TOOL-USE-ID."
@@ -1243,9 +1278,10 @@ nothing concerning it can be older."
       (save-excursion
         (goto-char start)
         (delete-region start end)
-        (mevedel-view--insert-hook-audit-block record source collapsed)
-        (mevedel-view-disclosure-record-state
-         source 'hook-audit (not collapsed))
+        (mevedel-view-disclosure-record-state-for-key
+         (mevedel-view-audit--hook-audit-state-key record source)
+         (not collapsed))
+        (mevedel-view--insert-hook-audit-block record source)
         (when turn-id
           (put-text-property start (point)
                              'mevedel-view-turn-id turn-id))
