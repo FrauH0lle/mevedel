@@ -1802,6 +1802,24 @@ TOOL-PROP."
                              "--- end evidence item ---")))
       (should-not (text-property-not-all 0 (length text) 'gptel nil text)))))
 
+(mevedel-deftest mevedel-transcript--repair-response-fragment-segments ()
+  ,test
+  (test)
+  :doc "trusted audits between a final response and its summary stay ignored"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer.\n" 'gptel 'response)
+            "\n\n"
+            (mevedel--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-1"))
+            (mevedel--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-2"))
+            (mevedel-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1.0)))
+    (should (equal '(response ignored render-data)
+                   (mapcar #'car (mevedel-transcript-segments
+                                  (point-min) (point-max)))))))
+
 (mevedel-deftest mevedel-transcript-project-evidence ()
   ,test
   (test)
