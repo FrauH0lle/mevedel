@@ -1830,7 +1830,13 @@ thinking blocks or user turns."
              (convert-p
               (or (and (eq prev-type 'response)
                        (memq type '(user ignored))
-                       render-data-after-tail-p)
+                       render-data-after-tail-p
+                       ;; Audits emitted after the final response are
+                       ;; records, not a stale tail of its text.
+                       (not (string-match-p
+                             "\\`[ \t\r\n]*<!-- mevedel-hook-audit -->"
+                             (buffer-substring-no-properties
+                              (cadr seg) (caddr seg)))))
                   (and (eq type 'user)
                        (or (and (eq prev-type 'response)
                                 (eq next-type 'ignored)
