@@ -566,6 +566,8 @@
                (cons 1 (with-current-buffer data (point-max))))
               (goto-char (point-min))
               (should (search-forward "[Execution history]" nil t))
+              (should (save-excursion (goto-char (match-beginning 0)) (bolp)))
+              (should-not (get-text-property (match-end 0) 'mouse-face))
               (funcall (get-text-property (match-beginning 0)
                                           'mevedel-view-zone-activate))
               (should (equal "exec-child" opened)))))

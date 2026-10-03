@@ -1205,12 +1205,13 @@ nothing concerning it can be older."
                        :execution-id))))
     (unless (eq (char-before) ?\n) (insert "\n"))
     (insert (propertize
-             "    [Execution history]\n"
+             "[Execution history]"
              'font-lock-face 'link
              'mouse-face 'highlight
              'help-echo "RET: inspect retained execution interactions"
              'mevedel-view-zone-activate
-             (lambda () (mevedel-view-audit-show-history id))))))
+             (lambda () (mevedel-view-audit-show-history id)))
+            "\n")))
 
 (defun mevedel-view-audit-toggle-hook-audit ()
   "Toggle a hook audit disclosure."
