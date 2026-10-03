@@ -402,6 +402,18 @@
      :after-each ((delete-directory default-directory t)))
   ,test
   (test)
+  :doc "only an interactive exit sweeps registered workspaces for expired sessions"
+  (let ((workspace (mevedel-workspace--create
+                    :type 'project :id default-directory :root default-directory :name "exit"))
+        (mevedel-workspace--registry (make-hash-table :test #'equal))
+        swept)
+    (puthash (cons 'project default-directory) workspace mevedel-workspace--registry)
+    (cl-letf (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+               (lambda (ws &rest _) (push ws swept) 0)))
+      (let ((noninteractive t)) (mevedel-session-persistence--kill-emacs-hook))
+      (should-not swept)
+      (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook))
+      (should (equal (list workspace) swept))))
   :doc "flushes retained agent text before its idle save timer fires"
   (dolist (type '(file project))
     (let* ((root (make-temp-file "mevedel-exit-agent-" t))
@@ -573,7 +585,7 @@
                  expired-session)
                 (cl-letf (((symbol-function 'buffer-list)
                            (lambda (&optional _frame) (list live-buf))))
-                  (mevedel-session-persistence--kill-emacs-hook))
+                  (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
                 (should-not
                  (file-directory-p
                   (mevedel-session-save-path expired-session)))
@@ -613,7 +625,7 @@
                    t mevedel-session-persistence--cleanup-throttle)
                   (cl-letf (((symbol-function 'buffer-list)
                              (lambda (&optional _frame) nil)))
-                    (mevedel-session-persistence--kill-emacs-hook))
+                    (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
                   (should (file-directory-p save-path))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
@@ -648,7 +660,7 @@
                     (set-buffer-modified-p t))
                   (cl-letf (((symbol-function 'buffer-list)
                              (lambda (&optional _frame) (list buf))))
-                    (mevedel-session-persistence--kill-emacs-hook))
+                    (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
                   (should (file-directory-p save-path))
                   (should (file-directory-p sidecar))
                   (should-not
@@ -697,7 +709,7 @@
           (set-file-modes bad-sessions 0)
           (cl-letf (((symbol-function 'buffer-list)
                      (lambda (&optional _frame) (list live-buf))))
-            (mevedel-session-persistence--kill-emacs-hook))
+            (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
           (should-not
            (file-directory-p (mevedel-session-save-path expired-session)))
           (should-not
@@ -4345,14 +4357,59 @@
                     (should
                      (mevedel-session-durability-lease-acquire
                       session-dir "*cleanup-owner*" session))
-                    (should-not
-                     (mevedel-session-persistence-cleanup-expired
-                      workspace t))
+                    (should
+                     (eql 0 (mevedel-session-persistence-cleanup-expired
+                             workspace t)))
                     (should (file-directory-p session-dir))
                     (should
                      (mevedel-session-durability-lease-owned-p session)))
                 (mevedel-session-durability-lease-release
                  session-dir session)))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry)))
+  :doc "deletes an abandoned portable session once its lease renewal also expired"
+  (let* ((host "cleanup-remote-abandoned-host")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-cleanup-abandoned-" t))))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-destructuring-bind (workspace _session session-dir _segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Published transcript\n")
+            (let* ((mevedel-session-max-age-days 7)
+                   (mevedel-session-durability--client-id (make-string 64 ?a))
+                   (sidecar-path (mevedel-session-artifacts-sidecar-path session-dir))
+                   (sidecar (mevedel-session-codec-read sidecar-path))
+                   (lease-dir (mevedel-session-durability--lease-path session-dir))
+                   (later (+ (mevedel-session-durability--target-time lease-dir)
+                             (* 30 24 60 60)))
+                   (live nil)
+                   (cleanup
+                    (lambda (keep)
+                      (let ((mevedel-session-keep-recent-count keep)
+                            (mevedel-session-persistence--cleanup-throttle
+                             (make-hash-table :test #'equal)))
+                        (mevedel-session-persistence-cleanup-expired workspace t)))))
+              (plist-put sidecar :updated-at
+                         (format-time-string
+                          "%FT%H-%M-%S"
+                          (time-subtract (current-time) (* 30 24 60 60))))
+              (mevedel-session-codec-write sidecar-path sidecar)
+              ;; The fixture's release renewed the lease just now.
+              (should (eql 0 (funcall cleanup nil)))
+              (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
+                         (lambda (&optional _) later))
+                        ((symbol-function 'mevedel-session-control-transfer-root-buffer-for-id)
+                         (lambda (_) live)))
+                (should (eql 0 (funcall cleanup 1)))
+                (setq live (current-buffer))
+                (should (eql 0 (funcall cleanup nil)))
+                (should (file-directory-p session-dir))
+                (setq live nil)
+                (should (eql 1 (funcall cleanup nil))))
+              (should-not (file-directory-p session-dir)))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))

@@ -371,12 +371,13 @@ Defaults to 1 MB."
 Sessions older than this are eligible for deletion when the `mevedel'
 session chooser runs or Emacs exits (throttled per workspace per Emacs
 invocation).  Age comes from `:updated-at', or the sidecar or session
-directory modification time when metadata cannot provide it.  Sessions with
-active locks are always
-skipped: any cross-host lock, or a same-host lock whose PID is live and not
-known to have been reused, as are the `mevedel-session-keep-recent-count'
-most-recently-updated sessions.  A nil value disables auto-cleanup
-entirely."
+directory modification time when metadata cannot provide it; a portable
+session's last lease renewal must also be older.  Sessions with an owner are
+always skipped: any cross-host lock, a same-host lock whose PID is live and
+not known to have been reused, or a portable lease that is live, publishing,
+mutating, or reserved for transfer.  So are the
+`mevedel-session-keep-recent-count' most-recently-updated sessions.  A nil
+value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
           (const :tag "Disabled" nil))
   :group 'mevedel)
@@ -384,7 +385,7 @@ entirely."
 (defcustom mevedel-session-keep-recent-count 3
   "Number of most-recently-updated sessions exempt from auto-cleanup.
 
-The newest sessions of a file workspace, counted by the same timestamp
+The newest sessions of a workspace, counted by the same timestamp
 auto-cleanup ages against, survive `mevedel-session-max-age-days'
 regardless of age.  Without this floor a long absence would delete the
 very session a returning user opens the chooser to resume: the chooser
@@ -2657,28 +2658,29 @@ active because we cannot probe the remote process."
       t)))
 
 (defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
-  "Delete file-workspace sessions older than `mevedel-session-max-age-days'.
+  "Delete sessions older than `mevedel-session-max-age-days'.
 
 Scans session directories independently of resume compatibility.  Uses
 `:updated-at' when available, otherwise the sidecar or directory modification
 time.
 
-Portable project stores are not auto-cleaned.  The
-`mevedel-session-keep-recent-count' most-recently-updated sessions are
-never deleted regardless of age.  File-workspace cleanup skips
-sessions with an active lock.  Cross-host locks are active.
-Pending journal capture pins also prevent deletion.  Same-host locks are
-stale when their PID is dead or when the live
-process start time proves PID reuse.  Throttled to at most once per
+The `mevedel-session-keep-recent-count' most-recently-updated sessions are
+never deleted regardless of age.  Pending journal capture pins prevent
+deletion.  PID-lock sessions with an active lock are skipped; cross-host
+locks are active, and same-host locks are stale when their PID is dead or
+when the live process start time proves PID reuse.  Portable sessions open
+in this Emacs are skipped; the others are deleted only through
+`mevedel-session-durability-delete-abandoned', which also requires the last
+lease renewal to be older than the cap.  Throttled to at most once per
 `(workspace-type . workspace-id)' per Emacs invocation; when FORCE is
 non-nil the throttle is bypassed.
 
-Returns the number of sessions deleted, or nil when the cap is nil, WORKSPACE
-uses portable authority, or the throttle has already fired."
+Returns the number of sessions deleted, or nil when the cap is nil or the
+throttle has already fired."
   (let ((sessions-dir
-         (mevedel-session-artifacts-sessions-dir workspace)))
-    (when (and mevedel-session-max-age-days
-               (eq (mevedel-workspace-type workspace) 'file))
+         (mevedel-session-artifacts-sessions-dir workspace))
+        (portable (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))))
+    (when mevedel-session-max-age-days
       (let* ((ws-key (cons (mevedel-workspace-type workspace)
                            (mevedel-workspace-id workspace)))
              (already-ran
@@ -2703,8 +2705,9 @@ uses portable authority, or the throttle has already fired."
                       (mevedel-session-persistence--observed-update-time
                        (plist-get sidecar :updated-at)
                        sidecar-path save-path)))
-                (push (cons save-path
-                            (and parsed-time (float-time parsed-time)))
+                (push (list save-path
+                            (and parsed-time (float-time parsed-time))
+                            (plist-get sidecar :session-id))
                       candidates))))
           ;; The newest sessions are exempt regardless of age: the chooser
           ;; sweeps before any lock is taken, so without this floor a
@@ -2713,19 +2716,27 @@ uses portable authority, or the throttle has already fired."
           ;; so it never displaces a dated one from the floor.
           (setq candidates
                 (sort candidates
-                      (lambda (a b) (> (or (cdr a) 0) (or (cdr b) 0)))))
+                      (lambda (a b) (> (or (cadr a) 0) (or (cadr b) 0)))))
           (when mevedel-session-keep-recent-count
             (setq candidates
                   (nthcdr mevedel-session-keep-recent-count candidates)))
-          (pcase-dolist (`(,save-path . ,updated-secs) candidates)
+          (pcase-dolist (`(,save-path ,updated-secs ,session-id) candidates)
             (when (and updated-secs
                        (> (- now updated-secs) threshold-secs)
-                       (not
-                        (mevedel-session-persistence--active-lock-p
-                         save-path))
                        (not (mevedel-journal-pins-present-p save-path)))
-              (delete-directory save-path t)
-              (cl-incf deleted)))
+              (cond
+               ((not portable)
+                (unless (mevedel-session-persistence--active-lock-p save-path)
+                  (delete-directory save-path t)
+                  (cl-incf deleted)))
+               ;; A session open here may outlive its lease after suspend.
+               ((and session-id
+                     (mevedel-session-control-transfer-root-buffer-for-id session-id)))
+               ;; One unreadable or contested session must not end the sweep.
+               ((condition-case nil
+                    (mevedel-session-durability-delete-abandoned save-path threshold-secs)
+                  (error nil))
+                (cl-incf deleted)))))
           (when (> deleted 0)
             (message "Cleaned up %d expired session%s"
                      deleted (if (= deleted 1) "" "s")))
@@ -2844,8 +2855,11 @@ bad buffer can't block exit."
               (when-let* ((dir (mevedel-session-save-path mevedel--session)))
                 (cl-pushnew dir lock-dirs :test #'equal))))))
       ;; Keep live locks through cleanup so an exit-save failure cannot expose
-      ;; an old session directory for deletion.
-      (when (and (boundp 'mevedel-workspace--registry)
+      ;; an old session directory for deletion.  A batch Emacs (a script or
+      ;; test subprocess) only registered workspaces incidentally, often its
+      ;; working directory, and must not sweep the user's sessions.
+      (when (and (not noninteractive)
+                 (boundp 'mevedel-workspace--registry)
                  (hash-table-p mevedel-workspace--registry))
         (maphash
          (lambda (_ workspace)

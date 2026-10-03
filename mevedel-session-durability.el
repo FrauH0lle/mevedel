@@ -24,6 +24,10 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
+;; `mevedel-journal-pins'
+(declare-function mevedel-journal-pins-present-p "mevedel-journal-pins" (session-dir))
+(autoload 'mevedel-journal-pins-present-p "mevedel-journal-pins")
+
 ;; `mevedel-session-collection'
 (declare-function mevedel-session-collection-cancel
                   "mevedel-session-collection" (session))
@@ -70,6 +74,10 @@
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-valid-head-p
   "mevedel-session-publication")
+
+;; `mevedel-session-recovery'
+(declare-function mevedel-session-recovery-read "mevedel-session-recovery" (session-dir))
+(autoload 'mevedel-session-recovery-read "mevedel-session-recovery")
 
 ;; `mevedel-session-transfer'
 (declare-function mevedel-session-transfer-release-fence
@@ -1065,6 +1073,66 @@ When SESSION is non-nil, record the resulting lease state on it."
          (and owned (mevedel-session-durability--record-bytes current))))
       (and owned t))))
 
+(defun mevedel-session-durability--abandoned-head-p (directory head now)
+  "Return non-nil when lease HEAD of DIRECTORY has no owner at target time NOW.
+A missing head, a release not reserved for control transfer, or an expired
+active or claiming head qualifies.  Unresolved mutation and publishing never
+do: their evidence needs an explicit takeover."
+  (or (null head)
+      (and (not (plist-get head :unsettled-mutation))
+           (or (and (eq 'released (plist-get head :status))
+                    (not (mevedel-session-transfer-release-fence
+                          directory (plist-get head :generation))))
+               (and (memq (plist-get head :status) '(active claiming))
+                    (<= (plist-get head :expires-at) now))))))
+
+(defun mevedel-session-durability-delete-abandoned (session-dir max-age-seconds)
+  "Delete portable SESSION-DIR when no client held it for MAX-AGE-SECONDS.
+A head in another lease format qualifies only when its expiry is also older
+than MAX-AGE-SECONDS.  Claim the next lease generation exactly like
+abandoned-storage recovery, so a
+live, publishing, mutating, or transfer-reserved owner keeps the session and a
+competing claim wins.  Recovery markers and journal pins also keep it.  The
+deletion runs in one program after proving the claim is still the newest
+generation.  Return non-nil only when the directory was deleted."
+  (mevedel-session-durability--assert-no-pid-lock session-dir)
+  (let* ((remote-file-name-inhibit-cache t)
+         (directory (mevedel-session-durability--lease-path session-dir))
+         (_ (mevedel-session-durability--ensure-lease-directory directory))
+         (head (mevedel-session-durability--lease-head directory))
+         (now (mevedel-session-durability--target-time directory))
+         deleted)
+    (when (and (or (null head)
+                   (mevedel-session-durability--valid-lease-p head)
+                   ;; A record in another lease format cannot be interpreted
+                   ;; further, but no owner of any format leaves its expiry a
+                   ;; whole cap behind.
+                   (and (mevedel-session-durability--finite-nonnegative-number-p
+                         (plist-get head :expires-at))
+                        (< (plist-get head :expires-at) (- now max-age-seconds))))
+               (mevedel-session-durability--abandoned-head-p directory head now)
+               ;; Unchanged saves keep the sidecar time, so the last lease
+               ;; renewal is the latest proof that a client used the session.
+               (< (or (plist-get head :renewed-at) 0) (- now max-age-seconds)))
+      (when-let* ((lease (mevedel-session-durability--claim-next
+                          directory head "session cleanup")))
+        (unwind-protect
+            (unless (or (condition-case nil (mevedel-session-recovery-read session-dir) (error t))
+                        (mevedel-journal-pins-present-p session-dir))
+              (let ((path (mevedel-session-durability--generation-path
+                           directory (plist-get lease :generation))))
+                (setq deleted
+                      (eq 'ok (plist-get
+                               (nth 2 (mevedel-session-control-fs-run-program
+                                       (list (list :op 'verify :path path
+                                                   :content (mevedel-session-durability--record-bytes lease))
+                                             (list :op 'verify-latest :path path :content ".el")
+                                             (list :op 'delete-directory :path session-dir))))
+                               :status)))))
+          (unless deleted
+            (mevedel-session-durability-lease-release session-dir)))))
+    deleted))
+
 (defun mevedel-session-durability-call-with-abandoned-lease (session function)
   "Call FUNCTION under temporary authority for abandoned SESSION storage.
 This is for recovering already frozen evidence, not resuming a conversation.
@@ -1082,13 +1150,7 @@ lease, including on nonlocal exit; never publish a new session head."
          (now (mevedel-session-durability--target-time directory)))
     (when (and existing (not (mevedel-session-durability--valid-lease-p existing)))
       (error "Invalid portable session lease: %s" directory))
-    (when (or (null existing)
-              (and (not (plist-get existing :unsettled-mutation))
-                   (or (and (eq 'released (plist-get existing :status))
-                            (not (mevedel-session-transfer-release-fence
-                                  directory (plist-get existing :generation))))
-                       (and (memq (plist-get existing :status) '(active claiming))
-                            (<= (plist-get existing :expires-at) now)))))
+    (when (mevedel-session-durability--abandoned-head-p directory existing now)
       (when-let* ((lease (mevedel-session-durability--claim-next
                          directory existing "journal recovery")))
         (unwind-protect

@@ -1710,22 +1710,36 @@ pin release only after checking the successor's retained turn coverage.
 `mevedel-session-max-age-days` (default 30) deletes expired sessions from the
 `mevedel` session chooser and from `kill-emacs-hook`, including sessions whose sidecars
 are obsolete, unreadable, or missing. Exit cleanup scans every workspace
-registered during the Emacs invocation before releasing live-session locks.
+registered during an interactive Emacs invocation before releasing live-session
+locks. A batch Emacs never sweeps at exit: scripts and test subprocesses
+register workspaces incidentally, typically their working directory.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
 directory modification time. The `mevedel-session-keep-recent-count`
 (default 3) most-recently-updated sessions are exempt regardless of age:
 the chooser sweeps before any lock is taken, so without this floor a
 long absence would delete the very session the user came back to resume.
-Cleanup skips active locks and is throttled to once per
+Cleanup skips sessions with journal pins and is throttled to once per
 workspace per Emacs invocation. Expired session cleanup removes its `local/`
-scratch directory with the rest of the session. Portable project session
-stores are never auto-cleaned; their portable lease protocol has no deletion
-claim in v1. `nil` disables local cleanup.
+scratch directory with the rest of the session. `nil` disables cleanup.
+
+File-workspace cleanup skips active locks. Portable project cleanup skips a
+session open in this Emacs and otherwise deletes through
+`mevedel-session-durability-delete-abandoned`: the lease head must be absent,
+released without a control-transfer reservation, or an expired active or
+claiming record without unsettled mutation, and its last renewal must also be
+older than the cap. A head in another lease format (such as records written
+before control transfer added `:transfer-generation`) qualifies only when its
+numeric expiry is itself older than the cap; no owner of any format leaves its
+expiry that far behind. Unchanged saves keep the sidecar's `:updated-at`, so the
+renewal is the later proof of use. Cleanup claims the next lease generation
+without prompting, rechecks recovery markers and pins, and deletes the
+directory in one control program only after proving its claim is still the
+newest generation. A competing claim from another client keeps the session,
+and any kept session's claim is released.
 
 Chooser cleanup still runs before incompatibility discovery. Consequently an
-expired file-workspace session may be deleted before it can appear as an
-`Inspect` row; portable project sessions remain exempt. Inspection itself never
-archives, deletes, or modifies persisted session files.
+expired session may be deleted before it can appear as an `Inspect` row.
+Inspection itself never archives, deletes, or modifies persisted session files.
 
 This file-session retention pass does not run journal maintenance. Journal
 retention uses its own scheduled lifecycle opportunities; neither the chooser
