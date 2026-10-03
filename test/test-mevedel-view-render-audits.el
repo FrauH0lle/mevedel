@@ -149,6 +149,19 @@
                                                  'mevedel-view-execution-breadcrumb)
                               :execution-id)))))
 
+(mevedel-deftest mevedel-view--decorate-agent-message-blocks/point-after ()
+  ,test
+  (test)
+  :doc "point stays after the breadcrumb so callers stamp and append past it"
+  (with-temp-buffer
+    (insert "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+            "<bash-execution execution_id=\"exec-1\" outcome=\"error\" "
+            "exit_code=\"2\"/>\n</agent-message>\n")
+    (mevedel-view--decorate-agent-message-blocks (point-min) (point))
+    (should (= (point) (point-max)))
+    (should (get-text-property (1- (point))
+                               'mevedel-view-execution-breadcrumb))))
+
 (mevedel-deftest mevedel-view--render-tool-call/preview-truncation ()
   ,test
   (test)

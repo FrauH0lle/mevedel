@@ -4838,11 +4838,16 @@ collapse threshold, click gating, and vtype tag are uniform with
 
 Multiple `<agent-message>' blocks in one user turn produce one mailbox
 card each, in source order.  Non-matching prose in the same turn
-remains as ordinary user text."
+remains as ordinary user text.
+
+Point is restored with an advancing marker: callers sit at the end of the
+block, which a replaced execution mail collapses onto, and must stay after
+its breadcrumb to stamp and append past it."
   (let ((open "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>")
-        (end-marker (copy-marker end t)))
+        (end-marker (copy-marker end t))
+        (return (copy-marker (point) t)))
     (unwind-protect
-        (save-excursion
+        (progn
           (goto-char start)
           (while (re-search-forward open end-marker t)
             (let* ((begin (match-beginning 0))
@@ -4870,6 +4875,8 @@ remains as ordinary user text."
                      begin (point) 'execution-breadcrumb)))))))
           (mevedel-view--decorate-mailbox-block
            open "</agent-message>" start end-marker 'agent-message))
+      (goto-char return)
+      (set-marker return nil)
       (set-marker end-marker nil)))
 
 (defun mevedel-view--mailbox-only-text-p (text)
