@@ -571,6 +571,106 @@
               (should (equal "exec-child" opened)))))
       (kill-buffer data))))
 
+(defun test-mevedel-view-audit--insert-history-fixture (id execution-id)
+  "Insert Bash call ID that started EXECUTION-ID at point."
+  (insert (propertize
+           (format "(:name \"Bash\" :args (:command \"make %s\"))\n\nOUT\n" id)
+           'gptel (cons 'tool id))
+          (mevedel-tool-render-data-format
+           (list :execution-id execution-id :state 'completed) id)))
+
+(defun test-mevedel-view-audit--insert-history-delivery (execution-id)
+  "Insert the mailbox delivery of EXECUTION-ID at point."
+  (insert (format (concat "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+                          "TAIL\n<bash-execution execution_id=\"%s\" "
+                          "outcome=\"success\" exit_code=\"0\"/>\n"
+                          "</agent-message>\n")
+                  execution-id)))
+
+(mevedel-deftest mevedel-view-audit--history-records ()
+  ,test
+  (test)
+  :doc "only calls and deliveries naming the execution are collected, in order"
+  (let ((data (generate-new-buffer " *history records source*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (test-mevedel-view-audit--insert-history-fixture "t1" "exec-1")
+            (insert (propertize "I will poll exec-1 next.\n" 'gptel 'response))
+            (insert (propertize
+                     "(:name \"WriteStdin\" :args (:execution_id \"exec-1\"))\n\nok\n"
+                     'gptel '(tool . "t2")))
+            (test-mevedel-view-audit--insert-history-fixture "t3" "exec-2")
+            (test-mevedel-view-audit--insert-history-delivery "exec-1"))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer nil)
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () data)))
+              (should (equal '("Bash" "WriteStdin" "Execution delivery")
+                             (mapcar (lambda (call) (plist-get call :name))
+                                     (mevedel-view-audit--history-records
+                                      "exec-1")))))))
+      (kill-buffer data))))
+
+(mevedel-deftest mevedel-view-audit--history-records/origin-stops-walk ()
+  ,test
+  (test)
+  :doc "segments older than the execution's starting call are never read"
+  (let ((live (generate-new-buffer " *history live*"))
+        read)
+    (unwind-protect
+        (progn
+          (with-current-buffer live
+            (setq-local mevedel--session 'session)
+            (test-mevedel-view-audit--insert-history-delivery "exec-1"))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer live)
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () live))
+                      ((symbol-function
+                        'mevedel-session-artifacts-transcript-segments)
+                       (lambda (&rest _)
+                         '((:number 1 :status readable)
+                           (:number 2 :status readable)
+                           (:status readable :current-p t))))
+                      ((symbol-function
+                        'mevedel-session-artifacts-read-transcript-segment)
+                       (lambda (_session descriptor)
+                         (push (plist-get descriptor :number) read)
+                         (with-current-buffer (generate-new-buffer " *older*")
+                           (when (= 2 (plist-get descriptor :number))
+                             (test-mevedel-view-audit--insert-history-fixture
+                              "t1" "exec-1"))
+                           (current-buffer)))))
+              (should (equal '("Bash" "Execution delivery")
+                             (mapcar (lambda (call) (plist-get call :name))
+                                     (mevedel-view-audit--history-records
+                                      "exec-1"))))
+              (should (equal '(2) read)))))
+      (kill-buffer live))))
+
+(mevedel-deftest mevedel-view-audit-show-history ()
+  ,test
+  (test)
+  :doc "arguments and execution facts render as readable lines"
+  (cl-letf (((symbol-function 'mevedel-view-audit--history-records)
+             (lambda (_)
+               (list (list :name "Bash" :args '(:command "make test")
+                           :result (concat "OUT\n<bash-execution execution_id="
+                                           "\"exec-1\" exit_code=\"1\"/>")))))
+            ((symbol-function 'display-buffer) #'ignore))
+    (unwind-protect
+        (progn
+          (mevedel-view-audit-show-history "exec-1")
+          (with-current-buffer "*mevedel execution history*"
+            (should (string-match-p "^Bash\n  command: make test\n\nOUT\n\n"
+                                    (buffer-string)))
+            (should (string-match-p "^  exit_code: 1$" (buffer-string)))
+            (should-not (string-match-p "<bash-execution\\|(:command"
+                                        (buffer-string)))))
+      (when (get-buffer "*mevedel execution history*")
+        (kill-buffer "*mevedel execution history*")))))
+
 (mevedel-deftest mevedel-view-audit-show-control-result ()
   ,test
   (test)

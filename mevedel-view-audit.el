@@ -31,14 +31,6 @@
 (defvar mevedel--session)
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
 
-;; `mevedel-tool-render-data'
-(declare-function mevedel-tool-render-data-direct-call
-                  "mevedel-tool-render-data" (name data))
-(declare-function mevedel-tool-render-data-for-tool
-                  "mevedel-tool-render-data" (buffer tool-use-id))
-(declare-function mevedel-tool-render-data-segment-bounds
-                  "mevedel-tool-render-data" (tool-use-id))
-
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments "mevedel-transcript"
                   (start end))
@@ -131,6 +123,7 @@
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
+(require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-disclosure)
 
@@ -1027,86 +1020,148 @@ terminal facts and retained bounded payload without a second output card."
                                  :execution-output output))))))
       (error nil))))
 
+(defun mevedel-view-audit--history-render-data-owner (pos)
+  "Return the tool owning the render-data block around POS, or nil."
+  (save-excursion
+    (goto-char pos)
+    (when-let* ((open (search-backward mevedel-tool-render-data-open nil t))
+                (close (search-forward mevedel-tool-render-data-close nil t))
+                ((> close pos))
+                (block (car (mevedel-tool-render-data-blocks
+                             (buffer-substring-no-properties open close)))))
+      (plist-get (caddr block) :mevedel-tool-use-id))))
+
+(defun mevedel-view-audit--history-delivery (pos execution-id)
+  "Return EXECUTION-ID's mailbox delivery around POS and its end, or nil."
+  (save-excursion
+    (goto-char pos)
+    (when-let* (((re-search-backward "<agent-message\\([^>]*\\)>" nil t))
+                (attributes (match-string-no-properties 1))
+                (body-start (match-end 0))
+                ((string-match-p "type=\"EXECUTION\"" attributes))
+                (sender (and (string-match "sender=\"\\([^\"]+\\)\"" attributes)
+                             (match-string 1 attributes)))
+                ((search-forward "</agent-message>" nil t))
+                ((> (match-beginning 0) pos))
+                (body (buffer-substring-no-properties
+                       body-start (match-beginning 0)))
+                ((equal execution-id
+                        (plist-get (mevedel-view-audit-mailbox-breadcrumb
+                                    body sender)
+                                   :execution-id))))
+      (cons (list :name "Execution delivery"
+                  :args (list :execution_id execution-id :sender sender)
+                  :result body)
+            (point)))))
+
 (defun mevedel-view-audit--history-records (execution-id)
-  "Return retained tool interactions concerning EXECUTION-ID in segment order."
+  "Return retained tool interactions concerning EXECUTION-ID in segment order.
+Only text naming EXECUTION-ID is parsed.  Segments are read newest first and
+the walk stops at the one holding the call that started the execution, since
+nothing concerning it can be older."
   (let* ((live (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
          (display (mevedel-view-segments-display-buffer))
          (session (and (buffer-live-p live)
                        (buffer-local-value 'mevedel--session live)))
-         records)
+         records origin-p)
     (cl-labels
-        ((collect-buffer (data)
-           (with-current-buffer data
-             (save-restriction
-               (widen)
-               (cl-labels ((collect (call)
-                             (when (or (equal execution-id
-                                              (plist-get (plist-get call :args)
-                                                         :execution_id))
-                                       (equal execution-id
-                                              (plist-get (plist-get call :render-data)
-                                                         :execution-id)))
-                               (push call records))
-                             (dolist (child (plist-get (plist-get call :render-data)
-                                                       :calls))
-                               (collect (list :name (plist-get child :tool)
-                                              :args (plist-get child :args)
-                                              :result (plist-get child :result)
-                                              :render-data (plist-get child :render-data))))))
-                 (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
-                   (pcase (car segment)
-                     ('tool
-                      (when-let* ((call (mevedel-view--tool-call-parse
-                                         data (cadr segment) (caddr segment))))
-                        (let ((retained (and (plist-get call :tool-use-id)
-                                             (mevedel-tool-render-data-for-tool
-                                              data (plist-get call :tool-use-id)))))
-                          (collect (if retained
-                                       (plist-put (copy-sequence call)
-                                                  :render-data retained)
-                                     call)))))
-                     ('mailbox
-                      (let* ((text (buffer-substring-no-properties
-                                    (cadr segment) (caddr segment)))
-                             (start (and (string-match "<agent-message\\([^>]*\\)>"
-                                                       text)
-                                         (match-end 0)))
-                             (attributes (and start (match-string 1 text)))
-                             (sender (and attributes
-                                          (string-match "sender=\"\\([^\"]+\\)\""
-                                                        attributes)
-                                          (match-string 1 attributes)))
-                             (finish (and start
-                                          (string-match "</agent-message>" text start)))
-                             (body (and finish (substring text start finish)))
-                             (record (and body sender
-                                          (string-match-p "type=\"EXECUTION\""
-                                                          attributes)
-                                          (mevedel-view-audit-mailbox-breadcrumb
-                                           body sender))))
-                        (when (equal (plist-get record :execution-id) execution-id)
-                          (push (list :name "Execution delivery"
-                                      :args (list :execution_id execution-id
-                                                  :sender sender)
-                                      :result body)
-                                records)))))))))))
+        ((collect (call)
+           (let ((data (plist-get call :render-data)))
+             (when (or (equal execution-id
+                              (plist-get (plist-get call :args) :execution_id))
+                       (equal execution-id (plist-get data :execution-id)))
+               (push call records)
+               (unless (plist-get (plist-get call :args) :execution_id)
+                 (setq origin-p t)))
+             (dolist (child (plist-get data :calls))
+               (collect (list :name (plist-get child :tool)
+                              :args (plist-get child :args)
+                              :result (plist-get child :result)
+                              :render-data (plist-get child :render-data))))))
+         (collect-buffer (data)
+           (let (seen)
+             (setq records nil)
+             (with-current-buffer data
+               (save-restriction
+                 (widen)
+                 (save-excursion
+                   (goto-char (point-min))
+                   (while (search-forward execution-id nil t)
+                     (let* ((hit (match-beginning 0))
+                            (property (get-text-property hit 'gptel))
+                            (tool-id
+                             (if (eq (car-safe property) 'tool)
+                                 (cdr property)
+                               (mevedel-view-audit--history-render-data-owner
+                                hit)))
+                            (delivery
+                             (unless tool-id
+                               (mevedel-view-audit--history-delivery
+                                hit execution-id))))
+                       (cond
+                        (delivery
+                         (push (car delivery) records)
+                         (goto-char (cdr delivery)))
+                        ((and tool-id (not (member tool-id seen)))
+                         (push tool-id seen)
+                         ;; ponytail: each owning call rescans property runs
+                         ;; from the buffer start; index ids if hits multiply.
+                         (when-let* ((bounds
+                                      (mevedel-tool-render-data-segment-bounds
+                                       tool-id))
+                                     (call (mevedel-view--tool-call-parse
+                                            data (car bounds) (cdr bounds))))
+                           (let ((retained (mevedel-tool-render-data-for-tool
+                                            data tool-id)))
+                             (collect (if retained
+                                          (plist-put (copy-sequence call)
+                                                     :render-data retained)
+                                        call)))))))))))
+             (nreverse records))))
       (if (and session (buffer-live-p live))
-          (dolist (descriptor (mevedel-session-artifacts-transcript-segments
-                               session live mevedel-view--agent-transcript-p))
-            (when (eq (plist-get descriptor :status) 'readable)
-              (if (plist-get descriptor :current-p)
-                  (collect-buffer live)
-                (when-let* ((older
-                             (condition-case nil
-                                 (mevedel-session-artifacts-read-transcript-segment
-                                  session descriptor)
-                               (error nil))))
-                  (unwind-protect
-                      (collect-buffer older)
-                    (kill-buffer older))))))
+          (let (all)
+            (catch 'origin
+              (dolist (descriptor (reverse
+                                   (mevedel-session-artifacts-transcript-segments
+                                    session live mevedel-view--agent-transcript-p)))
+                (when (eq (plist-get descriptor :status) 'readable)
+                  (setq all
+                        (append
+                         (if (plist-get descriptor :current-p)
+                             (collect-buffer live)
+                           (when-let* ((older
+                                        (condition-case nil
+                                            (mevedel-session-artifacts-read-transcript-segment
+                                             session descriptor)
+                                          (error nil))))
+                             (unwind-protect
+                                 (collect-buffer older)
+                               (kill-buffer older))))
+                         all))
+                  (when origin-p (throw 'origin nil)))))
+            all)
         (when (buffer-live-p display)
-          (collect-buffer display))))
-    (nreverse records)))
+          (collect-buffer display))))))
+
+(defun mevedel-view-audit--history-result (text)
+  "Return TEXT with its `<bash-execution/>' element spelled out as facts."
+  (let ((text (substring-no-properties text)))
+    (if-let* (((string-match "<bash-execution[^<>]*/>" text))
+              (start (match-beginning 0))
+              (end (match-end 0))
+              (attributes
+               (condition-case nil
+                   (with-temp-buffer
+                     (insert (match-string 0 text))
+                     (cadr (car (xml-parse-region (point-min) (point-max)))))
+                 (error nil))))
+        (concat (string-trim-right (substring text 0 start))
+                "\n\n"
+                (mapconcat (lambda (attribute)
+                             (format "  %s: %s" (car attribute) (cdr attribute)))
+                           attributes "\n")
+                (substring text end))
+      text)))
 
 (defun mevedel-view-audit-show-history (execution-id)
   "Open a read-only disclosure of retained tool records for EXECUTION-ID."
@@ -1119,10 +1174,19 @@ terminal facts and retained bounded payload without a second output card."
         (insert (format "Execution history · %s\n\n" execution-id))
         (if records
             (dolist (call records)
-              (insert (format "%s  %S\n" (plist-get call :name)
-                              (plist-get call :args)))
+              (insert (propertize (plist-get call :name)
+                                  'font-lock-face 'bold)
+                      "\n")
+              (cl-loop for (key value) on (plist-get call :args) by #'cddr
+                       do (insert (format "  %s: %s\n"
+                                          (substring (symbol-name key) 1)
+                                          (if (stringp value)
+                                              value
+                                            (prin1-to-string value)))))
               (unless (string-empty-p (or (plist-get call :result) ""))
-                (insert (plist-get call :result) "\n"))
+                (insert "\n" (mevedel-view-audit--history-result
+                              (plist-get call :result))
+                        "\n"))
               (insert "\n"))
           (insert "Retained interaction records are unavailable in this transcript.\n"))
         (special-mode)))
