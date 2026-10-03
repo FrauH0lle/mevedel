@@ -4538,6 +4538,30 @@
           (should (markerp (cdr source)))))
       (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
 
+(mevedel-deftest mevedel-view--prepare-tool-segment/audited-span
+  (:doc "a complete tool followed by its merged hook audit is parsed once")
+  (mevedel-view-test--with-buffers
+    (let ((computations 0)
+          (compute (symbol-function 'mevedel-view--prepare-tool-segment)))
+      (with-current-buffer data-buf
+        (insert (propertize "#+begin_tool Custom\n" 'gptel 'ignore)
+                (propertize "(:name \"Custom\" :args (:value \"x\"))\n\nresult"
+                            'gptel '(tool . "audited"))
+                (propertize "\n#+end_tool\n" 'gptel 'ignore)
+                (mevedel--format-hook-audit-record
+                 '(:type provider-tool-batch :id "audited" :messages "m"))))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--prepare-tool-segment)
+                   (lambda (&rest args)
+                     (cl-incf computations)
+                     (apply compute args))))
+          (mevedel-view--full-rerender)
+          (should (string-search "Custom" (buffer-string)))
+          (let ((first computations))
+            (should (> first 0))
+            (mevedel-view--full-rerender)
+            (should (= first computations))))))))
+
 (mevedel-deftest mevedel-view-render-summary-expansion
   (:doc "a collapsed Bash row defers its body until the user's expansion")
   (mevedel-view-test--with-buffers

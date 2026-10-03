@@ -29,7 +29,17 @@ view immediately; a closed or historical view reconstructs it through its own
 source instead of borrowing the live view's projection.
 
 Streaming updates retain completed semantic units and reconcile the mutable
-tail. A tool/reasoning/delivery activity run remains mutable until its surrounding
+tail. Every section, hook audits included, renders in its remembered fold
+state, so restoration is a fallback that normally toggles nothing. Disclosure
+restoration preserves an untouched final unit using its pre-restoration
+boundaries and uninterrupted source identity; rewriting that unit or failing
+restoration invalidates retention. Expanding an earlier section therefore does
+not force complete-turn parsing on each subsequent chunk. Re-rendering the
+mutable unit reuses work that its unchanged contents already paid for: tool
+parses keyed by source span, archived breadcrumb keys keyed by archive content
+identity, execution completions indexed once per transcript change, and path
+links resolved once per projection. Boundary bookkeeping steps by property
+runs rather than characters. A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
 changes in presentation. Nested compound rows retain their own metadata and
@@ -102,65 +112,38 @@ only frames showing their target span and cache glyph support until the next
 semantic tick (or theme invalidation), not at every decorative frame. A global
 reduced-motion switch disables decorative updates, not semantic progress or
 elapsed metadata; semantic redraws retain the last displayed sample, and
-unchanged tool rows are not rebuilt at their initial frame. Hidden
-and vertically or horizontally offscreen indicators suspend decorative wakeups;
-a still-visible elapsed suffix independently retains its one-second semantic
-refresh even when horizontal scrolling hides its label. When both source-span
-endpoints fall outside a narrow viewport, a bounded display-row edge probe
-checks for visible ordinary text in the middle; a wrapped window may start
-inside the suffix. Window focus and target visibility are checked together: a
-visible target in an unfocused frame
-cannot borrow attention from another frame where the target is offscreen.
-The transcript's separate buffer-wide attention gate remains unchanged.
-A theme change repaints visible color labels at their displayed or frozen
-phase, even when paused metadata and zero fps remove timers; hidden labels
-wait until visible again to repaint. Frozen glyphs and pending-tool spans
-also recheck their display fallbacks on theme changes or visibility resume;
-each surviving tool keeps its own last displayed phase through lightweight,
-incremental, and full projection when motion is disabled. This is
-event-driven rather than a decorative polling timer. A move between display
-frames likewise repaints the existing sample when the target is attended, using
-the destination frame's prepared bank or a portable multi-frame fallback; no
-timer or global
-cache invalidation is needed. Horizontal visibility checks the
-displayed animated portion in hscrolled windows, leaving ordinary leading-glyph
-callbacks on the cheap window-boundary path. Trailing ellipsis must check its
-last displayed glyph even without hscroll: truncation can hide it beyond the
-right edge while a wrapped final row can expose it. Plain elapsed text also
-needs a text-area/fringe check without hscroll. Vertical pixel scrolling of a
-wrapped label can also conceal the bounded animated prefix while keeping its
-source buffer position constant; that path checks the displayed index instead
-of taking the unscrolled fast path. Replacement display strings map all their
-characters to one buffer span, so looking up buffer positions could leave a
-60-Hz timer running after a long label's bounded color prefix was offscreen;
-the hscrolled check now reads the visible display-string index instead. It
-compares that index with the *changing* color bound recorded once while
-preparing the bank, not merely the face-bearing prefix: shimmer and bounce
-leave some colored characters unchanged throughout the cycle. An event-driven
-theme or display-frame repaint instead considers any visible part of the
-colored label; it does not schedule motion for a constant-colored tail. Glyph
-indicators similarly exclude their invariant trailing separator from motion
-visibility. Since `window-scroll-functions` does not run for horizontal
-scrolling, a scoped
-`set-window-hscroll` observer rearms explicitly scrolled views; an internal
-automatic pan does not call that primitive. Explicit pixel scrolling has a
-`set-window-vscroll` observer, while a buffer-local redisplay hook is installed
-only during horizontal/pixel suspension and defers one resume probe
-until after redisplay, only for a window with the target in its visible rows.
-The probe cancels and replaces a pending one-second elapsed timer before taking
-the view's timer slot; otherwise cleanup loses track of an extra wakeup. Both
-the view's one-shot timer and its deferred probe use the Emacs UI host's
-top-level timer list. TRAMP's temporary binding must neither discard their
-rearms nor hide an already queued timer from cancellation during view stop.
-When a window replaces a view, the same buffer-local window-change hook
-reevaluates the departing view as well as resuming the arriving one: frozen
-tool-only progress has no timer callback to release its power subscription.
-Deleting the last window does not invoke that buffer-local hook, so the shared
-power observer briefly installs a window-state callback while subscribed views
-exist, then removes it after the last subscription ends.
-Package install/uninstall owns the global horizontal-scroll and face-change
-observers; neither path changes the broader attention gate for transcript
-rendering.
+unchanged tool rows are not rebuilt at their initial frame. Hidden and vertically offscreen indicators suspend decorative wakeups. Animation
+eligibility uses overlap of a registered span with the completed redisplay's
+visible buffer range in an attended window. Partially visible spans are retained;
+horizontal clipping and partial pixel scrolling do not refine that decision.
+This intentionally permits decorative updates to horizontally clipped labels
+on visible rows. Pixel-position queries, horizontal/pixel-scroll primitive
+observers, animation redisplay hooks, and prepared changing-prefix bounds are
+absent. Deciding whether a decorative update is useful must be cheaper than
+performing it. The October 2026 measurement below explains this reversal.
+
+The elapsed suffix independently retains its one-second semantic refresh when
+its range is eligible. Window focus and range eligibility must hold together:
+a visible target in an unfocused frame cannot borrow attention from another
+frame where the target is offscreen. The transcript's separate buffer-wide
+attention gate remains unchanged. Theme and display-frame events repaint
+eligible labels at their displayed or frozen phase, including zero-fps and
+paused labels; offscreen labels wait until they return. Frozen glyphs recheck
+display fallbacks without scheduling decorative motion. A move between frames
+uses the destination palette or the portable multi-frame fallback.
+
+Focus, window and ordinary buffer-scroll events rearm scheduling. The one-shot
+timer uses the Emacs UI host's top-level timer list: TRAMP's temporary binding
+neither discards rearms nor hides a queued timer from cancellation. Window
+replacement and deletion release power subscriptions, including frozen
+tool-only progress with no timer to discover that its window disappeared.
+Package install/uninstall owns the global focus and face-change observers.
+
+Prompt previews stored for header-line redisplay are limited to 512 characters,
+including an ellipsis when truncated, after mailbox filtering and whitespace
+normalization. The original prompt and its navigation target remain in the
+source-backed transcript. Header width measurement never traverses a complete
+multi-kilobyte prompt on each evaluation.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
 external power permits the configured 60-fps normal ceiling, and battery,
@@ -286,6 +269,8 @@ the current user-facing controls and fallback behavior. No battery-life
 percentage or guaranteed delivered display rate follows from timer ceilings.
 
 ### September 2026: include horizontal visibility in animation scheduling
+
+Superseded by the October 2026 range-overlap decision below.
 
 An independent production-view check found that an indicator scrolled entirely
 left of a truncated line still received 60-Hz display-property writes: the
@@ -1000,3 +985,80 @@ temporary in-flight tokens do not participate. Both capture and restoration
 respect source, type and disclosure-key boundaries. Tail retention stays in
 place. Regressions cover both projection directions, summary and child readers,
 selections, window positions and a multiline composer draft.
+
+### October 2026: remove pixel-level animation visibility probes
+
+The October 3 session CPU profile attributed 52.3% of nonempty CPU samples to
+`mevedel-view--animation-span-in-window-p`, including 40.0% under the suspended
+animation redisplay hook. Pixel-position queries also reentered expensive
+header and mode-line evaluation. Visibility checking accounted for 56.6% of
+samples beneath scheduled rendering; that request recorded five 2.57-6.43 second
+rendering stalls, four with input pending. The aggregate profile cannot assign
+a particular sampled callee to each individual stall.
+
+Buffer-range overlap replaces the precise clipping policy, and its unused
+probes, observers and changing-prefix metadata are removed. The accepted cost
+is occasional decorative updates to horizontally clipped spans on visible rows.
+The previous policy saved those writes but spent substantial CPU deciding to
+save them. A 512-character stored prompt preview also bounds the width work
+amplified by the position probes. No visibility cache or new scheduler is needed.
+
+
+### October 2026: preserve intact tails across disclosure restoration
+
+The former conservative fallback invalidated retention whenever restoration
+toggled any section. A graphical replay of the October 3 transcript spent about
+96 ms per streamed update, and a minimal regression reproduced repeated rendering
+of an earlier expanded thinking block. Its final response unit was intact.
+
+The renderer now captures the final unit before restoring disclosure state.
+Markers follow shifts caused by earlier sections; a first-character witness
+rejects prefix replacements that would otherwise leave a homogeneous suffix.
+Retention survives only if the original unit remains one complete
+source-property run. A split, merge,
+deletion or failed restore still invalidates it. Scanning for the last fragment
+only after restoration remains unsafe because it can pair a partial view unit
+with the whole source unit, duplicating or dropping content on the next chunk.
+
+
+An unprofiled graphical replay alternated three before/after pairs on the saved
+1.62 MB transcript with eight expanded disclosures and twelve streamed updates
+per phase. Median queued-input latency fell from 104.57 ms to 5.92 ms; p95 fell
+from 115.19 ms to 97.42 ms, including the initial full rebuild after expansion.
+The visibility stress loop fell from 976.91 ms to 0.256 ms for 2,000 checks,
+with 5,000 glyph queries reduced to zero. This isolates the changed paths; it
+does not reproduce the user's complete configuration or prove each original
+multi-second freeze is gone.
+
+### October 2026: keep a long live activity unit cheap to re-render
+
+The visibility fix left the October 3 stalls unexplained under the user's real
+session: its replay used a detached transcript, so agent transcripts, archived
+segments and session publications were unreachable. A batch replay restored a
+copy of that session, loaded its pre-rotation segment as the live transcript,
+expanded the live turn's 73 collapsed sections and streamed its final 71 KB
+back in 74 property-run chunks. Every update took 0.36 s (median), reading two
+or three archived segments.
+
+Four causes compounded. Expanded hook audits rendered collapsed and were
+re-expanded by restoration, which invalidated the retained tail, so each update
+rebuilt the whole 700 KB turn. With retention working, the retained unit was
+still one 40-call activity group covering 464 KB of source: breadcrumb
+deduplication re-read and reparsed every older archive for each fresh breadcrumb
+(57% of render samples), each Bash row reparsed every audit record in the
+transcript, and audited tool spans failed the cache's exact-span test so all
+tools were reparsed. Boundary recovery also walked the view a character at a
+time even when the retained tail made its result unused.
+
+Hook audits now render their remembered state; archive breadcrumb keys, the
+completion index and tool parses are cached as described above; recovery is
+skipped on the retained path and steps by property runs. A graphical replay of
+the same stream, alternating the committed and changed modules, measured
+render plus redisplay per update. With every section expanded the median fell
+from 0.36 s to 0.07 s and p95 from 0.40 s to 0.10-0.11 s; queued input
+followed the same figures. With the default folds the median fell from 0.10 s
+to 0.03 s. Activity grouping is unchanged: a later call can still join the
+growing group, so its rows are still re-inserted on each update. Incremental
+group insertion was not adopted, because the measured worst case stays below
+the 0.15 s render debounce.
+

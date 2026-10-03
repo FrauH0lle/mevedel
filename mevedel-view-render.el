@@ -197,6 +197,7 @@
 (declare-function mevedel-transcript-segments "mevedel-transcript"
 		  (start end))
 (defvar mevedel-transcript--tool-block-index)
+(defvar mevedel-view--path-link-memo)
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-buffer-only-p
@@ -768,6 +769,23 @@ turns rendered as usual.")
        (eq (marker-buffer mevedel-view--live-view-tail-start)
            (current-buffer))))
 
+(defun mevedel-view--live-tail-intact-p (data-buf first-end end)
+  "Return non-nil if the retained DATA-BUF unit remains whole through END.
+FIRST-END tracks the end of its original first character, with insertion
+type nil.  That character must survive before one uninterrupted source run;
+otherwise an advancing start marker could accept a replaced unit's suffix."
+  (when (mevedel-view--live-tail-valid-p data-buf)
+    (let ((start (marker-position mevedel-view--live-view-tail-start))
+          (source (marker-position mevedel-view--live-data-tail-start)))
+      (and (< start end)
+           (= (1+ start) first-end)
+           (or (= start (point-min))
+               (not (equal source
+                           (get-text-property
+                            (1- start) 'mevedel-view-live-unit-source))))
+           (not (text-property-not-all
+                 start end 'mevedel-view-live-unit-source source))))))
+
 (defun mevedel-view--mark-live-render-unit (start source-start)
   "Mark START through point as one live unit backed by SOURCE-START."
   (when (< start (point))
@@ -789,7 +807,9 @@ turns rendered as usual.")
     (while (and (>= pos start) (null source))
       (setq source (get-text-property pos 'mevedel-view-live-unit-source))
       (unless source
-        (setq pos (1- pos))))
+        (setq pos (1- (or (previous-single-property-change
+                           (1+ pos) 'mevedel-view-live-unit-source nil start)
+                          start)))))
     (if (not source)
         (mevedel-view-render-invalidate-live-tail)
       (let ((view-start pos))
@@ -798,7 +818,9 @@ turns rendered as usual.")
                            (get-text-property
                             (1- view-start)
                             'mevedel-view-live-unit-source)))
-          (setq view-start (1- view-start)))
+          (setq view-start (previous-single-property-change
+                            view-start 'mevedel-view-live-unit-source
+                            nil start)))
         (mevedel-view-render-invalidate-live-tail)
         (unless mevedel-view--live-source-change-hook
           (let ((view-buf (current-buffer)))
@@ -2897,9 +2919,13 @@ The returned data is temporary; it can contain large hidden result payloads."
       (let* ((raw (mevedel-view-render--parse-step
                    (with-current-buffer data-buf
                      (mevedel-view--tool-segment-text seg-start seg-end text))))
+             ;; The key's revision covers the whole span, so a complete block
+             ;; inside it -- followed by its merged hook audits -- is as
+             ;; stable as the span.  Requiring equality left every audited
+             ;; tool reparsed on each streamed update.
              (cacheable
               (mevedel-view-render--parse-step
-                (and (equal raw text)
+                (and (string-search raw text)
                      (or (mevedel-view--complete-wrapped-tool-text-p raw)
                          (and (not (mevedel-view--tool-wrapped-text-p raw))
                               (mevedel-view--direct-tool-readable-text-p raw)))))))
@@ -3673,33 +3699,29 @@ the input boundary cannot be recovered."
   "Recover an in-flight turn start between HISTORY-START and HISTORY-END.
 DATA-FROM is the first data-buffer position for the in-flight turn."
   (when (and data-from history-start history-end (< history-start history-end))
+    ;; Step by property runs: the view holds the whole transcript, and a
+    ;; per-character walk cost a third of every streamed update.
     (let ((pos history-start)
           first-source)
       (while (and (< pos history-end) (not first-source))
         (let ((source (get-text-property pos 'mevedel-view-source)))
-          (when (and (consp source)
-                     (integer-or-marker-p (car source))
-                     (>= (mevedel-view-disclosure-source-start source)
-                         data-from))
-            (setq first-source pos)))
-        (setq pos (1+ pos)))
+          (if (and (consp source)
+                   (integer-or-marker-p (car source))
+                   (>= (mevedel-view-disclosure-source-start source)
+                       data-from))
+              (setq first-source pos)
+            (setq pos (next-single-property-change
+                       pos 'mevedel-view-source nil history-end)))))
       (when first-source
-        (let ((scan (1- first-source))
+        (let ((scan first-source)
               header)
-          (while (and (>= scan history-start) (not header))
+          (while (and (> scan history-start) (not header))
+            (setq scan (previous-single-property-change
+                        scan 'mevedel-view-type nil history-start))
             (when (eq (get-text-property scan 'mevedel-view-type)
                       'turn-header)
-              (setq header scan))
-            (setq scan (1- scan)))
-          (or (and header
-                   (progn
-                     (while (and (> header history-start)
-                                 (eq (get-text-property (1- header)
-                                                        'mevedel-view-type)
-                                     'turn-header))
-                       (setq header (1- header)))
-                     header))
-              first-source))))))
+              (setq header scan)))
+          (or header first-source))))))
 
 (defun mevedel-view--pre-rendered-user-visible-p ()
   "Return non-nil when the current in-flight marker follows a user block.
@@ -3754,6 +3776,7 @@ Section-level collapse state (expanded thinking block, collapsed
 tool summary, …) is captured before the delete and re-applied after
 the render so user toggles survive streaming ticks."
   (let* ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+         (mevedel-view--path-link-memo (make-hash-table :test #'equal))
          (mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal))
          (retained-p (and (not settle-p)
                           (mevedel-view--live-tail-valid-p data-buf)))
@@ -3866,9 +3889,11 @@ the render so user toggles survive streaming ticks."
                            (marker-position mevedel-view--input-marker)
                            mevedel-view--input-marker)))
                  (rebuild-end-pos (marker-position rebuild-end))
+                 ;; A retained tail already knows where to delete from.
                  (recovered-start
-                  (mevedel-view--recover-in-flight-turn-start
-                   data-from history-start rebuild-end-pos))
+                  (unless (and retained-p in-flight-p)
+                    (mevedel-view--recover-in-flight-turn-start
+                     data-from history-start rebuild-end-pos)))
                  (delete-start
                   (or (and retained-p in-flight-p)
                       (and in-flight-p
@@ -3934,29 +3959,53 @@ the render so user toggles survive streaming ticks."
           ;; Restore user-toggled collapse/expand state that the delete
           ;; above just wiped.  Walk the freshly rendered span and toggle
           ;; only sections whose saved state differs from the default.
-          (let ((restore-toggled
-                 (when (and saved-states
-                            delete-start
-                            rebuild-end
-                            (marker-position rebuild-end))
-                   (mevedel-view-disclosure-restore-state
-                    delete-start
-                    (marker-position rebuild-end)
-                    saved-states))))
-            ;; Retain the live tail only after the restore above, and
-            ;; only when the restore rewrote nothing: a restored toggle
-            ;; splits the freshly marked render unit, leaving the
-            ;; retained view marker mid-unit relative to its data-buffer
-            ;; twin, and the next retained render then deletes or
-            ;; duplicates content its narrowed reparse cannot
-            ;; regenerate.  Skipping retention costs one full-turn
-            ;; reparse per tick exactly while a live-tail section holds
-            ;; non-default state.
-            (when replace-p
-              (if (or settle-p restore-toggled)
-                  (mevedel-view-render-invalidate-live-tail)
-                (mevedel-view--retain-last-live-render-unit
-                 data-buf render-start (marker-position rebuild-end)))))
+          ;; Record the complete final unit before a toggle can split its
+          ;; source property.  Earlier disclosures may change length without
+          ;; changing this unit; rescanning after restore can instead pick
+          ;; only the last fragment of a rewritten unit.
+          (when replace-p
+            (if settle-p
+                (mevedel-view-render-invalidate-live-tail)
+              (mevedel-view--retain-last-live-render-unit
+               data-buf render-start (marker-position rebuild-end))))
+          (let ((tail-first-end
+                 (when mevedel-view--live-view-tail-start
+                   (copy-marker (1+ mevedel-view--live-view-tail-start) nil)))
+                (tail-end
+                 (when mevedel-view--live-view-tail-start
+                   (copy-marker
+                    (next-single-property-change
+                     mevedel-view--live-view-tail-start
+                     'mevedel-view-live-unit-source nil
+                     (marker-position rebuild-end))
+                    t)))
+                restored completed)
+            (when mevedel-view--live-view-tail-start
+              ;; Follow insertions before the unit.  FIRST-END distinguishes
+              ;; those from a replacement that consumes its first character.
+              (set-marker-insertion-type mevedel-view--live-view-tail-start t))
+            (unwind-protect
+                (progn
+                  (setq restored
+                        (when (and saved-states delete-start
+                                   (marker-position rebuild-end))
+                          (mevedel-view-disclosure-restore-state
+                           delete-start (marker-position rebuild-end)
+                           saved-states)))
+                  (setq completed t))
+              (when (or (not completed)
+                        (and restored
+                             (not (and tail-end
+                                       (mevedel-view--live-tail-intact-p
+                                        data-buf
+                                        (marker-position tail-first-end)
+                                        (marker-position tail-end))))))
+                (mevedel-view-render-invalidate-live-tail))
+              (when mevedel-view--live-view-tail-start
+                (set-marker-insertion-type
+                 mevedel-view--live-view-tail-start nil))
+              (when tail-first-end (set-marker tail-first-end nil))
+              (when tail-end (set-marker tail-end nil))))
           (mevedel-view--ensure-request-progress data-buf)
           (unless mevedel-view--agent-transcript-p
             (mevedel-view--render-agent-status)
@@ -5083,8 +5132,13 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
                   (forward-char 1)))
               (buffer-substring-no-properties (point-min) (point-max)))))
     (unless (string-blank-p visible)
-      (replace-regexp-in-string
-       "[[:space:]\n]+" " " (string-trim visible)))))
+      (let ((preview (replace-regexp-in-string
+                      "[[:space:]\n]+" " " (string-trim visible))))
+        ;; Header-line evaluation measures this string on every redisplay.
+        ;; Retain the full prompt only in its source-backed transcript row.
+        (if (> (length preview) 512)
+            (concat (substring preview 0 511) "…")
+          preview)))))
 
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
@@ -8191,6 +8245,7 @@ view chrome."
      (mevedel-view--call-preserving-input-text
       (lambda ()
       (let* ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+             (mevedel-view--path-link-memo (make-hash-table :test #'equal))
              (mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal))
              (start-time (float-time))
              (data-buf

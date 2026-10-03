@@ -433,6 +433,7 @@ streaming extends the segment's end position, but rewritten data at the same
 numeric start does not inherit stale state.  Locally decorated mailbox cards
 use their rendered kind, agent id, body hash, and ordinal."
   (let ((mailbox-counts (make-hash-table :test 'equal))
+        (seen (make-hash-table :test 'equal))
         (states nil)
         (pos from))
     (while (< pos to)
@@ -445,8 +446,9 @@ use their rendered kind, agent id, body hash, and ordinal."
                        (min to (cdr mailbox-bounds))
                      (mevedel-view-disclosure--next-state-change pos to)))
              (key (mevedel-view-disclosure--state-key-at pos mailbox-counts)))
-        (when (and key (not (assoc key states)))
+        (when (and key (not (gethash key seen)))
           (let ((state (and collapsed t)))
+            (puthash key t seen)
             (push (cons key state) states)
             (when (eq (car key) 'source)
               (puthash key state
@@ -467,7 +469,11 @@ knows the freshly rendered span was rewritten after insertion."
     (save-excursion
       (let ((mailbox-counts (make-hash-table :test 'equal))
             (to-marker (copy-marker to t))
+            (wanted (make-hash-table :test 'equal))
             (toggled nil))
+        ;; A live turn holds hundreds of sections; look each one up once.
+        (dolist (entry (reverse states))
+          (puthash (car entry) entry wanted))
         (unwind-protect
             (progn
               (let ((pos from))
@@ -486,7 +492,7 @@ knows the freshly rendered span was rewritten after insertion."
                          (key (mevedel-view-disclosure--state-key-at
                                pos mailbox-counts)))
                     (when-let* (((not force-expanded))
-                                (entry (and key (assoc key states)))
+                                (entry (and key (gethash key wanted)))
                                 ((not (eq collapsed (cdr entry)))))
                       (setq toggled t)
                       (goto-char pos)

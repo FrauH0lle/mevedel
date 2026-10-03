@@ -193,6 +193,13 @@
             (should (equal (list 'image :file file) display))))
       (delete-file file)))
 
+  :doc "bare non-image paths are never resolved"
+  (with-temp-buffer
+    (insert "See lisp/file.el and docs/readme.md\n")
+    (cl-letf (((symbol-function 'mevedel-view--resolve-path)
+               (lambda (_) (ert-fail "Resolved a path that cannot be an image"))))
+      (mevedel-view--decorate-local-images-in-range (point-min) (point-max))))
+
   :doc "renders bare local image paths"
   (let ((file (make-temp-file "mevedel-image-bare-" nil ".png")))
     (unwind-protect
@@ -346,6 +353,35 @@
 (mevedel-deftest mevedel-view--linkify-paths-in-range ()
   ,test
   (test)
+  :doc "one projection resolves a repeated path once and links each use"
+  (let* ((root (make-temp-file "mevedel-view-linkify-memo-" t))
+         (file (file-name-concat root "memo.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-memo"
+                     :root root :name "linkify-memo"))
+         (session (mevedel-session-create "main" workspace))
+         (resolve (symbol-function 'mevedel-view--resolve-path))
+         (resolutions 0))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "memo\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "Read: memo.el\nAgain: memo.el\nGone: absent.el\n"
+                    "Gone again: absent.el\n")
+            (cl-letf (((symbol-function 'mevedel-view--resolve-path)
+                       (lambda (raw) (cl-incf resolutions) (funcall resolve raw))))
+              (let ((mevedel-view--path-link-memo (make-hash-table :test #'equal)))
+                (mevedel-view--linkify-paths-in-range (point-min) (point-max))))
+            (should (= 2 resolutions))
+            (goto-char (point-min))
+            (dotimes (_ 2)
+              (search-forward "memo.el")
+              (should (button-at (match-beginning 0))))
+            (search-forward "absent.el")
+            (should-not (button-at (match-beginning 0)))))
+      (delete-directory root t)))
+
   :doc "slashless root filename is buttonized when it exists"
   (let* ((root (make-temp-file "mevedel-view-linkify-" t))
          (file (file-name-concat root "mevedel-skills.el"))

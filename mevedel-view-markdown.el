@@ -546,7 +546,10 @@ discipline."
         (let* ((mb (match-beginning 0))
                (me (match-end 0))
                (raw (match-string-no-properties 0))
-               (path (and (not (get-text-property mb 'display))
+               ;; Resolving keeps the extension; test it before paying for
+               ;; target path expansion on every path-like word.
+               (path (and (mevedel-view--image-file-p raw)
+                          (not (get-text-property mb 'display))
                           (not (mevedel-view--decoration-blocked-p
                                 mb code-ranges))
                           (mevedel-view--path-candidate-p raw)
@@ -673,6 +676,23 @@ one button per reference.  The first button includes the path text."
             (match-string-no-properties 0)))
           (setq first nil))))))
 
+(defvar mevedel-view--path-link-memo nil
+  "Hash of raw path text to its link, scoped to one projection.
+A live turn repeats the same paths across many tool rows, and each
+lookup expands the path in the execution target.")
+
+(defun mevedel-view--path-link (raw)
+  "Return RAW's resolved absolute path when it should become a link."
+  (let ((memo mevedel-view--path-link-memo))
+    (if-let* ((hit (and memo (gethash raw memo))))
+        (car hit)
+      (let ((resolved (when-let* ((resolved (mevedel-view--resolve-path raw))
+                                  ((mevedel-view--path-target resolved)))
+                        resolved)))
+        (when memo
+          (puthash raw (list resolved) memo))
+        resolved))))
+
 (defun mevedel-view--linkify-paths-in-range (start end)
   "Scan the buffer between START and END and turn paths into text buttons.
 Clickable targets are resolved to absolute paths via
@@ -700,8 +720,8 @@ file.el#L12."
                                     mb src-ranges))
                               (mevedel-view--path-candidate-p raw)
                               (mevedel-view--path-context-candidate-p mb raw)
-                              (mevedel-view--resolve-path raw))))
-          (when (and resolved (mevedel-view--path-target resolved))
+                              (mevedel-view--path-link raw))))
+          (when resolved
             (mevedel-view--linkify-path-reference
              mb me suffix-start suffix-end resolved)))))))
 

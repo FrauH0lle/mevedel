@@ -114,24 +114,7 @@
   `(save-window-excursion
      (switch-to-buffer view-buf)
      (redisplay t)
-     ;; Batch Emacs has no glyph positions even for text well inside its
-     ;; visible window.  Supply a bounded text-area position for the ordinary
-     ;; elapsed suffix; tests of actual clipping mock positions explicitly.
-     (let ((actual-posn-at-point (symbol-function 'posn-at-point)))
-       (cl-letf (((symbol-function 'posn-at-point)
-                  (lambda (pos &optional window)
-                    (or (funcall actual-posn-at-point pos window)
-                        (when (and noninteractive (windowp window)
-                                   (eq (window-buffer window) view-buf)
-                                   (zerop (window-hscroll window))
-                                   (get-text-property
-                                    pos 'mevedel-view-spinner-status)
-                                   (save-excursion
-                                     (goto-char pos)
-                                     (< (current-column)
-                                        (window-body-width window))))
-                          (list window pos '(0 . 0)))))))
-         (with-current-buffer view-buf ,@body)))))
+     (with-current-buffer view-buf ,@body)))
 
 (mevedel-deftest mevedel-view-stream-begin-turn ()
   ,test
@@ -5194,11 +5177,9 @@
                  (initial (get-text-property pos 'display)))
             (setq mevedel-view--spinner-last-second (floor (float-time)))
             (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
-                       (lambda (_target &optional _all _paint) :multiple))
-                      ;; This case tests frame selection, not the pixel
-                      ;; visibility unavailable in batch Emacs for ellipsis.
+                       (lambda (_target &optional _all) :multiple))
                       ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                       (lambda (_start _end _window &optional _paint) t))
+                       (lambda (_start _end _window) t))
                       ((symbol-function 'mevedel-view--animation-seconds)
                        (lambda () 0.48)))
               (mevedel-view--spinner-tick))
@@ -5241,7 +5222,7 @@
                   ;; Fake window symbols have no redisplay positions; this
                   ;; case checks which frame receives the dots bank.
                   ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                   (lambda (_start _end window &optional _paint)
+                   (lambda (_start _end window)
                      (eq window 'visible)))
                   ((symbol-function 'mevedel-view-animation--dots-frame-supported-p)
                    (lambda (frame) (eq frame visible-frame))))
@@ -5303,13 +5284,12 @@
                     ((symbol-function 'frame-focus-state)
                      (lambda (frame) (eq frame focused)))
                     ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                     (lambda (_start _end window &optional _paint)
+                     (lambda (_start _end window)
                        (eq window background))))
             (should-not (mevedel-view--animation-visible-p))
             (should-not (mevedel-view--spinner-metadata-visible-p))
             (mevedel-view--start-spinner-timer)
             (should-not mevedel-view--spinner-timer-period)
-            (mevedel-view--resume-on-horizontal-redisplay background)
             (should-not mevedel-view--spinner-timer)
             (let ((mevedel-view--spinner-last-second (floor (float-time))))
               (mevedel-view--spinner-tick))
@@ -5328,36 +5308,47 @@
               (should-not (equal-including-properties
                            initial (get-text-property position 'display))))))))))
 
-(mevedel-deftest mevedel-view-animation-horizontal-metadata
-  (:doc "Elapsed metadata stays current when hscroll hides only the label.")
+(mevedel-deftest mevedel-view-animation-clipped-row
+  (:doc "Clipped rows keep progress current without glyph layout or draft edits.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full)
+            (auto-hscroll-mode nil)
+            (draft "> quoted\nsecond line"))
+        (setq-local truncate-lines t)
+        (mevedel-view-stream-test--insert-composer-draft draft 4)
+        (dolist (style '(ascii ellipsis shimmer static))
+          (let ((mevedel-view-spinner-style style))
+            (mevedel-view--start-spinner "Working...")
+            (set-window-hscroll (selected-window) 100)
+            (let ((cursor (point)))
+              (cl-letf (((symbol-function 'posn-at-point)
+                         (lambda (&rest _) (ert-fail "Animation queried glyphs")))
+                        ((symbol-function 'posn-at-x-y)
+                         (lambda (&rest _) (ert-fail "Animation queried pixels"))))
+                (mevedel-view--start-spinner-timer)
+                (should mevedel-view--spinner-timer-period)
+                (mevedel-view--spinner-tick))
+              (should (equal draft (mevedel-view--input-text)))
+              (should (= cursor (point))))))))))
+
+(mevedel-deftest mevedel-view-animation-metadata-middle-visible
+  (:doc "A suffix starting above the viewport keeps elapsed time current.")
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
       (let ((mevedel-view-spinner-style 'static)
-            (mevedel-view-tool-spinner-style 'static)
-            (window (selected-window))
-            (auto-hscroll-mode nil))
+            (window (selected-window)))
         (setq-local truncate-lines t)
         (mevedel-view--start-spinner "Working...")
-        (redisplay t)
-        (should mevedel-view--spinner-metadata-target)
-        (should (get-text-property
-                 (marker-position (car mevedel-view--spinner-metadata-target))
-                 'mevedel-view-spinner-status))
-        (should (eq (window-buffer window) view-buf))
-        (set-window-hscroll window 22)
-        (redisplay t)
-        ;; Batch redisplay cannot position this truncated row reliably.  Its
-        ;; actual hscroll visibility is also exercised in the GUI probe.
-        (let ((metadata-start (marker-position
-                               (car mevedel-view--spinner-metadata-target)))
-              (metadata-end (marker-position
-                             (cdr mevedel-view--spinner-metadata-target))))
-          (cl-letf (((symbol-function 'posn-at-point)
-                     (lambda (pos &optional target-window)
-                       (and (eq target-window window)
-                            (<= metadata-start pos) (< pos metadata-end)
-                            (list window pos '(0 . 0))))))
-            (should-not (mevedel-view--animation-visible-p))
+        (let* ((start (marker-position
+                       (car mevedel-view--spinner-metadata-target)))
+               (end (marker-position
+                     (cdr mevedel-view--spinner-metadata-target)))
+               (window-start-position (1+ start)))
+          (cl-letf (((symbol-function 'window-start)
+                     (lambda (_window) window-start-position))
+                    ((symbol-function 'window-end)
+                     (lambda (_window &optional _update) (1+ end))))
             (should (mevedel-view--spinner-metadata-visible-p))
             (mevedel-view--start-spinner-timer)
             (should (= 1.0 mevedel-view--spinner-timer-period))
@@ -5369,427 +5360,7 @@
                                     (buffer-substring-no-properties
                                      (mevedel-view-zone-start 'progress)
                                      (overlay-end
-                                      (mevedel-view-zone-region
-                                       'progress)))))))))))
-
-(mevedel-deftest mevedel-view-animation-horizontal-hidden-metadata
-  (:doc "A suffix wholly beyond the right edge has no metadata wakeup.")
-  (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--with-visible-view
-      (let ((mevedel-view-spinner-style 'static)
-            (mevedel-view-tool-spinner-style 'static)
-            (window (selected-window)))
-        (setq-local truncate-lines t)
-        (mevedel-view--start-spinner "Working...")
-        (let ((metadata-start
-               (marker-position (car mevedel-view--spinner-metadata-target)))
-              (metadata-end
-               (marker-position (cdr mevedel-view--spinner-metadata-target))))
-          (cl-letf (((symbol-function 'posn-at-point)
-                     (lambda (pos &optional target-window)
-                       (and (eq target-window window)
-                            (<= metadata-start pos) (< pos metadata-end)
-                            (list window 'right-fringe '(0 . 0)))))
-                    ((symbol-function 'posn-at-x-y)
-                     (lambda (&rest _args)
-                       (list window 'right-fringe '(0 . 0)))))
-            (dolist (hscroll '(0 22))
-              (set-window-hscroll window hscroll)
-              (should-not (mevedel-view--spinner-metadata-visible-p))
-              (mevedel-view--start-spinner-timer)
-              (should-not mevedel-view--spinner-timer-period))))))))
-
-(mevedel-deftest mevedel-view-animation-metadata-middle-visible
-  (:doc "A visible middle suffix keeps elapsed time running with both ends clipped.")
-  (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--with-visible-view
-      (let ((mevedel-view-spinner-style 'static)
-            (window (selected-window)))
-        (setq-local truncate-lines t)
-        (mevedel-view--start-spinner "Working...")
-        (let* ((start (marker-position
-                       (car mevedel-view--spinner-metadata-target)))
-               (end (marker-position
-                     (cdr mevedel-view--spinner-metadata-target)))
-               (window-start-position (1+ start))
-               (visible-edge 0))
-          (cl-letf (((symbol-function 'window-start)
-                     (lambda (_window) window-start-position))
-                    ((symbol-function 'window-end)
-                     (lambda (_window &optional _update) (1+ end)))
-                    ((symbol-function 'posn-at-point)
-                     (lambda (&rest _args) nil))
-                    ((symbol-function 'posn-at-x-y)
-                     (lambda (x _y &optional _window _whole)
-                       (list window (if (eq (zerop x) (zerop visible-edge))
-                                        (1+ start) 'right-fringe)
-                             '(0 . 0)))))
-            (dolist (edge '(0 1))
-              (setq visible-edge edge)
-              (should (mevedel-view--spinner-metadata-visible-p)))
-            (mevedel-view--start-spinner-timer)
-            (should (= 1.0 mevedel-view--spinner-timer-period))
-            (setq mevedel-view--spinner-start-time
-                  (time-subtract (current-time) (seconds-to-time 3))
-                  mevedel-view--spinner-last-second nil)
-            (mevedel-view--spinner-tick)
-            (should (string-match-p "Working\\.\\.\\. · [3-9]s"
-                                    (buffer-substring-no-properties
-                                     (mevedel-view-zone-start 'progress)
-                                     (overlay-end
                                       (mevedel-view-zone-region 'progress)))))))))))
-
-(mevedel-deftest mevedel-view--animation-span-in-window-p
-  (:doc "A replacement string's visible index, not its buffer position, gates motion.")
-  (with-temp-buffer
-    (let* ((start (point))
-           (label (concat "Working " (make-string 92 ?w)))
-           (end (+ start (length label)))
-           (window (selected-window))
-           (left-index 47)
-           (right-index 48)
-           (hscroll 60)
-           (vscroll 0)
-           (sample-xy '(0 . 0))
-           (mevedel-view-spinner-style 'shimmer)
-           (display (concat (propertize (substring label 0 48)
-                                        'face '(:foreground "red"))
-                            (substring label 48))))
-      (insert label)
-      (put-text-property start end 'display display)
-      (cl-letf (((symbol-function 'window-start) (lambda (_window) start))
-                ((symbol-function 'window-end) (lambda (_window) (1+ end)))
-                ((symbol-function 'window-hscroll) (lambda (_window) hscroll))
-                ((symbol-function 'window-vscroll)
-                 (lambda (_window &optional _pixelwise) vscroll))
-                ((symbol-function 'window-body-width)
-                 (lambda (_window &optional _pixelwise) 80))
-                ((symbol-function 'posn-at-point)
-                 (lambda (_position &optional _window) '(sample)))
-                ((symbol-function 'posn-x-y)
-                 (lambda (_position) sample-xy))
-                ((symbol-function 'posn-at-x-y)
-                 (lambda (x _y &optional _window _whole)
-                   (if (zerop x) '(left) '(right))))
-                ((symbol-function 'posn-point)
-                 (lambda (_position) start))
-                ((symbol-function 'posn-string)
-                 (lambda (position)
-                   (cons display (if (eq (car position) 'left)
-                                     left-index right-index)))))
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 48)
-        (ert-info ("color suffix")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        ;; Frame preparation records the *changing* prefix: shimmer and
-        ;; bounce leave part of their colored prefix visually constant.
-        (dolist (case '((shimmer 14 15) (bounce 9 10) (breathe 20 48)))
-          (let* ((mevedel-view-spinner-style (car case))
-                 (bank (mevedel-view-animation--prepare
-                        (car case) label '("#ffffff" . "#000000") nil))
-                 (display (concat (aref (car bank) 0) (cadr bank))))
-            (put-text-property start end 'display display)
-            (setq left-index (nth 1 case))
-            (should (mevedel-view--animation-span-in-window-p
-                     start end window))
-            (setq left-index (nth 2 case))
-            (should-not (mevedel-view--animation-span-in-window-p
-                         start end window))))
-        (setq mevedel-view-spinner-style 'shimmer)
-        ;; A combining mark at the bound keeps its entire cluster uncolored.
-        (setq display (concat (propertize (substring label 0 47)
-                                           'face '(:foreground "red"))
-                              (substring label 47))
-              left-index 46)
-        (put-text-property start end 'display display)
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 47)
-        (ert-info ("uncolored final cluster")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq hscroll 0 vscroll 17 left-index 46)
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 47)
-        (ert-info ("vertical pixel scroll hides the animated prefix")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        ;; A glyph fallback animates only its initial indicator, not the label.
-        (setq display (concat "- " label)
-              hscroll 60 vscroll 0 left-index 0)
-        (put-text-property start end 'display display)
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 1)
-        (ert-info ("invariant glyph separator")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq mevedel-view-spinner-style 'dots
-              display (concat "*... " label)
-              left-index 3)
-        (put-text-property start end 'display display)
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 4)
-        (ert-info ("main dots separator")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq display "*... " left-index 3)
-        (put-text-property start end 'display display)
-        (put-text-property start end 'mevedel-view-inline-spinner-frame t)
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 4)
-        (ert-info ("compact tool separator")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq display "- " left-index 0)
-        (put-text-property start end 'display display)
-        (should (mevedel-view--animation-span-in-window-p start end window))
-        (setq left-index 1)
-        (ert-info ("compact ASCII/Braille separator")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (remove-text-properties start end '(mevedel-view-inline-spinner-frame nil))
-        ;; Ellipsis animates at the end, so its rightmost visible index matters.
-        (setq mevedel-view-spinner-style 'ellipsis
-              display (concat label "...")
-              left-index 0
-              right-index (- (length display) 4))
-        (put-text-property start end 'display display)
-        (ert-info ("ellipsis offscreen")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq hscroll 0)
-        (ert-info ("ellipsis beyond the right edge without hscroll")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq sample-xy '(0 . 17)
-              right-index (- (length display) 3))
-        (ert-info ("ellipsis at end of previous wrapped row")
-          (should (mevedel-view--animation-span-in-window-p start end window)))
-        (setq sample-xy '(0 . 0)
-              right-index (- (length display) 4))
-        (ert-info ("previous wrapped row has scrolled away")
-          (should-not (mevedel-view--animation-span-in-window-p start end window)))
-        (setq right-index (- (length display) 3))
-        (should (mevedel-view--animation-span-in-window-p start end window))))))
-
-(mevedel-deftest mevedel-view-animation-horizontal-offscreen
-  (:doc "A horizontally scrolled-away label stops writes and resumes at its phase.")
-  (let ((mevedel-view-animation--cache nil)
-        (installed (advice-member-p
-                    #'mevedel-view--resume-on-horizontal-scroll
-                    'set-window-hscroll)))
-    (unless installed
-      (advice-add 'set-window-hscroll :after
-                  #'mevedel-view--resume-on-horizontal-scroll))
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-view-animation--colors)
-                   (lambda (_face _frame) '("#ffffff" . "#000000"))))
-          (mevedel-view-stream-test--with-buffers
-            (mevedel-view-stream-test--with-visible-view
-              (let ((mevedel-view-spinner-style 'breathe)
-                    (mevedel-view-tool-spinner-style 'static)
-                    (mevedel-view-spinner-power-policy 'full)
-                    (window (selected-window))
-                    (auto-hscroll-mode nil))
-                (setq-local truncate-lines t)
-                (mevedel-view--start-spinner "Working...")
-                (redisplay t)
-                (let* ((target mevedel-view--spinner-label-target)
-                       (pos (marker-position (car target)))
-                       (phase mevedel-view--spinner-phase-start)
-                       (initial (get-text-property pos 'display)))
-                  (should (mevedel-view--animation-visible-p))
-                  (set-window-hscroll window 50)
-                  (redisplay t)
-                  (should-not (posn-at-point pos window))
-                  ;; A pending callback observes the scroll and must retire.
-                  ;; No decoration is written even on that last callback.
-                  (mevedel-view--spinner-tick)
-                  (should-not (mevedel-view--animation-visible-p))
-                  (should-not mevedel-view--spinner-timer-period)
-                  (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
-                             (lambda () 1.0)))
-                    (setq mevedel-view--spinner-last-second (floor (float-time)))
-                    (mevedel-view--spinner-tick)
-                    (should (equal-including-properties
-                             initial (get-text-property pos 'display)))
-                    ;; Scroll commands also pass nil for the selected window.
-                    (set-window-hscroll nil 0)
-                    (redisplay t)
-                    ;; Horizontal scrolling does not invoke `window-scroll-functions'.
-                    ;; Rearming must happen from the real scroll path, not a manual hook.
-                    (should (mevedel-view--animation-visible-p))
-                    (should (= (/ 1.0 60) mevedel-view--spinner-timer-period))
-                    (mevedel-view--spinner-tick)
-                    (should-not (equal-including-properties
-                                 initial (get-text-property pos 'display)))
-                    (should (= phase mevedel-view--spinner-phase-start)))))))))
-    (unless installed
-      (advice-remove 'set-window-hscroll
-                     #'mevedel-view--resume-on-horizontal-scroll))))
-
-(mevedel-deftest mevedel-view-animation-pixel-scroll-rearms
-  (:doc "An explicit vertical pixel scroll reaches the view scheduler.")
-  (let ((installed (advice-member-p
-                    #'mevedel-view--resume-on-pixel-scroll
-                    'set-window-vscroll)))
-    (unless installed
-      (advice-add 'set-window-vscroll :after
-                  #'mevedel-view--resume-on-pixel-scroll))
-    (unwind-protect
-        (mevedel-view-stream-test--with-buffers
-          (mevedel-view-stream-test--with-visible-view
-            (let ((window (selected-window))
-                  (rearms 0))
-              (cl-letf (((symbol-function 'mevedel-view--start-spinner-timer)
-                         (lambda (&optional _force) (cl-incf rearms))))
-                (set-window-vscroll window 17 t)
-                (should (= rearms 1))
-                (set-window-vscroll window 0 t)
-                (should (= rearms 2))
-                (set-window-vscroll nil 0 t)
-                (should (= rearms 3))))))
-      (unless installed
-        (advice-remove 'set-window-vscroll
-                       #'mevedel-view--resume-on-pixel-scroll)))))
-
-(mevedel-deftest mevedel-view-animation-horizontal-tool-windows
-  (:doc "A tool target suspends only when no displayed window shows its glyph.")
-  (let ((installed (advice-member-p
-                    #'mevedel-view--resume-on-horizontal-scroll
-                    'set-window-hscroll)))
-    (unless installed
-      (advice-add 'set-window-hscroll :after
-                  #'mevedel-view--resume-on-horizontal-scroll))
-    (unwind-protect
-        (mevedel-view-stream-test--with-buffers
-          (mevedel-view-stream-test--with-visible-view
-            (let ((mevedel-view-tool-spinner-style 'ascii)
-                  (mevedel-view-spinner-power-policy 'full)
-                  (mevedel-view--pending-tool-calls
-                   '(("call-1" . "Calling Read...")))
-                  (auto-hscroll-mode nil))
-              (setq-local truncate-lines t)
-              (mevedel-view--refresh-pending-tool-lines)
-              (let ((first (selected-window))
-                    (second (split-window-right)))
-                (set-window-buffer first view-buf)
-                (set-window-buffer second view-buf)
-                (redisplay t)
-                (let ((target (car mevedel-view--spinner-tool-targets)))
-                  (should target)
-                  (should (mevedel-view--animation-visible-p))
-                  (set-window-hscroll first 50)
-                  (redisplay t)
-                  (should (mevedel-view--animation-visible-p))
-                  (set-window-hscroll second 50)
-                  (redisplay t)
-                  (mevedel-view--spinner-tick)
-                  (should-not (mevedel-view--animation-visible-p))
-                  (should-not mevedel-view--spinner-timer-period)
-                  ;; A different window with the same buffer but no target
-                  ;; in its visible rows must not schedule a resume probe.
-                  (let ((original (symbol-function 'window-start)))
-                    (cl-letf (((symbol-function 'window-start)
-                               (lambda (candidate)
-                                 (if (eq candidate second)
-                                     (marker-position (cdr target))
-                                   (funcall original candidate)))))
-                      (set-window-hscroll second 0)
-                      (mevedel-view--resume-on-horizontal-redisplay second)
-                      (should-not mevedel-view--spinner-timer)
-                      (should (memq
-                               #'mevedel-view--resume-on-horizontal-redisplay
-                               pre-redisplay-functions))))
-                  (set-window-hscroll second 50)
-                  (set-window-hscroll second 0)
-                  (redisplay t)
-                  (should (mevedel-view--animation-visible-p))
-                  (should (= 0.12 mevedel-view--spinner-timer-period)))))))
-      (unless installed
-        (advice-remove 'set-window-hscroll
-                       #'mevedel-view--resume-on-horizontal-scroll)))))
-
-(mevedel-deftest mevedel-view-animation-redisplay-horizontal-resume
-  (:doc "The suspended redisplay hook schedules only one resume probe.")
-  (let ((installed (advice-member-p
-                    #'mevedel-view--resume-on-horizontal-scroll
-                    'set-window-hscroll)))
-    (when installed
-      (advice-remove 'set-window-hscroll
-                     #'mevedel-view--resume-on-horizontal-scroll))
-    (unwind-protect
-        (mevedel-view-stream-test--with-buffers
-          (mevedel-view-stream-test--with-visible-view
-            (let ((mevedel-view-spinner-style 'ascii)
-                  (mevedel-view-spinner-power-policy 'full)
-                  (window (selected-window)))
-              (setq-local truncate-lines t)
-              (mevedel-view--start-spinner "Working...")
-              (redisplay t)
-              (set-window-hscroll window 50)
-              (redisplay t)
-              (mevedel-view--start-spinner-timer)
-              (should-not mevedel-view--spinner-timer-period)
-              (should (memq #'mevedel-view--resume-on-horizontal-redisplay
-                            pre-redisplay-functions))
-              (set-window-hscroll window 0)
-              (run-hook-with-args 'pre-redisplay-functions window)
-              (let ((probe mevedel-view--spinner-timer))
-                (should (mevedel--timer-pending-p probe))
-                (run-hook-with-args 'pre-redisplay-functions window)
-                (should (eq probe mevedel-view--spinner-timer)))
-              (redisplay t)
-              (sit-for 0.02)
-              (should (= 0.12 mevedel-view--spinner-timer-period))
-              (should-not (memq #'mevedel-view--resume-on-horizontal-redisplay
-                                pre-redisplay-functions)))))
-      (when installed
-        (advice-add 'set-window-hscroll :after
-                    #'mevedel-view--resume-on-horizontal-scroll)))))
-
-(mevedel-deftest mevedel-view--resume-on-horizontal-redisplay
-  (:doc "The redisplay probe replaces, rather than orphans, a suffix timer.")
-  (let ((installed (advice-member-p
-                    #'mevedel-view--resume-on-horizontal-scroll
-                    'set-window-hscroll)))
-    (when installed
-      (advice-remove 'set-window-hscroll
-                     #'mevedel-view--resume-on-horizontal-scroll))
-    (unwind-protect
-        (mevedel-view-stream-test--with-buffers
-          (mevedel-view-stream-test--with-visible-view
-            (let ((mevedel-view-spinner-style 'ascii)
-                  (mevedel-view-spinner-power-policy 'full)
-                  (auto-hscroll-mode nil)
-                  (window (selected-window)))
-              (setq-local truncate-lines t)
-              (mevedel-view--start-spinner "Working...")
-              (redisplay t)
-              (set-window-hscroll window 22)
-              (redisplay t)
-              (let ((start (marker-position
-                            (car mevedel-view--spinner-metadata-target)))
-                    (end (marker-position
-                          (cdr mevedel-view--spinner-metadata-target))))
-                ;; Batch redisplay cannot position the truncated suffix;
-                ;; keep the actual registered span and scheduler timers.
-                (cl-letf (((symbol-function 'posn-at-point)
-                           (lambda (pos &optional target-window)
-                             (and (eq target-window window)
-                                  (<= start pos) (< pos end)
-                                  (list window pos '(0 . 0))))))
-                  (mevedel-view--start-spinner-timer)
-                  (should (= 1.0 mevedel-view--spinner-timer-period))
-                  (should (memq #'mevedel-view--resume-on-horizontal-redisplay
-                                pre-redisplay-functions))
-                  (let ((old mevedel-view--spinner-timer))
-                    (should (mevedel--timer-pending-p old))
-                    (set-window-hscroll window 0)
-                    (run-hook-with-args 'pre-redisplay-functions window)
-                    (let ((probe mevedel-view--spinner-timer))
-                      (should (mevedel--timer-pending-p probe))
-                      (should-not (eq old probe))
-                      (should-not (mevedel--timer-pending-p old))
-                      (run-hook-with-args 'pre-redisplay-functions window)
-                      (should (eq probe mevedel-view--spinner-timer))
-                      (mevedel-view--stop-spinner-timer)
-                      (should-not (mevedel--timer-pending-p probe))
-                      (should-not (mevedel--timer-pending-p old)))))))))
-      (when installed
-        (advice-add 'set-window-hscroll :after
-                    #'mevedel-view--resume-on-horizontal-scroll)))))
 
 (mevedel-deftest mevedel-view-animation-low-color-terminal-cadence
   (:doc "A resolved 8-color terminal never schedules color-rate callbacks.")
@@ -5913,76 +5484,6 @@
                        (get-text-property start 'display)))
               (should (= frozen mevedel-view--spinner-frozen-seconds))
               (should-not mevedel-view--spinner-timer))))))))
-
-(mevedel-deftest mevedel-view-animation-theme-refreshes-visible-static-tail
-  (:doc "A visible constant-colored tail repaints without restarting motion.")
-  (let ((mevedel-view-animation--cache nil)
-        (foreground "#ff0000"))
-    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
-               (lambda (_face _frame) (cons foreground "#000000"))))
-      (mevedel-view-stream-test--with-buffers
-        (mevedel-view-stream-test--with-visible-view
-          (let ((mevedel-view-spinner-style 'shimmer)
-                (mevedel-view-spinner-power-policy 'full))
-            (mevedel-view--start-spinner
-             (concat "Working " (make-string 92 ?w)))
-            (let* ((target mevedel-view--spinner-label-target)
-                   (start (marker-position (car target)))
-                   (end (marker-position (cdr target)))
-                   (before (get-text-property start 'display))
-                   (phase mevedel-view--spinner-phase-start)
-                   (undo buffer-undo-list)
-                   (modified (buffer-modified-p)))
-              (should (= 15 (get-text-property
-                             0 'mevedel-view-animation--changing-end before)))
-              (cl-letf (((symbol-function 'window-start) (lambda (_window) start))
-                        ((symbol-function 'window-end) (lambda (_window) (1+ end)))
-                        ((symbol-function 'window-hscroll) (lambda (_window) 20))
-                        ((symbol-function 'window-vscroll)
-                         (lambda (_window &optional _pixelwise) 0))
-                        ((symbol-function 'window-body-height)
-                         (lambda (_window &optional _pixelwise) 120))
-                        ((symbol-function 'frame-char-height)
-                         (lambda (&optional _frame) 16))
-                        ((symbol-function 'posn-at-point)
-                         (lambda (pos &optional _window)
-                           (unless (= pos start) '(fringe))))
-                        ((symbol-function 'posn-area)
-                         (lambda (pos)
-                           (and (eq (car pos) 'fringe) 'right-fringe)))
-                        ((symbol-function 'posn-x-y)
-                         (lambda (_pos) '(728 . 40)))
-                        ((symbol-function 'posn-at-x-y)
-                         (lambda (_x y &rest _)
-                           (if (>= y 64) '(left) '(blank))))
-                        ((symbol-function 'posn-point)
-                         (lambda (pos) (and (eq (car pos) 'left) start)))
-                        ((symbol-function 'posn-string)
-                         (lambda (_pos)
-                           (cons (get-text-property start 'display) 20))))
-                (mevedel-view--start-spinner-timer t)
-                (should-not mevedel-view--spinner-timer-period)
-                (should-not (mevedel-view--animation-target-visible-p
-                             target 'mevedel-view-spinner-frame))
-                (should (mevedel-view--animation-target-visible-p
-                         target 'mevedel-view-spinner-frame nil t))
-                (setq foreground "#00ff00")
-                (run-hook-with-args 'enable-theme-functions 'mevedel-test-theme)
-                (let ((after (get-text-property start 'display)))
-                  (should-not (equal (get-text-property 20 'face before)
-                                     (get-text-property 20 'face after)))
-                  (should (equal (get-text-property 20 'face after)
-                                 (get-text-property 20 'face
-                                   (mevedel-view-animation-frame
-                                    'shimmer (buffer-substring-no-properties
-                                              start end)
-                                    0 'mevedel-view-spinner
-                                    (selected-frame)))))
-                  (should-not mevedel-view--spinner-theme-stale-p)
-                  (should-not mevedel-view--spinner-timer-period)
-                  (should (= phase mevedel-view--spinner-phase-start))
-                  (should (eq undo buffer-undo-list))
-                  (should (eq modified (buffer-modified-p))))))))))))
 
 (mevedel-deftest mevedel-view-animation-frame-refreshes-frozen-status
   (:doc "A paused zero-fps label changes palettes when its display frame changes.")

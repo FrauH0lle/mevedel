@@ -1958,6 +1958,62 @@
       (when (buffer-live-p data) (kill-buffer data))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-view-audit--archived-breadcrumbs ()
+  ,test
+  (test)
+  :doc "an unchanged archive is read once; rewriting it is read again"
+  (let* ((root (make-temp-file "mevedel-archive-cache-" t))
+         (data (generate-new-buffer " *archive cache live*"))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (session (mevedel-session--create :save-path root
+                                           :authority-mode 'pid-lock
+                                           :current-segment 2))
+         (read (symbol-function
+                'mevedel-session-artifacts-read-transcript-segment))
+         (reads 0)
+         (delivery (lambda (id)
+                     (concat "<agent-message type=\"EXECUTION\" "
+                             "sender=\"/root/child\">\n"
+                             "<bash-execution execution_id=\"" id
+                             "\" outcome=\"success\"/>\n"
+                             "</agent-message>\n"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (setq buffer-file-name
+                  (mevedel-session-artifacts-segment-path root 2))
+            (setq-local mevedel--session session))
+          (with-temp-file archive (insert (funcall delivery "exec-1")))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer data)
+            (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                       (lambda () data))
+                      ((symbol-function
+                        'mevedel-session-artifacts-read-transcript-segment)
+                       (lambda (&rest args)
+                         (cl-incf reads)
+                         (apply read args))))
+              (dotimes (_ 3)
+                (should (mevedel-view-audit-breadcrumb-present-p
+                         '(:execution-id "exec-1" :owner "/root/child")
+                         (point-max)))
+                (should-not (mevedel-view-audit-breadcrumb-present-p
+                             '(:execution-id "exec-2" :owner "/root/child")
+                             (point-max))))
+              (should (= 1 reads))
+              ;; Same-second rewrites still change the identity by size.
+              (with-temp-file archive
+                (insert (funcall delivery "exec-2") (funcall delivery "exec-3")))
+              (should (mevedel-view-audit-breadcrumb-present-p
+                       '(:execution-id "exec-2" :owner "/root/child")
+                       (point-max)))
+              (should-not (mevedel-view-audit-breadcrumb-present-p
+                           '(:execution-id "exec-1" :owner "/root/child")
+                           (point-max)))
+              (should (= 2 reads)))))
+      (when (buffer-live-p data) (kill-buffer data))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-view-audit-breadcrumb-archived-projection ()
   ,test
   (test)

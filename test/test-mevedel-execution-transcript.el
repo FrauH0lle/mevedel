@@ -568,7 +568,35 @@
                    (plist-get
                     (mevedel-execution-transcript-pending-render-data
                      (current-buffer) "archived-call")
-                    :execution-output)))))
+                    :execution-output))))
+  :doc "parses the transcript once per change and the newest record wins"
+  (with-temp-buffer
+    (let ((completion
+           (lambda (id output)
+             (mevedel--format-hook-audit-record
+              `(:type execution-completion :tool-use-id ,id
+                :render-data (:execution-output ,output)))))
+          (parses 0)
+          (parse (symbol-function 'mevedel-transcript-audit-records)))
+      (insert (funcall completion "a" "old a") (funcall completion "b" "b"))
+      (cl-letf (((symbol-function 'mevedel-transcript-audit-records)
+                 (lambda (&rest args) (cl-incf parses) (apply parse args))))
+        (dolist (id '("a" "b" "a" "missing"))
+          (mevedel-execution-transcript-pending-render-data (current-buffer) id))
+        (should (= 1 parses))
+        (goto-char (point-max))
+        (insert (funcall completion "a" "new a"))
+        (should (equal "new a"
+                       (plist-get (mevedel-execution-transcript-pending-render-data
+                                   (current-buffer) "a")
+                                  :execution-output)))
+        (should (= 2 parses))
+        (let ((copy (mevedel-execution-transcript-pending-render-data
+                     (current-buffer) "b")))
+          (plist-put copy :execution-output "changed"))
+        (should (equal "b" (plist-get (mevedel-execution-transcript-pending-render-data
+                                       (current-buffer) "b")
+                                      :execution-output)))))))
 
 (mevedel-deftest mevedel-execution-transcript--record-archived-terminal ()
   ,test

@@ -309,46 +309,30 @@ batch behavior unchanged. Child frames use their top-level ancestor's focus
 state. The rendering measurements are recorded in
 [ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history).
 
-Animation adds a stricter visibility gate without changing that rendering
-contract: a windowless or vertically/horizontally offscreen indicator has no
-decorative wakeups. A replacement display string maps its entire label to one
-buffer span, so horizontal visibility checks its actually displayed animated
-characters, not merely source positions. A long color label's static tail
-does not keep a high-frequency timer alive after the *changing* part of its
-bounded colored prefix scrolls away. Preparation records that bound from the
-actual frame colors: shimmer and bounce can leave some colored characters
-constant across the cycle. Glyph indicators also exclude their invariant
-separating space: showing only that space does not justify a decorative timer.
-The trailing ellipsis is checked against the last
-visible glyph even without horizontal scrolling: truncation can hide it beyond
-the right edge, while a wrapped final row may still show it. Vertical pixel
-scrolling can likewise hide a wrapped color prefix without advancing the source
-position; visibility then uses the displayed index and rearming observes pixel
-scrolls. Event-driven theme or display-frame changes still repaint a visible
-constant-colored tail without restarting decorative callbacks.
-If horizontal scrolling hides the label but leaves any part of its elapsed
-suffix visible in the text area, a separate visibility check keeps the
-once-per-second metadata refresh. This includes a narrow viewport showing only
-the middle of the suffix or a wrapped row starting inside it; a suffix wholly
-beyond the right edge or in a fringe does not keep the timer alive. The per-view
-timer animates only a progress label or pending-tool indicator visible in an
-attended window, and updates registered spans instead of scanning the transcript
-each frame. Attention and target
-visibility must hold in the *same* window: a focused frame where the label is
-offscreen cannot make a visible label in another, unfocused frame animate.
-This stricter animation gate leaves the buffer-wide transcript rendering
-attention rule unchanged. Focus, window and scroll
-changes rearm it (horizontal scroll uses a scoped `set-window-hscroll` observer
-because Emacs does not call
-`window-scroll-functions` for that change; automatic panning instead arms a
-buffer-local redisplay observer while a target is horizontally or vertically
-pixel-scrolled out of view; `set-window-vscroll` likewise rearms explicitly).
-Its deferred resume probe replaces any pending elapsed-metadata timer rather
-than leaving a second timer behind. The view-owned one-shot timer and that
-probe are queued on the Emacs UI host's top-level timer list: TRAMP's temporary
-timer binding neither discards a new timer nor hides an existing timer from
-ownership checks and cleanup. Stopping a view inside that binding removes its
-timer before the outer list is restored.
+Animation checks whether each registered indicator's buffer span overlaps the
+visible buffer range of an attended window. Both focus and range eligibility
+must hold in the same window. A partially visible span remains eligible even
+when its start is above the viewport. These checks reuse the completed
+redisplay's `window-start` and `window-end`; they never request glyph layout.
+Horizontal clipping and partial pixel scrolling deliberately do not suspend an
+indicator whose buffer span still overlaps that range. A clipped indicator may
+therefore receive decorative updates until its row leaves the viewport. This
+bounded extra work avoids expensive pixel-position queries and visibility
+checks from inside redisplay. There are no horizontal/pixel-scroll primitive
+observers or animation resume hooks in `pre-redisplay-functions`.
+
+The elapsed suffix uses the same range check and retains its once-per-second
+semantic refresh independently of decorative motion. Focus, window and normal
+buffer scrolling changes reevaluate scheduling. Theme and display-frame changes
+repaint eligible labels at their displayed or frozen phase; labels outside the
+visible buffer range wait until they return. Frozen glyphs recheck display
+fallbacks on these events without restarting decorative motion. The
+transcript's separate buffer-wide attention gate remains unchanged.
+
+The view-owned one-shot timer uses the Emacs UI host's top-level timer list:
+TRAMP's temporary timer binding neither discards a rearm nor hides an existing
+timer from ownership checks and cleanup. Stopping a view inside that binding
+removes its timer before the outer list is restored.
 The buffer-local window-change hook reevaluates a view when its window switches
 buffers; a shared window-state hook catches deletion of its last window. Both
 release power monitoring even if zero-fps tool-only progress has no animation
@@ -524,7 +508,9 @@ projects its durable breadcrumb into an open current view immediately, without
 waiting for a full rerender; views opened later reconstruct it from the
 transcript. Source-backed disclosure choices and reader/composer positions
 survive progress and completion. Folding a turn retains its projected
-breadcrumb for retry deduplication; Show result first unfolds the turn holding
+breadcrumb for retry deduplication. Deduplication against older segments reads
+each archive once per view and rereads it only when its published hash, staged
+write, or file size and modification time change. Show result first unfolds the turn holding
 the source-backed Bash row. A separate execution-history disclosure
 preserves inspectable polling and delivery records.
 The same rules apply to execution tools nested within ToolCall. A direct
@@ -834,7 +820,9 @@ follows the exchange at the top of each window independently, not the buffer
 point or the most recent submission. A visible prompt header does not pin
 itself; scrolling to a different exchange changes the preview. In tight
 windows, the prompt preview truncates to its own row's width, without taking
-space from the operational controls. Clicking it reveals the original prompt,
+space from the operational controls. Its stored text is capped at 512 characters,
+including an ellipsis, after filtering and whitespace normalization. This bounds
+the width measurement performed on every header-line evaluation. Clicking it reveals the original prompt,
 expanding a folded turn or input when necessary. It is view-only:
 synthetic/model-only context is excluded, and archived segments use only their
 own visible turns.
@@ -1341,7 +1329,9 @@ Markdown rendering adds small view-only affordances:
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
   inside the active remote session opens resolver-verified published bytes at
   its logical path; the disposable fixed-path cache is never used as evidence
-  that the artifact exists.
+  that the artifact exists. One projection resolves each distinct path once,
+  and a bare path is considered for inline image display only when it has an
+  image extension.
 
 Markdown links, local images, paths, and fenced source-panel projection are
 isolated in `mevedel-view-markdown.el`, deferred target path verification in
@@ -1398,13 +1388,17 @@ Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
 `mevedel-view-disclosure.el` owns its shared source-backed toggle state, and
 `mevedel-view-render.el` retains the surrounding turn projection. Each
 tool-attached hook audit uses its own transcript span, so audits attached to
-one tool retain independent collapse state across rerenders.
+one tool retain independent collapse state across rerenders. Each audit is
+drawn in that remembered state, so a streamed update never has to toggle it
+afterward.
 
 Read-tool syntax selection keeps a bounded per-buffer path cache. Its rule
 snapshot includes copied regular expressions, so replacing or mutating
 `auto-mode-alist` invalidates cached selections, including misses.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
+A complete tool block followed by its merged hook audits is cached under the
+whole span's key; only an incomplete or partially covered block is reparsed.
 Cache keys must include session-side state that changes visible
 headers/status — currently permission-queue origins and pending plan
 approval — and collapsed-header cache entries should omit large bodies
@@ -1535,12 +1529,16 @@ property restore does not change a section's identity.
 A user toggle deletes and re-inserts view text, which can drag the retained
 live-tail view marker away from its data-buffer twin; `mevedel-view-toggle-
 section` therefore invalidates the retained tail, sending the next update
-down the non-retained path whose capture/restore preserves the toggle. For
-the same reason the live renderer retains the tail only after collapse-state
-restoration, and skips retention entirely on a tick whose restore actually
-toggled a section. A toggle that finds the in-flight marker inside the
-section re-anchors it at the section start — never the end, which would
-leave everything above it stale for the next incremental render.
+down the non-retained path whose capture/restore preserves the toggle. The
+live renderer records the complete final render unit before restoration.
+Restoring an earlier disclosure may shift that unit without invalidating it.
+Retention survives only when its original boundaries still enclose one complete,
+uninterrupted source-property run; a split, merged, deleted or failed restoration
+discards it. This avoids rebuilding earlier expanded thinking or tools on every
+response chunk while preserving the full-render fallback for a rewritten tail.
+A toggle that finds the in-flight marker inside the section re-anchors it at
+the section start — never the end, which would leave everything above it stale
+for the next incremental render.
 
 Live-tail duplicate detection should compare literal lines while skipping
 volatile spinner/tool/agent rows. Avoid building one large regexp from
