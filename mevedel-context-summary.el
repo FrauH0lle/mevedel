@@ -433,7 +433,9 @@ continuation and handoff summaries."
                  :stream stream
                  :transforms nil
                  :context
-                 (list :mevedel-context-summary t :purpose purpose)
+                 (list :mevedel-context-summary t :purpose purpose
+                       :mevedel-telemetry-session session
+                       :mevedel-telemetry-workload 'context-summary)
                  :fsm
                  (if (and (eq purpose 'digest) (plist-get policy :max-tokens))
                      (gptel-make-fsm

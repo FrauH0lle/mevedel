@@ -279,7 +279,9 @@
     (should (eq gptel-stream (plist-get captured :stream)))
     (should-not (plist-get captured :transforms))
     (should (equal (plist-get captured :context)
-                   '(:mevedel-context-summary t :purpose continuation)))
+                   '(:mevedel-context-summary t :purpose continuation
+                     :mevedel-telemetry-session nil
+                     :mevedel-telemetry-workload context-summary)))
     (should (eq (plist-get captured :backend) 'summary-backend))
     (should (eq (plist-get captured :model) 'summary-model))
     (should (eq (plist-get captured :effort) 'high))

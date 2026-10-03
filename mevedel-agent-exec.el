@@ -472,7 +472,8 @@ Returns the spawned FSM."
                  :handlers mevedel-agent-exec--handlers))
            (mevedel-cb
             (mevedel-agent-exec--make-callback
-             main-cb agent-type description where (list partial))))
+             main-cb agent-type description where (list partial)))
+           (wrapped (mevedel-agent-exec--wrap-callback mevedel-cb)))
       (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm)
       (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
       ;; Install one dispatch-local copy of the frozen request state before
@@ -484,11 +485,11 @@ Returns the spawned FSM."
           :buffer agent-buffer
           :fsm fsm
           :stream gptel-stream
+          :callback wrapped
           :system gptel-system-prompt
           :transforms (list #'gptel--transform-add-context
                             #'mevedel-reminders--agent-transform)))
-      (let* ((req-info (gptel-fsm-info fsm))
-             (wrapped (mevedel-agent-exec--wrap-callback mevedel-cb)))
+      (let ((req-info (gptel-fsm-info fsm)))
         ;; `gptel-request' replaces the FSM info plist wholesale, so
         ;; every mevedel key must be installed on the plist it built.
         ;; The terminal callback is what settles the invocation from the
@@ -508,8 +509,9 @@ Returns the spawned FSM."
                      (alist-get 'gptel-max-tokens request-locals)
                      :request-params
                      (alist-get 'gptel--request-params request-locals))))
-        (setf (gptel-fsm-info fsm)
-              (plist-put req-info :callback wrapped)))
+        ;; The callback must be supplied to gptel-request before it can
+        ;; dispatch, not replaced afterwards: observers may have wrapped it.
+        (setf (gptel-fsm-info fsm) req-info))
       fsm)))
 
 (defun mevedel-agent-exec--wrap-callback (mevedel-cb)

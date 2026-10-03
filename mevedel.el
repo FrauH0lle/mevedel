@@ -116,6 +116,7 @@
 (require 'mevedel-view-input-files)
 (require 'mevedel-view-stream)
 (require 'mevedel-gptel-stream-bridge)
+(require 'mevedel-telemetry-usage)
 (require 'mevedel-view-zone)
 (require 'mevedel-directive-activity)
 (require 'mevedel-reminders)
@@ -762,6 +763,7 @@ always prompt for the session name."
 
   ;; Install the gptel stream compatibility bridge.
   (mevedel-gptel-stream-bridge-install)
+  (mevedel-telemetry-usage-install)
   (mevedel-gptel-bridge-install)
 
   (message "mevedel installed successfully"))
@@ -833,6 +835,7 @@ always prompt for the session name."
   ;; Remove the gptel stream compatibility bridge.
   (when (featurep 'mevedel-gptel-stream-bridge)
     (mevedel-gptel-stream-bridge-uninstall))
+  (mevedel-telemetry-usage-uninstall)
   (mevedel-gptel-bridge-uninstall)
 
   ;; Stop event-loop lag watching and its timer advice.

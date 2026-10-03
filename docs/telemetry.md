@@ -358,6 +358,88 @@ repository state.  Use profiler-only results for performance comparisons;
 full-debug capture deliberately pays the cost of gptel request logging and the
 view-render trace.
 
+## Prompt-cache efficiency
+
+Ordinary telemetry records `provider-call` events with `:stage start` and at
+most one `:stage finish` per actual provider dispatch. A `:call-id` identifies
+the HTTP call, unlike `:request-id`, which can span a whole tool-loop turn.
+Both events retain the dispatch-time session turn, request identity, agent
+path (when applicable), backend name and concrete `:backend-type`, model,
+and workload (`root`, `agent`, `naming`, or `context-summary`). Context
+summaries also retain their categorical purpose. Helpers write into the owning
+session; sessionless journal/memory work keeps its separate workspace stream.
+Transient `/btw` conversational calls do not create per-call events.
+
+Normal completion observes gptel's per-call `:tokens` at streaming transport
+cleanup or non-streaming response parsing, before callbacks can tear down a
+buffer, run tools, or dispatch another call. Transport completion metadata
+keeps an older cleanup's error from contaminating a replacement call. Streaming
+parsing retains only a boolean for provider errors, with no per-chunk events.
+Abort callbacks and explicit `ABRT` transitions cover cancellation, including
+retained-agent interruption with a muted callback. It never uses cumulative
+`:tokens-full` for per-call accounting. Successful tool-only responses that
+have no text callback also settle before tool or terminal handling. Finish adds `:outcome`
+(`success`, `error`, or `aborted`) and monotonic `:duration-ms`, which ends
+before subsequent tool execution and user waits. An interrupted process may
+leave an unmatched start. A failed/aborted call may retain partial usage; it
+does not imply a zero bill.
+
+Token fields have one normalized meaning across providers:
+
+| Field | Meaning |
+| --- | --- |
+| `:input-tokens` | Input not read from cache, including cache-write tokens under gptel's normalized accounting |
+| `:cached-tokens` | Input read from cache |
+| `:cache-write-tokens` | Cache-write subset of input, when reported; do not add it to input again |
+| `:output-tokens` | Provider-reported output |
+
+Counts are nonnegative integers or nil (unknown). `:usage-status` is `complete`
+when input, cached input, and output are known, `partial` when only some are
+known, `missing` when none are known, and `invalid` when a reported value is
+invalid. Cache writes are optional, so their absence does not make otherwise
+complete usage partial. Invalid counts are retained as unknown. gptel can
+normalize omitted provider fields to zero; telemetry cannot reconstruct that
+lost distinction. Token-baseline events normalize nested `:provider-context-usage`
+and `:cumulative-usage` into these same allowlisted names without broadening
+the privacy filter to generic `:input`/`:output` keys.
+
+Analyze logs from a repository checkout, without loading mevedel or making
+provider calls:
+
+```bash
+# Text summary of every session with a log in this workspace.
+emacs -Q --batch -l scripts/analyze-session-cache.el \
+  -f mevedel-analyze-session-cache-main -- .mevedel/sessions
+
+# Structured report for explicit logs or session directories.
+emacs -Q --batch -l scripts/analyze-session-cache.el \
+  -f mevedel-analyze-session-cache-main -- --json /path/to/session/telemetry-log.el
+```
+
+The analyzer accepts telemetry files, session directories, or sessions
+directories. It reads Lisp data without evaluating it and validates records.
+It reports source files and line numbers, duplicate/conflicting records,
+malformed lines, incomplete calls, outcomes, usage coverage, and breakdowns
+by session, backend/model, and workload. Chronological call details let you
+locate reuse drops without recording prompt content.
+
+The token-weighted cached-input share is
+`sum(cached) / sum(input + cached)` over calls with both fields known. It is
+not the average of call percentages. The cache-positive call fraction uses
+calls with known cached-input usage; coverage is reported separately. Zero
+denominators are unavailable, not 0%. Field totals sum known values and cannot
+establish complete usage when coverage is partial.
+
+Only per-call events enter these totals. Existing `request-settled` events
+remain cumulative lifecycle summaries and are never added. Older logs have
+insufficient per-call evidence; mixed logs disclose limited coverage rather
+than backfilling call counts from settlements. Historical logs are not changed.
+
+Observed reuse is not theoretical cacheability, monetary savings, or evidence
+that caching caused a latency improvement. Cold starts, compaction, model or
+schema changes, routing, and provider retention can legitimately reduce reuse.
+The report locates drops; it does not automatically attribute their cause.
+
 ## Prompt guard
 
 Profiler runs temporarily advise `ask-user-about-supersession-threat`,
