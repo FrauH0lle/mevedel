@@ -1832,9 +1832,10 @@ thinking blocks or user turns."
                        (memq type '(user ignored))
                        render-data-after-tail-p
                        ;; Audits emitted after the final response are
-                       ;; records, not a stale tail of its text.
+                       ;; records, not a stale tail of its text; neither is
+                       ;; the empty prompt heading gptel inserts after it.
                        (not (string-match-p
-                             "\\`[ \t\r\n]*<!-- mevedel-hook-audit -->"
+                             "\\`[ \t\r\n]*\\(?:<!-- mevedel-hook-audit -->\\|\\*+[ \t\r\n]*\\'\\)"
                              (buffer-substring-no-properties
                               (cadr seg) (caddr seg)))))
                   (and (eq type 'user)

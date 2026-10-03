@@ -6186,6 +6186,15 @@
 	  (should-not (string-match-p "GPTEL_SYSTEM" text))
 	  (should-not (string-match-p "hidden system prompt" text))))
 
+  :doc "a prompt heading after separator whitespace is stripped"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "\n\n*** Real user prompt here.\n"))
+    (let* ((seg (list 'user (point-min)
+                      (with-current-buffer data-buf (point-max))))
+           (text (mevedel-view--user-turn-text (list seg) data-buf)))
+      (should (equal "Real user prompt here." text))))
+
   :doc "an agent task heading's property drawer is stripped"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf

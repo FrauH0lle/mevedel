@@ -1818,7 +1818,20 @@ TOOL-PROP."
              '(:kind request-summary :elapsed-seconds 1.0)))
     (should (equal '(response ignored render-data)
                    (mapcar #'car (mevedel-transcript-segments
-                                  (point-min) (point-max)))))))
+                                  (point-min) (point-max))))))
+
+  :doc "the empty prompt heading between a final response and its summary stays user"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer." 'gptel 'response)
+            "\n\n*** \n"
+            (mevedel-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1.0)))
+    (let ((segments (mevedel-transcript-segments (point-min) (point-max))))
+      (should (equal '(response user render-data) (mapcar #'car segments)))
+      (should (equal "Answer."
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments))))))))
 
 (mevedel-deftest mevedel-transcript-project-evidence ()
   ,test
