@@ -636,7 +636,12 @@ the memory table with **Candidates**, **Memories**, and **History** views.
 Switch with the clickable header or `1`, `2`, and `3`. Opening starts with
 Candidates when proposals need attention, otherwise Memories. Refresh retains
 the selected view and row where possible. Resolved candidates move to History.
-Rows show action, type, title, status, and exact target/origin. The header shows
+Rows show action, type, title, status, and exact target/origin. A candidate's
+status reflects the same read-only freshness check acceptance runs: a recorded
+`stale` decision that would now apply reads `ready`, and a pending or stale
+candidate whose targets changed since capture reads `superseded` (only `r`
+resolves it). Refresh reads the public journal once and authenticates each
+decision once. The header shows
 workspace, pending/recovery counts, history retention, and this client's running pass. Opening attempts checked recovery; a busy owner does
 not prevent read-only inspection or lose its claim. Refresh preserves the active
 session composer draft. Another client's unavailable memory root remains visible,

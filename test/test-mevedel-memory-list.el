@@ -162,6 +162,19 @@
       (with-current-buffer view
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4))))))
+  :doc "candidate rows label stale and pending proposals by what acceptance would do now"
+  (let ((index (file-name-concat memory "MEMORY.md"))
+        (label (lambda () (aref (cadr (mevedel-memory-list--entry (car (mevedel-memory-list--collect context)) nil)) 3))))
+    (should (equal "pending" (funcall label)))
+    (write-region "- [Topic](topic.md) - Conflicting edit\n" nil index nil 'silent)
+    (should (equal "superseded" (funcall label)))
+    (should (eq 'stale (plist-get (mevedel-memory-decision-apply
+                                   workspace (plist-get (car (mevedel-memory-list--collect context)) :pass) id)
+                                  :status)))
+    (should (equal "superseded" (funcall label)))
+    (write-region "- [Topic](topic.md) - Original\n" nil index nil 'silent)
+    (should (eq 'stale (plist-get (car (mevedel-memory-list--collect context)) :status)))
+    (should (equal "ready" (funcall label))))
   :doc "inspection shows an effective index diff and keeps captured evidence for conflicts"
   (let* ((row (car (mevedel-memory-list--collect context)))
          (index (file-name-concat memory "MEMORY.md")))

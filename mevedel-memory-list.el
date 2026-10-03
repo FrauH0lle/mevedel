@@ -75,7 +75,8 @@
   "Return persisted proposal rows for CONTEXT without writing or inferring."
   (let* ((workspace (mevedel-cockpit-context-workspace context))
          (entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
-         (writes (mevedel-memory-write-list workspace)) last-pass seen rows)
+         (writes (mevedel-memory-write-list workspace))
+         (passes (make-hash-table :test #'equal)) last-pass seen rows)
     ;; Accepted private state remains inspectable if public publication failed.
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes")
@@ -90,7 +91,9 @@
           (push pass seen)
           (condition-case err
               (let ((accepted (mevedel-memory-store-accepted workspace pass)))
+                (clrhash passes)
                 (when accepted
+                  (puthash pass accepted passes)
                   (let ((date (plist-get (plist-get accepted :review) :created)))
                     (when (string> date (or last-pass "")) (setq last-pass date))))
                 (when (and accepted (null (plist-get accepted :proposals)))
@@ -100,7 +103,7 @@
                   (let* ((id (plist-get proposal :id))
                          (scope (plist-get (plist-get accepted :prepared) :scope))
                          (root (cdr (assoc (plist-get proposal :root) (plist-get scope :roots))))
-                         (decision (mevedel-memory-decision-status workspace id))
+                         (decision (mevedel-memory-decision-status workspace id entries passes))
                          (write (seq-find (lambda (row) (and (equal id (plist-get (plist-get row :intent) :proposal))
                                                             (or (plist-get row :marked) (plist-get row :error)))) writes))
                          (status (or (plist-get decision :status) 'pending)) problem)
@@ -111,6 +114,10 @@
                     (when problem (setq status 'unavailable))
                     (push (list :id id :pass pass :proposal proposal :accepted accepted :decision decision :write write
                                 :created (plist-get (plist-get accepted :review) :created) :status status :error problem
+                                ;; A recorded stale decision may since have become applicable, or a pending
+                                ;; proposal superseded; label rows by what accepting would do now.
+                                :check (when (mevedel-memory-decision-actionable-status-p status)
+                                         (plist-get (mevedel-memory-decision--application-input accepted proposal) :status))
                                 :target (format "%s%s" (file-name-concat (plist-get root :dir) (plist-get proposal :file))
                                                 (if (plist-get root :client) (format " [%s]" (plist-get root :client)) ""))) rows))))
             (error (push (list :id pass :pass pass :status 'unavailable :error (error-message-string err)) rows))))))
@@ -134,7 +141,11 @@
                   (or (plist-get proposal :type) (plist-get item :type) "")
                   (or (plist-get proposal :title) (plist-get item :title)
                       (and (eq (plist-get item :kind) 'review) "No proposed changes") "Unavailable record")
-                  (symbol-name (plist-get item :status))
+                  (pcase (list (plist-get item :status) (plist-get item :check))
+                    ('(stale fresh) "ready")
+                    (`(,_ stale) "superseded")
+                    (`(,_ unavailable) "unavailable")
+                    (`(,status ,_) (symbol-name status)))
                   (or (plist-get item :target) (plist-get item :created) (format "%s" (plist-get item :id)))))))
 
 (defun mevedel-memory-list--header (_items context)
