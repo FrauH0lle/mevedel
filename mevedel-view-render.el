@@ -252,6 +252,7 @@
 (defvar mevedel-view--agent-handle-map)
 (defvar mevedel-view--agent-label-map)
 (defvar mevedel-view--agent-transcript-p)
+(defvar mevedel-view--agent-path)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--call-preserving-input-text
@@ -2087,6 +2088,7 @@ Execution outcome remains independent of lifecycle and disclosure state."
                   ((eq vtype 'tool-preparing) "…")
                   (prompt-p "◆")
                   ((eq tool-status 'error) "×")
+                  ((and (not agent-p) (eq tool-status 'running)) "●")
                   ((and agent-p (eq status 'running)) "●")
                   ((and agent-p (memq status '(blocked waiting))) "!")
                   ((and agent-p (memq status '(error failed))) "×")
@@ -2215,9 +2217,11 @@ every row."
         (sandbox
          (mevedel-view--sandbox-summary-line
           (plist-get rendering :sandbox-summary))))
-    (if sandbox
-        (concat header "\n" sandbox)
-      header)))
+    (let ((block (if sandbox (concat header "\n" sandbox) header)))
+      ;; A collapsed group still projects the completions folded into it.
+      (if-let* ((records (plist-get rendering :execution-completions)))
+          (propertize block 'mevedel-view-execution-completions records)
+        block))))
 
 (defvar mevedel-view--rendering-indent ""
   "Line prefix applied to the rendering currently being inserted.
@@ -2431,7 +2435,7 @@ folding a run into a group does not lose the boundary it ran with."
                 (t (plist-get child :render-data))))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
-          (if (memq (plist-get child :kind) '(reasoning mailbox))
+          (if (memq (plist-get child :kind) '(reasoning mailbox completion))
               (plist-get child :rendering)
             (or (and tool
                      (mevedel-view--invoke-renderer tool render-data args result))
@@ -2538,8 +2542,19 @@ body of the block that ran them."
             (concat mevedel-view--rendering-indent indent))
            (mevedel-view--child-call-depth (1+ mevedel-view--child-call-depth))
            (start (point)))
-      (if-let* ((text (plist-get rendering :mailbox-text)))
-          (let ((mevedel-view-mailbox-collapse-line-threshold
+      (cond
+       ((plist-get rendering :completion-record)
+        (let ((record (plist-get rendering :completion-record)))
+          (mevedel-view--insert-hook-audit-block record source)
+          (add-text-properties
+           start (point)
+           `(mevedel-view-type tool-child
+                               mevedel-view-source ,source
+                               mevedel-view-collapsed ,collapsed))
+          (mevedel-view--apply-rendering-indent start (point))))
+       ((plist-get rendering :mailbox-text)
+          (let ((text (plist-get rendering :mailbox-text))
+                (mevedel-view-mailbox-collapse-line-threshold
                  (cond (mailbox-default-p
                         mevedel-view-mailbox-collapse-line-threshold)
                        (collapsed 0)
@@ -2559,10 +2574,11 @@ body of the block that ran them."
              `(mevedel-view-type tool-child
                                  mevedel-view-source ,source
                                  mevedel-view-collapsed ,collapsed))
-            (mevedel-view--apply-rendering-indent start (point)))
-        (if collapsed
-            (mevedel-view--render-collapsed-header rendering source)
-          (mevedel-view--render-expanded-body rendering source)))
+            (mevedel-view--apply-rendering-indent start (point))))
+       (collapsed
+        (mevedel-view--render-collapsed-header rendering source))
+       (t
+        (mevedel-view--render-expanded-body rendering source)))
       ;; Descendants have their own source identity and disclosure state.
       ;; Stamp only this row's body, even when it contains a compound call.
       (add-text-properties
@@ -4392,6 +4408,8 @@ Empty string when the turn contains only whitespace or markers."
 (autoload 'mevedel-view-audit-show-control-result "mevedel-view-audit")
 (autoload 'mevedel-view-audit-mailbox-breadcrumb "mevedel-view-audit")
 (autoload 'mevedel-view-audit-breadcrumb-present-p "mevedel-view-audit")
+(autoload 'mevedel-view-audit-breadcrumb-status "mevedel-view-audit")
+(autoload 'mevedel-view-audit-mailbox-completion "mevedel-view-audit")
 (autoload 'mevedel-view-audit-toggle-hook-audit "mevedel-view-audit")
 (autoload 'mevedel-view--decorate-code-blocks-in-range
   "mevedel-view-markdown")
@@ -5649,6 +5667,52 @@ one renderer, including execution summaries and sender links."
               (list :mailbox-text
                     (mevedel-view--user-turn-text (list seg) data-buf)))))
 
+(defun mevedel-view--completion-record-p (record)
+  "Return non-nil when hook audit RECORD is an execution breadcrumb."
+  (eq (plist-get record :type) 'execution-breadcrumb))
+
+(defun mevedel-view--split-completion-entries (entries)
+  "Return activity ENTRIES with execution breadcrumbs as entries of their own.
+A breadcrumb lands in the hook audits of whichever tool or audit segment
+precedes it, which would make that row demand individual presentation.  As a
+`completion' entry it instead folds into the activity group and is counted
+there, and still renders as its own line when no group absorbs it."
+  (mapcan
+   (lambda (entry)
+     (let* ((audit-p (eq (plist-get entry :kind) 'hook-audit))
+            (rendering (plist-get entry :rendering))
+            (audits (if audit-p
+                        (plist-get entry :hook-audits)
+                      (plist-get rendering :hook-audits)))
+            (crumbs (cl-remove-if-not #'mevedel-view--completion-record-p
+                                      audits)))
+       (if (null crumbs)
+           (list entry)
+         (let ((others (cl-remove-if #'mevedel-view--completion-record-p
+                                     audits)))
+           (append
+            (cond
+             ((not audit-p)
+              (list (plist-put (copy-sequence entry) :rendering
+                               (plist-put (copy-sequence rendering)
+                                          :hook-audits others))))
+             (others
+              (list (plist-put (copy-sequence entry) :hook-audits others))))
+            (mapcar
+             (lambda (record)
+               (let ((source (or (plist-get record :source)
+                                 (plist-get entry :source))))
+                 (list :kind 'completion
+                       :start (marker-position (car source))
+                       :end (marker-position (cdr source))
+                       :source source
+                       :count 1
+                       :group-child
+                       (list :kind 'completion :status 'success
+                             :rendering (list :completion-record record)))))
+             crumbs))))))
+   entries))
+
 (defun mevedel-view--tool-activity-entries (segments data-buf)
   "Return ordered tool, reasoning, and mailbox entries for SEGMENTS in DATA-BUF."
   (let (out thinking-group)
@@ -5680,7 +5744,7 @@ one renderer, including execution summaries and sender links."
              (push seg thinking-group)))
           (_ (push seg thinking-group))))
       (flush-thinking))
-    (nreverse out)))
+    (mevedel-view--split-completion-entries (nreverse out))))
 
 (defun mevedel-view--tool-activity-groupable-p (entries)
   "Return non-nil when activity ENTRIES may fold across thinking."
@@ -5999,11 +6063,55 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
 Each entry is (NAME SINGULAR PLURAL) with a `%d' count slot.  Tools
 without an entry -- MCP tools included -- fall back to \"NAME xN\".")
 
-(defun mevedel-view--tool-group-header (children)
-  "Return the one-line activity summary for grouped CHILDREN."
+(defun mevedel-view--group-child-completion (child)
+  "Return the execution completion grouped CHILD presents, or nil."
+  (pcase (plist-get child :kind)
+    ('completion (plist-get (plist-get child :rendering) :completion-record))
+    ('mailbox
+     (when-let* ((text (plist-get (plist-get child :rendering) :mailbox-text))
+                 ((string-search "type=\"EXECUTION\"" text)))
+       (mevedel-view-audit-mailbox-completion text)))))
+
+(defun mevedel-view--group-completions (children)
+  "Return the distinct execution completions among grouped CHILDREN.
+A delivery of this transcript's own command repeats the breadcrumb recorded
+when it finished, possibly in an earlier group, so only forwarded
+deliveries count as completions of their own."
+  (let ((own (or mevedel-view--agent-path "/root"))
+        records)
+    (dolist (child children (nreverse records))
+      (when-let* ((record (mevedel-view--group-child-completion child))
+                  ((not (and (eq (plist-get child :kind) 'mailbox)
+                             (equal (plist-get record :owner) own))))
+                  ((not (cl-find-if
+                         (lambda (prior)
+                           (and (equal (plist-get prior :execution-id)
+                                       (plist-get record :execution-id))
+                                (equal (plist-get prior :owner)
+                                       (plist-get record :owner))))
+                         records))))
+        (push record records)))))
+
+(defun mevedel-view--completion-summary-parts (records)
+  "Return group summary phrases counting completion RECORDS by outcome."
+  (let (counts parts)
+    (dolist (record records)
+      (cl-incf (alist-get (downcase (mevedel-view-audit-breadcrumb-status record))
+                          counts 0 nil #'equal)))
+    (dolist (status '("finished" "failed" "signaled" "stopped") (nreverse parts))
+      (when-let* ((count (alist-get status counts nil nil #'equal)))
+        (push (if parts
+                  (format "%d %s" count status)
+                (format "%d command%s %s" count (if (= count 1) "" "s") status))
+              parts)))))
+
+(defun mevedel-view--tool-group-header (children &optional completions)
+  "Return the one-line activity summary for grouped CHILDREN.
+COMPLETIONS are the distinct execution completions among them."
   (let (names counts (thought-count 0) (message-count 0))
     (dolist (child children)
       (cond
+       ((mevedel-view--group-child-completion child))
        ((eq (plist-get child :kind) 'mailbox) (cl-incf message-count))
        ((eq (plist-get child :kind) 'reasoning) (cl-incf thought-count))
        (t
@@ -6025,6 +6133,7 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
                    ((= count 1) name)
                    (t (format "%s ×%d" name count)))))
               names)
+             (mevedel-view--completion-summary-parts completions)
              (when (> message-count 0)
                (list (format (if (= message-count 1)
                                  "received %d message"
@@ -6090,7 +6199,9 @@ SUMMARY-ONLY omits cached tool bodies; recompute before expanding children."
                 (push child out))
               (cl-incf index)))))
     (when children
-      (list :header (mevedel-view--tool-group-header children)
+      (let ((completions (mevedel-view--group-completions children)))
+      (list :header (mevedel-view--tool-group-header children completions)
+            :execution-completions completions
             :vtype 'tool-group
             :expandable-p t
             :child-calls children
@@ -6111,7 +6222,7 @@ SUMMARY-ONLY omits cached tool bodies; recompute before expanding children."
                                   (mevedel-view--child-call-state-key
                                    child (plist-get child :source)))))
                       (not (cdr state))))
-                  children))))))
+                  children)))))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
@@ -6139,6 +6250,7 @@ rows, rows carrying hook audits, rows their renderer wants expanded or compact,
 coalesced rows, and renderer fallbacks.  Warning and note disclosures
 stay with their nested row inside the group."
   (let ((rendering (plist-get entry :rendering)))
+    (or (eq (plist-get entry :kind) 'completion)
     (and rendering
          (= (plist-get entry :count) 1)
          (not (eq (mevedel-view--rendering-status rendering) 'error))
@@ -6149,7 +6261,7 @@ stay with their nested row inside the group."
          (not (and (plist-member rendering :expandable-p)
                    (not (plist-get rendering :expandable-p))))
          (not (and (plist-member rendering :initially-collapsed-p)
-                   (not (plist-get rendering :initially-collapsed-p)))))))
+                   (not (plist-get rendering :initially-collapsed-p))))))))
 
 (defun mevedel-view--insert-tool-group (entries data-buf)
   "Insert grouped activity ENTRIES as one expandable row for DATA-BUF.
@@ -6185,6 +6297,7 @@ grouped activity row that expands into compound-tool nested rows."
           (mevedel-view--merge-tool-hook-audit-segments
            tool-segments data-buf))
          (entries
+          (mevedel-view--split-completion-entries
           (let (out)
             (dolist (seg tool-segments (nreverse out))
               (when-let* ((entry (mevedel-view--tool-segment-entry
@@ -6215,7 +6328,7 @@ grouped activity row that expands into compound-tool nested rows."
                                  :count
                                  (1+ (plist-get previous :count))))
                           (setcar out entry))
-                      (push entry out)))))))
+                      (push entry out))))))))
         (start-time (float-time))
         (inserted-rule nil)
         (rendered 0)
@@ -6238,6 +6351,13 @@ grouped activity row that expands into compound-tool nested rows."
                                   (plist-get rendering :header)
                                   count))))
                  (cond
+                  ((eq (plist-get entry :kind) 'completion)
+                   (let ((record (plist-get
+                                  (plist-get (plist-get entry :group-child)
+                                             :rendering)
+                                  :completion-record)))
+                     (mevedel-view--insert-hook-audit-block
+                      record (plist-get record :source))))
                   ((eq (plist-get entry :kind) 'hook-audit)
                    (dolist (record (plist-get entry :hook-audits))
                      (mevedel-view--insert-hook-audit-block

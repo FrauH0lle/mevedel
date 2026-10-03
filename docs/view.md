@@ -475,7 +475,13 @@ Delivered agent messages and agent results inside an activity run join the
 same group as independently expandable cards; `received N messages` counts
 them separately from tools. Yielded Bash completions use compact linked
 breadcrumbs instead of additional expandable mailbox cards, and do not
-repeat command output. Sender links and mailbox collapse thresholds for agent
+repeat command output. Inside an activity run they fold into the group as
+counted completions, such as `3 commands finished, 1 failed`, and show as
+linked rows when it expands; the group row keeps them identifiable while
+folded, so a later delivery of the same completion does not add another
+line. A delivery of the transcript's own command repeats the breadcrumb
+recorded when it finished and is not counted again. Completions no group
+absorbs remain standalone lines. Sender links and mailbox collapse thresholds for agent
 messages and answers stay the same. A newly formed group stays open when one
 of its rows is already open, so grouping
 does not hide text the reader is inspecting. An explicit group fold wins over
@@ -497,7 +503,8 @@ tools. A valid empty search is successful; a search that failed to run shows
 an error instead of a zero-match count. Bash rows show command, status and
 elapsed time; execution IDs, output counts, working directory and routine exit
 facts belong in expanded details. Their output disclosure starts closed for
-running and completed commands. The original row owns all progress and output,
+running and completed commands. A still-running command carries the running
+marker `●` rather than `✓`. The original row owns all progress and output,
 including output returned by a hidden, successful empty-input WriteStdin poll.
 Input and stop interactions remain visible and link to the original execution;
 their result links resolve the execution ID across the current transcript and

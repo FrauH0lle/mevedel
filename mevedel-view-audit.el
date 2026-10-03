@@ -419,18 +419,24 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
            mevedel-view-source ,source
            mevedel-view-source-key ,key))))))
 
+(defun mevedel-view-audit-breadcrumb-status (record)
+  "Return execution breadcrumb RECORD's terminal status word."
+  (let* ((facts (plist-get record :facts))
+         (termination (plist-get facts :termination)))
+    (cond ((eq termination 'signaled) "Signaled")
+          ((memq termination '(stopped interrupted cancelled owner-stopped))
+           "Stopped")
+          ((not (memq (plist-get facts :outcome)
+                      '(success no-match different false)))
+           "Failed")
+          (t "Finished"))))
+
 (defun mevedel-view-audit--breadcrumb-label (record)
   "Return the compact terminal label for execution breadcrumb RECORD."
   (let* ((facts (plist-get record :facts))
-         (outcome (plist-get facts :outcome))
          (termination (plist-get facts :termination))
-         (failed (not (memq outcome '(success no-match different false))))
-         (status (cond ((eq termination 'signaled) "Signaled")
-                       ((memq termination '(stopped interrupted cancelled
-                                           owner-stopped))
-                        "Stopped")
-                       (failed "Failed")
-                       (t "Finished")))
+         (status (mevedel-view-audit-breadcrumb-status record))
+         (failed (not (equal status "Finished")))
          (code (plist-get facts :exit-code))
          (command (or (plist-get record :command)
                       (plist-get facts :command) "Bash"))
@@ -470,7 +476,7 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
       (mevedel-view-render-add-display-properties
        start (point) 'execution-breadcrumb))))
 
-(defun mevedel-view-audit--mailbox-completion (text)
+(defun mevedel-view-audit-mailbox-completion (text)
   "Return the execution completion delivered by the mailbox block TEXT."
   (when-let* ((start (and (string-match "<agent-message\\([^>]*\\)>" text)
                            (match-end 0)))
@@ -484,37 +490,42 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
               (record (mevedel-view-audit-mailbox-breadcrumb body sender)))
     (plist-put record :delivery-body body)))
 
-(defun mevedel-view-audit--stashed-breadcrumb-p (stash record)
-  "Return non-nil if STASH contains RECORD's execution breadcrumb."
-  (let ((pos 0) (limit (length stash)) found)
-    (while (and (< pos limit) (not found))
-      (let ((prior (get-text-property
-                    pos 'mevedel-view-execution-breadcrumb stash)))
-        (setq found (and prior
-                         (equal (plist-get prior :execution-id)
+(defun mevedel-view-audit--projected-in-p (record start limit &optional object)
+  "Return non-nil if OBJECT from START to LIMIT projects RECORD's completion.
+OBJECT is a string or nil for the current buffer.  A breadcrumb line
+carries its own record; an activity group row carries the completions
+folded into it, so a collapsed group still counts as projecting them."
+  (cl-some
+   (lambda (property)
+     (let ((pos start) found)
+       (while (and (< pos limit) (not found))
+         (let ((value (get-text-property pos property object)))
+           (setq found
+                 (cl-some
+                  (lambda (prior)
+                    (and (equal (plist-get prior :execution-id)
                                 (plist-get record :execution-id))
                          (equal (plist-get prior :owner)
-                                (plist-get record :owner)))
-              pos (or (next-single-property-change
-                       pos 'mevedel-view-execution-breadcrumb stash limit)
-                      limit))))
-    found))
+                                (plist-get record :owner))))
+                  (if (eq property 'mevedel-view-execution-completions)
+                      value
+                    (and value (list value))))
+                 pos (or (next-single-property-change
+                          pos property object limit)
+                         limit))))
+       found))
+   '(mevedel-view-execution-breadcrumb mevedel-view-execution-completions)))
+
+(defun mevedel-view-audit--stashed-breadcrumb-p (stash record)
+  "Return non-nil if STASH contains RECORD's execution breadcrumb."
+  (mevedel-view-audit--projected-in-p record 0 (length stash) stash))
 
 (defun mevedel-view-audit-breadcrumb-present-p (record before)
   "Return non-nil if RECORD was already projected before BEFORE.
 Identity is local to this receiving transcript, not to the global
 execution, so parent and child may each display their own breadcrumb."
-  (let ((pos (point-min)) found)
-    (while (and (< pos before) (not found))
-      (let ((prior (get-text-property pos 'mevedel-view-execution-breadcrumb)))
-        (setq found (and prior
-                         (equal (plist-get prior :execution-id)
-                                (plist-get record :execution-id))
-                         (equal (plist-get prior :owner)
-                                (plist-get record :owner))))
-        (setq pos (or (next-single-property-change
-                       pos 'mevedel-view-execution-breadcrumb nil before)
-                      before))))
+  (let ((found (mevedel-view-audit--projected-in-p record (point-min) before))
+        (pos (point-min)))
     (unless found
       (setq pos (point-min))
       (while (and (< pos before) (not found))
@@ -593,7 +604,7 @@ changes."
                                 (lambda (segment)
                                   (when-let* (((eq (car segment) 'mailbox))
                                               (completion
-                                               (mevedel-view-audit--mailbox-completion
+                                               (mevedel-view-audit-mailbox-completion
                                                 (buffer-substring-no-properties
                                                  (cadr segment) (caddr segment)))))
                                     (funcall key completion)))

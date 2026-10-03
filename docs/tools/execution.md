@@ -127,7 +127,9 @@ the execution-history disclosure. These rules also apply within ToolCall.
 Only a command that actually yielded receives a completion breadcrumb. Whether
 completion was polled or delivered independently, the receiving transcript
 shows one linked line, such as `↳ Finished: ./run-tests  [Show result]` or
-`↳ Failed: ./run-tests · exit 1  [Show result]`. Foreground commands have no
+`↳ Failed: ./run-tests · exit 1  [Show result]`. Inside an activity group the
+line folds into the group and is counted there, as in
+`ran 2 commands, 1 command finished, 1 failed`. Foreground commands have no
 breadcrumb. The breadcrumb repeats neither output nor a metadata summary;
 `Show result` opens the original execution output, including from an older
 segment or an agent transcript. If the original row is unavailable, navigation
