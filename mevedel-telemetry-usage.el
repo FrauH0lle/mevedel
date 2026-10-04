@@ -131,9 +131,11 @@ inherited from an older transport's cleanup is not this parser's evidence."
 
 (defun mevedel-telemetry-usage--stream-cleanup (original process status)
   "Observe PROCESS completion before ORIGINAL handles STATUS.
-Freeze completion ownership across reentrant tool-loop transitions.  A failed
-curl cleanup can transition before assigning its error, so capture that call's
-usage before the next dispatch replaces the callback and resets its counts."
+Freeze completion ownership across reentrant tool-loop transitions.  gptel
+before `ec25a41' transitions a failed curl cleanup before assigning its error,
+so a pending tool call can dispatch the next call from inside ORIGINAL; capture
+this call's usage before that dispatch replaces the callback and resets its
+counts."
   (let* ((fsm (car (alist-get process gptel--request-alist)))
          (info (and fsm (gptel-fsm-info fsm)))
          (call (plist-get info :mevedel-usage-call))
@@ -192,10 +194,12 @@ This seam is downstream of mevedel's compaction/admission gates."
              (invocation (or (plist-get info :mevedel-agent-invocation)
                              ;; Agent request transforms may dispatch before
                              ;; gptel-request returns to install top-level keys.
-                             (when (and (boundp 'mevedel--agent-invocation)
-                                        (buffer-live-p (plist-get info :buffer)))
-                               (buffer-local-value 'mevedel--agent-invocation
-                                                   (plist-get info :buffer)))))
+                             (let ((buffer (plist-get info :buffer)))
+                               (when (and (buffer-live-p buffer)
+                                          (buffer-local-boundp
+                                           'mevedel--agent-invocation buffer))
+                                 (buffer-local-value 'mevedel--agent-invocation
+                                                     buffer)))))
              (request (plist-get info :mevedel-request))
              (backend (plist-get info :backend))
              (stream (and gptel-use-curl (plist-get info :stream)))
