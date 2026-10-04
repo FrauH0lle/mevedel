@@ -224,13 +224,60 @@ Unknown or missing charsets decode as UTF-8."
       (insert html)
       (libxml-parse-html-region (point-min) (point-max)))))
 
-(defun mevedel-tool-web--page-text ()
-  "Return readable text from the HTML response body at point."
-  (let ((dom (mevedel-tool-web--html-dom)))
+(defun mevedel-tool-web--page-text (&optional base)
+  "Return readable text from the HTML response body at point.
+Links become markdown links whose relative targets resolve against
+BASE, the page's URL."
+  (let* ((dom (mevedel-tool-web--html-dom))
+         (readable (or (eww-readable-dom dom) dom)))
     (with-temp-buffer
       (let ((shr-use-fonts nil) (shr-width 80))
-        (shr-insert-document (or (eww-readable-dom dom) dom)))
+        ;; `shr-insert-document' resets `shr-base'; a base element sets it.
+        (shr-insert-document (if base (eww-document-base base readable) readable)))
+      (mevedel-tool-web--markdown-links base)
       (buffer-substring-no-properties (point-min) (point-max)))))
+
+(defun mevedel-tool-web--without-fragment (url)
+  "Return URL without its fragment."
+  (replace-regexp-in-string "#.*\\'" "" url))
+
+(defun mevedel-tool-web--markdown-link (text url page)
+  "Return TEXT linking to URL as markdown, or nil to keep TEXT plain.
+Only http(s) links with text are kept; a link to PAGE, the fetched
+page's URL without fragment, is a same-page anchor.  The text keeps
+its surrounding whitespace and loses its line wrapping."
+  (let ((label (string-trim (replace-regexp-in-string "[ \t\n\r]+" " " text))))
+    (when (and (stringp url)
+               (string-match-p "\\`https?://" url)
+               (not (string-empty-p label))
+               (not (equal (mevedel-tool-web--without-fragment url) page)))
+      (let ((target (replace-regexp-in-string
+                     "[()]" (lambda (paren) (if (equal paren "(") "%28" "%29"))
+                     url t t)))
+        (concat (and (string-match "\\`[ \t\n\r]+" text) (match-string 0 text))
+                (if (equal label url)
+                    target
+                  (format "[%s](%s)"
+                          (replace-regexp-in-string "[][]" "\\\\\\&" label)
+                          target))
+                (and (string-match "[ \t\n\r]+\\'" text) (match-string 0 text)))))))
+
+(defun mevedel-tool-web--markdown-links (base)
+  "Rewrite the current buffer's `shr-url' runs as markdown links.
+BASE is the page's URL."
+  (let ((page (and base (mevedel-tool-web--without-fragment base))))
+    (goto-char (point-min))
+    (while (< (point) (point-max))
+      (let* ((start (point))
+             (url (get-text-property start 'shr-url))
+             (end (or (next-single-property-change start 'shr-url) (point-max)))
+             (link (and url (mevedel-tool-web--markdown-link
+                             (buffer-substring-no-properties start end) url page))))
+        (if (not link)
+            (goto-char end)
+          (delete-region start end)
+          (goto-char start)
+          (insert link))))))
 
 
 ;;
@@ -441,7 +488,8 @@ decoded into :text; others stay raw bytes in :data."
                   :type type :kind kind
                   :bytes (- (point-max) (point)))
             (pcase kind
-              ('html (list :text (mevedel-tool-web--page-text)))
+              ('html (list :text (mevedel-tool-web--page-text
+                                  (url-recreate-url url-current-object))))
               ('text (list :text (mevedel-tool-web--body)))
               (_ (list :data (buffer-substring-no-properties (point) (point-max))))))))
 
