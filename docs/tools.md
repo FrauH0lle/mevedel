@@ -428,8 +428,17 @@ instead of opening an interactive directory prompt.
 `variable_value` always asks for permission; `library_source` must resolve
 inside a local load-path directory.
 
-WebSearch uses the configured EWW search engine and returns up to five URLs
-and excerpts, with two searches active at a time. WebFetch renders readable
+WebSearch queries DuckDuckGo's HTML endpoint, independent of EWW's
+`eww-search-prefix`, with two searches active at a time. It parses
+DuckDuckGo's result blocks rather than every link on the page: each result
+contributes its title, its destination unwrapped from DuckDuckGo's `uddg`
+redirect parameter and re-encoded as a valid URL, and its snippet. Ads are
+skipped, destinations are deduplicated, and at most ten numbered results are
+returned. Optional `allowed_domains` or `blocked_domains` (not both) add
+`site:` or `-site:` terms to the query and also filter results by host at a
+label boundary, so filtering holds even when DuckDuckGo ignores the terms.
+DuckDuckGo's bot challenge page is a tool error, distinct from an empty
+result. WebFetch renders readable
 HTML with EWW/SHR; YouTube URLs retrieve video descriptions and English captions.
 Every HTTP retrieval has a 30-second timeout, including its redirects. Each
 YouTube stage gets its own timeout. The retrieval owns its response buffers

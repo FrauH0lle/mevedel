@@ -12,9 +12,10 @@
 
 ;;; Code:
 
-(require 'eww)
-(require 'url-http)
 (require 'cl-lib)
+(require 'eww)
+(require 'mail-parse)
+(require 'url-http)
 
 (eval-when-compile
   (require 'mevedel-tool-registry))
@@ -109,55 +110,145 @@ including redirects.  Cleanup precedes delivery, exactly once."
                    (finish nil "Retrieval did not create a response buffer"))))
         (error (finish nil (error-message-string err)))))))
 
+(defun mevedel-tool-web--content-type ()
+  "Return the response's (MIME-TYPE . CHARSET), each a string or nil."
+  (let ((parsed (and (bound-and-true-p url-http-content-type)
+                     (mail-header-parse-content-type url-http-content-type))))
+    (cons (and (car parsed) (downcase (car parsed)))
+          (cdr (assq 'charset (cdr parsed))))))
+
+(defun mevedel-tool-web--body (&optional html-p)
+  "Return the response body after point, decoded.
+The Content-Type charset wins; HTML-P also consults a meta charset.
+Unknown or missing charsets decode as UTF-8."
+  (let* ((charset (or (cdr (mevedel-tool-web--content-type))
+                      (save-excursion (eww-detect-charset html-p))))
+         (coding (or (and charset
+                          (ignore-errors
+                            (coding-system-from-name (downcase charset))))
+                     'utf-8)))
+    (decode-coding-string
+     (buffer-substring-no-properties (point) (point-max)) coding)))
+
+(defun mevedel-tool-web--html-dom ()
+  "Return the DOM of the HTML response body at point."
+  (let ((html (mevedel-tool-web--body t)))
+    (with-temp-buffer
+      (insert html)
+      (libxml-parse-html-region (point-min) (point-max)))))
+
 (defun mevedel-tool-web--page-text ()
   "Return readable text from the HTML response body at point."
-  (let ((dom (libxml-parse-html-region (point) (point-max))))
+  (let ((dom (mevedel-tool-web--html-dom)))
     (with-temp-buffer
       (let ((shr-use-fonts nil) (shr-width 80))
         (shr-insert-document (or (eww-readable-dom dom) dom)))
-      (decode-coding-region (point-min) (point-max) 'utf-8)
       (buffer-substring-no-properties (point-min) (point-max)))))
 
 
 ;;
 ;;; Search
 
+(defvar mevedel-tool-web--search-url "https://html.duckduckgo.com/html/?q="
+  "DuckDuckGo HTML endpoint; the hexified query is appended.")
+
+(defvar mevedel-tool-web--search-limit 10
+  "Maximum number of results one search returns.")
+
 (defvar mevedel-tool-web--search-active 0
   "Number of active web searches.")
 (defvar mevedel-tool-web--search-queue nil
-  "FIFO of pending (URL CALLBACK) searches.")
+  "FIFO of pending (URL PARSE CALLBACK) searches.")
 
-(defun mevedel-tool-web--search-results ()
-  "Return the first five links and excerpts from a search response body."
-  (let ((dom (libxml-parse-html-region (point) (point-max))) results)
-    (with-temp-buffer
-      (let ((shr-use-fonts nil) (shr-width 80))
-        (shr-insert-document (or (eww-readable-dom dom) dom)))
-      (goto-char (point-min))
-      (while (and (not (eobp)) (< (length results) 5))
-        (let ((start (point)) (url (get-text-property (point) 'shr-url)))
-          (goto-char (or (next-single-property-change (point) 'shr-url)
-                         (point-max)))
-          (when url
-            (when (and (not (eobp)) (not (get-text-property (point) 'shr-url)))
-              (goto-char (or (next-single-property-change (point) 'shr-url)
-                             (point-max))))
-            (when-let* (((stringp url))
-                        (index (string-search "http" url)))
-              (push (concat (url-unhex-string (substring url index)) "\n\n"
-                            (string-trim (buffer-substring-no-properties start (point)))
-                            "\n\n----\n") results)))))
-      (apply #'concat (nreverse results)))))
+(defun mevedel-tool-web--class-p (node class)
+  "Return non-nil when NODE's class attribute has the token CLASS."
+  (and (consp node)
+       (member class (split-string (or (dom-attr node 'class) "")))))
+
+(defun mevedel-tool-web--by-class (dom class)
+  "Return the elements of DOM whose class attribute has the token CLASS."
+  (dom-search dom (lambda (node) (mevedel-tool-web--class-p node class))))
+
+(defun mevedel-tool-web--node-text (node)
+  "Return NODE's text with whitespace runs collapsed."
+  (string-trim (replace-regexp-in-string "[ \t\n\r]+" " " (dom-inner-text node))))
+
+(defun mevedel-tool-web--result-url (href)
+  "Return the destination of DuckDuckGo result link HREF, or nil.
+DuckDuckGo wraps destinations as the `uddg' parameter of its own
+redirect link; an absolute http(s) HREF is already the destination."
+  (when (stringp href)
+    (if-let* ((start (string-search "?" href))
+              (target (car (alist-get "uddg"
+                                      (url-parse-query-string
+                                       (substring href (1+ start)))
+                                      nil nil #'equal))))
+        (url-encode-url (decode-coding-string target 'utf-8))
+      (and (string-match-p "\\`https?://" href) href))))
+
+(defun mevedel-tool-web--domains (domains)
+  "Return DOMAINS, a list or vector of host suffixes, normalized."
+  (mapcar (lambda (domain)
+            (downcase (string-remove-prefix
+                       "." (string-remove-prefix "*" (string-trim domain)))))
+          (append domains nil)))
+
+(defun mevedel-tool-web--domain-match-p (url domains)
+  "Return non-nil when URL's host is one of DOMAINS or a subdomain of one."
+  (when-let* ((host (mevedel-tool-web--url-host url)))
+    (setq host (downcase host))
+    (seq-some (lambda (domain)
+                (or (string= host domain)
+                    (string-suffix-p (concat "." domain) host)))
+              domains)))
+
+(defun mevedel-tool-web--search-results (allowed blocked)
+  "Return formatted DuckDuckGo results from the response body at point.
+When ALLOWED is non-nil, keep only results on those domains; drop
+results on BLOCKED domains.  Signal an error for a bot challenge."
+  (let ((dom (mevedel-tool-web--html-dom))
+        (seen (make-hash-table :test #'equal))
+        (found 0)
+        results)
+    (dolist (block (mevedel-tool-web--by-class dom "result"))
+      (when-let* (((not (mevedel-tool-web--class-p block "result--ad")))
+                  (link (car (mevedel-tool-web--by-class block "result__a")))
+                  (url (mevedel-tool-web--result-url (dom-attr link 'href)))
+                  ((not (gethash url seen))))
+        (puthash url t seen)
+        (cl-incf found)
+        (when (and (< (length results) mevedel-tool-web--search-limit)
+                   (or (null allowed)
+                       (mevedel-tool-web--domain-match-p url allowed))
+                   (not (mevedel-tool-web--domain-match-p url blocked)))
+          (push (list (mevedel-tool-web--node-text link) url
+                      (when-let* ((snippet (car (mevedel-tool-web--by-class
+                                                 block "result__snippet"))))
+                        (mevedel-tool-web--node-text snippet)))
+                results))))
+    (cond
+     (results
+      (let ((index 0))
+        (mapconcat (pcase-lambda (`(,title ,url ,snippet))
+                     (format "%d. %s\n   %s%s" (cl-incf index) title url
+                             (if (and snippet (not (string-empty-p snippet)))
+                                 (concat "\n   " snippet)
+                               "")))
+                   (nreverse results) "\n\n")))
+     ((or (dom-by-id dom "\\`challenge-form\\'")
+          (mevedel-tool-web--by-class dom "anomaly-modal__modal"))
+      (error "DuckDuckGo refused the search (bot challenge); retry later"))
+     ((> found 0) "No results on the requested domains.")
+     (t "No results."))))
 
 (defun mevedel-tool-web--start-searches ()
   "Start queued searches while fewer than two retrievals are active."
   (while (and mevedel-tool-web--search-queue
               (< mevedel-tool-web--search-active 2))
-    (pcase-let ((`(,url ,callback) (pop mevedel-tool-web--search-queue)))
+    (pcase-let ((`(,url ,parse ,callback) (pop mevedel-tool-web--search-queue)))
       (cl-incf mevedel-tool-web--search-active)
       (mevedel-tool-web--retrieve
-       url
-       #'mevedel-tool-web--search-results
+       url parse
        (lambda (value error)
          (cl-decf mevedel-tool-web--search-active)
          (unwind-protect
@@ -167,13 +258,31 @@ including redirects.  Cleanup precedes delivery, exactly once."
            (mevedel-tool-web--start-searches)))))))
 
 (defun mevedel-tool-web--websearch (callback args)
-  "Search for the query in ARGS and deliver a handler result to CALLBACK."
-  (setq mevedel-tool-web--search-queue
-        (nconc mevedel-tool-web--search-queue
-               (list (list (concat eww-search-prefix
-                                   (url-hexify-string (plist-get args :query)))
-                           callback))))
-  (mevedel-tool-web--start-searches))
+  "Search for the query in ARGS and deliver a handler result to CALLBACK.
+Optional `allowed_domains' or `blocked_domains' in ARGS add `site:'
+terms to the query and filter the returned results."
+  (let ((allowed (mevedel-tool-web--domains (plist-get args :allowed_domains)))
+        (blocked (mevedel-tool-web--domains (plist-get args :blocked_domains))))
+    (if (and allowed blocked)
+        (funcall callback
+                 (list :result "Error: Pass allowed_domains or blocked_domains, not both."
+                       :status 'error))
+      (let ((query (string-join
+                    (cons (plist-get args :query)
+                          (if allowed
+                              (list (mapconcat (lambda (domain) (concat "site:" domain))
+                                               allowed " OR "))
+                            (mapcar (lambda (domain) (concat "-site:" domain))
+                                    blocked)))
+                    " ")))
+        (setq mevedel-tool-web--search-queue
+              (nconc mevedel-tool-web--search-queue
+                     (list (list (concat mevedel-tool-web--search-url
+                                         (url-hexify-string query))
+                                 (lambda ()
+                                   (mevedel-tool-web--search-results allowed blocked))
+                                 callback))))
+        (mevedel-tool-web--start-searches)))))
 
 
 ;;
@@ -339,8 +448,16 @@ CHUNK-TIME is the number of seconds per paragraph (default 30)."
           :tool name
           :host (and url (mevedel-tool-web--url-host url))
           :query query
+          :results (and query (mevedel-tool-web--result-count result))
           :lines (length (split-string result "\n" t))
           :chars (length result))))
+
+(defun mevedel-tool-web--result-count (result)
+  "Return the number of numbered search entries in RESULT."
+  (let ((count 0) (start 0))
+    (while (string-match "^[0-9]+\\. " result start)
+      (setq count (1+ count) start (match-end 0)))
+    count))
 
 (defun mevedel-tool-web--render-fetch (name args result render-data)
   "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA.
@@ -361,15 +478,15 @@ the expanded body."
 
 (defun mevedel-tool-web--render-search (name args result render-data)
   "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA.
-Header shows the query and output line count; body fontifies in the
-data buffer's major mode (see `mevedel-tool-web--render-fetch' for
-why)."
+Header shows the query and result count; body fontifies in the data
+buffer's major mode (see `mevedel-tool-web--render-fetch' for why)."
   (when (stringp result)
     (let* ((query (or (plist-get args :query) ""))
-           (lines (or (plist-get render-data :lines)
-                      (length (split-string result "\n" t)))))
-      (list :header (format "%s: %s (%d lines)"
-                            (or name "WebSearch") query lines)
+           (count (or (plist-get render-data :results)
+                      (mevedel-tool-web--result-count result))))
+      (list :header (format "%s: %s (%d result%s)"
+                            (or name "WebSearch") query count
+                            (if (= count 1) "" "s"))
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :initially-collapsed-p t))))
@@ -384,12 +501,18 @@ why)."
 
   (mevedel-define-tool
     :name "WebSearch"
-    :description "Search the web for the top results to a query."
+    :description "Search the web with DuckDuckGo for titled result links and snippets."
     :summary "Search the web for the top results to a query."
     :prompt-file "prompts/tools/websearch.md"
     :handler #'mevedel-tool-web--websearch
     :args ((query string :required
-                  "The natural language search query, can be multiple words."))
+                  "The natural language search query, can be multiple words.")
+           (allowed_domains array :optional
+                            "Only return results on these domains or their subdomains."
+                            :items (:type string))
+           (blocked_domains array :optional
+                            "Never return results on these domains or their subdomains."
+                            :items (:type string)))
     :async-p t
     :category "mevedel-web"
     :groups (web)
