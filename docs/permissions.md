@@ -90,6 +90,16 @@ Hook integration sits around this chain:
   allow. Its payload identifies the original policy, user, reviewer, `PreToolUse`, or
   `PermissionRequest` provenance.
 
+`mevedel-tool-permission-decide-now` decides a call that a running tool makes
+on the model's behalf without dispatching it, such as WebFetch following a
+redirect to another host. It runs the same decision chain under a given
+buffer's session, request, agent invocation and buffer-local policy, but never
+prompts and never runs hooks: an `allow` becomes `ask` when a `PreToolUse`
+handler would run for the tool, since only a dispatched call runs it. A dead
+buffer or one without a session yields `ask`. The caller treats `ask` as "make
+this a fresh tool call", which then receives the full chain, hooks and prompt
+included. Each decision is written to the permission log with its reason.
+
 Permission invocation context is normalized in the decision facade before
 callers enter the decision chain. That context centralizes specifier
 extraction, rule buckets, mode, allowed roots, resource grants,
@@ -162,7 +172,7 @@ One specifier per rule:
 | `:path`    | path (glob, `~` exp.)  | Read, ApplyPatch, Glob, Grep, ... |
 | `:pattern` | command/expression glob | Bash; deliberately authored Eval rules |
 | `:expression` | whole expression, literal | Remembered Eval approvals and execution profiles |
-| `:domain`  | host name (glob)       | WebFetch, WebSearch               |
+| `:domain`  | host name (glob)       | WebFetch                          |
 | `:name`    | free-form name (glob)  | Agent (`role`)                    |
 
 Precedence: specifier rules outrank generic; within a group

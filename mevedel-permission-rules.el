@@ -61,7 +61,7 @@ rule matches against.  At most one specifier is allowed per rule:
                    Used by remembered Eval approvals, including execution
                    profiles and full escalation.  No wildcard expansion.
   :domain  GLOB  - host name (supports *)
-                   Used by WebFetch and WebSearch.
+                   Used by WebFetch, including its redirect targets.
   :name    GLOB  - match name (supports *)
                    Used by Agent (task_name).
 

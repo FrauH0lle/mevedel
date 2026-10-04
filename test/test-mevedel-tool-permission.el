@@ -30,6 +30,7 @@
 (require 'mevedel-tool-patch)
 (require 'mevedel-tool-permission)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tool-web)
 
 
 ;;
@@ -76,6 +77,70 @@
       (should (equal "parent/1" (plist-get entry :tool-use-id)))
       (should (equal "parent" (plist-get entry :parent-tool-use-id)))
       (should (eq 'ptc (plist-get entry :call-source))))))
+
+(defun test-mevedel-tool-permission--decide (rules &optional mode hook-rules)
+  "Decide WebFetch of example.org under session RULES, MODE and HOOK-RULES.
+Return the outcome and the logged entry."
+  (let* ((mevedel-permission-log-enabled t)
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-hook-rules hook-rules)
+         (session (mevedel-session--create
+                   :name "decide-now" :permission-mode (or mode 'ask)
+                   :permission-rules rules)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (let ((outcome (mevedel-tool-permission-decide-now
+                      "WebFetch" '(:url "https://example.org/x") nil 'redirect)))
+        (list outcome
+              (car (last (mevedel-session-permission-log-pending session))))))))
+
+(mevedel-deftest mevedel-tool-permission-decide-now
+  (:before-each (mevedel-tool-web--register))
+  ,test
+  (test)
+  :doc "allows a read-only call with no rule through the permission mode"
+  (pcase-let ((`(,outcome ,entry) (test-mevedel-tool-permission--decide nil)))
+    (should (eq 'allow outcome))
+    (should (eq 'mode (plist-get entry :via)))
+    (should (eq 'redirect (plist-get entry :reason)))
+    (should (equal "example.org" (plist-get entry :specifier-value))))
+
+  :doc "follows session allow, ask and deny rules for the target domain"
+  (should (eq 'allow (car (test-mevedel-tool-permission--decide
+                           '(("WebFetch" :domain "*.org" :action allow))))))
+  (should (eq 'ask (car (test-mevedel-tool-permission--decide
+                         '(("WebFetch" :domain "example.org" :action ask))))))
+  (should (eq 'deny (car (test-mevedel-tool-permission--decide
+                          '(("WebFetch" :domain "example.org" :action deny))))))
+  (should (eq 'allow (car (test-mevedel-tool-permission--decide
+                           '(("WebFetch" :domain "other.org" :action deny))))))
+
+  :doc "turns allow into ask when a PreToolUse hook would run for the tool"
+  (pcase-let ((`(,outcome ,entry)
+               (test-mevedel-tool-permission--decide
+                nil nil '((PreToolUse ((:matcher "WebFetch"
+                                        :hooks ((:type command :command "true")))))))))
+    (should (eq 'ask outcome))
+    (should (eq 'pre-tool-hook (plist-get entry :via))))
+  (should (eq 'allow (car (test-mevedel-tool-permission--decide
+                           nil nil '((PreToolUse ((:matcher "Bash"
+                                                   :hooks ((:type command :command "true"))))))))))
+
+  :doc "a hook never relaxes a deny"
+  (should (eq 'deny (car (test-mevedel-tool-permission--decide
+                          '(("WebFetch" :domain "example.org" :action deny))
+                          nil '((PreToolUse ((:matcher "WebFetch"
+                                              :hooks ((:type command :command "true"))))))))))
+
+  :doc "asks without a live buffer or session"
+  (let ((buffer (generate-new-buffer " *decide-now*")))
+    (kill-buffer buffer)
+    (should (eq 'ask (mevedel-tool-permission-decide-now
+                      "WebFetch" '(:url "https://example.org/") buffer))))
+  (with-temp-buffer
+    (should (eq 'ask (mevedel-tool-permission-decide-now
+                      "WebFetch" '(:url "https://example.org/"))))))
 
 (mevedel-deftest mevedel-tool-permission--denial-outcome-p ()
   ,test

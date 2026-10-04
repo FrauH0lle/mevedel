@@ -11,6 +11,7 @@
 (require 'mevedel-tools)
 (require 'gptel-request)
 (require 'mevedel-view)
+(require 'mevedel-tool-permission)
 (require 'mevedel-tool-web)
 (require 'mevedel-view-render)
 (require 'mevedel-view-segments)
@@ -177,6 +178,16 @@
                              (bound-and-true-p url-callback-arguments)))))))
       (kill-buffer foreign)))
 
+  :doc "hands a cross-host redirect back when no session can approve it"
+  (mevedel-test-http
+   (lambda (_) '("302 Found" "Location: https://other.invalid/page\r\n" ""))
+   (lambda (base)
+     (with-temp-buffer
+       (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
+         (should (eq 'success (plist-get result :handler-status)))
+         (should (string-prefix-p "REDIRECT: 127.0.0.1 redirects to https://other.invalid/page"
+                                  (plist-get result :result)))))))
+
   :doc "HTTP failure becomes a canonical tool error"
   (mevedel-test-http
    (lambda (_) '("500 Internal Server Error" "" "failed"))
@@ -240,7 +251,152 @@
          "https://example.invalid/" #'ignore
          (lambda (value error) (push (list value error) results)))))
     (should (equal '((nil "Transport failure")) results))
-    (should-not (memq timer timer-list))))
+    (should-not (memq timer timer-list)))
+
+  :doc "refuses non-http schemes before connecting"
+  (dolist (url '("file:///etc/passwd" "ftp://example.com/x" "example.com"))
+    (should (string-prefix-p
+             "Unsupported URL"
+             (cadr (test-mevedel-tool-web--retrieve url #'ignore)))))
+
+  :doc "refuses a redirect into a non-http scheme"
+  (mevedel-test-http
+   (lambda (_) '("302 Found" "Location: file:///etc/passwd\r\n" ""))
+   (lambda (base)
+     (should (equal '(nil "Unsupported URL (only http and https are retrieved): file:///etc/passwd")
+                    (test-mevedel-tool-web--retrieve base #'ignore)))))
+
+  :doc "follows same-host redirects up to the limit and releases every hop"
+  (let ((mevedel-tool-web--max-redirects 2) (before (buffer-list)) requests)
+    (mevedel-test-http
+     (lambda (request) (push request requests) '("302 Found" "Location: /loop\r\n" ""))
+     (lambda (base)
+       (should (equal '(nil "Too many redirects (more than 2)")
+                      (test-mevedel-tool-web--retrieve base #'ignore)))))
+    (should (= 3 (length requests)))
+    (dolist (buffer (buffer-list))
+      (unless (memq buffer before)
+        (should-not (with-current-buffer buffer
+                      (bound-and-true-p url-callback-arguments))))))
+
+  :doc "asks REDIRECT about a cross-host hop that follows a same-host hop"
+  (let (calls)
+    (mevedel-test-http
+     (lambda (request)
+       (if (string-match-p " /first " request)
+           '("302 Found" "Location: /second\r\n" "")
+         '("301 Moved Permanently" "Location: http://other.invalid/page\r\n" "")))
+     (lambda (base)
+       (should (equal '("handed back" nil)
+                      (test-mevedel-tool-web--retrieve
+                       (concat base "/first") #'ignore
+                       :redirect (lambda (from target)
+                                   (push (list from target) calls)
+                                   '(result . "handed back")))))
+       (should (equal (list (list (concat base "/second") "http://other.invalid/page"))
+                      calls)))))
+
+  :doc "a REDIRECT error settles as an error"
+  (mevedel-test-http
+   (lambda (_) '("302 Found" "Location: http://other.invalid/\r\n" ""))
+   (lambda (base)
+     (should (equal '(nil "blocked")
+                    (test-mevedel-tool-web--retrieve
+                     base #'ignore :redirect (lambda (_ _) '(error . "blocked")))))))
+
+  :doc "keeps the method through a 307 and switches a 302 to GET"
+  (let (requests)
+    (mevedel-test-http
+     (lambda (request)
+       (push request requests)
+       (cond ((string-match-p " /temporary " request)
+              '("307 Temporary Redirect" "Location: /target\r\n" ""))
+             ((string-match-p " /found " request)
+              '("302 Found" "Location: /target\r\n" ""))
+             (t '("200 OK" "Content-Type: text/plain\r\n" "done"))))
+     (lambda (base)
+       (let ((url-request-method "POST") (url-request-data "x"))
+         (test-mevedel-tool-web--retrieve (concat base "/temporary") #'ignore)
+         (test-mevedel-tool-web--retrieve (concat base "/found") #'ignore))))
+    (should (equal '("POST /temporary" "POST /target" "POST /found" "GET /target")
+                   (mapcar (lambda (request) (substring request 0 (string-search " HTTP" request)))
+                           (reverse requests))))))
+
+(defun test-mevedel-tool-web--retrieve (url parse &rest keys)
+  "Retrieve URL with PARSE and KEYS; return the settled (VALUE ERROR)."
+  (let (results)
+    (apply #'mevedel-tool-web--retrieve url parse
+           (lambda (value error) (push (list value error) results))
+           keys)
+    (let ((deadline (+ (float-time) 4)))
+      (while (and (not results) (< (float-time) deadline))
+        (accept-process-output nil 0.01)))
+    (should (= 1 (length results)))
+    (car results)))
+
+(mevedel-deftest mevedel-tool-web--unsupported-url ()
+  ,test
+  (test)
+  :doc "accepts http and https URLs with a host"
+  (should-not (mevedel-tool-web--unsupported-url "https://example.com/a"))
+  (should-not (mevedel-tool-web--unsupported-url "HTTP://example.com"))
+  :doc "rejects other schemes, missing hosts and non-strings"
+  (should (mevedel-tool-web--unsupported-url "file:///etc/passwd"))
+  (should (mevedel-tool-web--unsupported-url "http://"))
+  (should (mevedel-tool-web--unsupported-url nil)))
+
+(mevedel-deftest mevedel-tool-web--local-host-p ()
+  ,test
+  (test)
+  :doc "recognizes loopback, private and link-local hosts"
+  (dolist (host '("localhost" "app.localhost" "127.0.0.1" "10.1.2.3" "192.168.0.1"
+                  "172.16.0.1" "172.31.255.1" "169.254.1.1" "[::1]" "fd12:3456::1"
+                  "fe80::1" "0.0.0.0"))
+    (should (mevedel-tool-web--local-host-p host)))
+  :doc "treats public hosts as remote"
+  (dolist (host '("example.com" "172.32.0.1" "11.0.0.1" "localhost.example.com" nil))
+    (should-not (mevedel-tool-web--local-host-p host))))
+
+(mevedel-deftest mevedel-tool-web--redirect-decision
+  (:before-each (mevedel-tool-web--register))
+  ,test
+  (test)
+  :doc "follows, blocks or hands back according to the target's permission"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mevedel-hook-rules nil)
+        (mevedel-permission-log-enabled nil))
+    (with-temp-buffer
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :name "redirect" :permission-mode 'ask
+                   :permission-rules '(("WebFetch" :domain "denied.org" :action deny)
+                                       ("WebFetch" :domain "asked.org" :action ask))))
+      (let ((buffer (current-buffer)))
+        (with-temp-buffer
+          (should (eq 'follow (mevedel-tool-web--redirect-decision
+                               buffer "https://a.org/" "https://b.org/")))
+          (should (equal '(error . "Redirect from a.org to https://denied.org/x blocked: the target host is denied by permission rules")
+                         (mevedel-tool-web--redirect-decision
+                          buffer "https://a.org/" "https://denied.org/x")))
+          (should (equal '(result . "REDIRECT: a.org redirects to https://asked.org/x.  That host needs approval; call WebFetch with url=\"https://asked.org/x\" to continue.")
+                         (mevedel-tool-web--redirect-decision
+                          buffer "https://a.org/" "https://asked.org/x")))))))
+
+  :doc "hands back a public-to-local redirect even when the target is allowed"
+  (let ((mevedel-permission-rules nil) (mevedel-hook-rules nil))
+    (with-temp-buffer
+      (setq-local mevedel--session
+                  (mevedel-session--create :name "local" :permission-mode 'ask))
+      (should (eq 'result (car (mevedel-tool-web--redirect-decision
+                                (current-buffer) "https://a.org/" "http://127.0.0.1:8080/"))))
+      (should (eq 'follow (mevedel-tool-web--redirect-decision
+                           (current-buffer) "http://localhost:3000/" "http://127.0.0.1:3000/")))))
+
+  :doc "hands back without a session"
+  (with-temp-buffer
+    (should (eq 'result (car (mevedel-tool-web--redirect-decision
+                              (current-buffer) "https://a.org/" "https://b.org/"))))))
 
 (defun test-mevedel-tool-web--ddg-result (url title snippet &optional class)
   "Return a DuckDuckGo HTML result block for URL with TITLE and SNIPPET.
