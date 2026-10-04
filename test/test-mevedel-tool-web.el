@@ -116,11 +116,11 @@
   (should (null (mevedel-tool-web--render-search
                  "WebSearch" '(:query "q") nil nil)))
 
-  :doc "header includes the query and line count"
-  (let* ((body "- r1\n- r2\n- r3\n")
+  :doc "header includes the query and result count"
+  (let* ((body "1. A\n   https://a/\n\n2. B\n   https://b/")
          (plist (mevedel-tool-web--render-search
                  "WebSearch" '(:query "mevedel") body nil)))
-    (should (string-match-p "\\`WebSearch: mevedel " (plist-get plist :header)))
+    (should (equal "WebSearch: mevedel (2 results)" (plist-get plist :header)))
     ;; No data buffer in this test → body-mode is nil.
     (should (null (plist-get plist :body-mode))))
 
@@ -242,28 +242,206 @@
     (should (equal '((nil "Transport failure")) results))
     (should-not (memq timer timer-list))))
 
+(defun test-mevedel-tool-web--ddg-result (url title snippet &optional class)
+  "Return a DuckDuckGo HTML result block for URL with TITLE and SNIPPET.
+CLASS adds result classes.  Like the live page, the title, icon,
+display URL and snippet all link to DuckDuckGo's redirect for URL."
+  (let ((href (format "//duckduckgo.com/l/?uddg=%s&amp;rut=4f2c9e"
+                      (url-hexify-string url))))
+    (format "<div class=\"result results_links results_links_deep web-result %s\">
+<div class=\"links_main links_deep result__body\">
+<h2 class=\"result__title\"><a rel=\"nofollow\" class=\"result__a\" href=\"%s\">%s</a></h2>
+<div class=\"result__extras\"><div class=\"result__extras__url\">
+<span class=\"result__icon\"><a rel=\"nofollow\" href=\"%s\"><img class=\"result__icon__img\" src=\"//external-content.duckduckgo.com/ip3/x.ico\"></a></span>
+<a class=\"result__url\" href=\"%s\">%s</a></div></div>
+<a class=\"result__snippet\" href=\"%s\">%s</a>
+<div class=\"clear\"></div></div></div>"
+            (or class "") href title href href url href snippet)))
+
+(defun test-mevedel-tool-web--ddg-page (&rest results)
+  "Return a DuckDuckGo HTML results page holding RESULTS."
+  (concat "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"></head>"
+          "<body class=\"body--html\"><div class=\"serp__results\">"
+          "<div id=\"links\" class=\"results\">"
+          (apply #'concat results)
+          "</div></div></body></html>"))
+
+(defconst test-mevedel-tool-web--ddg-challenge
+  (concat "<html><body><center id=\"lite_wrapper\">"
+          "<form id=\"challenge-form\" action=\"//duckduckgo.com/anomaly.js\" method=\"POST\">"
+          "<div class=\"anomaly-modal__mask\">"
+          "<div class=\"anomaly-modal__modal  is-ie\" data-testid=\"anomaly-modal\">"
+          "<div class=\"anomaly-modal__title\">Unfortunately, bots use DuckDuckGo too.</div>"
+          "</div></div></form></center></body></html>")
+  "Trimmed DuckDuckGo bot challenge page, served with HTTP 202.")
+
+(defun test-mevedel-tool-web--parse-search (html &optional allowed blocked)
+  "Parse search response HTML with ALLOWED and BLOCKED domains."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert (encode-coding-string html 'utf-8))
+    (goto-char (point-min))
+    (let ((url-http-content-type "text/html; charset=UTF-8"))
+      (mevedel-tool-web--search-results allowed blocked))))
+
+(mevedel-deftest mevedel-tool-web--search-results ()
+  ,test
+  (test)
+  :doc "returns one numbered entry per result with its unwrapped URL"
+  (let ((text (test-mevedel-tool-web--parse-search
+               (test-mevedel-tool-web--ddg-page
+                (test-mevedel-tool-web--ddg-result
+                 "https://www.gnu.org/software/emacs/manual/html_mono/eww.html"
+                 "Emacs Web Wowser - GNU"
+                 "<b>EWW</b>, the <b>Emacs</b> Web Wowser,\n  is a web browser")
+                (test-mevedel-tool-web--ddg-result
+                 "https://en.wikipedia.org/wiki/Eww_(web_browser)"
+                 "Eww (web browser)" "A browser")))))
+    (should (equal text
+                   (concat "1. Emacs Web Wowser - GNU\n"
+                           "   https://www.gnu.org/software/emacs/manual/html_mono/eww.html\n"
+                           "   EWW, the Emacs Web Wowser, is a web browser\n\n"
+                           "2. Eww (web browser)\n"
+                           "   https://en.wikipedia.org/wiki/Eww_(web_browser)\n"
+                           "   A browser"))))
+
+  :doc "skips ads and duplicate destinations and caps the count"
+  (let* ((mevedel-tool-web--search-limit 2)
+         (text (test-mevedel-tool-web--parse-search
+                (test-mevedel-tool-web--ddg-page
+                 (test-mevedel-tool-web--ddg-result
+                  "https://ads.example/" "Ad" "Buy" "result--ad")
+                 (test-mevedel-tool-web--ddg-result "https://a.example/" "A" "a")
+                 (test-mevedel-tool-web--ddg-result "https://a.example/" "A again" "a")
+                 (test-mevedel-tool-web--ddg-result "https://b.example/" "B" "b")
+                 (test-mevedel-tool-web--ddg-result "https://c.example/" "C" "c")))))
+    (should (= 2 (mevedel-tool-web--result-count text)))
+    (should-not (string-search "ads.example" text))
+    (should-not (string-search "A again" text))
+    (should (string-search "https://b.example/" text)))
+
+  :doc "re-encodes a non-ASCII destination as a valid URL"
+  (let ((text (test-mevedel-tool-web--parse-search
+               (test-mevedel-tool-web--ddg-page
+                (test-mevedel-tool-web--ddg-result
+                 "https://de.example/Grüße" "Grüße" "Hallo")))))
+    (should (string-search "https://de.example/Gr%C3%BC%C3%9Fe" text))
+    (should (string-search "1. Grüße" text)))
+
+  :doc "allowed and blocked domains match hosts at label boundaries"
+  (let ((page (test-mevedel-tool-web--ddg-page
+               (test-mevedel-tool-web--ddg-result "https://docs.gnu.org/x" "Docs" "d")
+               (test-mevedel-tool-web--ddg-result "https://notgnu.org/y" "Not" "n")
+               (test-mevedel-tool-web--ddg-result "https://gnu.org/z" "Root" "r"))))
+    (let ((text (test-mevedel-tool-web--parse-search page '("gnu.org"))))
+      (should (= 2 (mevedel-tool-web--result-count text)))
+      (should-not (string-search "notgnu.org" text)))
+    (let ((text (test-mevedel-tool-web--parse-search page nil '("gnu.org"))))
+      (should (= 1 (mevedel-tool-web--result-count text)))
+      (should (string-search "notgnu.org" text)))
+    (should (equal "No results on the requested domains."
+                   (test-mevedel-tool-web--parse-search page '("example.com")))))
+
+  :doc "reports an empty page as no results"
+  (should (equal "No results."
+                 (test-mevedel-tool-web--parse-search
+                  (test-mevedel-tool-web--ddg-page))))
+
+  :doc "signals the bot challenge instead of returning nothing"
+  (should (equal "DuckDuckGo refused the search (bot challenge); retry later"
+                 (cadr (should-error (test-mevedel-tool-web--parse-search
+                                      test-mevedel-tool-web--ddg-challenge))))))
+
+(mevedel-deftest mevedel-tool-web--result-url ()
+  ,test
+  (test)
+  :doc "unwraps the uddg parameter without DuckDuckGo's tracking suffix"
+  (should (equal "https://example.com/a?b=c"
+                 (mevedel-tool-web--result-url
+                  "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa%3Fb%3Dc&rut=9f")))
+  :doc "keeps an absolute destination and rejects other links"
+  (should (equal "https://example.com/"
+                 (mevedel-tool-web--result-url "https://example.com/")))
+  (should-not (mevedel-tool-web--result-url "//duckduckgo.com/y.js?ad_domain=x"))
+  (should-not (mevedel-tool-web--result-url nil)))
+
+(mevedel-deftest mevedel-tool-web--domains ()
+  ,test
+  (test)
+  :doc "normalizes vectors of domain patterns to lowercase host suffixes"
+  (should (equal '("example.com" "docs.gnu.org" "a.org")
+                 (mevedel-tool-web--domains [" Example.COM" "*.docs.gnu.org" ".a.org"])))
+  (should-not (mevedel-tool-web--domains nil)))
+
+(mevedel-deftest mevedel-tool-web--domain-match-p ()
+  ,test
+  (test)
+  :doc "matches the domain itself and its subdomains only"
+  (should (mevedel-tool-web--domain-match-p "https://gnu.org/" '("gnu.org")))
+  (should (mevedel-tool-web--domain-match-p "https://WWW.GNU.org/" '("gnu.org")))
+  (should-not (mevedel-tool-web--domain-match-p "https://notgnu.org/" '("gnu.org")))
+  (should-not (mevedel-tool-web--domain-match-p "not-a-url" '("gnu.org"))))
+
+(mevedel-deftest mevedel-tool-web--result-count ()
+  ,test
+  (test)
+  :doc "counts numbered entries, not lines"
+  (should (= 2 (mevedel-tool-web--result-count
+                "1. A\n   https://a/\n   x\n\n2. B\n   https://b/")))
+  (should (= 0 (mevedel-tool-web--result-count "No results."))))
+
 (mevedel-deftest mevedel-tool-web--websearch
   (:before-each (mevedel-tool-web--register))
   ,test
   (test)
-  :doc "configured EWW search returns five links and excerpts through the pipeline"
+  :doc "searches DuckDuckGo through the pipeline and returns parsed results"
   (mevedel-test-http
    (lambda (request)
-     (should (string-search "/search?q=two%20words" request))
-     (list "200 OK" "Content-Type: text/html\r\n"
-           (concat "<html><body>"
-                   (mapconcat (lambda (n)
-                                (format "<p><a href=\"https://example.com/%d\">Title %d</a> Excerpt %d</p>" n n n))
-                              '(1 2 3 4 5 6) "")
-                   "</body></html>")))
+     (should (string-search "/html/?q=two%20words " request))
+     (list "200 OK" "Content-Type: text/html; charset=UTF-8\r\n"
+           (test-mevedel-tool-web--ddg-page
+            (test-mevedel-tool-web--ddg-result "https://example.com/1" "Title 1" "Excerpt 1"))))
    (lambda (base)
-     (let* ((eww-search-prefix (concat base "/search?q="))
+     (let* ((mevedel-tool-web--search-url (concat base "/html/?q="))
             (result (test-mevedel-tool-web--call "WebSearch" '(:query "two words"))))
-       (should (string-match-p "https://example.com/1" (plist-get result :result)))
-       (should (string-match-p "Excerpt 5" (plist-get result :result)))
-       (should-not (string-match-p "example.com/6" (plist-get result :result)))
+       (should (eq 'success (plist-get result :handler-status)))
+       (should (equal "1. Title 1\n   https://example.com/1\n   Excerpt 1"
+                      (plist-get result :result)))
        (should (zerop mevedel-tool-web--search-active))
-       (should-not mevedel-tool-web--search-queue)))))
+       (should-not mevedel-tool-web--search-queue))))
+
+  :doc "adds domain filters to the query"
+  (let (requests)
+    (mevedel-test-http
+     (lambda (request)
+       (push request requests)
+       (list "200 OK" "Content-Type: text/html\r\n" (test-mevedel-tool-web--ddg-page)))
+     (lambda (base)
+       (let ((mevedel-tool-web--search-url (concat base "/html/?q=")))
+         (test-mevedel-tool-web--call
+          "WebSearch" '(:query "eww" :allowed_domains ["gnu.org" "github.com"]))
+         (test-mevedel-tool-web--call
+          "WebSearch" '(:query "eww" :blocked_domains ["reddit.com"])))))
+    (should (string-search "?q=eww%20site%3Agnu.org%20OR%20site%3Agithub.com " (cadr requests)))
+    (should (string-search "?q=eww%20-site%3Areddit.com " (car requests))))
+
+  :doc "rejects allowed and blocked domains together without searching"
+  (let ((result (test-mevedel-tool-web--call
+                 "WebSearch" '(:query "q" :allowed_domains ["a.org"]
+                                         :blocked_domains ["b.org"]))))
+    (should (eq 'error (plist-get result :handler-status)))
+    (should (string-search "not both" (plist-get result :result)))
+    (should-not mevedel-tool-web--search-queue))
+
+  :doc "a bot challenge becomes a tool error"
+  (mevedel-test-http
+   (lambda (_) (list "202 Accepted" "Content-Type: text/html\r\n"
+                     test-mevedel-tool-web--ddg-challenge))
+   (lambda (base)
+     (let* ((mevedel-tool-web--search-url (concat base "/html/?q="))
+            (result (test-mevedel-tool-web--call "WebSearch" '(:query "q"))))
+       (should (eq 'error (plist-get result :handler-status)))
+       (should (string-search "bot challenge" (plist-get result :result)))))))
 
 (mevedel-deftest mevedel-tool-web--start-searches ()
   ,test
@@ -276,11 +454,11 @@
     (mevedel-test-http
      (lambda (request) (push request requests) nil)
      (lambda (base)
-       (let ((eww-search-prefix (concat base "/?q=")))
+       (let ((mevedel-tool-web--search-url (concat base "/?q=")))
          (dotimes (_ 3)
            (mevedel-tool-web--websearch
             (lambda (result) (push result results)) '(:query "hang")))
-         (setq eww-search-prefix (concat base "/wrong?q="))
+         (setq mevedel-tool-web--search-url (concat base "/wrong?q="))
          (should (= 2 mevedel-tool-web--search-active))
          (should (= 1 (length mevedel-tool-web--search-queue)))
          (let ((deadline (+ (float-time) 4)))
