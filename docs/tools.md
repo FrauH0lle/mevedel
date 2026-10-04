@@ -440,6 +440,24 @@ label boundary, so filtering holds even when DuckDuckGo ignores the terms.
 DuckDuckGo's bot challenge page is a tool error, distinct from an empty
 result. WebFetch renders readable
 HTML with EWW/SHR; YouTube URLs retrieve video descriptions and English captions.
+
+Web retrieval accepts only `http` and `https` URLs with a host, both as the
+requested URL and as every redirect target, so neither a model-supplied URL nor
+a `Location` header reaches `file:` or other URL handlers. Redirects are followed
+by mevedel rather than by `url-http`: each request binds `url-max-redirections`
+to 0 and repeats its method, body and headers, as `url-http` adjusted them for
+the redirect. At most ten redirects are followed. A redirect to the same host is
+followed. WebFetch decides a redirect to another host, including a `www.`
+variant, with `mevedel-tool-permission-decide-now` under the dispatching
+buffer's policy: a target a fresh WebFetch call could fetch without a prompt is
+followed, a denied target is a tool error, and any other target is returned as
+a `REDIRECT:` result naming the URL, so the model's next WebFetch call gets the
+ordinary permission check. A redirect from a public host to the local machine
+or a private network address is always returned that way. WebSearch and the
+YouTube stages contact fixed hosts and follow every redirect. A redirect
+without a `Location` header never completes in `url-http` and ends in the
+timeout.
+
 Every HTTP retrieval has a 30-second timeout, including its redirects. Each
 YouTube stage gets its own timeout. The retrieval owns its response buffers
 and timer, releases them before delivery, and delivers success or failure once.

@@ -11,7 +11,7 @@ Fetch readable text from a URL, or a YouTube video's description and transcript.
 
 ### How to use `WebFetch`
 
-- Pass a complete URL including its protocol. HTML becomes readable text rather
+- Pass a complete http or https URL. HTML becomes readable text rather
   than raw markup; script-rendered or authenticated content may be unavailable.
 - YouTube retrieval depends on available video metadata and captions. A missing
   transcript or failed fetch does not establish what the video says.

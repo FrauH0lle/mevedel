@@ -513,6 +513,48 @@ behavior."
                 (or (cdr (assoc path canonical)) path)))
             paths)))))
 
+(defun mevedel-tool-permission-decide-now (tool-name args &optional buffer reason)
+  "Return `allow', `deny' or `ask' for a call of TOOL-NAME with ARGS now.
+Decide without prompting under the policy of BUFFER, which defaults to
+the current buffer: its session, request, agent invocation and
+buffer-local rules.  Only a dispatched call runs PreToolUse hooks, so an
+`allow' becomes `ask' when such a hook would run.  A dead BUFFER, or one
+without a session, yields `ask'.  The decision is recorded in the
+permission log with REASON."
+  (let ((buffer (or buffer (current-buffer))))
+    (or (and (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (when-let* ((session (bound-and-true-p mevedel--session)))
+                 (let* ((request (bound-and-true-p mevedel--current-request))
+                        (invocation (bound-and-true-p mevedel--agent-invocation))
+                        (workspace (mevedel-session-workspace session))
+                        (context (mevedel-permission--invocation-context
+                                  :tool-name tool-name :args args
+                                  :session session :workspace workspace
+                                  :request request :invocation invocation
+                                  :buffer buffer))
+                        (decision (apply #'mevedel-check-permission-with-metadata
+                                         tool-name
+                                         (mevedel-permission--checker-args context)))
+                        (outcome (mevedel-permission--normalize-outcome
+                                  (mevedel-permission-decision-raw-outcome decision)))
+                        (hooked-p
+                         (and (eq outcome 'allow)
+                              (< 0 (plist-get
+                                    (mevedel-hooks-run-dry
+                                     'PreToolUse
+                                     (list :tool-name tool-name :tool-input args)
+                                     session workspace request invocation)
+                                    :handler-count))))
+                        (outcome (if hooked-p 'ask outcome)))
+                   (mevedel-tool-permission-log-decision
+                    context
+                    (list :outcome outcome :raw-outcome outcome
+                          :via (if hooked-p 'pre-tool-hook (plist-get decision :via)))
+                    :reason reason)
+                   outcome))))
+        'ask)))
+
 (defun mevedel-tool-permission-step (context next fail)
   "Authorize each filesystem path in CONTEXT before continuing.
 

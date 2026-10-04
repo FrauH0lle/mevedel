@@ -27,6 +27,10 @@
 (declare-function mevedel-pipeline-run-tool
                   "mevedel-pipeline" (tool callback args))
 
+;; `mevedel-tool-permission'
+(declare-function mevedel-tool-permission-decide-now
+                  "mevedel-tool-permission" (tool-name args &optional buffer reason))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool--positional-to-plist
                   "mevedel-tool-registry" (raw-args specs))
@@ -36,6 +40,11 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
+
+;; `url-http'
+(defvar url-http-data)
+(defvar url-http-extra-headers)
+(defvar url-http-method)
 
 
 ;;
@@ -48,6 +57,28 @@
       (let ((host (url-host (url-generic-parse-url url))))
         (and host (not (string-empty-p host)) host)))))
 
+(defun mevedel-tool-web--unsupported-url (url)
+  "Return why URL cannot be retrieved, or nil for an http(s) URL with a host."
+  (unless (and (stringp url)
+               (string-match-p "\\`https?://" (downcase url))
+               (mevedel-tool-web--url-host url))
+    (format "Unsupported URL (only http and https are retrieved): %s" url)))
+
+(defun mevedel-tool-web--local-host-p (host)
+  "Return non-nil when HOST names this machine or a private network address."
+  (when host
+    (let ((host (downcase (string-trim host "\\[" "\\]"))))
+      (or (equal host "localhost")
+          (string-suffix-p ".localhost" host)
+          (member host '("::" "::1" "0.0.0.0"))
+          (string-match-p
+           (rx bos (or "127." "10." "192.168." "169.254."
+                       (seq "172." (or (seq "1" (any "6-9")) (seq "2" digit) "30" "31")
+                            ".")))
+           host)
+          (string-match-p (rx bos (or (seq "f" (any "cd") (= 2 hex) ":") "fe80:"))
+                          host)))))
+
 
 ;;
 ;;; Request ownership
@@ -55,12 +86,25 @@
 (defvar mevedel-tool-web--timeout 30
   "Maximum seconds for one retrieval, including redirects.")
 
-(defun mevedel-tool-web--retrieve (url parse callback)
+(defvar mevedel-tool-web--max-redirects 10
+  "Maximum redirects one retrieval follows.")
+
+(cl-defun mevedel-tool-web--retrieve (url parse callback &key redirect accept)
   "Retrieve URL, parse its body with PARSE, then call CALLBACK.
 CALLBACK receives (VALUE ERROR), where ERROR is nil on success or an
-error string.  Each retrieval owns its timer and response buffers,
-including redirects.  Cleanup precedes delivery, exactly once."
+error string.  Only http and https URLs are retrieved.
+
+Redirects are followed here, at most `mevedel-tool-web--max-redirects'.
+A redirect to the same host is followed.  Otherwise REDIRECT, called
+with the redirecting and the target URL, returns `follow', or
+\(result . TEXT) or (error . TEXT) to settle with TEXT instead.
+Without REDIRECT, every redirect is followed.  ACCEPT, when non-nil,
+is the Accept header of every request.
+
+One timeout covers the whole chain.  Each retrieval owns its timer
+and response buffers.  Cleanup precedes delivery, exactly once."
   (let ((token (make-symbol "mevedel-web-request"))
+        (redirects 0)
         buffer timer done)
     (cl-labels
         ((cleanup ()
@@ -75,40 +119,69 @@ including redirects.  Cleanup precedes delivery, exactly once."
            (unless done
              (setq done t)
              (cleanup)
-             (funcall callback value error))))
+             (funcall callback value error)))
+         (request (target method data headers)
+           (condition-case err
+               (if-let* ((problem (mevedel-tool-web--unsupported-url target)))
+                   (finish nil problem)
+                 ;; url-http copies these into each response buffer, so
+                 ;; every hop binds them again.
+                 (let ((url-max-redirections 0)
+                       (url-request-noninteractive t)
+                       (url-request-method method)
+                       (url-request-data data)
+                       (url-request-extra-headers headers)
+                       (url-mime-accept-string (or accept url-mime-accept-string))
+                       (inhibit-message t))
+                   (setq buffer (url-retrieve target #'receive (list token) t t))
+                   ;; Some URL handlers call back before returning their buffer.
+                   (cond (done (cleanup))
+                         ((not (buffer-live-p buffer))
+                          (finish nil "Retrieval did not create a response buffer")))))
+             (error (finish nil (error-message-string err)))))
+         (follow (target)
+           ;; url-http already switched 302 and 303 to GET and dropped
+           ;; Authorization in this redirect response's buffer.
+           (let ((from (url-recreate-url url-current-object))
+                 (method url-http-method)
+                 (data url-http-data)
+                 (headers url-http-extra-headers))
+             (if (>= redirects mevedel-tool-web--max-redirects)
+                 (finish nil (format "Too many redirects (more than %d)"
+                                     mevedel-tool-web--max-redirects))
+               (cl-incf redirects)
+               (pcase (if (or (null redirect)
+                              (equal (downcase (or (mevedel-tool-web--url-host from) ""))
+                                     (downcase (or (mevedel-tool-web--url-host target) ""))))
+                          'follow
+                        (funcall redirect from target))
+                 ('follow (request target method data headers))
+                 (`(result . ,text) (finish text nil))
+                 (`(error . ,text) (finish nil text))
+                 (decision (finish nil (format "Invalid redirect decision: %S"
+                                               decision)))))))
+         (receive (status _token)
+           (unless done
+             (condition-case err
+                 (let ((failure (plist-get status :error)))
+                   (cond
+                    ((eq (car-safe (cdr-safe failure)) 'http-redirect-limit)
+                     (follow (nth 2 failure)))
+                    (failure (finish nil (format "%S" failure)))
+                    (t
+                     (goto-char (point-min))
+                     (if (bound-and-true-p url-http-end-of-headers)
+                         (goto-char url-http-end-of-headers)
+                       (unless (re-search-forward "\r?\n\r?\n" nil t)
+                         (error "Response has no HTTP headers")))
+                     (finish (funcall parse) nil))))
+               (error (finish nil (error-message-string err)))))))
       (setq timer (run-at-time
                    mevedel-tool-web--timeout nil
                    (lambda ()
                      (finish nil (format "Request timed out after %s seconds"
                                          mevedel-tool-web--timeout)))))
-      (condition-case err
-          (let ((url-request-noninteractive t)
-                (inhibit-message t))
-            (setq buffer
-                  (url-retrieve
-                   url
-                   (lambda (status _token)
-                     (unless done
-                       (let ((parsed
-                              (condition-case err
-                                  (if (plist-get status :error)
-                                      (cons nil (format "%S" (plist-get status :error)))
-                                    (goto-char (point-min))
-                                    (if (bound-and-true-p url-http-end-of-headers)
-                                        (goto-char url-http-end-of-headers)
-                                      (unless (re-search-forward "\r?\n\r?\n" nil t)
-                                        (error "Response has no HTTP headers")))
-                                    (cons t (funcall parse)))
-                                (error (cons nil (error-message-string err))))))
-                         (if (car parsed)
-                             (finish (cdr parsed) nil)
-                           (finish nil (cdr parsed))))))
-                   (list token) t t))
-            ;; Some URL handlers call back before returning their buffer.
-            (cond (done (cleanup))
-                  ((not (buffer-live-p buffer))
-                   (finish nil "Retrieval did not create a response buffer"))))
-        (error (finish nil (error-message-string err)))))))
+      (request url url-request-method url-request-data url-request-extra-headers))))
 
 (defun mevedel-tool-web--content-type ()
   "Return the response's (MIME-TYPE . CHARSET), each a string or nil."
@@ -288,9 +361,30 @@ terms to the query and filter the returned results."
 ;;
 ;;; Page and YouTube retrieval
 
+(defun mevedel-tool-web--redirect-decision (buffer from target)
+  "Return how WebFetch handles a redirect from FROM to TARGET.
+A target that a fresh WebFetch call could fetch without prompting under
+BUFFER's permission policy is followed; a denied target is an error.
+Otherwise the target is handed back to the model, whose WebFetch call
+on it gets the ordinary permission check.  A redirect from a public
+host into the local machine or a private network is always handed back."
+  (let ((host (mevedel-tool-web--url-host from)))
+    (pcase (if (and (mevedel-tool-web--local-host-p
+                     (mevedel-tool-web--url-host target))
+                    (not (mevedel-tool-web--local-host-p host)))
+               'ask
+             (mevedel-tool-permission-decide-now
+              "WebFetch" (list :url target) buffer 'redirect))
+      ('allow 'follow)
+      ('deny (cons 'error (format "Redirect from %s to %s blocked: the target \
+host is denied by permission rules" host target)))
+      (_ (cons 'result (format "REDIRECT: %s redirects to %s.  That host needs \
+approval; call WebFetch with url=%S to continue." host target target))))))
+
 (defun mevedel-tool-web--fetch (callback args)
   "Fetch the URL in ARGS and deliver readable text to CALLBACK."
   (let* ((url (plist-get args :url))
+         (buffer (current-buffer))
          done
          (finish (lambda (value error)
                    (unless done
@@ -301,7 +395,10 @@ terms to the query and filter the returned results."
                                 (list :result value)))))))
     (if-let* ((video-id (mevedel-tool-web--yt-video-id url)))
         (mevedel-tool-web--yt-fetch finish video-id)
-      (mevedel-tool-web--retrieve url #'mevedel-tool-web--page-text finish))))
+      (mevedel-tool-web--retrieve
+       url #'mevedel-tool-web--page-text finish
+       :redirect (lambda (from target)
+                   (mevedel-tool-web--redirect-decision buffer from target))))))
 
 (defun mevedel-tool-web--yt-fetch (callback video-id)
   "Fetch VIDEO-ID's description and captions, delivering to CALLBACK."
