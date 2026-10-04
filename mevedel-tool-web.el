@@ -21,7 +21,14 @@
   (require 'mevedel-tool-registry))
 
 ;; `gptel-request'
+(declare-function gptel--model-capable-p "ext:gptel-request" (cap &optional model))
+(declare-function gptel--model-mime-capable-p "ext:gptel-request" (mime &optional model))
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-start-helper
+                  "mevedel-execution"
+                  (callback name command read-paths writable-roots &rest keys))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-run-tool
@@ -38,6 +45,9 @@
                   "mevedel-tool-registry" (prompt))
 (declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
+
 ;; `mevedel-view'
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
@@ -45,6 +55,7 @@
 (defvar url-http-data)
 (defvar url-http-extra-headers)
 (defvar url-http-method)
+(defvar url-http-response-status)
 
 
 ;;
@@ -171,7 +182,10 @@ and response buffers.  Cleanup precedes delivery, exactly once."
                     (t
                      (goto-char (point-min))
                      (if (bound-and-true-p url-http-end-of-headers)
-                         (goto-char url-http-end-of-headers)
+                         ;; The marker sits on the blank line ending the
+                         ;; headers; the body starts after it.
+                         (progn (goto-char url-http-end-of-headers)
+                                (when (eq (char-after) ?\n) (forward-char 1)))
                        (unless (re-search-forward "\r?\n\r?\n" nil t)
                          (error "Response has no HTTP headers")))
                      (finish (funcall parse) nil))))
@@ -381,24 +395,200 @@ host is denied by permission rules" host target)))
       (_ (cons 'result (format "REDIRECT: %s redirects to %s.  That host needs \
 approval; call WebFetch with url=%S to continue." host target target))))))
 
+(defvar mevedel-tool-web--accept "text/markdown, text/html;q=0.9, */*;q=0.8"
+  "Accept header of WebFetch requests; servers able to send markdown do.")
+
+(defvar mevedel-tool-web--image-max-bytes (* 10 1024 1024)
+  "Maximum size of an image WebFetch attaches.")
+
+(defconst mevedel-tool-web--image-types
+  '("image/png" "image/jpeg" "image/gif" "image/webp")
+  "Image MIME types WebFetch can attach as media.")
+
+(defun mevedel-tool-web--body-kind (type)
+  "Return the kind of the response body at point with MIME TYPE.
+The kind is `html', `text', `image', `pdf' or `binary'.  Without TYPE,
+the body itself decides."
+  (cond
+   ((null type)
+    (let ((case-fold-search t))
+      (cond ((looking-at-p "%PDF-") 'pdf)
+            ((looking-at-p "[ \t\r\n]*<\\(?:!doctype html\\|html\\)") 'html)
+            ((save-excursion (search-forward "\0" (min (point-max) (+ (point) 1024)) t))
+             'binary)
+            (t 'text))))
+   ((member type '("text/html" "application/xhtml+xml")) 'html)
+   ((or (string-prefix-p "text/" type)
+        (string-match-p (rx bos "application/"
+                            (or "json" "xml" "javascript" "ecmascript" "x-javascript"
+                                (seq (+ (not (any ";"))) "+" (or "json" "xml")))
+                            eos)
+                        type))
+    'text)
+   ((member type mevedel-tool-web--image-types) 'image)
+   ((equal type "application/pdf") 'pdf)
+   (t 'binary)))
+
+(defun mevedel-tool-web--response ()
+  "Return the response at point as a plist for WebFetch.
+:url is the final URL, :code the HTTP status, :type the MIME type,
+:kind the body's kind and :bytes its size.  HTML and text bodies are
+decoded into :text; others stay raw bytes in :data."
+  (let* ((type (car (mevedel-tool-web--content-type)))
+         (kind (mevedel-tool-web--body-kind type)))
+    (append (list :url (url-recreate-url url-current-object)
+                  :code (bound-and-true-p url-http-response-status)
+                  :type type :kind kind
+                  :bytes (- (point-max) (point)))
+            (pcase kind
+              ('html (list :text (mevedel-tool-web--page-text)))
+              ('text (list :text (mevedel-tool-web--body)))
+              (_ (list :data (buffer-substring-no-properties (point) (point-max))))))))
+
+(defun mevedel-tool-web--image-data-p (type data)
+  "Return non-nil when DATA starts like an image of MIME TYPE."
+  (pcase type
+    ("image/png" (string-prefix-p (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n) data))
+    ("image/jpeg" (string-prefix-p (unibyte-string #xff #xd8 #xff) data))
+    ("image/gif" (or (string-prefix-p "GIF87a" data) (string-prefix-p "GIF89a" data)))
+    ("image/webp" (and (string-prefix-p "RIFF" data)
+                       (>= (length data) 12)
+                       (equal "WEBP" (substring data 8 12))))))
+
+(defun mevedel-tool-web--model-image-types ()
+  "Return the image MIME types the current model accepts as media."
+  (and (fboundp 'gptel--model-capable-p)
+       (gptel--model-capable-p 'media)
+       (seq-filter #'gptel--model-mime-capable-p mevedel-tool-web--image-types)))
+
+(defun mevedel-tool-web--pdf-text (data origin callback)
+  "Extract the text of PDF DATA with `pdftotext', then call CALLBACK.
+CALLBACK receives (TEXT ERROR) once.  The helper runs on this machine,
+whatever the session's execution target, owned by agent ORIGIN."
+  (let ((file (make-temp-file "mevedel-web-" nil ".pdf"))
+        done)
+    (cl-flet ((settle (text error)
+                (unless done
+                  (setq done t)
+                  (ignore-errors (delete-file file))
+                  (funcall callback text error))))
+      (condition-case err
+          (if (not (executable-find "pdftotext"))
+              (settle nil "PDF text extraction needs 'pdftotext'")
+            (let ((coding-system-for-write 'no-conversion))
+              (write-region data nil file nil 'silent))
+            (mevedel-execution-start-helper
+             (lambda (result)
+               (let ((output (decode-coding-string (or (plist-get result :output) "")
+                                                   'utf-8))
+                     (failure (plist-get result :error)))
+                 (cond
+                  (failure (settle nil (if (stringp failure) failure
+                                         (error-message-string failure))))
+                  ((plist-get result :timed-out-p)
+                   (settle nil "'pdftotext' timed out"))
+                  ((eql 0 (plist-get result :exit-code)) (settle output nil))
+                  (t (settle nil (format "'pdftotext' failed: %s" (string-trim output)))))))
+             "mevedel-pdftotext" (list "pdftotext" "-q" "-layout" file "-") (list file) nil
+             :timeout mevedel-tool-web--timeout :session nil :owner origin
+             :teardown-callback (lambda () (settle nil "Helper owner was torn down"))))
+        (error (settle nil (error-message-string err)))))))
+
+(defun mevedel-tool-web--fetch-result (url response images origin deliver)
+  "Deliver WebFetch's handler result for URL's RESPONSE to DELIVER.
+IMAGES are the image MIME types the model accepts; ORIGIN owns a PDF
+helper.  Signal an error for content WebFetch cannot return."
+  (let* ((final (plist-get response :url))
+         (type (plist-get response :type))
+         (bytes (plist-get response :bytes))
+         (redirected (and (not (equal final (url-recreate-url (url-generic-parse-url url))))
+                          final))
+         (prefix (if redirected (format "Redirected to %s\n\n" final) ""))
+         (render (list :kind 'web :tool "WebFetch"
+                       :host (mevedel-tool-web--url-host url)
+                       :final-host (and redirected (mevedel-tool-web--url-host final))
+                       :code (plist-get response :code)
+                       :content-type type :bytes bytes)))
+    (cl-flet ((text-result (text)
+                (let ((result (concat prefix text)))
+                  (funcall deliver (list :result result
+                                         :render-data (append render
+                                                              (list :chars (length result))))))))
+      (pcase (plist-get response :kind)
+        ((or 'html 'text) (text-result (plist-get response :text)))
+        ('image
+         (let ((data (plist-get response :data)))
+           (cond
+            ((not (member type images))
+             (error "The current model does not accept %s images" type))
+            ((> bytes mevedel-tool-web--image-max-bytes)
+             (error "Image is too large (%d bytes > %d bytes)"
+                    bytes mevedel-tool-web--image-max-bytes))
+            ((not (mevedel-tool-web--image-data-p type data))
+             (error "Response is not a valid %s image" type))
+            (t
+             (let ((result (format "%sImage %s (%s, %d bytes)." prefix final type bytes)))
+               (funcall deliver
+                        (list :result result
+                              :media (list (list :kind 'image :mime type
+                                                 :data (base64-encode-string data t)
+                                                 :source final))
+                              :render-data (append render
+                                                   (list :chars (length result))))))))))
+        ('pdf
+         (mevedel-tool-web--pdf-text
+          (plist-get response :data) origin
+          (lambda (text error)
+            (if error
+                (funcall deliver (list :result (concat "Error: " error) :status 'error))
+              (text-result text)))))
+        (_ (error "Binary content (%s, %d bytes) is not readable by WebFetch"
+                  (or type "unknown type") bytes))))))
+
 (defun mevedel-tool-web--fetch (callback args)
-  "Fetch the URL in ARGS and deliver readable text to CALLBACK."
+  "Fetch the URL in ARGS and deliver its content to CALLBACK.
+HTML becomes readable text, other text is returned verbatim, images
+are attached as media when the model accepts them, and PDFs become
+their extracted text."
   (let* ((url (plist-get args :url))
          (buffer (current-buffer))
+         (images (mevedel-tool-web--model-image-types))
+         (origin (mevedel-current-origin))
          done
-         (finish (lambda (value error)
-                   (unless done
-                     (setq done t)
-                     (funcall callback
-                              (if error
-                                  (list :result (or value (concat "Error: " error)) :status 'error)
-                                (list :result value)))))))
+         (deliver (lambda (result)
+                    (unless done
+                      (setq done t)
+                      (funcall callback result))))
+         (fail (lambda (error)
+                 (funcall deliver (list :result (concat "Error: " error) :status 'error)))))
     (if-let* ((video-id (mevedel-tool-web--yt-video-id url)))
-        (mevedel-tool-web--yt-fetch finish video-id)
+        (mevedel-tool-web--yt-fetch
+         (lambda (value error)
+           (funcall deliver
+                    (if error
+                        (list :result (or value (concat "Error: " error)) :status 'error)
+                      (list :result value
+                            :render-data (list :kind 'web :tool "WebFetch"
+                                               :host (mevedel-tool-web--url-host url)
+                                               :chars (length value))))))
+         video-id)
       (mevedel-tool-web--retrieve
-       url #'mevedel-tool-web--page-text finish
+       url #'mevedel-tool-web--response
+       (lambda (value error)
+         (cond
+          (error (funcall fail error))
+          ((stringp value)
+           (funcall deliver
+                    (list :result value
+                          :render-data (list :kind 'web :tool "WebFetch"
+                                             :host (mevedel-tool-web--url-host url)
+                                             :redirect t :chars (length value)))))
+          (t (condition-case err
+                 (mevedel-tool-web--fetch-result url value images origin deliver)
+               (error (funcall fail (error-message-string err)))))))
        :redirect (lambda (from target)
-                   (mevedel-tool-web--redirect-decision buffer from target))))))
+                   (mevedel-tool-web--redirect-decision buffer from target))
+       :accept mevedel-tool-web--accept))))
 
 (defun mevedel-tool-web--yt-fetch (callback video-id)
   "Fetch VIDEO-ID's description and captions, delivering to CALLBACK."
@@ -538,16 +728,12 @@ CHUNK-TIME is the number of seconds per paragraph (default 30)."
 ;;; Renderers
 
 (defun mevedel-tool-web--render-transform (name args result)
-  "Return bounded render metadata for web tool NAME with ARGS and RESULT."
-  (let ((url (plist-get args :url))
-        (query (plist-get args :query)))
-    (list :kind 'web
-          :tool name
-          :host (and url (mevedel-tool-web--url-host url))
-          :query query
-          :results (and query (mevedel-tool-web--result-count result))
-          :lines (length (split-string result "\n" t))
-          :chars (length result))))
+  "Return bounded render metadata for WebSearch NAME with ARGS and RESULT."
+  (list :kind 'web
+        :tool name
+        :query (plist-get args :query)
+        :results (mevedel-tool-web--result-count result)
+        :chars (length result)))
 
 (defun mevedel-tool-web--result-count (result)
   "Return the number of numbered search entries in RESULT."
@@ -558,17 +744,34 @@ CHUNK-TIME is the number of seconds per paragraph (default 30)."
 
 (defun mevedel-tool-web--render-fetch (name args result render-data)
   "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA.
-Header shows the URL's host and the fetched size; body fontifies in
-the data buffer's major mode.  The view parser passes renderers
-unescaped tool results, so `org-mode' storage escapes are not shown in
-the expanded body."
+Header shows the URL's host, the final host after redirects, and the
+fetched size, status and content type; body fontifies in the data
+buffer's major mode.  The view parser passes renderers unescaped tool
+results, so `org-mode' storage escapes are not shown in the expanded
+body."
   (when (stringp result)
     (let* ((url (plist-get args :url))
-           (host (or (mevedel-tool-web--url-host url) url "?"))
-           (chars (or (plist-get render-data :chars)
-                      (length result))))
-      (list :header (format "%s: %s (%d chars)"
-                            (or name "WebFetch") host chars)
+           (host (or (plist-get render-data :host)
+                     (mevedel-tool-web--url-host url) url "?"))
+           (final (plist-get render-data :final-host))
+           (bytes (plist-get render-data :bytes))
+           (details
+            (cond
+             ((plist-get render-data :redirect) "redirect needs approval")
+             (bytes (string-join
+                     (delq nil (list (file-size-human-readable bytes nil " " "B")
+                                     (and-let* ((code (plist-get render-data :code)))
+                                       (number-to-string code))
+                                     (plist-get render-data :content-type)))
+                     ", "))
+             (t (format "%d chars" (or (plist-get render-data :chars)
+                                       (length result)))))))
+      (list :header (format "%s: %s%s \u2014 %s"
+                            (or name "WebFetch") host
+                            (if (and final (not (equal final host)))
+                                (concat " \u2192 " final)
+                              "")
+                            details)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :initially-collapsed-p t))))
@@ -619,7 +822,7 @@ buffer's major mode (see `mevedel-tool-web--render-fetch' for why)."
 
   (mevedel-define-tool
     :name "WebFetch"
-    :description "Fetch and read the contents of a URL."
+    :description "Fetch a URL as readable text, or an image or PDF it serves."
     :summary "Fetch and read the contents of a URL."
     :prompt-file "prompts/tools/webfetch.md"
     :handler #'mevedel-tool-web--fetch
@@ -631,7 +834,6 @@ buffer's major mode (see `mevedel-tool-web--render-fetch' for why)."
     :max-result-size 50000
     :get-domain (lambda (args)
                   (mevedel-tool-web--url-host (plist-get args :url)))
-    :render-transform #'mevedel-tool-web--render-transform
     :renderer '((success . mevedel-tool-web--render-fetch))))
 
 (provide 'mevedel-tool-web)

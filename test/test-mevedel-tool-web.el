@@ -104,6 +104,19 @@
                       "WebFetch" '(:url "https://example.com/") "body\n" nil)))
           (should (eq 'org-mode (plist-get plist :body-mode)))))))
 
+  :doc "header shows size, status, type and the final host"
+  (should (equal "WebFetch: a.org → b.org — 2 kB, 200, text/html"
+                 (plist-get (mevedel-tool-web--render-fetch
+                             "WebFetch" '(:url "https://a.org/")
+                             "body" '(:host "a.org" :final-host "b.org" :bytes 2048
+                                            :code 200 :content-type "text/html"))
+                            :header)))
+  (should (equal "WebFetch: a.org — redirect needs approval"
+                 (plist-get (mevedel-tool-web--render-fetch
+                             "WebFetch" '(:url "https://a.org/") "REDIRECT: ..."
+                             '(:host "a.org" :redirect t))
+                            :header)))
+
   :doc "falls back to the url when host cannot be parsed"
   (let* ((body "content\n")
          (plist (mevedel-tool-web--render-fetch
@@ -152,6 +165,19 @@
     (should (= 1 (length results)))
     (car results)))
 
+(defconst test-mevedel-tool-web--pdf
+  (concat "%PDF-1.4\n"
+          "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+          "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+          "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144]"
+          " /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n"
+          "4 0 obj << /Length 41 >> stream\n"
+          "BT /F1 18 Tf 20 100 Td (Hello PDF) Tj ET\n"
+          "endstream endobj\n"
+          "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+          "trailer << /Root 1 0 R >>\n%%EOF\n")
+  "A one-page PDF whose text is \"Hello PDF\".")
+
 (mevedel-deftest mevedel-tool-web--fetch
   (:before-each (mevedel-tool-web--register))
   ,test
@@ -187,6 +213,91 @@
          (should (eq 'success (plist-get result :handler-status)))
          (should (string-prefix-p "REDIRECT: 127.0.0.1 redirects to https://other.invalid/page"
                                   (plist-get result :result)))))))
+
+  :doc "returns markdown and JSON verbatim with render metadata"
+  (let ((markdown "# Title\n\n```elisp\n(defun foo ()\n  (bar))\n```\n- b <x>\n"))
+    (mevedel-test-http
+     (lambda (request)
+       (if (string-match-p " /doc.md " request)
+           (list "200 OK" "Content-Type: text/markdown; charset=utf-8\r\n" markdown)
+         '("200 OK" "Content-Type: application/json\r\n" "{\"a\": [1,\n 2]}")))
+     (lambda (base)
+       (let ((result (test-mevedel-tool-web--call
+                      "WebFetch" (list :url (concat base "/doc.md")))))
+         (should (equal markdown (plist-get result :result)))
+         (should (equal '(:code 200 :content-type "text/markdown")
+                        (list :code (plist-get (plist-get result :render-data) :code)
+                              :content-type (plist-get (plist-get result :render-data)
+                                                       :content-type)))))
+       (should (equal "{\"a\": [1,\n 2]}"
+                      (plist-get (test-mevedel-tool-web--call
+                                  "WebFetch" (list :url (concat base "/data.json")))
+                                 :result))))))
+
+  :doc "decodes HTML with the charset its header declares"
+  (mevedel-test-http
+   (lambda (_)
+     (list "200 OK" "Content-Type: text/html; charset=iso-8859-1\r\n"
+           (decode-coding-string
+            (encode-coding-string "<html><body><p>Grüße</p></body></html>" 'latin-1)
+            'no-conversion)))
+   (lambda (base)
+     (should (string-search "Grüße" (plist-get (test-mevedel-tool-web--call
+                                                         "WebFetch" (list :url base))
+                                                        :result)))))
+
+  :doc "names the final URL of a followed redirect"
+  (mevedel-test-http
+   (lambda (request)
+     (if (string-match-p " /old " request)
+         '("301 Moved Permanently" "Location: /new\r\n" "")
+       '("200 OK" "Content-Type: text/plain\r\n" "moved text")))
+   (lambda (base)
+     (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url (concat base "/old")))))
+       (should (equal (format "Redirected to %s/new\n\nmoved text" base)
+                      (plist-get result :result))))))
+
+  :doc "attaches an image the model accepts and refuses it otherwise"
+  (let ((png (concat (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n) "rest")))
+    (mevedel-test-http
+     (lambda (_) (list "200 OK" "Content-Type: image/png\r\n"
+                       (decode-coding-string png 'no-conversion)))
+     (lambda (base)
+       (cl-letf (((symbol-function 'gptel--model-capable-p)
+                  (lambda (cap &optional _model) (eq cap 'media)))
+                 ((symbol-function 'gptel--model-mime-capable-p)
+                  (lambda (mime &optional _model) (equal mime "image/png"))))
+         (let* ((result (test-mevedel-tool-web--call "WebFetch" (list :url base)))
+                (item (car (plist-get result :media))))
+           (should (eq 'success (plist-get result :handler-status)))
+           (should (string-prefix-p "Image " (plist-get result :result)))
+           (should (equal "image/png" (plist-get item :mime)))
+           (should (equal png (base64-decode-string (plist-get item :data))))))
+       (cl-letf (((symbol-function 'gptel--model-capable-p) #'ignore))
+         (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
+           (should (eq 'error (plist-get result :handler-status)))
+           (should (string-search "does not accept image/png"
+                                  (plist-get result :result))))))))
+
+  :doc "refuses binary content it cannot read"
+  (mevedel-test-http
+   (lambda (_) (list "200 OK" "Content-Type: application/zip\r\n" "PK\3\4"))
+   (lambda (base)
+     (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
+       (should (eq 'error (plist-get result :handler-status)))
+       (should (equal "Error: Binary content (application/zip, 4 bytes) is not readable by WebFetch"
+                      (plist-get result :result))))))
+
+  :doc "returns a PDF's text through pdftotext"
+  (progn
+    (skip-unless (executable-find "pdftotext"))
+    (mevedel-test-http
+     (lambda (_) (list "200 OK" "Content-Type: application/pdf\r\n"
+                       test-mevedel-tool-web--pdf))
+     (lambda (base)
+       (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
+         (should (eq 'success (plist-get result :handler-status)))
+         (should (string-search "Hello PDF" (plist-get result :result)))))))
 
   :doc "HTTP failure becomes a canonical tool error"
   (mevedel-test-http
@@ -303,6 +414,25 @@
      (should (equal '(nil "blocked")
                     (test-mevedel-tool-web--retrieve
                      base #'ignore :redirect (lambda (_ _) '(error . "blocked")))))))
+
+  :doc "sends ACCEPT on every hop and leaves redirects to mevedel"
+  (let (seen)
+    (mevedel-test-http
+     (lambda (request)
+       (if (string-match-p " /first " request)
+           '("302 Found" "Location: /second\r\n" "")
+         '("200 OK" "Content-Type: text/plain\r\n" "done")))
+     (lambda (base)
+       (let ((retrieve (symbol-function 'url-retrieve)))
+         (cl-letf (((symbol-function 'url-retrieve)
+                    (lambda (&rest args)
+                      (push (list url-mime-accept-string url-max-redirections) seen)
+                      (apply retrieve args))))
+           (should (equal '("done" nil)
+                          (test-mevedel-tool-web--retrieve
+                           (concat base "/first") #'mevedel-tool-web--body
+                           :accept "text/markdown")))))))
+    (should (equal '(("text/markdown" 0) ("text/markdown" 0)) seen)))
 
   :doc "keeps the method through a 307 and switches a 302 to GET"
   (let (requests)
@@ -627,6 +757,71 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
          (should (cl-every (lambda (result) (eq 'error (plist-get result :status))) results))
          (should (zerop mevedel-tool-web--search-active))
          (should-not mevedel-tool-web--search-queue))))))
+
+(mevedel-deftest mevedel-tool-web--body-kind ()
+  ,test
+  (test)
+  :doc "classifies declared MIME types"
+  (dolist (case '(("text/html" . html) ("application/xhtml+xml" . html)
+                  ("text/markdown" . text) ("application/json" . text)
+                  ("application/ld+json" . text) ("application/rss+xml" . text)
+                  ("application/javascript" . text) ("image/png" . image)
+                  ("image/svg+xml" . binary) ("application/pdf" . pdf)
+                  ("application/octet-stream" . binary)))
+    (should (eq (cdr case) (mevedel-tool-web--body-kind (car case)))))
+  :doc "sniffs the body when the type is missing"
+  (dolist (case '(("  <!DOCTYPE html><p>x" . html) ("<HTML>" . html)
+                  ("%PDF-1.4" . pdf) ("plain words" . text) ("a\0b" . binary)))
+    (with-temp-buffer
+      (insert (car case))
+      (goto-char (point-min))
+      (should (eq (cdr case) (mevedel-tool-web--body-kind nil))))))
+
+(mevedel-deftest mevedel-tool-web--image-data-p ()
+  ,test
+  (test)
+  :doc "checks each image type's signature"
+  (should (mevedel-tool-web--image-data-p
+           "image/png" (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n 0)))
+  (should (mevedel-tool-web--image-data-p "image/jpeg" (unibyte-string #xff #xd8 #xff 0)))
+  (should (mevedel-tool-web--image-data-p "image/gif" "GIF89a..."))
+  (should (mevedel-tool-web--image-data-p "image/webp" "RIFF\0\0\0\0WEBPVP8 "))
+  (should-not (mevedel-tool-web--image-data-p "image/png" "<html>"))
+  (should-not (mevedel-tool-web--image-data-p "image/webp" "RIFF")))
+
+(mevedel-deftest mevedel-tool-web--model-image-types ()
+  ,test
+  (test)
+  :doc "lists the image types the current model accepts"
+  (cl-letf (((symbol-function 'gptel--model-capable-p)
+             (lambda (cap &optional _model) (eq cap 'media)))
+            ((symbol-function 'gptel--model-mime-capable-p)
+             (lambda (mime &optional _model) (member mime '("image/png" "image/gif")))))
+    (should (equal '("image/png" "image/gif") (mevedel-tool-web--model-image-types))))
+  (cl-letf (((symbol-function 'gptel--model-capable-p) #'ignore))
+    (should-not (mevedel-tool-web--model-image-types))))
+
+(mevedel-deftest mevedel-tool-web--pdf-text ()
+  ,test
+  (test)
+  :doc "extracts text and removes its temporary file"
+  (let ((before (directory-files temporary-file-directory nil "\\`mevedel-web-"))
+        result)
+    (skip-unless (executable-find "pdftotext"))
+    (mevedel-tool-web--pdf-text test-mevedel-tool-web--pdf "/root"
+                                (lambda (text error) (setq result (list text error))))
+    (let ((deadline (+ (float-time) 4)))
+      (while (and (not result) (< (float-time) deadline))
+        (accept-process-output nil 0.01)))
+    (should (string-search "Hello PDF" (car result)))
+    (should-not (cadr result))
+    (should (equal before (directory-files temporary-file-directory nil "\\`mevedel-web-"))))
+  :doc "reports a missing pdftotext without running anything"
+  (let (result)
+    (cl-letf (((symbol-function 'executable-find) #'ignore))
+      (mevedel-tool-web--pdf-text "%PDF-" "/root"
+                                  (lambda (text error) (setq result (list text error)))))
+    (should (equal '(nil "PDF text extraction needs 'pdftotext'") result))))
 
 (mevedel-deftest mevedel-tool-web--yt-fetch
   (:before-each (mevedel-tool-web--register))
