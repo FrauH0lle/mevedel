@@ -438,8 +438,26 @@ returned. Optional `allowed_domains` or `blocked_domains` (not both) add
 `site:` or `-site:` terms to the query and also filter results by host at a
 label boundary, so filtering holds even when DuckDuckGo ignores the terms.
 DuckDuckGo's bot challenge page is a tool error, distinct from an empty
-result. WebFetch renders readable
-HTML with EWW/SHR; YouTube URLs retrieve video descriptions and English captions.
+result.
+
+WebFetch asks for `text/markdown` first, so servers that can send markdown do,
+and returns a response by its content type. HTML and XHTML are decoded with the
+header charset, else a `<meta>` charset, else UTF-8, and rendered as readable
+text with EWW/SHR. Other text (`text/*`, JSON, XML and their `+json`/`+xml`
+variants, JavaScript) is decoded the same way and returned verbatim. PNG, JPEG,
+GIF and WebP images are attached as media, with a one-line text summary, when
+the current model accepts that type, the bytes carry the type's signature and
+the image is at most 10 MiB; otherwise the call fails. An outcome-only
+`ToolCall` run, which never attaches media, sees only the summary. PDFs become
+the text `pdftotext -layout` extracts; the bytes go to a private temporary file
+for a helper that always runs on this machine, whatever the session's execution
+target, under the web timeout. Without `pdftotext` the call fails. Other
+content types are tool errors naming the type and size. A response without a
+content type is sniffed as PDF, HTML, binary (a NUL byte early on) or text.
+When redirects moved the request, the result's first line names the final URL.
+WebFetch's renderer header shows the requested host, the final host when it
+differs, and the size, status and content type. YouTube URLs retrieve video
+descriptions and English captions.
 
 Web retrieval accepts only `http` and `https` URLs with a host, both as the
 requested URL and as every redirect target, so neither a model-supplied URL nor

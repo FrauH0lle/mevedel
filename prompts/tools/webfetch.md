@@ -1,4 +1,5 @@
-Fetch readable text from a URL, or a YouTube video's description and transcript.
+Fetch readable text from a URL, an image or PDF it serves, or a YouTube video's
+description and transcript.
 
 ### When to use `WebFetch`
 
@@ -7,12 +8,15 @@ Fetch readable text from a URL, or a YouTube video's description and transcript.
 ### When NOT to use `WebFetch`
 
 - Discovering an unknown URL; WebSearch can find candidate sources.
-- Downloading binary files or interacting with a site's JavaScript application.
+- Downloading archives or other binary files, or interacting with a site's
+  JavaScript application.
 
 ### How to use `WebFetch`
 
 - Pass a complete http or https URL. HTML becomes readable text rather
-  than raw markup; script-rendered or authenticated content may be unavailable.
+  than raw markup; markdown, JSON and other text come back verbatim. An image is
+  attached when the model accepts it, and a PDF becomes its extracted text.
+  Script-rendered or authenticated content may be unavailable.
 - YouTube retrieval depends on available video metadata and captions. A missing
   transcript or failed fetch does not establish what the video says.
 - Underlying fetches have a 30-second timeout; a multi-stage retrieval can take
