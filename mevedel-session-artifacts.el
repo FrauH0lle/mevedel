@@ -1896,6 +1896,8 @@ Missing snapshots clear presentations only in preservation mode."
 (defun mevedel-session-artifacts-publish-text
     (session path content &optional coding)
   "Publish SESSION's durability-critical CONTENT atomically at PATH.
+CONTENT is text, or a unibyte string written as its raw bytes.  CODING
+encodes text for portable writes; direct writes encode text as UTF-8.
 
 Portable project writes enter the session publication queue.  File-workspace
 writes retain the existing same-filesystem temporary-file and rename

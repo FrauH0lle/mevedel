@@ -33,6 +33,15 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-run-tool
                   "mevedel-pipeline" (tool callback args))
+(declare-function mevedel-pipeline-tool-results-dir
+                  "mevedel-pipeline" (session buffer &optional request))
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-artifact-address "mevedel-resource" (path session))
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts" (session path content &optional coding))
 
 ;; `mevedel-tool-permission'
 (declare-function mevedel-tool-permission-decide-now
@@ -542,10 +551,40 @@ whatever the session's execution target, owned by agent ORIGIN."
              :teardown-callback (lambda () (settle nil "Helper owner was torn down"))))
         (error (settle nil (error-message-string err)))))))
 
-(defun mevedel-tool-web--fetch-result (url response images origin deliver)
+(defvar mevedel-tool-web--pdf-save-max-bytes (* 25 1024 1024)
+  "Maximum size of a fetched PDF WebFetch saves as a session artifact.")
+
+(defun mevedel-tool-web--save-pdf (data session buffer)
+  "Save PDF DATA as an artifact of SESSION and return its address.
+BUFFER is the dispatching buffer.  Return nil without durable session
+storage or when DATA exceeds `mevedel-tool-web--pdf-save-max-bytes'."
+  (when-let* ((session)
+              ((<= (length data) mevedel-tool-web--pdf-save-max-bytes))
+              (dir (mevedel-pipeline-tool-results-dir session buffer)))
+    (let ((path (concat (make-temp-name (file-name-concat dir "WebFetch-")) ".pdf")))
+      (mevedel-session-artifacts-publish-text session path data)
+      (mevedel-resource-artifact-address path session))))
+
+(defun mevedel-tool-web--pdf-result (text error saved)
+  "Return WebFetch's text for a PDF with extracted TEXT or ERROR.
+SAVED is the PDF's artifact address, or an error string when saving
+failed, or nil."
+  (concat
+   (cond ((and saved (string-prefix-p "artifact://" saved))
+          (format "PDF saved as %s; Read it to view the pages themselves.\n\n" saved))
+         (saved (format "The PDF could not be saved: %s\n\n" saved)))
+   (cond (error (format "No text extracted: %s." error))
+         ;; pdftotext separates pages with form feeds.
+         ((string-match-p "\\`[[:space:]\f]*\\'" text)
+          "No text extracted; the PDF may contain only scanned images.")
+         (t text))))
+
+(defun mevedel-tool-web--fetch-result (url response context deliver)
   "Deliver WebFetch's handler result for URL's RESPONSE to DELIVER.
-IMAGES are the image MIME types the model accepts; ORIGIN owns a PDF
-helper.  Signal an error for content WebFetch cannot return."
+CONTEXT holds what the handler captured at entry: the `:images' types
+the model accepts, the `:origin' owning a PDF helper, and the
+`:session' and `:buffer' that save a PDF.  Signal an error for content
+WebFetch cannot return."
   (let* ((final (plist-get response :url))
          (type (plist-get response :type))
          (bytes (plist-get response :bytes))
@@ -567,7 +606,7 @@ helper.  Signal an error for content WebFetch cannot return."
         ('image
          (let ((data (plist-get response :data)))
            (cond
-            ((not (member type images))
+            ((not (member type (plist-get context :images)))
              (error "The current model does not accept %s images" type))
             ((> bytes mevedel-tool-web--image-max-bytes)
              (error "Image is too large (%d bytes > %d bytes)"
@@ -584,12 +623,17 @@ helper.  Signal an error for content WebFetch cannot return."
                               :render-data (append render
                                                    (list :chars (length result))))))))))
         ('pdf
-         (mevedel-tool-web--pdf-text
-          (plist-get response :data) origin
-          (lambda (text error)
-            (if error
-                (funcall deliver (list :result (concat "Error: " error) :status 'error))
-              (text-result text)))))
+         (let* ((data (plist-get response :data))
+                (saved (condition-case err
+                           (mevedel-tool-web--save-pdf
+                            data (plist-get context :session) (plist-get context :buffer))
+                         (error (error-message-string err)))))
+           (mevedel-tool-web--pdf-text
+            data (plist-get context :origin)
+            (lambda (text error)
+              (if (and error (not saved))
+                  (funcall deliver (list :result (concat "Error: " error) :status 'error))
+                (text-result (mevedel-tool-web--pdf-result text error saved)))))))
         (_ (error "Binary content (%s, %d bytes) is not readable by WebFetch"
                   (or type "unknown type") bytes))))))
 
@@ -600,8 +644,10 @@ are attached as media when the model accepts them, and PDFs become
 their extracted text."
   (let* ((url (plist-get args :url))
          (buffer (current-buffer))
-         (images (mevedel-tool-web--model-image-types))
-         (origin (mevedel-current-origin))
+         (context (list :images (mevedel-tool-web--model-image-types)
+                        :origin (mevedel-current-origin)
+                        :session (bound-and-true-p mevedel--session)
+                        :buffer buffer))
          done
          (deliver (lambda (result)
                     (unless done
@@ -632,7 +678,7 @@ their extracted text."
                                              :host (mevedel-tool-web--url-host url)
                                              :redirect t :chars (length value)))))
           (t (condition-case err
-                 (mevedel-tool-web--fetch-result url value images origin deliver)
+                 (mevedel-tool-web--fetch-result url value context deliver)
                (error (funcall fail (error-message-string err)))))))
        :redirect (lambda (from target)
                    (mevedel-tool-web--redirect-decision buffer from target))

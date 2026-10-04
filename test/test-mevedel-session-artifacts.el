@@ -3839,6 +3839,21 @@ rotation never saves through a rebound temporary visited filename or prompts"
                     (insert-file-contents path)
                     (buffer-string)))))
       (delete-directory root t)))
+  :doc "writes unibyte content as the same raw bytes"
+  (let* ((root (make-temp-file "mevedel-publish-bytes-" t))
+         (path (file-name-concat root "page.pdf"))
+         (bytes (concat (unibyte-string #x89 ?P ?N ?G ?\r ?\n #x1a ?\n #xff #x00 #xc3 #x28)
+                        "tail"))
+         (session (mevedel-session-create
+                   "publish" (test-mevedel-session-persistence--make-file-workspace root))))
+    (unwind-protect
+        (progn
+          (mevedel-session-artifacts-publish-text session path bytes)
+          (should (equal bytes (with-temp-buffer
+                                 (set-buffer-multibyte nil)
+                                 (insert-file-contents-literally path)
+                                 (buffer-string)))))
+      (delete-directory root t)))
   :doc "returns the remote queue outcome without claiming publication"
   (let* ((target
           (mevedel-execution-target-create "/ssh:user@host:/srv/project/"))

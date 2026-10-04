@@ -12,8 +12,11 @@ deviations from the recommendations below:
 - No fetch cache. Keyed by URL and shared across sessions, it would serve
   content whose final host passed a redirect check under another permission
   context, and stale pages from local dev servers.
-- No binary persistence. There is no binary-safe artifact publish; other
-  binary content is a tool error. PDFs use `pdftotext` with no media fallback.
+- Fetched PDFs are saved as session artifacts beside their extracted text,
+  so Read can open scans and figures, also without `pdftotext`. Other binary
+  content is still a tool error: only Read accepts `artifact://`, and it reads
+  none of those formats. (`publish-text` already wrote unibyte content as raw
+  bytes; the suspected UTF-8 corruption did not exist.)
 
 Also found during implementation: every response body began with the newline
 that ends url-http's headers, and WebFetch accepted `file:` URLs directly and

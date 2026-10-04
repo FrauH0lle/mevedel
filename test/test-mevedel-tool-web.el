@@ -11,6 +11,8 @@
 (require 'mevedel-tools)
 (require 'gptel-request)
 (require 'mevedel-view)
+(require 'mevedel-resource)
+(require 'mevedel-tool-fs-read)
 (require 'mevedel-tool-permission)
 (require 'mevedel-tool-web)
 (require 'mevedel-view-render)
@@ -165,6 +167,13 @@
     (should (= 1 (length results)))
     (car results)))
 
+(defun test-mevedel-tool-web--without-executable (name)
+  "Return an `executable-find' replacement that cannot find NAME."
+  (let ((find (symbol-function 'executable-find)))
+    (lambda (command &rest args)
+      (unless (equal command name)
+        (apply find command args)))))
+
 (defconst test-mevedel-tool-web--pdf
   (concat "%PDF-1.4\n"
           "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
@@ -298,6 +307,29 @@
        (let ((result (test-mevedel-tool-web--call "WebFetch" (list :url base))))
          (should (eq 'success (plist-get result :handler-status)))
          (should (string-search "Hello PDF" (plist-get result :result)))))))
+
+  :doc "saves a PDF for Read, even when its text cannot be extracted"
+  (mevedel-test-http
+   (lambda (_) (list "200 OK" "Content-Type: application/pdf\r\n"
+                     test-mevedel-tool-web--pdf))
+   (lambda (base)
+     (test-mevedel-tool-web--with-session session
+       (cl-letf (((symbol-function 'executable-find)
+                  (test-mevedel-tool-web--without-executable "pdftotext")))
+         (let* ((result (test-mevedel-tool-web--call "WebFetch" (list :url base)))
+                (text (plist-get result :result)))
+           (should (eq 'success (plist-get result :handler-status)))
+           (should (string-match "\\`PDF saved as \\(artifact://[^;]+\\);" text))
+           (should (equal test-mevedel-tool-web--pdf
+                          (test-mevedel-tool-web--artifact-bytes
+                           session (match-string 1 text))))
+           (should (string-suffix-p "No text extracted: PDF text extraction needs 'pdftotext'."
+                                    text)))))
+     (with-temp-buffer
+       (cl-letf (((symbol-function 'executable-find)
+                  (test-mevedel-tool-web--without-executable "pdftotext")))
+         (should (eq 'error (plist-get (test-mevedel-tool-web--call "WebFetch" (list :url base))
+                                       :handler-status)))))))
 
   :doc "HTTP failure becomes a canonical tool error"
   (mevedel-test-http
@@ -861,6 +893,79 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
       (mevedel-tool-web--pdf-text "%PDF-" "/root"
                                   (lambda (text error) (setq result (list text error)))))
     (should (equal '(nil "PDF text extraction needs 'pdftotext'") result))))
+
+(defmacro test-mevedel-tool-web--with-session (session &rest body)
+  "Run BODY in a buffer whose SESSION saves into a temporary directory."
+  (declare (indent 1))
+  `(let* ((root (make-temp-file "mevedel-web-session-" t))
+          (save-path (file-name-as-directory
+                      (file-name-concat root ".mevedel" "sessions" "main")))
+          (,session (progn
+                      (make-directory save-path t)
+                      (mevedel-session--create
+                       :name "main" :save-path save-path
+                       :workspace (mevedel-workspace--create
+                                   :type 'project :id root :root root)
+                       :execution-target (mevedel-execution-target-create root)))))
+     (unwind-protect
+         (with-temp-buffer
+           (setq-local mevedel--session ,session)
+           ,@body)
+       (delete-directory root t))))
+
+(defun test-mevedel-tool-web--artifact-bytes (session address)
+  "Return the raw bytes SESSION stores for artifact ADDRESS."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally
+     (file-name-concat (mevedel-session-save-path session) "tool-results"
+                       (string-remove-prefix "artifact://" address)))
+    (buffer-string)))
+
+(mevedel-deftest mevedel-tool-web--save-pdf ()
+  ,test
+  (test)
+  :doc "saves the bytes as a session artifact and returns its address"
+  (test-mevedel-tool-web--with-session session
+    (let ((address (mevedel-tool-web--save-pdf
+                    test-mevedel-tool-web--pdf session (current-buffer))))
+      (should (string-match-p "\\`artifact://WebFetch-[^/]+\\.pdf\\'" address))
+      (should (equal test-mevedel-tool-web--pdf
+                     (test-mevedel-tool-web--artifact-bytes session address)))))
+  :doc "Read opens the saved PDF as a document"
+  (test-mevedel-tool-web--with-session session
+    (let* ((address (mevedel-tool-web--save-pdf
+                     test-mevedel-tool-web--pdf session (current-buffer)))
+           (mevedel-resource-current-attempts
+            (list (cons address (mevedel-resource-prepare
+                                 'read address (list :session session))))))
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (mime &optional _model) (equal mime "application/pdf"))))
+        (let ((item (car (plist-get (mevedel-test--read (list :file_path address))
+                                    :media))))
+          (should (equal "application/pdf" (plist-get item :mime)))
+          (should (equal test-mevedel-tool-web--pdf
+                         (base64-decode-string (plist-get item :data))))))))
+
+  :doc "saves nothing without a session or above the size cap"
+  (should-not (mevedel-tool-web--save-pdf "%PDF-" nil (current-buffer)))
+  (test-mevedel-tool-web--with-session session
+    (let ((mevedel-tool-web--pdf-save-max-bytes 3))
+      (should-not (mevedel-tool-web--save-pdf "%PDF-" session (current-buffer))))))
+
+(mevedel-deftest mevedel-tool-web--pdf-result ()
+  ,test
+  (test)
+  :doc "leads with the saved address, then the text"
+  (should (equal "PDF saved as artifact://a.pdf; Read it to view the pages themselves.\n\ntext"
+                 (mevedel-tool-web--pdf-result "text" nil "artifact://a.pdf")))
+  :doc "explains missing text and failed saves"
+  (should (equal "No text extracted; the PDF may contain only scanned images."
+                 (mevedel-tool-web--pdf-result " \n\f" nil nil)))
+  (should (equal "The PDF could not be saved: disk full\n\nNo text extracted: 'pdftotext' failed."
+                 (mevedel-tool-web--pdf-result nil "'pdftotext' failed" "disk full"))))
 
 (mevedel-deftest mevedel-tool-web--yt-fetch
   (:before-each (mevedel-tool-web--register))

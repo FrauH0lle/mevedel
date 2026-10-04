@@ -457,7 +457,13 @@ the image is at most 10 MiB; otherwise the call fails. An outcome-only
 `ToolCall` run, which never attaches media, sees only the summary. PDFs become
 the text `pdftotext -layout` extracts; the bytes go to a private temporary file
 for a helper that always runs on this machine, whatever the session's execution
-target, under the web timeout. Without `pdftotext` the call fails. Other
+target, under the web timeout. With durable session storage, a PDF of at most
+25 MiB is also saved as a `WebFetch-*.pdf` session artifact, and the result
+leads with its `artifact://` address, which `Read` opens as a document or as
+rendered pages. The saved copy covers what extraction misses: scans, figures
+and layout. A PDF yielding only whitespace says so; a failed extraction, or a
+missing `pdftotext`, still succeeds with the saved address. Without a saved
+copy, extraction failure fails the call. Other
 content types are tool errors naming the type and size. A response without a
 content type is sniffed as PDF, HTML, binary (a NUL byte early on) or text.
 When redirects moved the request, the result's first line names the final URL.
