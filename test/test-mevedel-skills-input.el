@@ -46,18 +46,7 @@
                        (buffer-substring-no-properties
                         (car region) (cdr region)))))))
 
-  :doc "falls back to the configured prompt prefix when no property is set"
-  (let ((session (mevedel-skills-test--make-session)))
-    (mevedel-skills-test--with-chat-buffer session
-      (insert "### older\nplain response\n### /help")
-      (goto-char (point-max))
-      (let ((region (mevedel-skills-input-current-prompt-region)))
-        (should region)
-        (should (equal "/help"
-                       (buffer-substring-no-properties
-                        (car region) (cdr region)))))))
-
-  :doc "without prefix or property the whole buffer is the pending prompt"
+  :doc "without a `gptel' property the whole buffer is the pending prompt"
   (let ((session (mevedel-skills-test--make-session)))
     (with-temp-buffer
       (setq mevedel--session session)
@@ -73,6 +62,19 @@
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (should (null (mevedel-skills-input-current-prompt-region))))))
+
+(mevedel-deftest mevedel-skills-input-command-delete-start ()
+  ,test
+  (test)
+  :doc "a command preceded only by indentation deletes from the line start"
+  (with-temp-buffer
+    (insert "Response\n  /help")
+    (should (= (line-beginning-position)
+               (mevedel-skills-input-command-delete-start (- (point) 5)))))
+  :doc "a command after other text on its line deletes from the command"
+  (with-temp-buffer
+    (insert "please /help")
+    (should (= 8 (mevedel-skills-input-command-delete-start 8)))))
 
 
 ;;
@@ -725,7 +727,7 @@ spanning lines")))
     (with-temp-buffer
       (insert "$doc write it")
       (mevedel-skills-input--handle-user-skill-outcome
-       skill outcome (point-min) (point-max) nil nil)
+       skill outcome (point-min) (point-max) nil)
       (should (equal provider-prompt
                      (mevedel-tool-render-data-strip (buffer-string))))
       (let ((data (cdr (mevedel-tool-render-data-extract (buffer-string)))))
@@ -747,10 +749,10 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $greet world")
+        (insert "$greet world")
         (goto-char (point-max))
         (should (eq 'skill (mevedel-skills-input-dispatch-command)))
-        (should (equal "### Hello world!"
+        (should (equal "Hello world!"
                        (mevedel-tool-render-data-strip
                         (buffer-string))))
         (should (string-search "<!-- mevedel-render-data -->"
@@ -777,7 +779,7 @@ spanning lines")))
         (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
                    (lambda (_tool callback &rest _)
                      (setq pending callback))))
-          (insert "### $greet world and more text here")
+          (insert "$greet world and more text here")
           (goto-char (point-max))
           (mevedel-skills-input-dispatch-command)
           (should pending)
@@ -799,17 +801,17 @@ spanning lines")))
         (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
                    (lambda (_tool callback &rest _)
                      (setq pending callback))))
-          (insert "### $greet world")
+          (insert "$greet world")
           (goto-char (point-max))
           (mevedel-skills-input-dispatch-command
            (lambda () (setq sent t)))
           (should pending)
           ;; The user rewrites the command into something else entirely.
           (delete-region (point-min) (point-max))
-          (insert "### never mind"))
+          (insert "never mind"))
         (funcall pending "3")
         ;; The prepared body belongs to arguments that no longer exist.
-        (should (equal "### never mind" (buffer-string)))
+        (should (equal "never mind" (buffer-string)))
         (should-not sent)
         (should-not mevedel-skills--pending-request-context))))
 
@@ -829,7 +831,7 @@ spanning lines")))
         (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
                    (lambda (_tool callback &rest _)
                      (setq pending callback))))
-          (insert "### $greet world")
+          (insert "$greet world")
           (goto-char (point-max))
           (mevedel-skills-input-dispatch-command
            (lambda () (setq sent t)))
@@ -839,7 +841,7 @@ spanning lines")))
           (delete-char 5)
           (insert "there"))
         (funcall pending "3")
-        (should (equal "### $greet there" (buffer-string)))
+        (should (equal "$greet there" (buffer-string)))
         (should-not sent)
         (should-not mevedel-skills--pending-request-context))))
 
@@ -852,7 +854,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $internal-only")
+        (insert "$internal-only")
         (goto-char (point-max))
         (should-not (mevedel-skills-input-dispatch-command))
         (should (string-match-p "\\$internal-only" (buffer-string)))
@@ -861,10 +863,10 @@ spanning lines")))
   :doc "unknown dollar command is left for normal sending"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### $PATH is useful context")
+      (insert "$PATH is useful context")
       (goto-char (point-max))
       (should (null (mevedel-skills-input-dispatch-command)))
-      (should (equal "### $PATH is useful context" (buffer-string)))))
+      (should (equal "$PATH is useful context" (buffer-string)))))
 
   :doc "fork-context skill dispatches directly and inserts result"
   (let* ((session (mevedel-skills-test--make-session))
@@ -922,7 +924,7 @@ spanning lines")))
                  (list (lambda (_start _end)
                          (setq post-hook-called t)
                          (error "Broken post-response hook")))))
-            (insert "### $delegate do the thing")
+            (insert "$delegate do the thing")
             (goto-char (point-max))
             (should (eq 'skill (mevedel-skills-input-dispatch-command)))
             (let ((buf (buffer-string)))
@@ -939,7 +941,7 @@ spanning lines")))
             (should post-hook-called)
             (should (equal '(" Ready" success) status-called)))))))
 
-  :doc "no-prefix chat: skill body is placed on a fresh line with blank separator"
+  :doc "skill body after a response is placed on a fresh line with blank separator"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "greet"
@@ -1012,7 +1014,7 @@ spanning lines")))
                 (mevedel-skills-scan root '(".mevedel/skills") workspace))
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands nil))
-              (insert "### $parent")
+              (insert "$parent")
               (goto-char (point-max))
               (should (eq 'skill (mevedel-skills-input-dispatch-command)))
               (let ((text (mevedel-tool-render-data-strip (buffer-string))))

@@ -41,7 +41,6 @@
 (declare-function gptel-fsm-state "ext:gptel-request")
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (declare-function gptel-request "ext:gptel-request")
-(defvar gptel-prompt-prefix-alist)
 (defvar gptel-prompt-transform-functions)
 (defvar gptel-request--transitions)
 (defvar gptel-stream)
@@ -511,9 +510,7 @@ be inserted."
          (truncated-summary
           (let* ((lines (split-string summary "\n" t "[[:space:]]*"))
                  (first-line (or (car lines) ""))
-                 (prefix (or (alist-get major-mode gptel-prompt-prefix-alist) ""))
-                 (used-length (+ (length prefix)
-                                 (length header-prefix)
+                 (used-length (+ (length header-prefix)
                                  (length header-postfix)))
                  (available-length (max 10 (- (or fill-column 70)
                                               used-length))))

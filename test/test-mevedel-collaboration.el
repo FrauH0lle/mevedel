@@ -690,7 +690,6 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist nil)
             (setq-local mevedel-compact-run-in-flight nil))
           (with-temp-buffer
             (let ((mevedel--data-buffer data-buffer))

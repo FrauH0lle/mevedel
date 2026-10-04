@@ -22,7 +22,6 @@
 ;; `gptel'
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
 (defvar gptel-post-response-functions)
-(defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 
 ;; `gptel-request'
@@ -306,33 +305,17 @@ staged as reminder entries for the WAIT injector."
 (defun mevedel-skills-input-current-prompt-region ()
   "Return (START . END) of the pending prompt text in the chat buffer.
 
-Locates the start of the current user prompt by preferring gptel's
-`gptel' text property -- which marks prior LLM responses even when the
-user has disabled the prompt prefix -- and falling back to the last
-occurrence of the configured prompt prefix.  If neither boundary is
-present the whole buffer is treated as the pending prompt.  END is
-always `point-max'.  Returns nil only for an empty buffer."
+The pending prompt starts after the last text carrying a `gptel'
+property, which marks prior LLM output.  Without one, the whole buffer
+is the pending prompt.  END is always `point-max'.  Returns nil only
+for an empty buffer."
   (save-excursion
     (goto-char (point-max))
-    (let* ((match (text-property-search-backward 'gptel nil nil t))
-           (prefix (alist-get major-mode gptel-prompt-prefix-alist))
-           (has-prefix (and prefix (not (string-empty-p prefix))))
-           start)
+    (let ((match (text-property-search-backward 'gptel nil nil t)))
       (cond
-       (match (setq start (prop-match-end match)))
-       ((and has-prefix
-             (progn (goto-char (point-max))
-                    (search-backward prefix nil t)))
-        (setq start (+ (point) (length prefix))))
+       (match (cons (prop-match-end match) (point-max)))
        ((< (point-min) (point-max))
-        (setq start (point-min))))
-      (when (and start has-prefix)
-        (save-excursion
-          (goto-char start)
-          (when (looking-at-p (regexp-quote prefix))
-            (setq start (+ start (length prefix))))))
-      (when start
-        (cons start (point-max))))))
+        (cons (point-min) (point-max)))))))
 
 
 (defun mevedel-skills-input-parse-prefixed-line (text prefix)
@@ -623,14 +606,11 @@ leading mention after command dispatch has declined it."
 (defun mevedel-skills-input-ensure-fresh-line ()
   "Leave point at the start of an empty line with a blank line above.
 Called after deleting a slash-command region so the next insertion or
-cursor rest position is visually separated from the preceding response.
-Skipped when the slash command was preceded solely by the prompt prefix,
-since in that case the prefix should remain on its own line and the body
-should inline with it."
+cursor rest position is visually separated from the preceding response."
   (unless (bolp) (insert "\n"))
   (unless (save-excursion
             (forward-line -1)
-              (looking-at-p "^[ \t]*$"))
+            (looking-at-p "^[ \t]*$"))
     (insert "\n")))
 
 (defun mevedel-skills-input-insert-fork-result (outcome)
@@ -696,31 +676,23 @@ observe the completed response."
                       :mevedel-request-id (mevedel-request-id request))))
         (gptel--update-status " Ready" 'success)))))
 
-(defun mevedel-skills-input-command-delete-context (command-pos)
-  "Return deletion context for a command starting at COMMAND-POS.
-The result is a plist with :delete-start and :after-prefix."
-  (let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist))
-         (has-prefix (and prefix (not (string-empty-p prefix))))
-         (line-start (save-excursion
-                       (goto-char command-pos)
-                       (line-beginning-position)))
-         (before-command
-          (buffer-substring-no-properties line-start command-pos))
-         (after-prefix (and has-prefix (equal before-command prefix)))
-         (delete-start
-          (cond
-           (after-prefix command-pos)
-           ((string-match-p "\\`[ \t]*\\'" before-command) line-start)
-           (t command-pos))))
-    (list :delete-start delete-start :after-prefix after-prefix)))
+(defun mevedel-skills-input-command-delete-start (command-pos)
+  "Return where deleting a command starting at COMMAND-POS begins.
+A command preceded only by indentation takes its whole line with it."
+  (let ((line-start (save-excursion
+                      (goto-char command-pos)
+                      (line-beginning-position))))
+    (if (string-match-p "\\`[ \t]*\\'"
+                        (buffer-substring-no-properties line-start command-pos))
+        line-start
+      command-pos)))
 
 (defun mevedel-skills-input--handle-user-skill-outcome
-    (skill outcome delete-start region-end after-prefix continue-fn)
+    (skill outcome delete-start region-end continue-fn)
   "Apply user skill OUTCOME in the current data buffer.
 
 SKILL is the invoked user skill.  DELETE-START and REGION-END bound
-the original `$skill' text.  AFTER-PREFIX means the command followed
-the prompt prefix.
+the original `$skill' text.
 
 CONTINUE-FN, when non-nil, resumes the original `gptel-send' after an
 inline body has been inserted.  Fork outcomes suppress that send and
@@ -730,8 +702,7 @@ insert their result when the retained agent finishes."
      (pcase (plist-get outcome :kind)
        ('inline
         (delete-region delete-start region-end)
-        (unless after-prefix
-          (mevedel-skills-input-ensure-fresh-line))
+        (mevedel-skills-input-ensure-fresh-line)
         (let* ((prompt (or (plist-get outcome :body)
                            (format "Skill '%s' produced no body."
                                    (mevedel-skill-name skill))))
@@ -786,10 +757,7 @@ Returns:
       (if (not (eq (plist-get outcome :status) 'ok))
           nil
         (when skill
-          (let* ((delete-context
-                  (mevedel-skills-input-command-delete-context skill-pos))
-                 (after-prefix (plist-get delete-context :after-prefix))
-                 (buffer (current-buffer))
+          (let* ((buffer (current-buffer))
                  ;; Preparation is asynchronous whenever the body injects, so
                  ;; the draft can move, shrink, or be replaced before the
                  ;; outcome arrives.  Markers follow an edit where integers
@@ -797,7 +765,9 @@ Returns:
                  ;; buffer, and the snapshot says whether this is still the
                  ;; command that was dispatched.
                  (delete-start (copy-marker
-                                (plist-get delete-context :delete-start) nil))
+                                (mevedel-skills-input-command-delete-start
+                                 skill-pos)
+                                nil))
                  (region-end (copy-marker (cdr region) t))
                  (snapshot (buffer-substring-no-properties
                             delete-start region-end)))
@@ -820,7 +790,7 @@ Returns:
                             skill outcome
                             (marker-position delete-start)
                             (marker-position region-end)
-                            after-prefix continue-fn)
+                            continue-fn)
                          ;; Activation happened before preparation, so the
                          ;; skill's permission rules, model, and effort are
                          ;; staged in this buffer.  Abandoning without

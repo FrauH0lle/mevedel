@@ -15,7 +15,6 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `gptel'
-(defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 
 ;; `mevedel-chat'
@@ -294,7 +293,6 @@
     (with-current-buffer buffer
       (org-mode)
       (setq-local gptel-response-separator "\n\n"
-                  gptel-prompt-prefix-alist '((org-mode . "*** "))
                   mevedel--session
                   (mevedel-session-create "directive-inspector" workspace))
       (dolist (item entries)
@@ -353,7 +351,7 @@
                        :turn turn :outcome outcome
                        :activity-kind kind :sequence sequence))))
           (insert start)
-          (insert (format "*** %s :%s:\n:PROMPT:\n%s\n:END:\n"
+          (insert (format "%s :%s:\n:PROMPT:\n%s\n:END:\n"
                           (or message "Directive activity")
                           (symbol-name action)
                           (org-escape-code-in-string (or request ""))))

@@ -147,6 +147,9 @@
     (should (eq 'identity (alist-get 'display-sort-function metadata)))
     (should (eq 'identity (alist-get 'cycle-sort-function metadata)))))
 
+(defvar gptel-include-tool-results)
+(defvar gptel-prompt-prefix-alist)
+(defvar gptel-response-prefix-alist)
 (defvar org-element-cache-persistent)
 
 (mevedel-deftest mevedel--transcript-org-mode ()
@@ -210,6 +213,21 @@
           (should-not org-element-cache-persistent)))
       (should (= 0 reads))
       (should org-element-cache-persistent)))
+
+  :doc "owns gptel's transcript shape regardless of the user's chat settings"
+  (let ((gptel-prompt-prefix-alist '((org-mode . "*** ")))
+        (gptel-response-prefix-alist '((org-mode . "Assistant: ")))
+        (gptel-include-tool-results 'auto))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (should (local-variable-p 'gptel-prompt-prefix-alist))
+      (should-not gptel-prompt-prefix-alist)
+      (should (local-variable-p 'gptel-response-prefix-alist))
+      (should-not gptel-response-prefix-alist)
+      (should (local-variable-p 'gptel-include-tool-results))
+      (should (eq t gptel-include-tool-results)))
+    (should (equal '((org-mode . "*** ")) gptel-prompt-prefix-alist))
+    (should (eq 'auto gptel-include-tool-results)))
 
   :doc "suppresses org-indent-mode while transcript Org hooks run"
   (progn

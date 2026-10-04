@@ -710,10 +710,8 @@
                 '(:type fork-point :fork-point-id "fork-point-1"
                   :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
             (with-current-buffer target-data
-              (org-mode)
+              (mevedel--transcript-org-mode)
               (setq-local gptel-response-separator "\n\n")
-              (setq-local gptel-prompt-prefix-alist
-                          '((org-mode . "*** ")))
               (setq-local mevedel--session target-session)
               (insert (propertize "Shared response.\n" 'gptel 'response))
               (insert
@@ -901,7 +899,7 @@
   (test)
   :doc "preparation preserves the view and returns the canonical source turns"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Response\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
@@ -919,7 +917,7 @@
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Old response\n" 'response)
     (let ((start (with-current-buffer data-buf (copy-marker (point-max) nil))))
-      (mevedel-view-test--insert-data data-buf "*** New prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "New prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "New response\n" 'response)
       (with-current-buffer view-buf
         (setq-local mevedel-view--transcript-start start)
@@ -934,7 +932,7 @@
   (test)
   :doc "projects transcript turns and reports the last assistant turn"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Response\n" 'response)
     (with-current-buffer view-buf
       (let ((inhibit-read-only t))
@@ -960,7 +958,7 @@
 
   :doc "reports the current assistant turn's data start for reanchoring"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Response\n" 'response)
     (with-current-buffer view-buf
       (let ((inhibit-read-only t))
@@ -993,7 +991,7 @@
 
   :doc "repairs the data anchor to the projected turn's data start"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\nfiller\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\nfiller\n" nil)
     (with-current-buffer view-buf
       ;; Simulate a whole-buffer rewrite that collapsed the marker.
       (setq mevedel-view--data-turn-start
@@ -1014,7 +1012,7 @@
 
   :doc "parks the data anchor at the data end when no assistant turn exists"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\nfiller\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\nfiller\n" nil)
     (with-current-buffer view-buf
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-min) nil)))
@@ -1031,7 +1029,7 @@
   (test)
   :doc "points the data anchor at a position in the data buffer"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (with-current-buffer view-buf
       (mevedel-view--reanchor-data-turn-start data-buf 3)
       (should (markerp mevedel-view--data-turn-start))
@@ -1088,7 +1086,7 @@
   (test)
   :doc "rebuilds view from data buffer"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** What is 2+2?\n" nil)
+    (mevedel-view-test--insert-data data-buf "What is 2+2?\n" nil)
     (mevedel-view-test--insert-data data-buf "The answer is 4.\n" 'response)
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
@@ -1102,7 +1100,7 @@
 
   :doc "repairs a data anchor collapsed by a whole-buffer rewrite"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Response\n" 'response)
     (with-current-buffer view-buf
       ;; Compaction and segment rotation rewrite the data buffer through
@@ -1132,7 +1130,7 @@
 
   :doc "preserves an active transcript selection"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data
      data-buf "Response with selected text.\n" 'response)
     (with-current-buffer view-buf
@@ -1150,7 +1148,7 @@
 
   :doc "rolls back a destructive rebuild when projection fails"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -1167,7 +1165,7 @@
          " *mevedel-view-full-rerender-test*"))
     (unwind-protect
         (mevedel-view-test--with-buffers
-          (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+          (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
           (mevedel-view-test--insert-data data-buf "Response\n" 'response)
           (with-current-buffer view-buf
             (mevedel-view--full-rerender))
@@ -1193,7 +1191,7 @@
        (mevedel--format-hook-audit-record
         '(:type directive-turn-boundary :edge start
           :directive-id "directive-1" :action discuss :turn 3)))
-      (insert "*** Earlier question :discuss:\n:PROMPT:\nFull request\n:END:\n")
+      (insert "Earlier question :discuss:\n:PROMPT:\nFull request\n:END:\n")
       (insert (propertize "Earlier answer.\n" 'gptel 'response))
       (insert
        (mevedel--format-hook-audit-record
@@ -1204,7 +1202,7 @@
        (mevedel--format-hook-audit-record
         '(:type directive-turn-boundary :edge start
           :directive-id "directive-1" :action discuss :turn 4)))
-      (insert "*** Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
+      (insert "Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
       (insert (propertize "Complete answer.\n" 'gptel 'response))
       (insert
        (mevedel--format-hook-audit-record
@@ -1295,7 +1293,7 @@
          (mevedel--format-hook-audit-record
           '(:type directive-turn-boundary :edge start
             :directive-id "directive-1" :action discuss :turn 4)))
-        (insert "*** Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
+        (insert "Explain this :discuss:\n:PROMPT:\nFull request\n:END:\n")
         (insert (propertize "Complete answer.\n" 'gptel 'response))
         (insert
          (mevedel--format-hook-audit-record
@@ -1318,7 +1316,7 @@
   :doc "suppresses modification hooks while rebuilding rendered transcript"
   (mevedel-view-test--with-buffers
     (let ((changes 0))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Response\n" 'response)
       (with-current-buffer view-buf
         (add-hook 'after-change-functions
@@ -1335,7 +1333,7 @@
   (mevedel-view-test--with-buffers
     (let ((original (symbol-function 'mevedel-view--header-string))
           redisplay-inhibited)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer view-buf
         (cl-letf (((symbol-function 'mevedel-view--header-string)
                    (lambda (buffer)
@@ -1346,7 +1344,7 @@
   :doc "suppresses hooks while cleaning stale pending lines"
   (mevedel-view-test--with-buffers
     (let ((changes 0))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Response\n" 'response)
       (with-current-buffer view-buf
         (let ((mevedel-view--pending-tool-calls
@@ -1377,7 +1375,7 @@
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--view-buffer view-buf)
-        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
         (mevedel-view-test--insert-data data-buf "Response\n" 'response)
         (mevedel-tool-task-refresh-display))
       (with-current-buffer view-buf
@@ -1421,7 +1419,7 @@
         (with-current-buffer data-buf
           (setq-local mevedel--session session)
           (setq-local mevedel--view-buffer view-buf)
-          (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+          (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
           (mevedel-view-test--insert-data data-buf "Response\n" 'response))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
@@ -1469,7 +1467,7 @@
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--view-buffer view-buf)
-        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
         (mevedel-view-test--insert-data data-buf "Response\n" 'response))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
@@ -1480,7 +1478,7 @@
           (should-not (string-match-p "completed task" text))))))
   :doc "header stays at top when rerendering (input-marker advances past it)"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Greetings\n" nil)
+    (mevedel-view-test--insert-data data-buf "Greetings\n" nil)
     (mevedel-view-test--insert-data data-buf "Hello back\n" 'response)
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
@@ -1793,7 +1791,7 @@
         (should-not (string-match-p "(:name \\\"Read\\\"" text)))))
   :doc "render-data-only segments after responses stay hidden"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Handoff\n\nBody.\n" nil)
+    (mevedel-view-test--insert-data data-buf "Handoff\n\nBody.\n" nil)
     (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
     (mevedel-view-test--insert-data
      data-buf
@@ -1812,7 +1810,7 @@
         (should-not (string-match-p "Thinking" text)))))
   :doc "separates response prose from following activity"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
     (mevedel-view-test--insert-data
      data-buf
@@ -1847,7 +1845,7 @@
               ":GPTEL_MODEL: test\n"
               ":GPTEL_BOUNDS: ((response (100 200)))\n"
               ":END:\n\n"))
-    (mevedel-view-test--insert-data data-buf "*** Actual prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Actual prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -1865,7 +1863,7 @@
               ":GPTEL_MODEL: test\n"
               ":GPTEL_BOUNDS: nil\n"
               ":END:\n\n"
-              "*** Prompt\n\n"
+              "Prompt\n\n"
               "Assistant intro.\n"
               "\n#+begin_tool (Read :file_path \"/tmp/a.png\")\n"
               "(:name \"Read\" :args (:file_path \"/tmp/a.png\"))\n\n"
@@ -2166,12 +2164,12 @@
   :doc "reanchors in-flight assistant after restoring earlier expanded fold"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data data-buf "First\n" nil)
       (mevedel-view-test--insert-data
        data-buf
        "(:name \"Read\" :args (:file_path \"input.pdf\"))\n\nfirst\nsecond\nthird\n"
        '(tool . "call_0"))
-      (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+      (mevedel-view-test--insert-data data-buf "\n\nSecond\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
@@ -2206,12 +2204,12 @@
   :doc "turn fold preserves the in-flight assistant anchor"
   (mevedel-view-test--with-buffers
     (let (data-turn-start second-start)
-      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data data-buf "First\n" nil)
       (mevedel-view-test--insert-data
        data-buf
        "First response line 1.\nFirst response line 2.\nFirst response line 3.\n"
        'response)
-      (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+      (mevedel-view-test--insert-data data-buf "\n\nSecond\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
@@ -2250,7 +2248,7 @@
       (let ((start (point)))
         (insert "#+end_summary\n\n")
         (put-text-property start (point) 'gptel 'ignore)))
-    (mevedel-view-test--insert-data data-buf "*** Actual prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Actual prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -2269,7 +2267,7 @@
   :doc "preserves in-flight live tail when data has no assistant replacement yet"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
-     data-buf "*** Read files\nAssistant\nCalling Read...\n" nil)
+     data-buf "Read files\nAssistant\nCalling Read...\n" nil)
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             (start nil))
@@ -2293,14 +2291,14 @@
   :doc "stable-prefix matching stays within the latest assistant turn"
   (mevedel-view-test--with-buffers
     (let ((draft "> quoted\nsecond line"))
-      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data data-buf "First\n" nil)
       (mevedel-view-test--insert-data
        data-buf "Shared first.\nShared second.\n" 'response)
-      (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+      (mevedel-view-test--insert-data data-buf "\n\nSecond\n" nil)
       (mevedel-view-test--insert-data
        data-buf "Newest answer.\n" 'response)
       (mevedel-view-test--insert-data
-       data-buf "\n\n*** Follow-up\nAssistant\nShared first.\n" nil)
+       data-buf "\n\nFollow-up\nAssistant\nShared first.\n" nil)
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               start)
@@ -2477,9 +2475,9 @@
   (test)
   :doc "does not append preserved live tail already rendered from data"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
-    (mevedel-view-test--insert-data data-buf "\n\n*** Follow-up\n" nil)
+    (mevedel-view-test--insert-data data-buf "\n\nFollow-up\n" nil)
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             start)
@@ -2513,12 +2511,12 @@
 
   :doc "matches preserved live tail by stable prefix when status lines differ"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data
      data-buf
      "Assistant answer.\n(:name \"Read\" :args (:file_path \"a.el\"))\n\nok\n"
      'response)
-    (mevedel-view-test--insert-data data-buf "\n\n*** Follow-up\n" nil)
+    (mevedel-view-test--insert-data data-buf "\n\nFollow-up\n" nil)
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             start)
@@ -2562,9 +2560,9 @@
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
-      (mevedel-view-test--insert-data data-buf "\n\n*** Follow-up\n" nil)
+      (mevedel-view-test--insert-data data-buf "\n\nFollow-up\n" nil)
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               start)
@@ -2594,7 +2592,7 @@
 
   :doc "full rerender recreates progress from request state"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
             (copy-marker mevedel-view--input-marker nil))
@@ -2612,7 +2610,7 @@
   :doc "reanchors to current assistant when mailbox follows the in-flight turn"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         ;; Match the send-path marker shape: inside the user run, just
         ;; before the assistant response starts.
@@ -2653,9 +2651,9 @@
 (ert-deftest mevedel-view--full-rerender-in-flight-user-anchor/test ()
   "Full rerender during a new request keeps the in-flight anchor after `You'."
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+    (mevedel-view-test--insert-data data-buf "First\n" nil)
     (mevedel-view-test--insert-data data-buf "First response.\n" 'response)
-    (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+    (mevedel-view-test--insert-data data-buf "\n\nSecond\n" nil)
     (with-current-buffer data-buf
       (let ((data-turn-start (copy-marker (point-max) nil)))
         (with-current-buffer view-buf
@@ -2773,7 +2771,7 @@
   :doc "preserves an active selection while rebuilding the assistant turn"
   (mevedel-view-test--with-buffers
     (let (assistant-start)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point) nil)))
       (mevedel-view-test--insert-data
@@ -2802,7 +2800,7 @@
     (let ((fontify (symbol-function 'mevedel-view--fontify-response))
           (stable-fontify-count 0)
           assistant-start stable-marker stable-position)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data
@@ -3068,7 +3066,7 @@
           (progn
             (with-current-buffer data-buf
               (setq-local mevedel--view-buffer parent-view))
-            (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+            (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
             (with-current-buffer data-buf
               (setq assistant-start (copy-marker (point-max) nil)))
             (mevedel-view-test--insert-data
@@ -3095,7 +3093,7 @@
   :doc "reconciles the complete turn once and releases retained-tail state"
   (mevedel-view-test--with-buffers
     (let (assistant-start stable-marker)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data
@@ -3139,7 +3137,7 @@
                           :body result
                           :body-mode 'text-mode
                           :initially-collapsed-p t))))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point) nil)))
       (mevedel-view-test--insert-data data-buf "Intro.\n" 'response)
@@ -3171,7 +3169,7 @@
   :doc "expanded short thinking survives in-flight incremental render"
   (mevedel-view-test--with-buffers
     (let (assistant-start view-assistant-start)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point) nil)))
       (mevedel-view-test--insert-data data-buf "short thought\n" 'ignore)
@@ -3222,7 +3220,7 @@
                           :body-mode 'text-mode
                           :vtype 'agent-handle
                           :initially-collapsed-p t))))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point) nil)))
       (mevedel-view-test--insert-data
@@ -3254,7 +3252,7 @@
   (let ((mevedel-view-mailbox-collapse-line-threshold 1))
     (mevedel-view-test--with-buffers
       (let (assistant-start view-assistant-start)
-        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
         (with-current-buffer data-buf
           (setq assistant-start (copy-marker (point) nil)))
         (mevedel-view-test--insert-data data-buf "Before result.\n" 'response)
@@ -3304,7 +3302,7 @@
         (setq-local mevedel--view-buffer view-buf))
       (with-current-buffer view-buf
         (setq-local mevedel--session session))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq assistant-start (copy-marker (point) nil)))
       (mevedel-view-test--insert-data data-buf "Task response.\n" 'response)
@@ -3344,7 +3342,7 @@
           (gptel--known-tools (copy-tree gptel--known-tools))
           (draft "> quoted\nsecond line")
           data-turn-start)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
@@ -3385,7 +3383,7 @@
   :doc "incremental redraw preserves composer point in every live window"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
@@ -3417,7 +3415,7 @@
   :doc "full redraw preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let ((draft "> quoted\nsecond line"))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
       (with-current-buffer view-buf
         (goto-char (mevedel-view--input-start))
@@ -3434,7 +3432,7 @@
         (mevedel-view-test--with-buffers
           (let ((draft "> quoted\nsecond line")
                 (mevedel-view-rerender-debounce 0))
-            (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+            (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
             (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
@@ -3457,9 +3455,9 @@
   (test)
   :doc "turn navigation crosses rendered source-backed turns"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+    (mevedel-view-test--insert-data data-buf "First\n" nil)
     (mevedel-view-test--insert-data data-buf "Answer one.\n" 'response)
-    (mevedel-view-test--insert-data data-buf "\n*** Second\n" nil)
+    (mevedel-view-test--insert-data data-buf "\nSecond\n" nil)
     (mevedel-view-test--insert-data data-buf "Answer two.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -5363,7 +5361,7 @@
   (test)
   :doc "user turns hide provider bookkeeping while retaining reminder disclosures"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Continue\n" nil)
+    (mevedel-view-test--insert-data data-buf "Continue\n" nil)
     (mevedel-view-test--insert-data
      data-buf
      (mapconcat
@@ -6061,7 +6059,7 @@
   (test)
   :doc "renders a direct workflow's canonical started event"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** /review current changes\n"
+    (mevedel-view-test--insert-data data-buf "/review current changes\n"
                                     nil)
     (mevedel-view-test--insert-data
      data-buf
@@ -6186,14 +6184,23 @@
 	  (should-not (string-match-p "GPTEL_SYSTEM" text))
 	  (should-not (string-match-p "hidden system prompt" text))))
 
-  :doc "a prompt heading after separator whitespace is stripped"
+  :doc "a user-typed leading Org heading is prompt text"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (insert "\n\n*** Real user prompt here.\n"))
+      (insert "\n\n* Plan\n:PROPERTIES:\n:ID: 1\n:END:\nDo it.\n"))
     (let* ((seg (list 'user (point-min)
                       (with-current-buffer data-buf (point-max))))
            (text (mevedel-view--user-turn-text (list seg) data-buf)))
-      (should (equal "Real user prompt here." text))))
+      (should (equal "* Plan\n:PROPERTIES:\n:ID: 1\n:END:\nDo it." text))))
+
+  :doc "an agent task heading after separator whitespace shows its title"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "\n\n* Agent Task: Verify\n\nCheck it.\n"))
+    (let* ((seg (list 'user (point-min)
+                      (with-current-buffer data-buf (point-max))))
+           (text (mevedel-view--user-turn-text (list seg) data-buf)))
+      (should (equal "Agent Task: Verify\n\nCheck it." text))))
 
   :doc "an agent task heading's property drawer is stripped"
   (mevedel-view-test--with-buffers
@@ -7317,7 +7324,7 @@
                   (list :text text :context "context" :label "Shared context"))))
               ('history
                (mevedel-view-test--insert-data
-                data-buf (concat "*** " text "\n") nil)
+                data-buf (concat text "\n") nil)
                (let ((inhibit-read-only t))
                  (goto-char (mevedel-view--history-insertion-marker))
                  (mevedel-view--render-user-turn
@@ -7349,7 +7356,7 @@
                        (get-text-property
                         (match-beginning 0) 'mevedel-view-prompt-preview))))
       (mevedel-view-test--insert-data
-       data-buf (concat "*** Actual prompt\n" mailbox) nil)
+       data-buf (concat "Actual prompt\n" mailbox) nil)
       (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
@@ -7370,7 +7377,7 @@
                      "Visible % question with detail")))
     (mevedel-view-test--insert-data
      data-buf
-     "*** Visible % question\nwith detail\n:PROMPT:\nModel-only context\n:END:\n"
+     "Visible % question\nwith detail\n:PROMPT:\nModel-only context\n:END:\n"
      nil)
     (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
     (with-current-buffer view-buf
@@ -7396,7 +7403,7 @@
   (let ((mevedel-view-user-input-collapse-line-threshold 3))
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data
-       data-buf "*** line one\nline two\nline three\nline four\nline five\n"
+       data-buf "line one\nline two\nline three\nline four\nline five\n"
        nil)
       (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
       (with-current-buffer data-buf

@@ -268,9 +268,8 @@
 (mevedel-deftest mevedel-skills--dispatch-slash-command
   (:doc "dispatches /collab without copying its bearer URL into messages")
   (with-temp-buffer
-    (let ((gptel-prompt-prefix-alist '((fundamental-mode . "### ")))
-          (messages nil))
-      (insert "### /collab view")
+    (let ((messages nil))
+      (insert "/collab view")
       (cl-letf (((symbol-function 'mevedel-collaboration-view)
                  (lambda () "http://127.0.0.1:1/#room.secret"))
                 ((symbol-function 'message)

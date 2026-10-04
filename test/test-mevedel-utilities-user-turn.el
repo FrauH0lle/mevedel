@@ -23,21 +23,18 @@
 (mevedel-deftest mevedel--insert-user-turn ()
   ,test
   (test)
-  :doc "root producers preserve configured separators and prompt prefixes"
+  :doc "root producers keep the configured separator and start on their own line"
   (dolist (producer '(chat init review composer fork))
-    (dolist (case '(("" "\n\n" "*** " "\n\n*** hello\n")
-                    ("Answer" "\n\n" "*** " "Answer\n\n*** hello\n")
-                    ("*** " "" "*** " "*** hello\n")
-                    ("Answer" "" "*** " "Answer\n*** hello\n")
-                    ("Answer" "" nil "Answerhello\n")
-                    ("Answer" "" "" "Answerhello\n")
-                    ("" "\n" "User:\n" "\nUser:\nhello\n")))
-      (pcase-let ((`(,initial ,separator ,prefix ,expected) case))
+    (dolist (case '(("" "\n\n" "\n\nhello\n")
+                    ("Answer" "\n\n" "Answer\n\nhello\n")
+                    ("Answer" "\n" "Answer\nhello\n")
+                    ("Answer" "" "Answer\nhello\n")
+                    ("" "" "hello\n")))
+      (pcase-let ((`(,initial ,separator ,expected) case))
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (insert (propertize initial 'gptel 'response))
-            (setq-local gptel-response-separator separator
-                        gptel-prompt-prefix-alist `((org-mode . ,prefix))))
+            (setq-local gptel-response-separator separator))
           (cl-letf (((symbol-function 'gptel-send) #'ignore))
             (pcase producer
               ('chat
@@ -60,16 +57,15 @@
   :doc "directive headers retain their boundary record and prompt drawer"
   (with-temp-buffer
     (org-mode)
-    (setq-local gptel-response-separator "\n\n"
-                gptel-prompt-prefix-alist '((org-mode . "*** ")))
+    (setq-local gptel-response-separator "\n\n")
     (let ((marker (mevedel--insert-directive-turn
                    "d1" 2 "Change this" "Exact implementation prompt" 'implement)))
       (should (= (point-max) (marker-position marker)))
       (should (string-suffix-p
-               "\n\n*** Change this :implement:\n:PROMPT:\nExact implementation prompt\n:END:\n"
+               "\n\nChange this :implement:\n:PROMPT:\nExact implementation prompt\n:END:\n"
                (buffer-string)))
       (goto-char (point-min))
-      (search-forward "*** Change this")
+      (search-forward "Change this")
       (should-not (get-text-property (1- (point)) 'gptel))
       (should (string-prefix-p
                (mevedel--format-hook-audit-record
@@ -80,8 +76,7 @@
   :doc "returns the body offset and retains only trusted transcript properties"
   (with-temp-buffer
     (org-mode)
-    (setq-local gptel-response-separator "\n\n"
-                gptel-prompt-prefix-alist '((org-mode . "*** ")))
+    (setq-local gptel-response-separator "\n\n")
     (insert (propertize "Answer" 'gptel 'response))
     (let* ((binding '(:kind skill :token "$alpha"
                      :source-file "/tmp/alpha/SKILL.md"))
@@ -91,7 +86,7 @@
                                       'gptel 'response 'invisible t)
                           "\n" render))
            (body-start (mevedel--insert-user-turn input)))
-      (should (= body-start (1+ (length "Answer\n\n*** "))))
+      (should (= body-start (1+ (length "Answer\n\n"))))
       (should (= (point) (point-max)))
       (should (equal (concat input "\n")
                      (buffer-substring body-start (point))))

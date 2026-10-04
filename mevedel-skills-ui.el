@@ -25,7 +25,6 @@
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-backend)
 (defvar gptel-model)
-(defvar gptel-prompt-prefix-alist)
 
 ;; `mevedel-chat'
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
@@ -217,7 +216,7 @@
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-clear-pending
                   "mevedel-skills-input" ())
-(declare-function mevedel-skills-input-command-delete-context
+(declare-function mevedel-skills-input-command-delete-start
                   "mevedel-skills-input" (command-pos))
 (declare-function mevedel-skills-input-current-prompt-region
                   "mevedel-skills-input" ())
@@ -237,7 +236,7 @@
 (declare-function mevedel-skills-input-scan-tokens
                   "mevedel-skills-input" (text resolver &optional allow-root))
 (autoload 'mevedel-skills-input-clear-pending "mevedel-skills-input")
-(autoload 'mevedel-skills-input-command-delete-context "mevedel-skills-input")
+(autoload 'mevedel-skills-input-command-delete-start "mevedel-skills-input")
 (autoload 'mevedel-skills-input-current-prompt-region "mevedel-skills-input")
 (autoload 'mevedel-skills-input-dispatch-command "mevedel-skills-input")
 (autoload 'mevedel-skills-input-dispatch-inline-attachments
@@ -450,53 +449,34 @@ Routes through the lifecycle-aware permission transition path."
         (message "mevedel: edits mode off")
       (message "mevedel: edits mode on"))))
 
-(defun mevedel-cmd--clear-trim-bare-prefix (prefix)
-  "Delete PREFIX when it is the only text on the pending prompt line."
-  (when (and prefix (not (string-empty-p prefix)))
-    (let* ((end (point-max))
-           (start (- end (length prefix))))
-      (when (and (<= (point-min) start)
-                 (equal prefix
-                        (buffer-substring-no-properties start end))
-                 (save-excursion
-                   (goto-char start)
-                   (= start (line-beginning-position))))
-        (delete-region start end)))))
-
 (defun mevedel-cmd--clear (_args)
   "Start a new, empty chat segment."
   (when (and (bound-and-true-p mevedel--session)
              (mevedel-session-pending-input-p mevedel--session))
     (user-error
      "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q first"))
-  (let ((prefix (or (alist-get major-mode gptel-prompt-prefix-alist) "")))
-    (cond
-     ((bound-and-true-p mevedel-session--read-only-mode)
-      (user-error "Session is read-only"))
-     ((and (bound-and-true-p mevedel--session)
-           (mevedel-session-save-path mevedel--session)
-           buffer-file-name)
-      (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
+  (cond
+   ((bound-and-true-p mevedel-session--read-only-mode)
+    (user-error "Session is read-only"))
+   ((and (bound-and-true-p mevedel--session)
+         (mevedel-session-save-path mevedel--session)
+         buffer-file-name)
+    (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
+    (mevedel-session-artifacts-start-fresh-segment
+     mevedel--session (current-buffer) :clear t)
+    (mevedel--run-session-start-hooks "clear")
+    (message "mevedel: started a fresh chat segment"))
+   (t
+    (when (yes-or-no-p "Clear all chat buffer content? ")
       (let ((inhibit-read-only t))
-        (mevedel-cmd--clear-trim-bare-prefix prefix))
-      (mevedel-session-artifacts-start-fresh-segment
-       mevedel--session (current-buffer)
-       :initial-text prefix :clear t)
-      (mevedel--run-session-start-hooks "clear")
-      (message "mevedel: started a fresh chat segment"))
-     (t
-      (when (yes-or-no-p "Clear all chat buffer content? ")
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert prefix)
-          (goto-char (point-max)))
-        (mevedel-compact-estimation-clear-baseline)
-        (when (bound-and-true-p mevedel--session)
-          (mevedel-session-naming-cancel)
-          (unless (eq (mevedel-session-naming-state mevedel--session) 'explicit)
-            (setf (mevedel-session-naming-state mevedel--session) 'pending))
-          (mevedel--run-session-start-hooks "clear"))
-        (message "mevedel: cleared chat buffer"))))))
+        (erase-buffer))
+      (mevedel-compact-estimation-clear-baseline)
+      (when (bound-and-true-p mevedel--session)
+        (mevedel-session-naming-cancel)
+        (unless (eq (mevedel-session-naming-state mevedel--session) 'explicit)
+          (setf (mevedel-session-naming-state mevedel--session) 'pending))
+        (mevedel--run-session-start-hooks "clear"))
+      (message "mevedel: cleared chat buffer")))))
 
 (defun mevedel-cmd--help (_args)
   "Show the list of local slash commands and available `$' skills."
@@ -898,29 +878,26 @@ ARGS to include subsequent lines does not change their behavior."
   (mevedel-skills-input-parse-prefixed-line text ?/))
 
 (defun mevedel-skills--text-after-local-command-delete
-    (delete-start region-end after-prefix)
+    (delete-start region-end)
   "Return buffer text after deleting a local slash command region.
-DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
-the deleted command followed the prompt prefix."
+DELETE-START and REGION-END bound the command text."
   (let ((text (buffer-substring-no-properties (point-min) (point-max))))
     (with-temp-buffer
       (insert text)
       (delete-region delete-start region-end)
-      (unless after-prefix
-        (mevedel-skills-input-ensure-fresh-line))
+      (mevedel-skills-input-ensure-fresh-line)
       (buffer-string))))
 
 (defun mevedel-skills--refresh-visited-file-before-local-edit
-    (delete-start region-end after-prefix)
+    (delete-start region-end)
   "Refresh stale visited-file metadata before slash command edits.
-DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
-the deleted command followed the prompt prefix."
+DELETE-START and REGION-END bound the command text."
   (when (and buffer-file-name
              (bound-and-true-p mevedel--session)
              (mevedel-session-save-path mevedel--session))
     (mevedel-session-artifacts-refresh-visited-file-modtime-or-error
      (mevedel-skills--text-after-local-command-delete
-      delete-start region-end after-prefix))))
+      delete-start region-end))))
 
 (defun mevedel-skills--dispatch-slash-command ()
   "Parse and dispatch a local `/command' in the current chat buffer.
@@ -937,17 +914,14 @@ Returns:
            (args (nth 1 parsed))
            (slash-pos (+ (car region) (nth 2 parsed)))
            (local (assoc name mevedel-slash-commands))
-           (delete-context
-            (mevedel-skills-input-command-delete-context slash-pos))
-           (delete-start (plist-get delete-context :delete-start))
-           (after-prefix (plist-get delete-context :after-prefix)))
+           (delete-start
+            (mevedel-skills-input-command-delete-start slash-pos)))
       (cond
        (local
         (mevedel-skills--refresh-visited-file-before-local-edit
-         delete-start (cdr region) after-prefix)
+         delete-start (cdr region))
         (delete-region delete-start (cdr region))
-        (unless after-prefix
-          (mevedel-skills-input-ensure-fresh-line))
+        (mevedel-skills-input-ensure-fresh-line)
         (when-let* ((result (funcall (cdr local) args))
                     ((stringp result)))
           (message "%s" result))
@@ -1297,26 +1271,16 @@ completion exit status."
   "Return slash command start position on this line, or nil.
 
 INPUT-START, when non-nil, is the first editable input position in a
-view buffer.  Without INPUT-START, a leading gptel prompt prefix on the
-current line is skipped."
+view buffer; without it, a command starts at the beginning of the line."
   (let ((line-start (line-beginning-position)))
-    (cond
-     (input-start
-      (when (and (<= input-start (point))
-                 (= line-start
-                    (save-excursion
-                      (goto-char input-start)
-                      (line-beginning-position))))
-        input-start))
-     (t
-      (let ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-        (if (and prefix
-                 (not (string-empty-p prefix))
-                 (save-excursion
-                   (goto-char line-start)
-                   (looking-at-p (regexp-quote prefix))))
-            (+ line-start (length prefix))
-          line-start))))))
+    (if input-start
+        (when (and (<= input-start (point))
+                   (= line-start
+                      (save-excursion
+                        (goto-char input-start)
+                        (line-beginning-position))))
+          input-start)
+      line-start)))
 
 (defun mevedel-skills-slash-capf-context (&optional input-start)
   "Return slash completion context at point.

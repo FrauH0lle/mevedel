@@ -4367,7 +4367,7 @@
 (mevedel-deftest mevedel-session-artifacts-start-fresh-segment/remote ()
   ,test
   (test)
-  :doc "remote clear atomically publishes the transition but not its draft"
+  :doc "remote clear atomically publishes an empty new segment"
   (let* ((host "fresh-segment-host")
          (local-root (file-name-as-directory
                       (make-temp-file "mevedel-remote-fresh-" t)))
@@ -4389,12 +4389,11 @@
                 (should
                  (equal new
                         (mevedel-session-artifacts-start-fresh-segment
-                         session (current-buffer)
-                         :initial-text "Unsent draft")))
-                (should (string-match-p "Unsent draft" (buffer-string)))
+                         session (current-buffer))))
+                (should-not (string-match-p "Old conversation" (buffer-string)))
                 (should-not
                  (string-match-p
-                  "Unsent draft"
+                  "Old conversation"
                   (with-temp-buffer
                     (insert (mevedel-session-artifacts-read-artifact
                              session (file-name-nondirectory new) t))

@@ -45,8 +45,8 @@
                           (gptel--make-openai-responses)
                           (gptel--make-anthropic)))
       (with-temp-buffer
-        (org-mode)
-        (setq-local gptel-mode t gptel-include-tool-results t
+        (mevedel--transcript-org-mode)
+        (setq-local gptel-mode t
                     mevedel--session (mevedel-session--create))
         (setq-local gptel-model 'fixture)
         (insert "Inspect the fixture.\n\n")
@@ -148,8 +148,7 @@
                                           (prompt (generate-new-buffer " *history-copy*")))
                                       (with-current-buffer prompt
                                         (insert text)
-                                        (setq-local gptel-model 'fixture
-                                                    gptel-include-tool-results t))
+                                        (setq-local gptel-model 'fixture))
                                       prompt)))))
                     (unwind-protect
                         (with-current-buffer prompt
@@ -285,8 +284,8 @@
 
   :doc "keeps repair feedback in one tool result across hidden audit records"
   (with-temp-buffer
-    (org-mode)
-    (setq-local gptel-mode t gptel-include-tool-results t
+    (mevedel--transcript-org-mode)
+    (setq-local gptel-mode t
                 mevedel--session (mevedel-session--create))
     (insert "Task.\n"
             "#+begin_tool Bash\n"
@@ -319,20 +318,33 @@
   ()
   ,test
   (test)
-  :doc "respects omitted results and does not archive them behind the transcript"
+  :doc "archives the provider batch around its rendered tool results"
   (with-temp-buffer
+    (org-mode)
     (setq-local mevedel--session (mevedel-session--create)
-                gptel-include-tool-results nil)
+                gptel-model 'fixture)
+    (insert "Task.\n")
     (let* ((info (list :buffer (current-buffer) :position (point-marker)
-                       :data '(:messages []) :tool-use '((:id "omitted"))))
+                       :backend (gptel--make-openai) :model 'fixture
+                       :data (list :messages [(:role "user" :content "Task.")])
+                       :tool-use '((:id "call_a"))))
            (start (copy-marker (point) nil)))
       (plist-put info :mevedel-history-start start)
-      (plist-put info :mevedel-history-count 0)
-      (insert "Visible answer.")
+      (plist-put info :mevedel-history-count 1)
+      (insert "Rendered result.\n")
       (plist-put info :tracking-marker (point-marker))
-      (plist-put (plist-get info :data) :messages [(:content "hidden result")])
+      (plist-put (plist-get info :data) :messages
+                 [(:role "user" :content "Task.")
+                  (:role "tool" :content "exact result")])
       (mevedel-history-record-tool-batch info)
-      (should-not (mevedel-transcript-audit-records (buffer-string))))))
+      (should-not (plist-get info :mevedel-history-start))
+      (let ((records (mevedel-transcript-audit-records (buffer-string))))
+        (should (equal '(provider-tool-batch-start provider-tool-batch)
+                       (mapcar (lambda (record) (plist-get record :type))
+                               records)))
+        (should (equal '((:role "tool" :content "exact result"))
+                       (append (plist-get (cadr records) :messages) nil))))
+      (should (string-search "Rendered result." (buffer-string))))))
 
 (mevedel-deftest mevedel-history--provider
   ()
@@ -345,20 +357,6 @@
                        (mevedel-history--provider second)))
     (should (equal (mevedel-history--provider first)
                    (mevedel-history--provider (copy-sequence first))))))
-
-(mevedel-deftest mevedel-history--full-results-p
-  ()
-  ,test
-  (test)
-  :doc "honors per-tool full result settings in automatic inclusion mode"
-  (let* ((gptel--known-tools nil)
-         (gptel-include-tool-results 'auto)
-         (tool (gptel-make-tool :name "Included" :function #'ignore
-                                :description "Fixture." :args nil :include t))
-         (info (list :tools (list tool) :tool-use '((:name "Included")))))
-    (should (mevedel-history--full-results-p info))
-    (setf (gptel-tool-include tool) 'call)
-    (should-not (mevedel-history--full-results-p info))))
 
 (mevedel-deftest mevedel-history--cache-messages
   ()

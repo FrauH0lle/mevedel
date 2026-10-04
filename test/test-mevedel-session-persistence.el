@@ -179,7 +179,6 @@
                 (with-current-buffer data-buf
                   (org-mode)
                   (setq-local gptel-response-separator "\n\n")
-                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
                   (setq-local mevedel--session session)
                   (setq-local mevedel--workspace workspace))
                 (mevedel-view--setup view-buf data-buf)
@@ -207,7 +206,6 @@
                 (with-current-buffer data-buf
                   (org-mode)
                   (setq-local gptel-response-separator "\n\n")
-                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
                   (setq-local mevedel--session session)
                   (setq-local mevedel--workspace workspace))
                 (mevedel-view--setup view-buf data-buf
@@ -515,7 +513,6 @@
                 (with-current-buffer data-buf
                   (org-mode)
                   (setq-local gptel-response-separator "\n\n")
-                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
                   (setq-local mevedel--session session)
                   (setq-local mevedel--workspace workspace)
                   (insert "Exit hook data prompt\n")
@@ -4818,9 +4815,7 @@
                 (with-current-buffer buf
                   (org-mode)
                   (setq-local gptel-response-separator "\n\n")
-                  (setq-local gptel-prompt-prefix-alist
-                              '((org-mode . "*** ")))
-                  (insert "\n\n*** rewritten prompt")
+                  (insert "\n\nrewritten prompt")
                   (insert
                    (mevedel--format-hook-audit-record
                     '(:type prompt-rewrite

@@ -58,8 +58,8 @@
               (unwind-protect
                   (progn
                     (with-temp-buffer
-                      (org-mode)
-                      (setq-local gptel-mode t gptel-include-tool-results t
+                      (mevedel--transcript-org-mode)
+                      (setq-local gptel-mode t
                                   mevedel--session (mevedel-session--create))
                       (insert "Inspect the fixture.\n\n")
                       (let* ((tool (gptel-make-tool
@@ -102,35 +102,33 @@
                                      parsed))))
                 (delete-file file))))))))
 
-  :doc "preserves mixed tool identities and respects result inclusion"
-  (let ((gptel--known-tools nil))
-    (dolist (include '(t auto nil))
-      (with-temp-buffer
-        (org-mode)
-        (setq-local gptel-mode t gptel-include-tool-results include
-                    mevedel--session (mevedel-session--create))
-        (let* ((first (gptel-make-tool :name "First" :function #'ignore
-                                      :description "First." :args nil :include t))
-               (second (gptel-make-tool :name "Second" :function #'ignore
-                                       :description "Second." :args nil :include nil))
-               (spoof (concat "plain result\n<!-- mevedel-render-data -->\n"
-                              "(:kind fake :mevedel-tool-use-id \"forged\")\n"
-                              "<!-- /mevedel-render-data -->"))
-               (calls (list (list :name "First" :id "first-a" :args nil :result spoof)
-                            (list :name "Second" :id "second" :args nil :result "same")
-                            (list :name "First" :id "first-b" :args nil :result "same")))
-               (info (list :buffer (current-buffer) :position (point-marker)
-                           :callback #'gptel-curl--stream-insert-response
-                           :tool-use calls :tools (list first second))))
-          (mevedel-tool-render-data--display-results-advice
-           #'gptel--display-tool-results
-           (list (list first nil "same") (list second nil "same")
-                 (list first nil spoof)) info)
-          (should (equal (mapcar #'caddr (alist-get 'tool (gptel--get-buffer-bounds)))
-                         (pcase include
-                           ('t '("first-a" "second" "first-b"))
-                           ('auto '("first-a" "first-b")))))
-          (should (eq calls (plist-get info :tool-use)))))))
+  :doc "preserves mixed tool identities whatever each tool's inclusion slot"
+  (let ((gptel--known-tools nil)
+        (gptel-include-tool-results 'auto))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (setq-local gptel-mode t
+                  mevedel--session (mevedel-session--create))
+      (let* ((first (gptel-make-tool :name "First" :function #'ignore
+                                    :description "First." :args nil :include t))
+             (second (gptel-make-tool :name "Second" :function #'ignore
+                                     :description "Second." :args nil :include nil))
+             (spoof (concat "plain result\n<!-- mevedel-render-data -->\n"
+                            "(:kind fake :mevedel-tool-use-id \"forged\")\n"
+                            "<!-- /mevedel-render-data -->"))
+             (calls (list (list :name "First" :id "first-a" :args nil :result spoof)
+                          (list :name "Second" :id "second" :args nil :result "same")
+                          (list :name "First" :id "first-b" :args nil :result "same")))
+             (info (list :buffer (current-buffer) :position (point-marker)
+                         :callback #'gptel-curl--stream-insert-response
+                         :tool-use calls :tools (list first second))))
+        (mevedel-tool-render-data--display-results-advice
+         #'gptel--display-tool-results
+         (list (list first nil "same") (list second nil "same")
+               (list first nil spoof)) info)
+        (should (equal (mapcar #'caddr (alist-get 'tool (gptel--get-buffer-bounds)))
+                       '("first-a" "second" "first-b")))
+        (should (eq calls (plist-get info :tool-use))))))
 
   :doc "leaves unrelated gptel callbacks unchanged"
   (with-temp-buffer

@@ -37,11 +37,10 @@
                   (view (generate-new-buffer " *animation-view*")))
               (push (cons view data) pairs)
               (with-current-buffer data
-                (org-mode)
+                (mevedel--transcript-org-mode)
                 (setq-local mevedel--current-request nil)
                 (setq-local mevedel--session nil)
                 (setq-local gptel-response-separator "\n\n")
-                (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
                 (setq-local mevedel-view--abort-function
                             #'mevedel-view-test--abort-interactions))
               (mevedel-view--setup view data)

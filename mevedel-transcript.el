@@ -342,7 +342,7 @@ beginning of the buffer."
   (concat "^\\(?:#\\+\\(?:begin_\\|end_\\)"
           "\\|<\\(?:/?\\(?:system-reminder\\|hook-context"
           "\\|task-background\\|agent-message\\|agent-result\\)"
-          "\\|!-- /?mevedel-\\)\\|\\*+ <\\|:PROMPT:\\|:END:\\)")
+          "\\|!-- /?mevedel-\\)\\|:PROMPT:\\|:END:\\)")
   "Candidate prefix regexp shared by direct and resumable scans.")
 
 (defun mevedel-transcript--control-line-positions ()
@@ -361,8 +361,8 @@ Index prefixes only; the existing parsers still validate each complete marker."
     (end-reasoning . "#\\+end_reasoning")
     (begin-tool . "#\\+begin_tool\\b")
     (end-tool . "#\\+end_tool")
-    (reminder . "\\(?:\\*+ \\)?</?system-reminder>")
-    (mailbox . "\\(?:\\*+ \\)?<agent-\\(?:result\\|message\\)")
+    (reminder . "</?system-reminder>")
+    (mailbox . "<agent-\\(?:result\\|message\\)")
     (hook-context . "</?hook-context>")
     (task-background . "</?task-background>")
     (render-data . "<!-- /?mevedel-render-data -->")
@@ -384,10 +384,10 @@ Index prefixes only; the existing parsers still validate each complete marker."
     ("^#\\+begin_tool\\b" begin-tool)
     ("^#\\+end_tool[^\n]*\n?" end-tool)
     ("^#\\+\\(begin_tool\\b\\|end_tool[^\n]*\n?\\)" begin-tool end-tool)
-    ("^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" reminder)
-    ("^\\(?:\\(?:\\*+ \\)?<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
+    ("^<system-reminder>[ \t]*$" reminder)
+    ("^\\(?:<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
      reminder)
-    ("^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)" mailbox)
+    ("^<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)" mailbox)
     ("^<hook-context>[ \t]*$" hook-context)
     ("^</hook-context>[ \t]*\n?" hook-context)
     ("^<task-background>[ \t]*$" task-background)
@@ -471,7 +471,7 @@ search bounds and match data, including a match ending partway through a line."
   "Return complete system-reminder bounds at point before LIMIT.
 The result is `(START BODY-START BODY-END END)'.  Literal complete reminders
 nested inside the outer body do not close it early."
-  (when (looking-at "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$")
+  (when (looking-at "^<system-reminder>[ \t]*$")
     (let ((origin (point))
           (start (match-beginning 0))
           (body-start (progn (forward-line 1) (point)))
@@ -480,11 +480,11 @@ nested inside the outer body do not close it early."
           block-end)
       (while (and (> depth 0)
                   (mevedel-transcript--search-control-line
-                   "^\\(?:\\(?:\\*+ \\)?<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
+                   "^\\(?:<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
                    limit))
         (if (save-excursion
               (goto-char (match-beginning 0))
-              (looking-at "\\(?:\\*+ \\)?<system-reminder>"))
+              (looking-at "<system-reminder>"))
             (cl-incf depth)
           (cl-decf depth)
           (when (zerop depth)
@@ -555,8 +555,10 @@ BASE-SEGMENTS delimit the containing raw property run."
                (buffer-substring-no-properties cursor start))))))
 
 (defun mevedel-transcript--mailbox-control-context-p (range base-segments)
-  "Return non-nil when mailbox RANGE is outside an Org user heading.
-BASE-SEGMENTS supplies the raw property span containing RANGE."
+  "Return non-nil when mailbox RANGE is outside an Org heading's text.
+BASE-SEGMENTS supplies the raw property span containing RANGE.  A mailbox
+after an agent task heading or a heading line in the same span is quoted
+data, not delivered structure."
   (let* ((start (cadr range))
          (base (cl-find-if
                 (lambda (seg)
@@ -637,7 +639,7 @@ source, not a work-slice boundary."
     (pcase (car spec)
       ('reminder
        (when (mevedel-transcript--search-control-line
-              "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" end)
+              "^<system-reminder>[ \t]*$" end)
          (goto-char (match-beginning 0))
          (let ((start (point))
                (range (mevedel-transcript--system-reminder-range-at-point end)))
@@ -646,7 +648,7 @@ source, not a work-slice boundary."
              (cons (1+ start) nil)))))
       ('mailbox
        (when (mevedel-transcript--search-control-line
-              "^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)"
+              "^<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)"
               end)
          (let ((start (match-beginning 0)))
            (goto-char start)
@@ -1806,6 +1808,15 @@ next persisted tool."
                        (buffer-substring-no-properties start end))))
 
 
+(defun mevedel-transcript--own-line-prompt-p (seg)
+  "Return non-nil when user SEG is a prompt rather than a stale response tail.
+A prompt starts on its own line after the response separator; a stale
+tail left by drifted `GPTEL_BOUNDS' continues the response's last line."
+  (and (eq (car seg) 'user)
+       (let ((text (buffer-substring-no-properties (cadr seg) (caddr seg))))
+         (and (string-match-p "\\`[ \t]*\n" text)
+              (string-match-p "[^ \t\r\n]" text)))))
+
 (defun mevedel-transcript--repair-response-fragment-segments (segments)
   "Return SEGMENTS with stale response fragments reclassified.
 Older or externally edited transcripts can restore `GPTEL_BOUNDS' a
@@ -1832,20 +1843,18 @@ thinking blocks or user turns."
                        (memq type '(user ignored))
                        render-data-after-tail-p
                        ;; Audits emitted after the final response are
-                       ;; records, not a stale tail of its text; neither is
-                       ;; the empty prompt heading gptel inserts after it.
+                       ;; records, not a stale tail of its text.
                        (not (string-match-p
-                             "\\`[ \t\r\n]*\\(?:<!-- mevedel-hook-audit -->\\|\\*+[ \t\r\n]*\\'\\)"
+                             "\\`[ \t\r\n]*<!-- mevedel-hook-audit -->"
                              (buffer-substring-no-properties
-                              (cadr seg) (caddr seg)))))
+                              (cadr seg) (caddr seg))))
+                       ;; A generated prompt precedes its display record.
+                       (not (mevedel-transcript--own-line-prompt-p seg)))
                   (and (eq type 'user)
                        (or (and (eq prev-type 'response)
                                 (eq next-type 'ignored)
                                 ;; Guest attribution follows a real prompt too.
-                                (not (string-match-p
-                                      "\\`[ \t\r\n]*\\*+ "
-                                      (buffer-substring-no-properties
-                                       (cadr seg) (caddr seg))))
+                                (not (mevedel-transcript--own-line-prompt-p seg))
                                 (string-match-p
                                  "\\`[ \t\r\n]*<!-- mevedel-hook-audit -->"
                                  (buffer-substring-no-properties

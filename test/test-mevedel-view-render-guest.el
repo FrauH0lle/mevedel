@@ -60,7 +60,7 @@
                               :shared (list :text question :title "Notes" :scope "selection" :revision 5)))
            source before)
       (with-current-buffer data-buf
-        (insert "*** " text "\n")
+        (insert text "\n")
         (setq source (mevedel-view-disclosure-source-range data-buf 1 (point)))
         (insert (mevedel--format-hook-audit-record attribution))
         (setq before (buffer-substring-no-properties (point-min) (point-max))))

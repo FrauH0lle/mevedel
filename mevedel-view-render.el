@@ -4329,12 +4329,11 @@ Empty string when the turn contains only whitespace or markers."
             (let* ((seg-start (cadr seg))
                    (seg-end (caddr seg))
                    (text (buffer-substring seg-start seg-end)))
-              ;; Strip org heading prefix (e.g., "*** ") after any separator
-              ;; whitespace.
-              (when (string-match "\\`[ \t\n]*\\*+ " text)
-                (setq text (substring text (match-end 0)))
-                ;; The heading's own drawer (e.g. an agent task path) is
-                ;; metadata, not prompt text.
+              ;; An agent task heading shows as its title; its drawer (the
+              ;; agent task path) is metadata, not prompt text.
+              (when (let ((case-fold-search nil))
+                      (string-match "\\`[ \t\n]*\\* \\(Agent Task:\\)" text))
+                (setq text (substring text (match-beginning 1)))
                 (when (string-match
                        "\\`\\([^\n]*\n\\):PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
                        text)

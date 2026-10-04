@@ -14,9 +14,6 @@
   (require 'mevedel-structs))
 (require 'mevedel-plan)
 
-;; `gptel'
-(defvar gptel-prompt-prefix-alist)
-
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
@@ -787,11 +784,7 @@ the durable retry was retained"
         (with-current-buffer chat-buffer
           (unless
               (mevedel-session-artifacts-start-fresh-segment
-               session chat-buffer
-               :initial-text
-               (or (and (boundp 'gptel-prompt-prefix-alist)
-                        (alist-get major-mode gptel-prompt-prefix-alist))
-                   ""))
+               session chat-buffer)
             (error "Could not start a fresh conversation segment"))
           (mevedel--run-session-start-hooks "clear"))
       (error
