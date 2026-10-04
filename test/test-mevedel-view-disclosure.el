@@ -663,7 +663,7 @@ response folding along with a dangerous best-guess preview path)."
   :doc "TAB on Assistant header folds the whole turn into a single
 summary line; TAB again restores it exactly."
   (mevedel-view-test--with-buffers
-   (mevedel-view-test--insert-data data-buf "*** Hi\n" nil)
+   (mevedel-view-test--insert-data data-buf "Hi\n" nil)
    (mevedel-view-test--insert-data
     data-buf
     "Here is the first line.\nSecond line.\nThird line.\n"
@@ -705,7 +705,7 @@ compact."
    ;; Multi-line user turn.
    (mevedel-view-test--insert-data
     data-buf
-    "*** First prompt line.\nSecond prompt line.\nThird prompt line.\n"
+    "First prompt line.\nSecond prompt line.\nThird prompt line.\n"
     nil)
    (with-current-buffer data-buf
      (mevedel-view-stream-render-response (point-min) (point-max)))
@@ -732,7 +732,7 @@ compact."
        (should (string-match-p "Third prompt line" text)))))
   :doc "single-line user turn refuses to fold"
   (mevedel-view-test--with-buffers
-   (mevedel-view-test--insert-data data-buf "*** One line only.\n" nil)
+   (mevedel-view-test--insert-data data-buf "One line only.\n" nil)
    (with-current-buffer data-buf
      (mevedel-view-stream-render-response (point-min) (point-max)))
    (with-current-buffer view-buf
@@ -944,7 +944,7 @@ the preceding header."
   :doc "capture and restore agree after source movement and terminal key changes"
   (dolist (mode '(stamped unstamped moved active settled))
     (mevedel-view-test--with-buffers
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data
        data-buf "Unique response.\nSecond response line.\n" 'response)
       (with-current-buffer view-buf
@@ -1081,7 +1081,7 @@ the preceding header."
                   (point-min) mevedel-view--input-marker))))))
   :doc "restores expanded reminders without duplicate headings or lost faces"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Continue\n" nil)
+    (mevedel-view-test--insert-data data-buf "Continue\n" nil)
     (mevedel-view-test--insert-data
      data-buf
      (mevedel--format-hook-audit-record

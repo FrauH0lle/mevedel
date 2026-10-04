@@ -2230,8 +2230,6 @@
               (with-current-buffer new-buffer
                 (org-mode)
                 (setq-local gptel-response-separator "\n\n")
-                (setq-local gptel-prompt-prefix-alist
-                            '((org-mode . "* User\n")))
                 (setq-local mevedel--session new-session)
                 (setq-local mevedel--view-buffer view-buffer))
               (mevedel-view--setup view-buffer new-buffer)
@@ -2291,8 +2289,6 @@
               (with-current-buffer new-buffer
                 (org-mode)
                 (setq-local gptel-response-separator "\n\n")
-                (setq-local gptel-prompt-prefix-alist
-                            '((org-mode . "* User\n")))
                 (setq-local mevedel--session new-session))
               (cl-letf (((symbol-function 'mevedel-worktree--open-session)
                          (lambda (_workspace _dir) new-buffer))

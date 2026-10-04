@@ -425,7 +425,7 @@
     (mevedel-view-test--with-buffers
       (dolist (prompt '("First question" "Second question"))
         (mevedel-view-test--insert-data data-buf
-                                        (format "*** %s\n" prompt) nil)
+                                        (format "%s\n" prompt) nil)
         (mevedel-view-test--insert-data data-buf
                                         (apply #'concat (make-list 100 "response line\n"))
                                         'response))
@@ -466,7 +466,7 @@
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (dolist (prompt '("Alpha question" "Beta question"))
-        (mevedel-view-test--insert-data data-buf (format "*** %s\n" prompt) nil)
+        (mevedel-view-test--insert-data data-buf (format "%s\n" prompt) nil)
         (mevedel-view-test--insert-data
          data-buf (apply #'concat (make-list 60 "answer\n")) 'response))
       (with-current-buffer view-buf
@@ -497,7 +497,7 @@
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data data-buf
-                                      "*** First question\nMore text\n" nil)
+                                      "First question\nMore text\n" nil)
       (mevedel-view-test--insert-data
        data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
       (with-current-buffer view-buf
@@ -526,7 +526,7 @@
   :doc "two windows share stable rows but compute different prompt text"
   (save-window-excursion
     (mevedel-view-test--with-buffers
-      (mevedel-view-test--insert-data data-buf "*** First question\n" nil)
+      (mevedel-view-test--insert-data data-buf "First question\n" nil)
       (mevedel-view-test--insert-data
        data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
       (with-current-buffer view-buf
@@ -569,11 +569,11 @@
           (with-temp-buffer
             (org-mode)
             (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
-            (insert "*** Before tail\n")
+            (insert "Before tail\n")
             (insert (propertize "Answer before tail\n" 'gptel 'response))
-            (insert "*** First copied prompt\n")
+            (insert "First copied prompt\n")
             (insert (propertize "Answer in tail\n" 'gptel 'response))
-            (insert "*** Second copied prompt\n")
+            (insert "Second copied prompt\n")
             (dotimes (_ 8)
               (let (bounds)
                 (goto-char (point-min))
@@ -597,9 +597,9 @@
                 (insert (propertize
                          (apply #'concat (make-list 80 "Continuation answer\n"))
                          'gptel 'response))
-                (insert "*** First copied prompt\n")
+                (insert "First copied prompt\n")
                 (insert (propertize "Answer in tail\n" 'gptel 'response))
-                (insert "*** Second copied prompt\n")
+                (insert "Second copied prompt\n")
                 (insert (propertize
                          (apply #'concat (make-list 80 "More answer\n"))
                          'gptel 'response)))
@@ -639,7 +639,7 @@
             (org-mode)
             (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
             (setq prompt-position (point))
-            (insert "*** Original prompt with a second line\nMore details\n")
+            (insert "Original prompt with a second line\nMore details\n")
             (setq indexed (car (mevedel-session-artifacts-collect-prompts
                                 (current-buffer))))
             (write-region (point-min) (point-max) path nil 'silent))
@@ -682,7 +682,7 @@
                 (should (string-search "Original prompt with a second line"
                                        (mevedel-view--sticky-prompt-line)))
                 (with-current-buffer data-buf
-                  (insert "*** New local prompt\n")
+                  (insert "New local prompt\n")
                   (insert (propertize
                            (apply #'concat (make-list 80 "answer line\n"))
                            'gptel 'response)))
@@ -730,7 +730,7 @@
                 (with-current-buffer data-buf
                   (let ((inhibit-read-only t))
                     (erase-buffer)
-                    (insert "*** Fresh after clear\n")))
+                    (insert "Fresh after clear\n")))
                 (mevedel-view--full-rerender)
                 (should-not (mevedel-view--sticky-prompt-line))))))
       (delete-directory directory t))))
@@ -753,7 +753,7 @@
                        "Long prompt that must yield to controls" 4 width))))
   (save-window-excursion
     (mevedel-view-test--with-buffers
-      (mevedel-view-test--insert-data data-buf "*** Very long prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Very long prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
       (with-current-buffer view-buf
         (switch-to-buffer view-buf)
@@ -776,7 +776,7 @@
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data
-       data-buf (concat "*** Long question\n"
+       data-buf (concat "Long question\n"
                         (apply #'concat (make-list 18 "additional detail\n"))) nil)
       (mevedel-view-test--insert-data
        data-buf (apply #'concat (make-list 80 "answer\n")) 'response)
@@ -803,7 +803,7 @@
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data
-       data-buf (concat "*** Multi line prompt\n"
+       data-buf (concat "Multi line prompt\n"
                         (apply #'concat (make-list 20 "body line\n"))) nil)
       (mevedel-view-test--insert-data data-buf "Answer.\n" 'response)
       (with-current-buffer view-buf
@@ -826,7 +826,7 @@
   :doc "a preview click targets its window when another buffer is selected"
   (save-window-excursion
     (mevedel-view-test--with-buffers
-      (mevedel-view-test--insert-data data-buf "*** First question\n" nil)
+      (mevedel-view-test--insert-data data-buf "First question\n" nil)
       (mevedel-view-test--insert-data
        data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
       (with-current-buffer view-buf
@@ -876,7 +876,7 @@
   :doc "a long session name yields to controls; the prompt has its own row"
   (save-window-excursion
     (mevedel-view-test--with-buffers
-      (mevedel-view-test--insert-data data-buf "*** Short prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Short prompt\n" nil)
       (mevedel-view-test--insert-data
        data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
       (with-current-buffer data-buf

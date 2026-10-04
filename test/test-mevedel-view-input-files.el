@@ -18,7 +18,6 @@
 (require 'mevedel-workspace)
 (require 'mevedel-session-persistence)
 
-(defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 (defvar mevedel-plugin-extra-roots)
 
@@ -37,9 +36,8 @@
     (unwind-protect
         (progn
           (with-current-buffer data-buf
-            (org-mode)
+            (mevedel--transcript-org-mode)
             (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
           (mevedel-view--setup view-buf data-buf)
@@ -77,9 +75,8 @@
     (unwind-protect
         (progn
           (with-current-buffer data-buf
-            (org-mode)
+            (mevedel--transcript-org-mode)
             (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
           (mevedel-view--setup view-buf data-buf)
@@ -115,9 +112,8 @@
     (unwind-protect
         (progn
           (with-current-buffer data-buf
-            (org-mode)
+            (mevedel--transcript-org-mode)
             (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
           (mevedel-view--setup view-buf data-buf)

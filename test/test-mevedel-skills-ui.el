@@ -240,14 +240,14 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              `(("noop" . ,(lambda (args) (setq called (or args t)))))))
-        (insert "### /noop hello")
+        (insert "/noop hello")
         (goto-char (point-max))
         (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
         (should (equal "hello" called))
-        (should (equal "### " (buffer-string))))))
+        (should (equal "" (buffer-string))))))
 
-  :doc "local surface commands open their cockpit and preserve the prompt prefix"
+  :doc "local surface commands open their cockpit and clear the command"
   (dolist (case '(("/mode" . mode) ("/model" . model)
                   ("/skills" . skills) ("/skills list" . skills)
                   ("/tools" . tools) ("/tools list" . tools) ("/help" . help)))
@@ -256,12 +256,12 @@ spanning lines")))
       (mevedel-skills-test--with-chat-buffer session
         (cl-letf (((symbol-function 'mevedel-menu-open)
                    (lambda (area) (setq called area))))
-          (insert "### " (car case))
+          (insert (car case))
           (goto-char (point-max))
           (should (eq 'local (mevedel-test--with-captured-messages nil
                               (mevedel-skills--dispatch-slash-command))))
           (should (eq called (cdr case)))
-          (should (equal "### " (buffer-string)))))))
+          (should (equal "" (buffer-string)))))))
 
   :doc "mode slash command with an argument remains direct"
   (let ((session (mevedel-skills-test--make-session))
@@ -269,24 +269,24 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (cl-letf (((symbol-function 'mevedel-menu-open)
                  (lambda (area) (setq called area))))
-        (insert "### /mode edits")
+        (insert "/mode edits")
         (goto-char (point-max))
         (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
         (should-not called)
         (should (eq 'edits
                     (mevedel-session-permission-mode session)))
-        (should (equal "### " (buffer-string))))))
+        (should (equal "" (buffer-string))))))
 
   :doc "model slash command with an argument remains direct"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### /model gpt-5.5")
+      (insert "/model gpt-5.5")
       (goto-char (point-max))
       (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
       (should (eq 'gpt-5.5 gptel-model))
-      (should (equal "### " (buffer-string)))))
+      (should (equal "" (buffer-string)))))
 
   :doc "worktree slash commands open status and list surfaces"
   (let ((session (mevedel-skills-test--make-session))
@@ -304,20 +304,20 @@ spanning lines")))
             (setq status-buffer nil
                   list-buffer nil)
             (erase-buffer)
-            (insert "### " command)
+            (insert command)
             (goto-char (point-max))
             (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
             (should (eq status-buffer (current-buffer)))
             (should-not list-buffer)
-            (should (equal "### " (buffer-string))))
+            (should (equal "" (buffer-string))))
           (erase-buffer)
-          (insert "### /worktree list")
+          (insert "/worktree list")
           (goto-char (point-max))
           (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
           (should (eq list-buffer (current-buffer)))
-          (should (equal "### " (buffer-string)))))))
+          (should (equal "" (buffer-string)))))))
 
   :doc "skills mutation slash commands remain direct"
   (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))
@@ -335,13 +335,13 @@ spanning lines")))
                          (ert-fail "skills surface should not open"))))
               (dolist (action '("disable" "enable"))
                 (erase-buffer)
-                (insert "### /skills " action " visible")
+                (insert "/skills " action " visible")
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-test--with-captured-messages nil
                                     (mevedel-skills--dispatch-slash-command))))
                 (should (eq (mevedel-skills-skill-enabled-p skill)
                             (equal action "enable")))
-                (should (equal "### " (buffer-string)))))))
+                (should (equal "" (buffer-string)))))))
       (delete-directory user-dir t)))
 
   :doc "local command wins over a same-named skill"
@@ -354,27 +354,27 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              `(("review" . ,(lambda (args) (setq called args))))))
-        (insert "### /review HEAD")
+        (insert "/review HEAD")
         (goto-char (point-max))
         (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
         (should (equal "HEAD" called))
-        (should (equal "### " (buffer-string))))))
+        (should (equal "" (buffer-string))))))
 
   :doc "unknown slash command returns 'unknown without mutating the buffer"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /bogus")
+        (insert "/bogus")
         (goto-char (point-max))
         (should (eq 'unknown (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
-        (should (equal "### /bogus" (buffer-string))))))
+        (should (equal "/bogus" (buffer-string))))))
 
   :doc "nil return when no slash command is present"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### plain text")
+      (insert "plain text")
       (goto-char (point-max))
       (should (null (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))))
@@ -387,16 +387,16 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /greet world")
+        (insert "/greet world")
         (goto-char (point-max))
         (should (eq 'unknown (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
-        (should (equal "### /greet world" (buffer-string)))))))
+        (should (equal "/greet world" (buffer-string)))))))
 
 (mevedel-deftest mevedel-skills--dispatch-slash-command/layout ()
   ,test
   (test)
-  :doc "no-prefix chat: response followed by /cmd adds a blank line before cursor"
+  :doc "response followed by /cmd adds a blank line before cursor"
   (let ((session (mevedel-skills-test--make-session))
         (called nil))
     (with-temp-buffer
@@ -413,7 +413,7 @@ spanning lines")))
         (should (equal "Old response\n\n" (buffer-string)))
         (should (= (point) (point-max))))))
 
-  :doc "no-prefix chat: blank lines above the slash command are preserved"
+  :doc "blank lines above the slash command are preserved"
   (let ((session (mevedel-skills-test--make-session))
         (called nil))
     (with-temp-buffer
@@ -428,19 +428,6 @@ spanning lines")))
            (mevedel-skills--dispatch-slash-command))))
         (should called)
         (should (equal "Old response\n\n\n" (buffer-string))))))
-
-  :doc "prefix chat: slash command after prefix keeps prefix intact"
-  (let ((session (mevedel-skills-test--make-session))
-        (called nil))
-    (mevedel-skills-test--with-chat-buffer session
-      (let ((mevedel-slash-commands
-             `(("noop" . ,(lambda (_args) (setq called t))))))
-        (insert "### /noop")
-        (goto-char (point-max))
-        (should (eq 'local (mevedel-test--with-captured-messages nil
-           (mevedel-skills--dispatch-slash-command))))
-        (should called)
-        (should (equal "### " (buffer-string))))))
 
   :doc "`/plugin' and `/plugin list' dispatch to the plugin surface"
   (let ((session (mevedel-skills-test--make-session))
@@ -460,13 +447,13 @@ spanning lines")))
                      (lambda (fmt &rest args)
                        (push (apply #'format-message fmt args) messages)
                        nil)))
-            (insert "### " command)
+            (insert command)
             (goto-char (point-max))
             (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
             (should (eq opened 'plugins))
             (should-not messages)
-            (should (equal "### " (buffer-string))))))))
+            (should (equal "" (buffer-string))))))))
 
   :doc "`/clear' asks before clearing a non-materialized session"
   (let ((session (mevedel-skills-test--make-session))
@@ -477,12 +464,12 @@ spanning lines")))
                    (lambda (prompt)
                      (setq asked prompt)
                      nil)))
-          (insert "Existing transcript\n### /clear")
+          (insert (propertize "Existing transcript" 'gptel 'response) "\n/clear")
           (goto-char (point-max))
           (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
           (should (equal "Clear all chat buffer content? " asked))
-          (should (equal "Existing transcript\n### "
+          (should (equal "Existing transcript\n\n"
                          (buffer-string)))))))
 
   :doc "`/clear' clears a non-materialized session after confirmation"
@@ -498,13 +485,13 @@ spanning lines")))
                      (mevedel-hooks-record-session-context
                       session '(:additional-context ("clear context"))
                       'SessionStart))))
-          (insert "Existing transcript\n### /clear")
+          (insert (propertize "Existing transcript" 'gptel 'response) "\n/clear")
           (goto-char (point-max))
           (setq-local mevedel-compact-estimation--known-token-baseline
                       (list :tokens 258387 :position (copy-marker (point))))
           (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
-          (should (equal "### " (buffer-string)))
+          (should (equal "" (buffer-string)))
           (should (< (mevedel-compact-estimation-estimate-tokens) 1000))
           (should (equal "clear" start-source))
           (should (mevedel-session-hook-context-pending session))))))
@@ -528,12 +515,12 @@ spanning lines")))
                                   'mevedel-session-artifacts-start-fresh-segment)
 	                         (lambda (&rest _args)
 	                           (error "Should not rotate preview buffer"))))
-                (insert "Rewound transcript\n### /clear")
+                (insert (propertize "Rewound transcript" 'gptel 'response) "\n/clear")
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
                 (should (equal "Clear all chat buffer content? " asked))
-                (should (equal "### " (buffer-string)))))))
+                (should (equal "" (buffer-string)))))))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t))))
 
@@ -553,10 +540,7 @@ spanning lines")))
           (setf (mevedel-session-updated-at session) "2026-05-08T10-00-00")
           (with-temp-buffer
             (org-mode)
-            (let ((gptel-prompt-prefix-alist
-                   (cons (cons major-mode "### ")
-                         gptel-prompt-prefix-alist))
-                  (mevedel-slash-commands mevedel-slash-commands))
+            (let ((mevedel-slash-commands mevedel-slash-commands))
               (setq mevedel--session session)
               (setq buffer-file-name seg1)
               (cl-letf (((symbol-function
@@ -567,7 +551,7 @@ spanning lines")))
                         ((symbol-function 'mevedel--run-session-start-hooks)
                          (lambda (source)
                            (setq start-source source))))
-                (insert "### /clear")
+                (insert (propertize "Old response" 'gptel 'response) "\n/clear")
                 (goto-char (point-max))
                 (setq-local mevedel-compact-estimation--known-token-baseline
                             (list :tokens 258387
@@ -580,11 +564,12 @@ spanning lines")))
                          (file-name-concat
                           save-path "segment-0002.chat.org")
                          buffer-file-name))
-                (should (string-suffix-p "### " (buffer-string)))
+                (should-not (string-match-p "Old response" (buffer-string)))
                 (should (equal "clear" start-source))
                 (with-temp-buffer
                   (insert-file-contents seg1)
-                  (should-not (string-match-p "###" (buffer-string))))
+                  (should (string-match-p "Old response" (buffer-string)))
+                  (should-not (string-match-p "/clear" (buffer-string))))
                 (let* ((sidecar
                         (mevedel-session-artifacts-sidecar-path save-path))
                        (plist (mevedel-session-codec-read sidecar))
@@ -609,13 +594,10 @@ spanning lines")))
           (setf (mevedel-session-updated-at session) "2026-05-08T10-00-00")
           (with-temp-buffer
             (org-mode)
-            (let ((gptel-prompt-prefix-alist
-                   (cons (cons major-mode "### ")
-                         gptel-prompt-prefix-alist))
-                  (mevedel-slash-commands mevedel-slash-commands))
+            (let ((mevedel-slash-commands mevedel-slash-commands))
               (setq mevedel--session session)
               (setq buffer-file-name seg1)
-              (insert "### ")
+              (insert (propertize "Old response" 'gptel 'response) "\n\n")
               (write-region (point-min) (point-max) buffer-file-name nil 'silent)
               (set-visited-file-modtime)
               (set-buffer-modified-p nil)
@@ -638,14 +620,14 @@ spanning lines")))
                          (file-name-concat
                           save-path "segment-0002.chat.org")
                          buffer-file-name))
-                (should (string-suffix-p "### " (buffer-string)))
+                (should-not (string-match-p "Old response" (buffer-string)))
                 (with-temp-buffer
                   (insert-file-contents seg1)
-                  (should-not (string-match-p "###" (buffer-string))))))))
+                  (should-not (string-match-p "/clear" (buffer-string))))))))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t))))
 
-  :doc "`/clear' refreshes stale visited metadata before direct prefix trim"
+  :doc "`/clear' refreshes stale visited metadata before direct rotation"
   (let* ((session (mevedel-skills-test--make-session))
          (tempdir (make-temp-file "mevedel-clear-direct-stale-test-" t))
          (save-path (file-name-as-directory tempdir))
@@ -660,12 +642,10 @@ spanning lines")))
           (setf (mevedel-session-updated-at session) "2026-05-08T10-00-00")
           (with-temp-buffer
             (org-mode)
-            (let ((gptel-prompt-prefix-alist
-                   (cons (cons major-mode "### ")
-                         gptel-prompt-prefix-alist)))
+            (progn
               (setq mevedel--session session)
               (setq buffer-file-name seg1)
-              (insert "Completed turn\n### ")
+              (insert "Completed turn\n")
               (write-region (point-min) (point-max) seg1 nil 'silent)
               (set-visited-file-modtime)
               (set-buffer-modified-p nil)
@@ -1291,7 +1271,7 @@ spanning lines")))
         received)
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands `(("noop" . ,#'ert-fail))))
-        (insert "### /noop")
+        (insert "/noop")
         (mevedel-skills--gptel-send-advice
          (lambda (&rest args) (setq received args)) 0)
         (should (equal '(0) received)))))
@@ -1304,7 +1284,7 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              `(("noop" . ,(lambda (_args) nil)))))
-        (insert "### /noop")
+        (insert "/noop")
         (goto-char (point-max))
         (mevedel-test--with-captured-messages nil
           (mevedel-skills--gptel-send-advice
@@ -1316,7 +1296,7 @@ spanning lines")))
         (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /bogus")
+        (insert "/bogus")
         (goto-char (point-max))
         (mevedel-test--with-captured-messages nil
           (mevedel-skills--gptel-send-advice
@@ -1330,7 +1310,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $hi")
+        (insert "$hi")
         (goto-char (point-max))
         (mevedel-test--with-captured-messages nil
           (mevedel-skills--gptel-send-advice
@@ -1341,7 +1321,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session))
         (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### $PATH can be mentioned")
+      (insert "$PATH can be mentioned")
       (goto-char (point-max))
       (mevedel-test--with-captured-messages nil
         (mevedel-skills--gptel-send-advice
@@ -1352,7 +1332,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session))
         (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### just a normal message")
+      (insert "just a normal message")
       (goto-char (point-max))
       (mevedel-test--with-captured-messages nil
         (mevedel-skills--gptel-send-advice
@@ -1367,7 +1347,7 @@ spanning lines")))
          staged)
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### $alpha")
+      (insert "$alpha")
       (goto-char (point-max))
       (mevedel-test--with-captured-messages nil
         (mevedel-skills--gptel-send-advice
@@ -1388,7 +1368,7 @@ spanning lines")))
          staged)
     (setf (mevedel-session-skills session) (list alpha beta))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### $alpha then use $beta")
+      (insert "$alpha then use $beta")
       (goto-char (point-max))
       (mevedel-test--with-captured-messages nil
         (mevedel-skills--gptel-send-advice
@@ -1415,7 +1395,7 @@ spanning lines")))
             (insert "---\nname: alpha\ndescription: Alpha\n---\n\nALPHA\n"))
           (setf (mevedel-session-skills session) (list skill))
           (mevedel-skills-test--with-chat-buffer session
-            (insert "### use $alpha")
+            (insert "use $alpha")
             (goto-char (point-max))
             (mevedel-test--with-captured-messages nil
               (mevedel-skills--gptel-send-advice
@@ -1450,7 +1430,7 @@ spanning lines")))
                        ref-buffer (point-min) (1- (point-max)))))
           (let ((token (format "@ref:%d" (mevedel--instruction-id ref))))
             (mevedel-skills-test--with-chat-buffer session
-              (insert "### inspect " token)
+              (insert "inspect " token)
               (goto-char (point-max))
               (mevedel-test--with-captured-messages nil
                 (mevedel-skills--gptel-send-advice
@@ -1473,7 +1453,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session))
         orig-called)
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### $alpha")
+      (insert "$alpha")
       (with-silent-modifications
         (put-text-property
          (- (point) 6) (point) 'mevedel-mention-binding
@@ -1502,7 +1482,7 @@ spanning lines")))
     (unwind-protect
         (mevedel-skills-test--with-chat-buffer session
           (setq-local mevedel--view-buffer view-buffer)
-          (insert "### prepared body says $nested")
+          (insert "prepared body says $nested")
           (cl-letf (((symbol-function 'mevedel-skills-input-dispatch-command)
                      (lambda (&optional _) (setq dispatched t))))
             (mevedel-test--with-captured-messages nil
@@ -1517,7 +1497,7 @@ spanning lines")))
   ;; not drain it (e.g. because gptel-send aborted before WAIT).
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### plain text")
+      (insert "plain text")
       (goto-char (point-max))
       ;; Simulate a leaked stash (e.g., from a prior failed dispatch).
       (setq-local mevedel-skills--pending-request-context
@@ -1532,7 +1512,7 @@ spanning lines")))
   :doc "stash leaks cleared even when orig-fn signals an error"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### plain text")
+      (insert "plain text")
       (goto-char (point-max))
       (setq-local mevedel-skills--pending-request-context
                   '(:permission-rules nil :model haiku))
@@ -1561,7 +1541,7 @@ spanning lines")))
     (should (eq 'mevedel-cmd--prompt
                 (cdr (assoc "prompt" mevedel-slash-commands))))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### /pl")
+      (insert "/pl")
       (goto-char (point-max))
       (let* ((capf (mevedel-slash-capf))
              (cands (and capf
@@ -1581,7 +1561,7 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("help" . ignore)
                                       ("tokens" . ignore))))
-        (insert "### /")
+        (insert "/")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (cands (and capf
@@ -1602,7 +1582,7 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("help" . ignore)
                                       ("tokens" . ignore))))
-        (insert "### $")
+        (insert "$")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (cands (and capf
@@ -1626,7 +1606,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list inline fork))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $")
+        (insert "$")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (cands (and capf
@@ -1646,7 +1626,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list inline fork))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### Please use $")
+        (insert "Please use $")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (cands (and capf
@@ -1662,7 +1642,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $superpowers:b")
+        (insert "$superpowers:b")
         (goto-char (point-max))
         (let ((capf (mevedel-slash-capf)))
           (should capf)
@@ -1687,7 +1667,7 @@ spanning lines")))
                ("tools" . ignore)
                ("review" . ignore)
                ("verify" . ignore))))
-        (insert "### /")
+        (insert "/")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1711,7 +1691,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("mode" . ignore))))
-        (insert "### /mode fu")
+        (insert "/mode fu")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1733,7 +1713,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("goal" . ignore))))
-        (insert "### /goal b")
+        (insert "/goal b")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1751,7 +1731,7 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              '(("plugin" . mevedel-plugins-slash-command))))
-        (insert "### /plugin l")
+        (insert "/plugin l")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1788,7 +1768,7 @@ spanning lines")))
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands
                    '(("plugin" . mevedel-plugins-slash-command))))
-              (insert "### /plugin update de")
+              (insert "/plugin update de")
               (goto-char (point-max))
               (let* ((capf (mevedel-slash-capf))
                      (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1820,7 +1800,7 @@ spanning lines")))
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands
                    '(("plugin" . mevedel-plugins-slash-command))))
-              (insert "### /plugin enable ")
+              (insert "/plugin enable ")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should capf)
@@ -1829,7 +1809,7 @@ spanning lines")))
                 (should (member "other"
                                 (mevedel-skills-test--capf-candidates capf))))
               (erase-buffer)
-              (insert "### /plugin disable o")
+              (insert "/plugin disable o")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should capf)
@@ -1837,7 +1817,7 @@ spanning lines")))
                                (mevedel-skills-test--capf-candidates
                                 capf "o"))))
               (erase-buffer)
-              (insert "### /plugin remove d")
+              (insert "/plugin remove d")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should capf)
@@ -1845,7 +1825,7 @@ spanning lines")))
                                (mevedel-skills-test--capf-candidates
                                 capf "d"))))
               (erase-buffer)
-              (insert "### /plugin uninstall o")
+              (insert "/plugin uninstall o")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should capf)
@@ -1871,7 +1851,7 @@ spanning lines")))
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands
                    '(("plugin" . mevedel-plugins-slash-command))))
-              (insert "### /plugin hooks ")
+              (insert "/plugin hooks ")
               (goto-char (point-max))
               (let* ((capf (mevedel-slash-capf))
                      (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1888,7 +1868,7 @@ spanning lines")))
                 (should (string-match-p "installed plugin"
                                         (funcall annot "demo"))))
               (erase-buffer)
-              (insert "### /plugin hooks enable o")
+              (insert "/plugin hooks enable o")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should capf)
@@ -1896,7 +1876,7 @@ spanning lines")))
                                (mevedel-skills-test--capf-candidates
                                 capf "o"))))
               (erase-buffer)
-              (insert "### /plugin hooks demo ")
+              (insert "/plugin hooks demo ")
               (goto-char (point-max))
               (let* ((capf (mevedel-slash-capf))
                      (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1915,7 +1895,7 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              '(("plugin" . mevedel-plugins-slash-command))))
-        (insert "### /plugin install ")
+        (insert "/plugin install ")
         (goto-char (point-max))
         (should (null (mevedel-slash-capf))))))
 
@@ -1923,7 +1903,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("skills" . ignore))))
-        (insert "### /skills dis")
+        (insert "/skills dis")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1944,7 +1924,7 @@ spanning lines")))
           (gptel-model 'manual-model))
       (mevedel-skills-test--with-chat-buffer session
         (let ((mevedel-slash-commands '(("model" . ignore))))
-          (insert "### /model f")
+          (insert "/model f")
           (goto-char (point-max))
           (let ((capf (mevedel-slash-capf)))
             (should capf)
@@ -1960,7 +1940,7 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("review" . ignore)
                                       ("verify" . ignore))))
-        (insert "### /review cur")
+        (insert "/review cur")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -1973,7 +1953,7 @@ spanning lines")))
           (should (string-match-p "current changes"
                                   (funcall annot "current"))))
         (erase-buffer)
-        (insert "### /verify com")
+        (insert "/verify com")
         (goto-char (point-max))
         (let ((capf (mevedel-slash-capf)))
           (should capf)
@@ -1985,7 +1965,7 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("worktree" . ignore))))
-        (insert "### /worktree c")
+        (insert "/worktree c")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -2005,7 +1985,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $rem")
+        (insert "$rem")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (exit (and capf (plist-get (nthcdr 3 capf)
@@ -2014,14 +1994,14 @@ spanning lines")))
           (insert "remember")
           (funcall exit "remember" 'finished)
           (insert "d")
-          (should (equal "### $remember d"
+          (should (equal "$remember d"
                          (buffer-substring-no-properties
                           (point-min) (point-max))))))))
 
   :doc "returns nil when point is not right after a slash"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (insert "### hello world")
+      (insert "hello world")
       (goto-char (point-max))
       (should (null (mevedel-slash-capf)))))
 
@@ -2041,7 +2021,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list visible hidden))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $")
+        (insert "$")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (cands (and capf
@@ -2063,7 +2043,7 @@ spanning lines")))
           (mevedel-skills-set-enabled hidden nil)
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands nil))
-              (insert "### $")
+              (insert "$")
               (goto-char (point-max))
               (let* ((capf (mevedel-slash-capf))
                      (cands (and capf
@@ -2083,7 +2063,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list active dormant))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $")
+        (insert "$")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -2102,7 +2082,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list with-hint with-args))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### $")
+        (insert "$")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -2126,12 +2106,10 @@ spanning lines")))
           (mevedel-skills-test--write-skill
            root "alpha" "name: alpha\ndescription: A\n")
           (with-current-buffer buf
-            (let ((gptel-prompt-prefix-alist
-                   (cons (cons major-mode "### ")
-                         gptel-prompt-prefix-alist)))
+            (progn
               (setq-local mevedel--session session)
               (mevedel-skills-install session buf)
-              (insert "### $")
+              (insert "$")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should (member "alpha"

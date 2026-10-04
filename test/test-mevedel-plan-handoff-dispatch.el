@@ -69,8 +69,7 @@
           (write-region body nil accepted-path nil 'silent)
           (write-region "# Mutable replacement" nil current-path nil 'silent)
           (with-current-buffer data-buffer
-            (setq-local mevedel--session session
-                        gptel-prompt-prefix-alist '((fundamental-mode . "> "))))
+            (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function
                       'mevedel-session-artifacts-start-fresh-segment)

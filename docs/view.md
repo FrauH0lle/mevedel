@@ -1699,7 +1699,7 @@ as a zero-width overlay near point from `argument-hint` or remaining
 model.
 
 Root prompt producers share `mevedel--insert-user-turn`, which applies the
-configured gptel separator and prompt prefix and clears copied view, tool,
+configured gptel separator and clears copied view, tool,
 read-only, and `gptel` properties. Atomic mention bindings and live structural
 provenance survive this cleanup; the transcript grammar restores internal
 blocks' ignored properties. UI properties copied from the view must not become

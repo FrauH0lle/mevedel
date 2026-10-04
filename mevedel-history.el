@@ -18,11 +18,8 @@
 (declare-function gptel-backend-host "ext:gptel-request" (cl-x) t)
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-backend-protocol "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-include "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel-backend)
 (defvar gptel-cache)
-(defvar gptel-include-tool-results)
 (defvar gptel-model)
 
 ;; `mevedel-structs'
@@ -57,17 +54,6 @@ Audit insertion can reclassify adjacent blank separators without changing text."
                       (gptel-backend-protocol backend) (gptel-backend-host backend)
                       (gptel-backend-endpoint backend)))))
 
-(defun mevedel-history--full-results-p (info)
-  "Return non-nil when INFO's complete results are retained in the buffer."
-  (or (eq gptel-include-tool-results t)
-      (and (eq gptel-include-tool-results 'auto)
-           (cl-every
-            (lambda (call)
-              (when-let* ((tool (cl-find (plist-get call :name) (plist-get info :tools)
-                                         :test #'equal :key #'gptel-tool-name)))
-                (eq (gptel-tool-include tool) t)))
-            (plist-get info :tool-use)))))
-
 (defun mevedel-history--message-key (data)
   "Return the conversation-array key in provider DATA, or nil."
   (cl-find-if (lambda (key) (plist-member data key))
@@ -92,7 +78,6 @@ The source digest prevents replay after edits or partial context selection."
   (when-let* ((start (plist-get info :mevedel-history-start))
               (buffer (marker-buffer start))
               ((buffer-live-p buffer))
-              ((with-current-buffer buffer (mevedel-history--full-results-p info)))
               (end (mevedel--active-response-marker info buffer))
               ((< start end))
               (key (mevedel-history--message-key (plist-get info :data)))

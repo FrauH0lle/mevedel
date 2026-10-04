@@ -1261,7 +1261,6 @@
                 (with-current-buffer data-buf
                   (org-mode)
                   (setq-local gptel-response-separator "\n\n")
-                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
                   (setq-local mevedel--session session)
                   (setq-local mevedel--workspace workspace)
                   (insert "Persist data prompt\n"))
@@ -2852,7 +2851,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                               (list :tokens 258387
                                     :position (copy-marker (point-max))))))
                (new-path (mevedel-session-artifacts-start-fresh-segment
-                          session buf :initial-text "### ")))
+                          session buf)))
           (with-current-buffer buf
             (should new-path)
             (should-not mevedel-compact-estimation--known-token-baseline)
@@ -2861,12 +2860,14 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should (file-equal-p new-path buffer-file-name))
             (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
                                     (buffer-string)))
-            (should (string-suffix-p "### " (buffer-string)))
+            (should-not (string-match-p "Initial prompt" (buffer-string)))
             (should-not (string-match-p "#\\+begin_summary"
                                         (buffer-string)))
-            (with-temp-buffer
-              (insert-file-contents new-path)
-              (should-not (string-match-p "### " (buffer-string))))
+            (let ((live (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (with-temp-buffer
+                (insert-file-contents new-path)
+                (should (equal live (buffer-string)))))
             (let ((seg1 (mevedel-session-artifacts-segment-path
                          (mevedel-session-save-path session) 1)))
               (should (file-exists-p seg1))
@@ -2886,7 +2887,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (set-file-times buffer-file-name (time-add (current-time) 5))
             (should-not (verify-visited-file-modtime buf)))
           (should (mevedel-session-artifacts-start-fresh-segment
-                   session buf :initial-text "### "))
+                   session buf))
           (with-current-buffer buf
             (should (verify-visited-file-modtime buf))))
       (test-mevedel-session-persistence--cleanup tempdir)))
@@ -2896,7 +2897,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
     (unwind-protect
         (let ((buf (get-buffer "*test-data-buf*")))
           (mevedel-session-artifacts-start-fresh-segment
-           session buf :initial-text "### ")
+           session buf)
           (let ((plist (mevedel-session-codec-read
                         (mevedel-session-artifacts-sidecar-path
                          (mevedel-session-save-path session)))))
@@ -2917,7 +2918,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
               (put-text-property response-start (point) 'gptel 'response))
             (insert "\nFresh unsaved prompt\n"))
           (mevedel-session-artifacts-start-fresh-segment
-           session buf :initial-text "### ")
+           session buf)
           (let* ((plist (mevedel-session-codec-read
                          (mevedel-session-artifacts-sidecar-path
                           (mevedel-session-save-path session))))
@@ -2937,7 +2938,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (with-current-buffer buf
           (org-mode)
           (should (null (mevedel-session-artifacts-start-fresh-segment
-                         session buf :initial-text "### "))))
+                         session buf))))
       (kill-buffer buf)
       (mevedel-workspace-clear-registry))))
 
@@ -3302,7 +3303,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (should id)
                 (if fresh
                     (mevedel-session-artifacts-start-fresh-segment
-                     session buf :initial-text "Pending prompt\n")
+                     session buf)
                   (goto-char (point-max))
                   (insert "\nPending prompt\n")
                   (mevedel-session-artifacts-rotate-segment

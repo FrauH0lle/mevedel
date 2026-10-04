@@ -778,7 +778,13 @@ decision operation and holds instruction proposals for approval.
 
 The data buffer is normally org-mode so gptel can persist
 `GPTEL_BOUNDS` (gptel's other config properties are stripped; the
-sidecar owns request configuration). Tool results containing
+sidecar owns request configuration). Its shape does not follow the user's
+gptel chat settings: `mevedel--transcript-org-mode` sets buffer-local
+`gptel-prompt-prefix-alist` and `gptel-response-prefix-alist` to nil, so
+user turns are plain text after `gptel-response-separator`, and
+`gptel-include-tool-results` to t, because the view, history,
+compaction, and resume read tool calls and results from the transcript and
+mevedel tools do not set gptel's `:include` slot. Tool results containing
 `:PROPERTIES:` are escaped with `,` in the data buffer to prevent
 nested-drawer confusion; the rendered view strips those storage
 artifacts where appropriate.

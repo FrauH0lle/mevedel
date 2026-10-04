@@ -58,17 +58,11 @@
                        (unless (equal "demo" (plist-get (car tokens) :name))
                          (error "Input owner did not scan the token")))
                      (with-temp-buffer
-                       (mevedel-skills-input-command-delete-context 1))
+                       (mevedel-skills-input-command-delete-start 1))
                      (with-temp-buffer
-                       (let ((gptel-prompt-prefix-alist
-                              '((fundamental-mode . "### "))))
-                         (insert "### /help")
-                         (let ((context
-                                (mevedel-skills-input-command-delete-context
-                                 5)))
-                           (unless (and (plist-get context :after-prefix)
-                                        (= 5 (plist-get context :delete-start)))
-                             (error "Input owner did not resolve command context")))))
+                       (insert "please /help")
+                       (unless (= 8 (mevedel-skills-input-command-delete-start 8))
+                         (error "Input owner did not resolve command start")))
                      (when (featurep 'mevedel-skills-invoke)
                        (error "Input owner loaded the invocation facade"))
                      (when (featurep 'mevedel)

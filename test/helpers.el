@@ -497,16 +497,11 @@ settles at the sentinel instead of riding the grace timers."
 
 (defmacro mevedel-skills-test--with-chat-buffer (session &rest body)
   "Run BODY in a temp buffer that mimics a mevedel chat buffer.
-SESSION is bound to buffer-local `mevedel--session', and
-`gptel-prompt-prefix-alist' is extended so the buffer's major mode
-maps to \"### \"."
+SESSION is bound to buffer-local `mevedel--session'."
   (declare (indent 1))
   `(with-temp-buffer
-     (let ((gptel-prompt-prefix-alist
-            (cons (cons major-mode "### ")
-                  gptel-prompt-prefix-alist)))
-       (setq mevedel--session ,session)
-       ,@body)))
+     (setq mevedel--session ,session)
+     ,@body))
 
 (defun mevedel-skills-test--write-skill (dir name frontmatter &optional body)
   "Create DIR/NAME/SKILL.md with FRONTMATTER and optional BODY."
@@ -631,9 +626,8 @@ only report a failure the test never asked for."
      (unwind-protect
          (progn
            (with-current-buffer data-buf
-             (org-mode)
+             (mevedel--transcript-org-mode)
              (setq-local gptel-response-separator "\n\n")
-             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
              ;; These buffers own no root lifecycle, so teardown drains the
              ;; queues a test may assert on without running the session save
              ;; that a fixture session cannot complete.

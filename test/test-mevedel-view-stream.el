@@ -39,11 +39,10 @@
      (unwind-protect
          (progn
            (with-current-buffer data-buf
-             (org-mode)
+             (mevedel--transcript-org-mode)
              (setq-local mevedel--current-request nil)
              (setq-local mevedel--session nil)
              (setq-local gptel-response-separator "\n\n")
-             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
              ;; These buffers own no root lifecycle, so teardown drains the
              ;; queues without the session save a fixture cannot complete.
              (setq-local mevedel-view--abort-function
@@ -139,7 +138,7 @@
   (test)
   :doc "async streaming redraw preserves multiline leading-> draft and point"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
     (let ((data-start (with-current-buffer data-buf
                         (copy-marker (point-min) nil)))
           (draft "> quoted\nsecond line"))
@@ -2887,7 +2886,7 @@
   :doc "incremental response keeps request progress row visible"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (1- (point)) nil)))
       (mevedel-view-stream-test--insert-data data-buf "Partial answer.\n" 'response)
@@ -3145,7 +3144,7 @@
   (test)
   :doc "renders user + assistant turn"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--insert-data data-buf "*** Hello world\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Hello world\n" nil)
     (mevedel-view-stream-test--insert-data data-buf "Hi! How can I help?\n" 'response)
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
@@ -3158,7 +3157,7 @@
 
   :doc "clears stale compaction lock on final response"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--insert-data data-buf "*** Hello world\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Hello world\n" nil)
     (mevedel-view-stream-test--insert-data data-buf "Hi!\n" 'response)
     (with-current-buffer data-buf
       (setq-local mevedel-compact-run-in-flight t)
@@ -3181,7 +3180,7 @@
                     (mevedel-request--create
                      :session session
                      :started-at started)))
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (1- (point)) nil))
         (setq response-start (point)))
@@ -3228,7 +3227,7 @@
                     (mevedel-request--create
                      :session session
                      :started-at started)))
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq response-start (point)))
       (mevedel-view-stream-test--insert-data
@@ -3729,12 +3728,12 @@
   :doc "renders user turn when in-flight marker outlives echoed user block"
   (mevedel-view-stream-test--with-buffers
     (let (start end)
-      (mevedel-view-stream-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "First\n" nil)
       (mevedel-view-stream-test--insert-data data-buf "First response.\n" 'response)
       (with-current-buffer data-buf
         (mevedel-view-stream-render-response (point-min) (point-max))
         (setq start (point-max)))
-      (mevedel-view-stream-test--insert-data data-buf "*** Second\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Second\n" nil)
       (mevedel-view-stream-test--insert-data data-buf "Second response.\n" 'response)
       (with-current-buffer data-buf
         (setq end (point-max)))
@@ -3755,7 +3754,7 @@
     (let (start end)
       (with-current-buffer data-buf
         (setq start (point-max)))
-      (mevedel-view-stream-test--insert-data data-buf "*** Second\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Second\n" nil)
       (mevedel-view-stream-test--insert-data data-buf "Second response.\n" 'response)
       (with-current-buffer data-buf
         (setq end (point-max)))
@@ -3777,7 +3776,7 @@
   :doc "final response includes reasoning before hook start"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start response-start response-end)
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point) nil)))
       (mevedel-view-stream-test--insert-data
@@ -3819,7 +3818,7 @@
   :doc "final response widening does not duplicate visible user echo"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start response-start response-end)
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (1- (point)) nil)))
       (mevedel-view-stream-test--insert-data
@@ -3851,12 +3850,12 @@
   :doc "second-turn incremental render stays above interaction zone without duplication"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-stream-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "First\n" nil)
       (mevedel-view-stream-test--insert-data data-buf "First response.\n" 'response)
       (with-current-buffer data-buf
         (mevedel-view-stream-render-response (point-min) (point-max))
         (goto-char (point-max))
-        (insert "\n\n*** Second\n")
+        (insert "\n\nSecond\n")
         (setq data-turn-start (copy-marker (point) nil)))
       (mevedel-view-stream-test--insert-data data-buf "Partial response.\n" 'response)
       (with-current-buffer view-buf
@@ -3897,7 +3896,7 @@
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start
           (changes 0))
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point-max) nil)))
       (mevedel-view-stream-test--insert-data data-buf "Partial response.\n" 'response)
@@ -3923,7 +3922,7 @@
   :doc "does not duplicate the original user turn after mailbox insertion"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-stream-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
       (with-current-buffer data-buf
         ;; Simulate the real send-path marker landing inside the nil
         ;; user-property run, which `--extract-segments' expands
@@ -4063,7 +4062,7 @@
 
   :doc "renders ignored directive PROMPT drawer as collapsed user section"
   (mevedel-view-stream-test--with-buffers
-    (mevedel-view-stream-test--insert-data data-buf "*** Change alpha :implement:\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Change alpha :implement:\n" nil)
     (mevedel-view-stream-test--insert-data
      data-buf
      ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
@@ -4094,7 +4093,7 @@
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data
      data-buf
-     "*** You are helping with this user request:\n\nSay hi!\n"
+     "You are helping with this user request:\n\nSay hi!\n"
      nil)
     (with-current-buffer data-buf
       (let ((start (point)))
@@ -4106,7 +4105,7 @@
                   :display-text
                   "$emacs-context-snapshot\nSay hi!"
                   :prompt
-                  "*** You are helping with this user request:\n\nSay hi!\n")))
+                  "You are helping with this user request:\n\nSay hi!\n")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -4131,14 +4130,14 @@
     (mevedel-view-stream-test--insert-data
      data-buf
      (concat
-      "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
+      "# Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
       (mevedel-tool-render-data-format
        '(:kind inline-skill
                :name "green-loop"
                :arguments "current changes"
                :display-text "$green-loop current changes"
                :prompt
-               "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes")))
+               "# Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes")))
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -4167,7 +4166,7 @@
      'ignore)
     (mevedel-view-stream-test--insert-data
      data-buf
-     "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
+     "# Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
      nil)
     (mevedel-view-stream-test--insert-data
      data-buf
@@ -4193,7 +4192,7 @@
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data
      data-buf
-     ":PROPERTIES:\n:GPTEL_PRESET: mevedel-implement\n:GPTEL_MODEL: gpt-5.5\n:GPTEL_BOUNDS: ((ignore (1 2)))\n:END:\n\n*** Skill prompt body\n\nVisible model prompt.\n"
+     ":PROPERTIES:\n:GPTEL_PRESET: mevedel-implement\n:GPTEL_MODEL: gpt-5.5\n:GPTEL_BOUNDS: ((ignore (1 2)))\n:END:\n\nSkill prompt body\n\nVisible model prompt.\n"
      nil)
     (with-current-buffer data-buf
       (let ((start (point)))
@@ -4205,7 +4204,7 @@
                   :display-text
                   "$green-loop\ncommits a b"
                   :prompt
-                  "*** Skill prompt body\n\nVisible model prompt.\n")))
+                  "Skill prompt body\n\nVisible model prompt.\n")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -4221,7 +4220,7 @@
   :doc "expanded external Prompt survives in-flight incremental render"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start)
-      (mevedel-view-stream-test--insert-data data-buf "*** Change alpha :implement:\n" nil)
+      (mevedel-view-stream-test--insert-data data-buf "Change alpha :implement:\n" nil)
       (mevedel-view-stream-test--insert-data
        data-buf
        ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
@@ -4274,7 +4273,7 @@
                 (with-current-buffer buffer
                   (setq-local mevedel--session session)))
               (mevedel-view-stream-test--insert-data
-               data-buf "*** Show paths\n" nil)
+               data-buf "Show paths\n" nil)
               (mevedel-view-stream-test--insert-data
                data-buf
                (format "Open %s\nIgnore %s\nIgnore %s\n"
@@ -4333,7 +4332,7 @@
   :doc "releases the turn, warns, and reschedules when projection fails"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer data-buf
-      (insert "*** ask\n\nreply\n"))
+      (insert "ask\n\nreply\n"))
     (mevedel-view-stream-test--with-visible-view
       (mevedel-view-stream-begin-turn
        (point-min)
@@ -4364,7 +4363,7 @@
   :doc "releases the turn when stopping the progress row fails"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer data-buf
-      (insert "*** ask\n\nreply\n"))
+      (insert "ask\n\nreply\n"))
     (mevedel-view-stream-test--with-visible-view
       (mevedel-view-stream-begin-turn
        (point-min)

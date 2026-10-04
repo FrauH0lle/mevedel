@@ -1006,8 +1006,6 @@
 			   (with-current-buffer data-buffer
 			     (org-mode)
 			     (setq-local gptel-response-separator "\n\n")
-			     (setq-local gptel-prompt-prefix-alist
-					 '((org-mode . "* User\n")))
 			     (setq-local mevedel--view-buffer view-buffer)
 			     (let ((marker (mevedel--insert-local-user-turn
 					    "Setup context" "Show setup" 'worktree)))
@@ -1067,7 +1065,6 @@
   (with-temp-buffer
     (org-mode)
     (setq-local gptel-response-separator "\n\n"
-                gptel-prompt-prefix-alist '((org-mode . "* User\n"))
                 gptel-prompt-transform-functions '(transform)
                 gptel-stream t)
     (let ((fsm (gptel-make-fsm))
@@ -1093,8 +1090,7 @@
   :doc "stores the generated prompt while sending prepared skill context"
   (with-temp-buffer
     (org-mode)
-    (setq-local gptel-response-separator "\n\n"
-                gptel-prompt-prefix-alist '((org-mode . "* User\n")))
+    (setq-local gptel-response-separator "\n\n")
     (let (model-input)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (&rest _)
@@ -1121,8 +1117,7 @@
              :session session
              :context-entries context-entries)))
       (setq-local mevedel--session session
-                  gptel-response-separator "\n\n"
-                  gptel-prompt-prefix-alist '((org-mode . "* User\n")))
+                  gptel-response-separator "\n\n")
       (setf (mevedel-session-hook-context-pending session) context-entries)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (&rest _) (error "Request startup failed"))))

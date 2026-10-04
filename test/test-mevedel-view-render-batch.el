@@ -18,7 +18,7 @@
   (declare (indent 0))
   `(mevedel-view-test--with-buffers
      (dotimes (index 6)
-       (mevedel-view-test--insert-data data-buf (format "*** Prompt %d\n" index) nil)
+       (mevedel-view-test--insert-data data-buf (format "Prompt %d\n" index) nil)
        (mevedel-view-test--insert-data data-buf (format "Response %d with target text.\n" index) 'response))
      (with-current-buffer view-buf
        (mevedel-view--full-rerender)
@@ -229,11 +229,11 @@
   (test)
   :doc "a slice boundary preserves lookahead and assistant grouping"
   (mevedel-view-test--with-buffers
-    (dolist (entry '(("*** Prompt\n" . nil)
+    (dolist (entry '(("Prompt\n" . nil)
                      ("First response\n" . response)
                      ("\n" . nil)
                      ("Second response\n" . response)
-                     ("*** Next prompt\n" . nil)
+                     ("Next prompt\n" . nil)
                      ("Final response\n" . response)))
       (mevedel-view-test--insert-data data-buf (car entry) (cdr entry)))
     (let* ((segments (with-current-buffer data-buf
@@ -524,11 +524,11 @@
   (test)
   :doc "expanded tool bodies and manually folded turns survive all callbacks"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data
      data-buf "(:name \"Unknown\" :args nil)\nBody retained on expansion.\n" '(tool . "one"))
     (dotimes (index 4)
-      (mevedel-view-test--insert-data data-buf (format "*** Prompt %d\n" index) nil)
+      (mevedel-view-test--insert-data data-buf (format "Prompt %d\n" index) nil)
       (mevedel-view-test--insert-data data-buf (format "Response %d\n" index) 'response))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)

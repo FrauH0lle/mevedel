@@ -166,7 +166,7 @@
   (test)
   :doc "single user segment"
   (mevedel-transcript-test--with-buffer
-    (mevedel-transcript-test--insert data-buf "*** Hello\n" nil)
+    (mevedel-transcript-test--insert data-buf "Hello\n" nil)
     (with-current-buffer data-buf
       (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
@@ -174,7 +174,7 @@
 
   :doc "user + response segments"
   (mevedel-transcript-test--with-buffer
-    (mevedel-transcript-test--insert data-buf "*** Hello\n" nil)
+    (mevedel-transcript-test--insert data-buf "Hello\n" nil)
     (mevedel-transcript-test--insert data-buf "Hi there\n" 'response)
     (with-current-buffer data-buf
       (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
@@ -1112,10 +1112,10 @@ still my prompt
   (test)
   :doc "finds with the kind index exactly what a plain search finds"
   (with-temp-buffer
-    (insert ":PROPERTIES:\n:X: 1\n:END:\n*** prompt\n:PROMPT:\nbody\n:END:\n"
+    (insert ":PROPERTIES:\n:X: 1\n:END:\nprompt\n:PROMPT:\nbody\n:END:\n"
             "#+begin_reasoning\nthink\n#+END_REASONING\n"
             "#+begin_tool (:name \"Read\")\nx\n#+end_tool\n"
-            "* <system-reminder>\nr\n</system-reminder>\n"
+            "<system-reminder>\nr\n</system-reminder>\n"
             "<agent-result id=\"a\">\nres\n</agent-result>\n"
             "<hook-context>\nh\n</hook-context>\n"
             "<task-background>\nt\n</task-background>\n"
@@ -1305,7 +1305,7 @@ TOOL-PROP."
   :doc "repairs stale tool, mailbox, and structural transcript properties"
   (with-temp-buffer
     (org-mode)
-    (insert ":PROPERTIES:\n:END:\n*** User prompt\n")
+    (insert ":PROPERTIES:\n:END:\nUser prompt\n")
     (let (tool-start tool-end response-start response-end task-start task-end
           waiting-start waiting-end mailbox-start mailbox-end after-start
           after-end reasoning-start reasoning-end)
@@ -1669,7 +1669,7 @@ TOOL-PROP."
                      ":PROMPT:\npartial prompt"))
     (with-temp-buffer
       (org-mode)
-      (insert ":PROPERTIES:\n:END:\n*** User prompt\n\n")
+      (insert ":PROPERTIES:\n:END:\nUser prompt\n\n")
       (let ((start (point)))
         (insert snippet)
         (with-timeout
@@ -1682,7 +1682,7 @@ TOOL-PROP."
   :doc "clears stale tool properties from closed unparseable org tool blocks"
   (with-temp-buffer
     (org-mode)
-    (insert ":PROPERTIES:\n:END:\n*** User prompt\n\n")
+    (insert ":PROPERTIES:\n:END:\nUser prompt\n\n")
     (let ((start (point)))
       (insert "#+begin_tool (Bash :command \"date\")\nnot a sexp\n#+end_tool\n")
       (put-text-property start (point) 'gptel '(tool . "call-bad"))
@@ -1802,6 +1802,17 @@ TOOL-PROP."
                              "--- end evidence item ---")))
       (should-not (text-property-not-all 0 (length text) 'gptel nil text)))))
 
+(mevedel-deftest mevedel-transcript--own-line-prompt-p ()
+  ,test
+  (test)
+  :doc "accepts user text on its own line and rejects tails, blanks, and other types"
+  (with-temp-buffer
+    (insert "Answer.\n\nPrompt\n" "er.\n" "\n\n")
+    (should (mevedel-transcript--own-line-prompt-p '(user 8 17)))
+    (should-not (mevedel-transcript--own-line-prompt-p '(user 17 21)))
+    (should-not (mevedel-transcript--own-line-prompt-p '(user 21 23)))
+    (should-not (mevedel-transcript--own-line-prompt-p '(ignored 8 17)))))
+
 (mevedel-deftest mevedel-transcript--repair-response-fragment-segments ()
   ,test
   (test)
@@ -1820,16 +1831,68 @@ TOOL-PROP."
                    (mapcar #'car (mevedel-transcript-segments
                                   (point-min) (point-max))))))
 
-  :doc "the empty prompt heading between a final response and its summary stays user"
+  :doc "the separator gptel inserts after a final response is no user turn"
   (with-temp-buffer
     (org-mode)
     (insert (propertize "Answer." 'gptel 'response)
-            "\n\n*** \n"
+            "\n\n"
             (mevedel-tool-render-data-format
              '(:kind request-summary :elapsed-seconds 1.0)))
     (let ((segments (mevedel-transcript-segments (point-min) (point-max))))
+      (should (equal '(response render-data) (mapcar #'car segments)))
+      (should (equal "Answer."
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "a prompt on its own line after a response stays user before its audit"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer." 'gptel 'response)
+            "\n\nGuest prompt\n"
+            (mevedel--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-1")))
+    (let ((segments (mevedel-transcript-segments (point-min) (point-max))))
+      (should (equal '(response user ignored) (mapcar #'car segments)))
+      (should (equal "\n\nGuest prompt\n"
+                     (buffer-substring-no-properties
+                      (cadr (cadr segments)) (caddr (cadr segments)))))))
+
+  :doc "a stale tail continuing the response's last line joins it before an audit"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answ" 'gptel 'response)
+            "er.\n"
+            (mevedel--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-1")))
+    (let ((segments (mevedel-transcript-segments (point-min) (point-max))))
+      (should (equal '(response ignored) (mapcar #'car segments)))
+      (should (equal "Answer.\n"
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "a generated prompt after a response stays user before its display record"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer." 'gptel 'response)
+            "\n\nGenerated prompt\n"
+            (mevedel-tool-render-data-format
+             '(:kind user-display :text "Shown")))
+    (let ((segments (mevedel-transcript-segments (point-min) (point-max))))
       (should (equal '(response user render-data) (mapcar #'car segments)))
       (should (equal "Answer."
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "a stale tail continuing the response's last line joins it before a summary"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answ" 'gptel 'response)
+            "er.\n"
+            (mevedel-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1.0)))
+    (let ((segments (mevedel-transcript-segments (point-min) (point-max))))
+      (should (equal '(response render-data) (mapcar #'car segments)))
+      (should (equal "Answer.\n"
                      (buffer-substring-no-properties
                       (cadr (car segments)) (caddr (car segments))))))))
 

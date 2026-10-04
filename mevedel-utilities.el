@@ -19,8 +19,9 @@
 
 ;; `gptel'
 (declare-function gptel--display-reasoning-stream "ext:gptel" (text info))
-(defvar gptel-default-mode)
+(defvar gptel-include-tool-results)
 (defvar gptel-prompt-prefix-alist)
+(defvar gptel-response-prefix-alist)
 (defvar gptel-response-separator)
 
 ;; `mevedel-execution'
@@ -478,10 +479,17 @@ runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
     (funcall function)))
 
 (defun mevedel--transcript-org-mode ()
-  "Enable bare Org mode in a generated transcript buffer."
+  "Enable bare Org mode in a generated transcript buffer.
+
+The transcript is mevedel's canonical record, so its shape does not
+follow the user's gptel chat-buffer settings: no prompt or response
+prefixes, and every tool call and result stays in the buffer."
   (setq-local change-major-mode-hook nil)
   (mevedel--call-with-bare-transcript-mode #'org-mode)
-  (setq-local org-element-cache-persistent nil))
+  (setq-local org-element-cache-persistent nil
+              gptel-prompt-prefix-alist nil
+              gptel-response-prefix-alist nil
+              gptel-include-tool-results t))
 
 (defun mevedel--optimize-transcript-buffer ()
   "Apply buffer-local performance settings for generated transcript buffers."
@@ -1068,20 +1076,13 @@ Preserve atomic mention bindings and live structural producer provenance."
   (mevedel-transcript-restore-ignored-properties start end))
 
 (defun mevedel--insert-user-turn (input)
-  "Insert user INPUT at point with the configured gptel separator and prefix.
+  "Insert user INPUT at point after the configured gptel separator.
 Clear inherited transcript properties while retaining mention bindings and
 structural provenance.  Return the start of INPUT, leaving point after its
 trailing newline.  The caller owns request admission and response markers."
   (let ((start (point)))
     (insert gptel-response-separator)
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (let ((prefix-length (length prefix)))
-        (unless (and (>= (point) (+ (point-min) prefix-length))
-                     (string= (buffer-substring-no-properties
-                               (- (point) prefix-length) (point))
-                              prefix))
-          (unless (bolp) (insert "\n"))
-          (insert prefix))))
+    (unless (bolp) (insert "\n"))
     (let ((body-start (point)))
       (insert input "\n")
       (mevedel--clear-user-turn-gptel-properties start (point))
@@ -1191,14 +1192,9 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
 
 (defun mevedel--delimiting-markdown-backticks (string)
   "Return a string containing the appropriate code block backticks for STRING."
-  (let ((backticks (if (eq gptel-default-mode 'markdown-mode)
-                       "~~~"
-                     "```")))
+  (let ((backticks "```"))
     (while (string-match-p backticks string)
-      (setq backticks (concat backticks
-                              (if (eq gptel-default-mode 'markdown-mode)
-                                  "~"
-                                "`"))))
+      (setq backticks (concat backticks "`")))
     backticks))
 
 (defun mevedel--overlay-region-info (overlay)

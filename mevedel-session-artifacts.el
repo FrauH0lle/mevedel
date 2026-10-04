@@ -3123,12 +3123,9 @@ nil if SESSION is not yet materialized."
            (signal (car err) (cdr err)))))))))
 
 (cl-defun mevedel-session-artifacts-start-fresh-segment
-    (session buffer &key initial-text clear)
+    (session buffer &key clear)
   "Finalize SESSION's current segment and start a blank live segment in BUFFER.
 
-INITIAL-TEXT, when non-nil, is inserted after the new segment's org
-metadata.  This is used by `/clear' to leave a fresh prompt prefix in
-the data buffer without carrying over any conversation summary.
 When CLEAR is non-nil, rearm automatic naming in the new segment's sidecar
 and seal completed journal evidence only after the transition commits.
 
@@ -3152,8 +3149,7 @@ absolute path on success, nil if SESSION is not yet materialized."
             old-file-bytes
             old-publish-text
             new-segment
-            new-text
-            initial-position)
+            new-text)
         (unless old-segment
           (error "No current segment file"))
         (when clear
@@ -3192,11 +3188,6 @@ absolute path on success, nil if SESSION is not yet materialized."
                             (org-mode)
                             (mevedel-session-artifacts--insert-segment-header
                              session)
-                            (goto-char (point-max))
-                            (when (and initial-text
-                                       (not (string-empty-p initial-text)))
-                              (unless (bolp) (insert "\n"))
-                              (setq initial-position (point)))
                             (buffer-string))))
                   (setf (mevedel-session-updated-at session)
                         (format-time-string "%FT%H-%M-%S"))
@@ -3218,10 +3209,6 @@ absolute path on success, nil if SESSION is not yet materialized."
                       (setq committed t)
                       (mevedel-session-artifacts-save-instructions session buffer))
                     (setq committed t))
-                  (when initial-position
-                    (goto-char initial-position)
-                    (insert initial-text)
-                    (set-buffer-modified-p nil))
                   (goto-char (point-max))
                   (mevedel-compact-estimation-clear-baseline)
                   (mevedel-session-persistence-notify-session-event
@@ -3239,11 +3226,7 @@ absolute path on success, nil if SESSION is not yet materialized."
                    (setq committed t))
                   ((and portable-p (not clear)
                         (mevedel-session-pending-publication session))
-                   (progn
-                     (when initial-position
-                       (goto-char initial-position)
-                       (insert initial-text))
-                     (set-buffer-modified-p nil)))
+                   (set-buffer-modified-p nil))
                   (t
                    (setf (mevedel-session-current-segment session)
                          old-current-segment)
