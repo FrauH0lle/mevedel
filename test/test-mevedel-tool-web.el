@@ -758,6 +758,45 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
          (should (zerop mevedel-tool-web--search-active))
          (should-not mevedel-tool-web--search-queue))))))
 
+(defun test-mevedel-tool-web--page-text (html base)
+  "Return WebFetch's readable text for HTML fetched from BASE."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert (encode-coding-string html 'utf-8))
+    (goto-char (point-min))
+    (let ((url-http-content-type "text/html; charset=utf-8"))
+      (mevedel-tool-web--page-text base))))
+
+(mevedel-deftest mevedel-tool-web--page-text ()
+  ,test
+  (test)
+  :doc "keeps link targets as absolute markdown links"
+  (should (equal (concat "See the [API reference \\[v2\\]](https://example.com/guide/api.html)"
+                         " and top, [Wiki](https://en.wikipedia.org/wiki/Eww_%28web_browser%29),"
+                         " mail, https://x.org/.\n")
+                 (test-mevedel-tool-web--page-text
+                  (concat "<html><body><p>See the <a href=\"api.html\">API\n reference [v2]</a>"
+                          " and <a href=\"#top\">top</a>,"
+                          " <a href=\"https://en.wikipedia.org/wiki/Eww_(web_browser)\">Wiki</a>,"
+                          " <a href=\"mailto:a@b.c\">mail</a>,"
+                          " <a href=\"https://x.org/\">https://x.org/</a>.</p></body></html>")
+                  "https://example.com/guide/index.html#intro")))
+  :doc "renders readable text without a base"
+  (should (equal "Plain text.\n"
+                 (test-mevedel-tool-web--page-text
+                  "<html><body><p>Plain text.</p></body></html>" nil))))
+
+(mevedel-deftest mevedel-tool-web--markdown-link ()
+  ,test
+  (test)
+  :doc "keeps surrounding whitespace and collapses wrapped text"
+  (should (equal " [a b](https://x.org/) "
+                 (mevedel-tool-web--markdown-link " a\n b " "https://x.org/" nil)))
+  :doc "keeps non-http links, same-page anchors and empty text plain"
+  (should-not (mevedel-tool-web--markdown-link "mail" "mailto:a@b.c" nil))
+  (should-not (mevedel-tool-web--markdown-link "top" "https://x.org/p#top" "https://x.org/p"))
+  (should-not (mevedel-tool-web--markdown-link "  " "https://x.org/" nil)))
+
 (mevedel-deftest mevedel-tool-web--body-kind ()
   ,test
   (test)

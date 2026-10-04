@@ -14,7 +14,8 @@ description and transcript.
 ### How to use `WebFetch`
 
 - Pass a complete http or https URL. HTML becomes readable text rather
-  than raw markup; markdown, JSON and other text come back verbatim. An image is
+  than raw markup, with links as markdown `[text](url)` you can fetch in turn;
+  markdown, JSON and other text come back verbatim. An image is
   attached when the model accepts it, and a PDF becomes its extracted text.
   Script-rendered or authenticated content may be unavailable.
 - YouTube retrieval depends on available video metadata and captions. A missing

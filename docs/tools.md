@@ -443,7 +443,13 @@ result.
 WebFetch asks for `text/markdown` first, so servers that can send markdown do,
 and returns a response by its content type. HTML and XHTML are decoded with the
 header charset, else a `<meta>` charset, else UTF-8, and rendered as readable
-text with EWW/SHR. Other text (`text/*`, JSON, XML and their `+json`/`+xml`
+text with EWW/SHR. Links keep their targets as markdown links, `[text](url)`,
+resolved against the final URL through a `base` element (`shr-insert-document`
+resets `shr-base` itself). Link text loses its line wrapping and escapes
+brackets, and parentheses in targets are percent-encoded, so the view's link
+renderer and the model read the same link. Non-http(s) links, links without
+text and anchors into the fetched page stay plain text; a link whose text is
+its URL becomes the bare URL. Other text (`text/*`, JSON, XML and their `+json`/`+xml`
 variants, JavaScript) is decoded the same way and returned verbatim. PNG, JPEG,
 GIF and WebP images are attached as media, with a one-line text summary, when
 the current model accepts that type, the bytes carry the type's signature and
