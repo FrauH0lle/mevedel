@@ -103,6 +103,20 @@
           (or (not stage) (eq (plist-get event :stage) stage))))
    (reverse (mevedel-session-telemetry-pending session))))
 
+(defun test-mevedel-usage--pre-ec25a41-curl-failure (process _status)
+  "Fail PROCESS the way gptel did before commit ec25a41.
+That cleanup transitioned before assigning its error, so a pending tool call
+reached TOOL and could dispatch the next call from inside the cleanup."
+  (let* ((fsm (car (alist-get process gptel--request-alist)))
+         (info (gptel-fsm-info fsm)))
+    (gptel--fsm-transition fsm)
+    (plist-put info :error (format "Curl failed with exit code %d."
+                                   (process-exit-status process)))
+    (funcall (plist-get info :callback) nil info)
+    (gptel--fsm-transition fsm)
+    (setf (alist-get process gptel--request-alist nil 'remove) nil)
+    (kill-buffer (process-buffer process))))
+
 (defun test-mevedel-usage--fsm (buffer &rest props)
   "Create a quiet native gptel FSM for BUFFER with additional PROPS."
   (let ((info (list :buffer buffer :backend gptel-backend
@@ -1182,7 +1196,7 @@
           (when (process-live-p process) (delete-process process))
           (when (buffer-live-p proc-buf) (kill-buffer proc-buf))))))
 
-  :doc "native pending-tool stream failure belongs to call one despite reentrant call two dispatch"
+  :doc "pre-ec25a41 pending-tool stream failure belongs to call one despite reentrant call two dispatch"
   (test-mevedel-usage--with-session
     (test-mevedel-usage--with-observer
       (let* ((gptel-use-curl t)
@@ -1223,8 +1237,11 @@
                        "data: [DONE]\n\n"))
               (should (plist-get (gptel-fsm-info fsm) :tool-use))
               (should-not (test-mevedel-usage--events session 'finish))
+              ;; Current gptel assigns the error first and never re-enters, so
+              ;; drive the observer around the older ordering it still guards.
               (cl-letf (((symbol-function 'process-exit-status) (lambda (_process) 18)))
-                (gptel-curl--stream-cleanup process "failed"))
+                (mevedel-telemetry-usage--stream-cleanup
+                 #'test-mevedel-usage--pre-ec25a41-curl-failure process "failed"))
               (should (= 2 sends))
               ;; Callback forwarding remains native even though this old error
               ;; arrives through the newly installed callback in shared INFO.
@@ -1271,6 +1288,53 @@
           (when (buffer-live-p proc-buf) (kill-buffer proc-buf))
           (when (process-live-p next-process) (delete-process next-process))
           (when (buffer-live-p next-buf) (kill-buffer next-buf))))))
+
+  :doc "native pending-tool stream failure ends call one as an error without another dispatch"
+  (test-mevedel-usage--with-session
+    (test-mevedel-usage--with-observer
+      (let* ((gptel-use-curl t)
+             (proc-buf (generate-new-buffer " *mevedel-usage-pending-tool*"))
+             (process (make-pipe-process :name "usage-pending-tool" :buffer proc-buf
+                                         :noquery t :sentinel #'ignore))
+             (sends 0)
+             (fsm (test-mevedel-usage--fsm data-buf :stream t)))
+        (unwind-protect
+            (cl-letf (((symbol-function 'gptel-curl-get-response)
+                       (lambda (machine)
+                         (cl-incf sends)
+                         (setf (alist-get process gptel--request-alist)
+                               (cons machine #'ignore)))))
+              (setf (gptel-fsm-handlers fsm)
+                    (list (list 'WAIT #'gptel--handle-wait)
+                          (list 'TOOL (lambda (machine)
+                                        (gptel--fsm-transition machine 'WAIT)))))
+              (gptel--handle-wait fsm)
+              (gptel-curl--stream-filter
+               process
+               (concat "HTTP/1.1 200 OK\r\n\r\n"
+                       "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                       "\"id\":\"tool-1\",\"type\":\"function\",\"function\":{"
+                       "\"name\":\"Synthetic\",\"arguments\":\"{}\"}}]}}]}\n\n"
+                       "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,"
+                       "\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n"
+                       "data: [DONE]\n\n"))
+              (should (plist-get (gptel-fsm-info fsm) :tool-use))
+              (cl-letf (((symbol-function 'process-exit-status) (lambda (_process) 18)))
+                (gptel-curl--stream-cleanup process "failed"))
+              (should (= 1 sends))
+              (let ((history (plist-get (gptel-fsm-info fsm) :history)))
+                (should (memq 'ERRS history))
+                (should-not (memq 'TOOL history)))
+              (should-not gptel--request-alist)
+              (let ((starts (test-mevedel-usage--events session 'start))
+                    (finishes (test-mevedel-usage--events session 'finish)))
+                (should (= 1 (length starts)))
+                (should (= 1 (length finishes)))
+                (should (eq 'error (plist-get (car finishes) :outcome)))
+                (should (= 20 (plist-get (car finishes) :input-tokens)))
+                (should (= 80 (plist-get (car finishes) :cached-tokens)))))
+          (when (process-live-p process) (delete-process process))
+          (when (buffer-live-p proc-buf) (kill-buffer proc-buf))))))
 
   :doc "native curl sentinel captures text and tool-only usage before the TOOL boundary"
   (test-mevedel-usage--with-session
