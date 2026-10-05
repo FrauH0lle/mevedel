@@ -433,7 +433,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                       content)
                   authority))
          (content (concat cause content authority))
-         (source-buffer (current-buffer))
+         ;; The entry's session decides where its card goes.  A prompt can be
+         ;; admitted from an unrelated buffer, such as the permission
+         ;; reviewer's request buffer when it leaves the decision to a human.
+         (source-buffer (let ((owner (and entry (plist-get entry :data-buffer))))
+                          (if (buffer-live-p owner) owner (current-buffer))))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
               (mevedel-view--interaction-target-buffer

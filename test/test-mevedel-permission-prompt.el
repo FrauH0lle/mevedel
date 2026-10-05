@@ -463,6 +463,24 @@
       (dolist (key '("c" "n" "p" "s" "A"))
         (should (lookup-key captured-keymap key)))))
 
+  :doc "renders in the entry's session view from an unrelated current buffer"
+  ;; The permission reviewer admits a human card from its own request
+  ;; buffer, which has no view.
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--session (mevedel-session--create :name "reviewed")))
+    (let (registered-in)
+      (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (_plist)
+                   (setq registered-in (current-buffer))
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel--prompt--register-canceller) #'ignore))
+        (with-temp-buffer
+          (mevedel-permission--prompt-async-with-content
+           "Body\n" nil #'ignore nil (list :data-buffer data-buf))))
+      (should (eq registered-in view-buf))))
+
   :doc "warns at render time when a mutation can race an active parent"
   (let ((side-buffer (generate-new-buffer " *mevedel-side-warning*"))
         (parent-active nil))
