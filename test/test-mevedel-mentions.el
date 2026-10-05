@@ -2484,3 +2484,24 @@ injector would once the payload exists."
 
 (provide 'test-mevedel-mentions)
 ;;; test-mevedel-mentions.el ends here
+
+(mevedel-deftest mevedel-mentions--add-media-context ()
+  ,test
+  (test)
+  :doc "loads the gptel library that sends a media context, from a fresh Emacs"
+  ;; Other tests load gptel-context, so only a fresh process shows the gap.
+  (let ((emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (should
+       (zerop
+        (call-process
+         emacs nil t nil "--batch" "-Q" "--eval"
+         (prin1-to-string
+          `(progn
+             (setq load-path ',load-path)
+             (require 'mevedel-mentions)
+             (when (featurep 'gptel-context) (kill-emacs 3))
+             (with-temp-buffer
+               (mevedel-mentions--add-media-context "/tmp/board.png" "image/png")
+               (unless (and gptel-context (fboundp 'gptel-context--wrap))
+                 (kill-emacs 4)))))))))))
