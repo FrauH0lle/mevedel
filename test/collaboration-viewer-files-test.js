@@ -56,11 +56,12 @@ const rootListing = reqId => ({
 // Showing the tree lists the root; rows name folders and files.
 {
   const {files, nodes, sent, opened} = build();
-  files.show('proj');
+  files.show();
   assert.deepEqual(plain(sent), [{t: 'files', reqId: 1, dir: ''}]);
   assert.equal(textOf(nodes['files-status']), 'Loading…');
   files.listed(rootListing(1));
-  assert.equal(textOf(nodes['files-path']), 'proj');
+  // The top level needs no trail back up.
+  assert.equal(nodes['files-path'].hidden, true);
   const rows = nodes['files-list'].children;
   assert.equal(rows.length, 2);
   assert.match(textOf(rows[0]), /docs\//);
@@ -77,19 +78,21 @@ const rootListing = reqId => ({
   files.listed(rootListing(1));
   files.listed({t: 'files', reqId: 2, dir: 'docs', omitted: 3,
                 entries: [{name: 'a.md', kind: 'file', size: 1}]});
-  assert.equal(textOf(nodes['files-path']), 'proj/docs');
+  assert.equal(nodes['files-path'].hidden, false);
+  assert.equal(textOf(nodes['files-path']), 'All files/docs');
   assert.equal(textOf(nodes['files-status']), '3 more entries not shown.');
   // Breadcrumbs go back up.
   nodes['files-path'].children[0].dispatch('click');
   assert.deepEqual(plain(sent.at(-1)), {t: 'files', reqId: 3, dir: ''});
   files.listed({t: 'files', reqId: 3, dir: '', entries: [], omitted: 0});
   assert.equal(textOf(nodes['files-status']), 'No files here yet.');
+  assert.equal(nodes['files-path'].hidden, true);
 }
 
 // A folder that disappeared falls back to the root; a root refusal shows.
 {
   const {files, nodes, sent} = build();
-  files.show('proj');
+  files.show();
   files.listed({t: 'files', reqId: 1, dir: 'gone', entries: [], omitted: 0});
   files.refresh();
   files.listed({t: 'files', reqId: 2, error: 'This folder is not in the project'});
@@ -101,7 +104,7 @@ const rootListing = reqId => ({
 // Removing asks first, then reports and reloads.
 {
   const {files, nodes, sent, notices} = build();
-  files.show('proj');
+  files.show();
   files.listed(rootListing(1));
   nodes['files-list'].children[1].children.at(-1).dispatch('click');
   assert.deepEqual(plain(sent.at(-1)), {t: 'file-remove', reqId: 2, path: 'notes.md'});
@@ -111,7 +114,7 @@ const rootListing = reqId => ({
   files.removed({t: 'file-remove', reqId: 99, ok: true});
   assert.equal(notices.length, 1);
   const declined = build({confirmed: false});
-  declined.files.show('proj');
+  declined.files.show();
   declined.files.listed(rootListing(1));
   declined.nodes['files-list'].children[1].children.at(-1).dispatch('click');
   assert.equal(declined.sent.length, 1);
@@ -120,7 +123,7 @@ const rootListing = reqId => ({
 // Another guest's change reloads only the folder on screen.
 {
   const {files, nodes, sent} = build();
-  files.show('proj');
+  files.show();
   files.listed(rootListing(1));
   files.changed({t: 'files-changed', dir: 'docs'});
   assert.equal(sent.length, 1);
@@ -178,7 +181,7 @@ const rootListing = reqId => ({
   // The tree uploads picked or dropped files into the folder it shows.
   {
     const {files, nodes, sent, notices, uploads, drop} = build();
-    files.show('proj');
+    files.show();
     files.listed({t: 'files', reqId: 1, dir: 'docs', entries: [], omitted: 0});
     assert.equal(drop().target, nodes['lobby-files']);
     nodes['files-input'].files = [fakeFile('one.txt', 2)];

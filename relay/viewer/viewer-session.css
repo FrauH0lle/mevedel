@@ -221,6 +221,7 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
   letter-spacing: -.02em;
   overflow-wrap: anywhere;
 }
+.lobby-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-left: auto; }
 
 .lobby-list { list-style: none; margin: 0; padding: 0; }
 
@@ -254,13 +255,22 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
 .lobby-empty[hidden] { display: none; }
 
 /* A full link's lobby has two tabs: the session list and the project's
-   files. */
-.lobby-tabs {
-  display: flex;
-  gap: .25rem;
-  margin: 0 0 1rem;
+   files. The tabs head the page in place of the title, and the shown tab's
+   actions share their row above one rule. On a narrow screen the actions
+   wrap onto a row above the tabs, so the tabs stay on the rule. */
+.lobby-head:has(> .lobby-tabs:not([hidden])) {
+  flex-wrap: wrap-reverse;
+  align-items: flex-start;
   border-bottom: 1px solid var(--line);
 }
+.lobby-head:has(> .lobby-tabs:not([hidden])) h2 {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+}
+.lobby-head:has(> .lobby-tabs:not([hidden])) .lobby-actions {
+  align-self: center;
+  padding: .35rem 0;
+}
+.lobby-tabs { display: flex; gap: .25rem; }
 .lobby-tabs[hidden] { display: none; }
 .lobby-tab {
   font: inherit;
@@ -281,16 +291,8 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
 #lobby-sessions[hidden], .lobby-files[hidden] { display: none; }
 
 .lobby-files { border-radius: var(--panel-radius); }
-.files-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .5rem;
-  margin-bottom: .6rem;
-}
 .files-path {
-  flex: 1 1 12rem;
-  min-width: 0;
+  margin-bottom: .6rem;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;

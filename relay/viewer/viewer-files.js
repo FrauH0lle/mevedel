@@ -92,7 +92,6 @@
     const formatBytes = bytes => window.mevedelTranscriptRenderer.formatBytes(bytes);
 
     let dir = '';
-    let project = 'project';
     let latest = 0;
     let sequence = 0;
     let busy = false;
@@ -111,15 +110,18 @@
       send({t: 'files', reqId: latest, dir: next});
     }
 
+    // The lobby header already names the project, so the root crumb is
+    // only the way back up, and the top level shows no trail at all.
     function renderCrumbs() {
       const parts = dir ? dir.split('/') : [];
+      crumbs.hidden = !parts.length;
       const link = (label, target) => {
         const button = el('button', 'files-crumb', label);
         button.type = 'button';
         button.addEventListener('click', () => load(target));
         return button;
       };
-      const nodes = [link(project, '')];
+      const nodes = [link('All files', '')];
       parts.forEach((part, index) => {
         nodes.push(el('span', 'files-sep', '/'));
         nodes.push(link(part, parts.slice(0, index + 1).join('/')));
@@ -227,12 +229,7 @@
     window.mevedelAttachments.bind({add: files => uploadAll(files)}, {target: section});
 
     // The tree is fetched when first shown and refreshed with the lobby.
-    function show(name) {
-      if (typeof name === 'string' && name) project = name;
-      load();
-    }
-
-    return Object.freeze({show, refresh: () => load(), listed, removed, changed});
+    return Object.freeze({show: () => load(), refresh: () => load(), listed, removed, changed});
   }
 
   window.mevedelFilesView = Object.freeze({create, uploader, base64, CHUNK_BYTES});

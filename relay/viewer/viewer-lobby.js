@@ -36,17 +36,21 @@
     const omitted = document.getElementById('lobby-omitted');
     const title = document.getElementById('lobby-title');
     const newButton = document.getElementById('lobby-new');
+    const uploadButton = document.getElementById('files-upload');
     const refresh = document.getElementById('lobby-refresh');
 
     let active = false;
-    let project = null;
     let tab = 'sessions';
     let requestSequence = 0;
     const opening = new Map();
 
+    // The header already names the project, and the tabs, when shown,
+    // stand in for this heading on screen; it labels the section for
+    // assistive technology and heads a view link's tab-less list.
     function retitle() {
-      const noun = tab === 'files' ? 'files' : 'sessions';
-      title.textContent = project ? `${project} ${noun}` : noun[0].toUpperCase() + noun.slice(1);
+      title.textContent = tab === 'files' ? 'Files' : 'Sessions';
+      newButton.hidden = !state.owner || tab !== 'sessions';
+      uploadButton.hidden = tab !== 'files';
     }
 
     // Project files are a full-link feature: a view link lists sessions
@@ -57,9 +61,8 @@
       filesTab.setAttribute('aria-selected', String(tab === 'files'));
       sessionsPane.hidden = tab !== 'sessions';
       filesPane.hidden = tab !== 'files';
-      newButton.hidden = !state.owner || tab !== 'sessions';
       retitle();
-      if (tab === 'files') files.show(project);
+      if (tab === 'files') files.show();
     }
 
     function reload() {
@@ -104,10 +107,9 @@
         // kept where those rooms list the others.
         sessions.rememberCurrent(`Lobby · ${frame.project || 'project'}`);
       }
-      project = typeof frame.project === 'string' && frame.project ? frame.project : null;
+      const project = typeof frame.project === 'string' && frame.project ? frame.project : null;
       document.title = project ? `${project} · mevedel` : 'mevedel';
       tabs.hidden = !(files && state.writable);
-      newButton.hidden = !state.owner || tab !== 'sessions';
       retitle();
       const rows = Array.isArray(frame.sessions) ? frame.sessions : [];
       list.replaceChildren(...rows.map(renderRow));
