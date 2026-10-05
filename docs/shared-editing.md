@@ -434,7 +434,10 @@ and area and frames them. Pins, hover cards and threads are visible to view
 participants, who cannot post.
 
 A board comment records its object IDs, optional area, quote, and a fingerprint
-of those objects and their labels. The thread is
+of those objects and their labels. The quote names labelled objects and counts
+unlabelled ones by type, such as `freedraw ×24`. In a thread, a question sent to
+the assistant shows only its sender and shared context, since its text is the
+thread's latest message. The thread is
 **changed** once an object moves, restyles, changes its label or is deleted, and
 **removed** when none of its objects remain and it has no area. An area
 outlives its objects. A request to the assistant attaches the anchor's surviving

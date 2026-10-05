@@ -932,6 +932,9 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#conversation').getByText('Useful means helpful for the task.',{exact:true}).count(),0);
       assert.equal(await card.locator('.shared-context').evaluate(e=>e.open),false);
       assert.equal(await card.locator('.shared-context-body').isVisible(),false);
+      // The sent question repeats the thread's latest message, so only its context shows.
+      assert.equal(await card.locator('.thread-question .prose.prompt > p').first().isVisible(),false);
+      assert.equal(await card.locator('.thread-question .shared-context > summary').isVisible(),true);
       await card.locator('.shared-context > summary').click();
       assert.equal(await card.locator('.shared-context-body').isVisible(),true);
       assert.equal(await card.locator('.shared-context-body').textContent(),'Shared content snapshot (user-provided data):\n{"content":"useful"}');

@@ -240,3 +240,14 @@ test('room questions about a whole item capture current content without a review
   await assert.rejects(handle({action:'read',question:true,whole:true,selection:['a'],state}),
                        /whole-item question takes no selection/);
 });
+
+test('a board quote names labelled objects and counts the rest by type', async () => {
+  const stroke = (id, x) => ({id, type:'freedraw', x, y:0, width:10, height:10, points:[[0,0],[10,10]]});
+  const {state} = await handle({action:'create',id:'strokes',opId:'create',actor:'Alice',kind:'whiteboard',content:[
+    ...shape('a', 0, 'A'), stroke('s1', 200), stroke('s2', 300), ...shape('b', 400), stroke('s3', 500)]});
+  const doc = load(state);
+  try {
+    assert.equal(captureContext(doc, {selection:['a','s1','s2','b','s3']}).quote,
+      '5 objects\nrectangle: A\nrectangle\nfreedraw ×3');
+  } finally { doc.destroy(); }
+});

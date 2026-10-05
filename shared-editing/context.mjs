@@ -26,10 +26,20 @@ function nearby(all, region, selection) {
   return [...touched, ...labelsOf(all, touched.map(e => e.id))];
 }
 
+/* Labelled objects are named; unlabelled ones are counted by type, since a
+   hand-drawn selection can be dozens of strokes that say nothing apart. */
 function boardQuote(shapes, region, all) {
   const label = shape => shape.text ?? labelsOf(all, [shape.id]).map(t => t.text).join(' ');
   const objects = shapes.filter(shape => !(shape.containerId && shapes.some(s => s.id === shape.containerId)));
-  return `${region ? `Area ${region[2]} × ${region[3]} at ${region[0]}, ${region[1]}\n` : ''}${objects.length} object${objects.length === 1 ? '' : 's'}${objects.map(shape => `\n${shape.type}${label(shape) ? ': ' + label(shape) : ''}`).join('')}`;
+  const lines = [], counts = new Map();
+  for (const shape of objects) {
+    const text = label(shape);
+    if (text) lines.push(`${shape.type}: ${text}`);
+    else if (counts.has(shape.type)) lines[counts.get(shape.type)].n += 1;
+    else { counts.set(shape.type, lines.length); lines.push({ type: shape.type, n: 1 }); }
+  }
+  const named = lines.map(l => typeof l === 'string' ? l : l.n > 1 ? `${l.type} ×${l.n}` : l.type);
+  return `${region ? `Area ${region[2]} × ${region[3]} at ${region[0]}, ${region[1]}\n` : ''}${objects.length} object${objects.length === 1 ? '' : 's'}${named.map(l => `\n${l}`).join('')}`;
 }
 
 /* A compact fingerprint of anchored elements and their labels. */
