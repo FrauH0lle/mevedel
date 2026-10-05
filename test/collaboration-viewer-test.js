@@ -933,6 +933,7 @@ async function main() {
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
   await deliver({t: 'welcome', proto: 3, readOnly: false, recordCount: 3,
+                 workspace: 'ws',
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'},
                             {name: 'design', kind: 'skill', hint: '[brief]'}],
@@ -1678,9 +1679,10 @@ async function main() {
   assert.deepEqual([storedRooms[0].room, storedRooms[0].name],
                    ['roomroomroomroom', 'Pipeline diagram']);
   assert.deepEqual(storedRooms.slice(1),
-                   [{room: 'other', name: 'onboarding', secret: otherSecret},
+                   [{room: 'other', name: 'onboarding', secret: otherSecret,
+                     workspace: 'ws'},
                     {room: 'third', name: 'handed-over',
-                     secret: thirdSecret}]);
+                     secret: thirdSecret, workspace: 'ws'}]);
   assert.match(textOf(nodes['session-summary']), /2 rooms · invite/);
   // The same room twice is one room: a reconnect re-offering it must not
   // stack a second card.

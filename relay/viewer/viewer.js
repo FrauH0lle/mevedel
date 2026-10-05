@@ -990,6 +990,7 @@
       setComposerVisible(!state.readOnly);
       showSkillChips(state.readOnly ? [] : frame.commands);
       state.models = Array.isArray(frame.models) ? frame.models : [];
+      sessions.setWorkspace(frame.workspace);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
       // The host sends `queue' only when it changes, so a reconnect
@@ -1091,6 +1092,7 @@
       artifacts.activity();
     } else if (frame.t === 'lobby') {
       state.models = Array.isArray(frame.models) ? frame.models : [];
+      sessions.setWorkspace(frame.workspace);
       lobby.show(frame);
       if (sessionLabel && typeof frame.project === 'string') {
         sessionLabel.textContent = `Lobby · ${frame.project}`;

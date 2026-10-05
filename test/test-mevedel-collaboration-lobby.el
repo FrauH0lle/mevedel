@@ -204,15 +204,18 @@
   (:doc "caps the listing and reports how many rows it left out")
   (let ((mevedel-collaboration-lobby--max-sessions 2))
     (cl-letf (((symbol-function 'mevedel-collaboration-lobby--rows)
-               (lambda (_workspace) '((:id "a") (:id "b") (:id "c")))))
+               (lambda (_workspace) '((:id "a") (:id "b") (:id "c"))))
+              ((symbol-function 'mevedel-collaboration--workspace-key)
+               (lambda (lobby) (format "key-%s" (plist-get lobby :workspace)))))
       (let ((frame (mevedel-collaboration-lobby--frame
                     '(:workspace w :project "proj"))))
         (should (equal "lobby" (plist-get frame :t)))
         (should (equal "proj" (plist-get frame :project)))
+        (should (equal "key-w" (plist-get frame :workspace)))
         (should (equal [(:id "a") (:id "b")] (plist-get frame :sessions)))
         (should (= 1 (plist-get frame :omitted)))
         ;; Rows travel as a JSON array of objects.
-        (should (string-prefix-p "{\"t\":\"lobby\",\"project\":\"proj\",\"sessions\":[{"
+        (should (string-prefix-p "{\"t\":\"lobby\",\"project\":\"proj\",\"workspace\":\"key-w\",\"sessions\":[{"
                                  (json-encode frame)))))))
 
 (mevedel-deftest mevedel-collaboration-lobby--session-buffer
