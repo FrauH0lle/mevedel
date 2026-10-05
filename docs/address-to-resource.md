@@ -30,6 +30,7 @@ resource URI.
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | explicit file descendants |
 | Workspace journal | `memory://journal/`, `memory://journal/FILE` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
+| Shared item | `shared://`, `shared://ID[/PART]`, `shared://library[/NAME][/sheet.png]` | yes | no | text views | no |
 | Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
 
 ## Prompt availability
@@ -49,8 +50,10 @@ current resource metadata has a usable surface:
 - `memory://` requires at least one configured memory root; a first permitted
   file write can create a missing directory;
 - `memory://journal/` requires at least one validated published entry in the workspace;
-  private pending state alone does not qualify; and
-- `mcp://` requires at least one configured MCP server.
+  private pending state alone does not qualify;
+- `mcp://` requires at least one configured MCP server; and
+- `shared://` requires at least one shared whiteboard or document in the
+  session.
 
 With no valid request session, the roster still contains `mevedel://` but no
 session-owned families. The roster reports request-time availability metadata; it does not itself
@@ -376,6 +379,27 @@ every use, so an observation does not extend the ordinary recall period. An init
 composer can still insert `memory://journal/`; request-time discovery populates its
 descendants. Authorized operations always validate current storage, independently
 of the discovery observation and whether automatic capture is enabled.
+
+### `shared://`
+
+Shared items are the session's collaborative whiteboards and documents. Bare
+`shared://` lists them with `shared://library`. An item address is
+session-relative: `shared://ID` reads its overview of hashed element or block
+lines, and its parts are `view.png`, `comments`, `history`,
+`elements/ELEMENT` and `images/KEY`. `shared://library` lists element library
+items, `shared://library/NAME` one library, and `sheet.png` beneath either
+renders their numbered sheet. Item, element and image identities match
+`[a-zA-Z0-9_-]{1,80}`; any other shape is refused before execution, and an
+item missing from the session is unavailable.
+
+Preparation, authorization and availability are synchronous. The content is
+computed by the session's editing host, which answers asynchronously: the
+resolver returns a descriptor naming the components, and Read and Grep fetch
+the view through `mevedel-tool-editing-view` before paging or searching it.
+Text follows the ordinary virtual-text Read bounds; images are written to a
+private temporary copy and delivered through ordinary Read media handling.
+Grep accepts text views only. Writes go through `SharedEdit`, never through a
+resource address. [Shared editing](shared-editing.md) owns the view formats.
 
 ### `mcp://`
 

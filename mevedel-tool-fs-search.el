@@ -21,6 +21,17 @@
                   "mevedel-execution"
                   (callback name command read-paths writable-roots &rest keys))
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
+
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (session))
+(autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
+
+;; `mevedel-tool-editing'
+(declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback))
+(autoload 'mevedel-tool-editing-view "mevedel-tool-editing")
+
 ;; `mevedel-history-search'
 (declare-function mevedel-history-search-start
                   "mevedel-history-search" (callback args descriptor))
@@ -107,6 +118,47 @@ remote media conversion, this processes an already transferred copy locally."
        (funcall cleanup)
        (error "Could not search resource %s: %s" address
               (mevedel-resource-error-message err address (list directory)))))))
+
+(defun mevedel-tool-fs-search--shared (callback args descriptor operation)
+  "Grep the shared item text views DESCRIPTOR names with OPERATION and ARGS.
+A bare `shared://' searches every item's overview.  The editing host
+answers asynchronously, so the views are fetched first, one at a time, and
+then searched as virtual documents whose results CALLBACK receives."
+  (let* ((components (plist-get descriptor :shared-view))
+         (address (plist-get descriptor :address))
+         (views (cond
+                 ((null components)
+                  (mapcar (lambda (id) (cons id (list id)))
+                          (mevedel-shared-editing-ids mevedel--session)))
+                 ((or (equal (car (last components)) "view.png")
+                      (equal (car (last components)) "sheet.png")
+                      (equal (cadr components) "images"))
+                  (error "Grep searches text; %s is an image" address))
+                 (t (list (cons (car (last components)) components)))))
+         (documents nil)
+         (next nil))
+    (setq next
+          (mevedel-pipeline-handler-resumable
+           (lambda ()
+             (if (null views)
+                 (mevedel-tool-fs-search--documents
+                  callback args
+                  (list :resource-search-documents (nreverse documents) :address address)
+                  operation)
+               (pcase-let ((`(,name . ,parts) (pop views)))
+                 (mevedel-tool-editing-view
+                  parts
+                  (lambda (view)
+                    (if-let* ((message (plist-get view :error)))
+                        (funcall callback
+                                 (list :result (format "Error: Could not search %s: %s"
+                                                       address message)
+                                       :status 'error))
+                      (push (cons name (plist-get view :text)) documents)
+                      (funcall next)))))))))
+    (if views
+        (funcall next)
+      (funcall callback (list :result (format "No shared items to search under %s" address))))))
 
 (defun mevedel-tool-fs-search--visible-path (path)
   "Return PATH in the current search operation's visible domain."
@@ -558,6 +610,8 @@ results rewritten in the authored resource domain."
        (mevedel-history-search-start callback args path))
       ((and (listp path) (plist-member path :resource-search-documents))
        (mevedel-tool-fs-search--documents callback args path operation))
+      ((and (listp path) (plist-member path :shared-view))
+       (mevedel-tool-fs-search--shared callback args path operation))
       ((mevedel-tool-fs-search--resource-search-roots path)
        (let ((native-args (copy-sequence args))
              (mevedel-tool-fs-search--resource-address authored)

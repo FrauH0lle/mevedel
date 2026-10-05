@@ -532,7 +532,7 @@ test('editor interaction regressions', async (t) => {
       await page.evaluate(async () => {
         const read = await window.apply({action:'read'});
         const result = await window.apply({action:'patch', opId:'agent-delete',
-          changes:[{id:'a', before:read.content.find(s => s.id === 'a'), after:null}]});
+          changes:[{id:'a', hash:await window.contentHash(read.content.find(s => s.id === 'a')), after:null}]});
         window.port.postMessage({type:'changed', ...result});
       });
       await card.locator('.thread-status').getByText('Referenced objects were removed').waitFor();
@@ -597,8 +597,8 @@ test('editor interaction regressions', async (t) => {
       await page.evaluate(async () => {
         const bind = elementId => ({elementId, fixedPoint:[0.5, 0.5], mode:'orbit'});
         const reply = await window.apply({action:'patch',opId:'connect',changes:[
-          {id:'target',before:null,after:{id:'target',type:'rectangle',x:550,y:100,width:200,height:160}},
-          {id:'arrow',before:null,after:{id:'arrow',type:'arrow',x:250,y:180,width:400,height:0,
+          {id:'target',after:{id:'target',type:'rectangle',x:550,y:100,width:200,height:160}},
+          {id:'arrow',after:{id:'arrow',type:'arrow',x:250,y:180,width:400,height:0,
             points:[[0,0],[400,0]],startBinding:bind('ellipse'),endBinding:bind('target')}},
         ]});
         window.port.postMessage({type:'changed',...reply});
@@ -791,7 +791,7 @@ test('editor interaction regressions', async (t) => {
           const after = kind === 'whiteboard' ? {...before,strokeColor:'#e03131'} :
             {...before,content:[{type:'text',text:'Assistant text'}]};
           const result = await window.apply({action:'patch',opId:'timed-edit',changes:[{
-            id:kind === 'whiteboard' ? before.id : before.attrs.id,before,after,
+            id:kind === 'whiteboard' ? before.id : before.attrs.id,hash:await window.contentHash(before),after,
           }]});
           result.transactions[0].actor = 'Agent: /root';
           window.agentChange = {type:'changed',...result};
@@ -820,7 +820,7 @@ test('editor interaction regressions', async (t) => {
             const after = kind === 'whiteboard' ? {...before,strokeColor:actor.startsWith('Agent:') ? '#2f9e44' : '#1971c2'} :
               {...before,content:[{type:'text',text:actor}]};
             const result = await window.apply({action:'patch',opId:actor.startsWith('Agent:') ? 'renew-agent' : 'renew-human',changes:[{
-              id:kind === 'whiteboard' ? before.id : before.attrs.id,before,after,
+              id:kind === 'whiteboard' ? before.id : before.attrs.id,hash:await window.contentHash(before),after,
             }]});
             result.transactions[0].actor = actor;
             window.port.postMessage({type:'changed',...result});
@@ -844,7 +844,7 @@ test('editor interaction regressions', async (t) => {
             changes: [
               {
                 id: before.attrs.id,
-                before,
+                hash: await window.contentHash(before),
                 after: {
                   ...before,
                   content: [{ type: 'text', text: 'Assistant text' }],
@@ -1057,7 +1057,7 @@ test('editor interaction regressions', async (t) => {
       if (process.env.MEVEDEL_POLISH_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/shared-editing-polish/after/assistant-board.png',import.meta.url).pathname});
       await page.evaluate(async () => {
         const label = {id:'remote-label',type:'text',x:0,y:0,width:0,height:0,text:'Changed remotely',containerId:'ellipse'};
-        const reply = await window.apply({action:'patch',opId:'concurrent',changes:[{id:label.id,before:null,after:label}]});
+        const reply = await window.apply({action:'patch',opId:'concurrent',changes:[{id:label.id,after:label}]});
         window.port.postMessage({type:'changed',...reply});
       });
       await frame.locator('#question-send').click();

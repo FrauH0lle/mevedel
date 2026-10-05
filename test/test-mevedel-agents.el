@@ -251,14 +251,14 @@
                     "XrefDefinitions" "Skill" "TaskCreate"))
       (should (member tool tools))))
 
-  :doc "shared tools stay discoverable with edits limited to the worker"
+  :doc "shared editing stays discoverable to the worker; every role reads through Read"
   (dolist (name '("worker" "explorer" "reviewer" "verifier"))
     (let* ((resolved (mevedel-tool-resolve
                       (mevedel-agent--effective-specs (mevedel-agent-get name))))
            (active (mapcar #'mevedel-tool-name (plist-get resolved :active)))
            (catalog (mapcar #'mevedel-tool-name (plist-get resolved :discoverable))))
-      (should (member "SharedRead" catalog))
-      (dolist (tool '("SharedRead" "SharedCreate" "SharedEdit"))
+      (should (member "Read" active))
+      (dolist (tool '("SharedCreate" "SharedEdit"))
         (should-not (member tool active)))
       (dolist (tool '("SharedCreate" "SharedEdit"))
         (if (equal name "worker")

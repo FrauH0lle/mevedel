@@ -28,6 +28,8 @@ import { extent } from './scene.mjs';
 import { generateNKeysBetween } from 'fractional-indexing';
 import { escape } from './render.mjs';
 import { FONT_FILES } from './text.mjs';
+import { address, commentsView, contentHash, documentImages, element, historyView, line, nodeId,
+  nodesOf, overview, restoreImages } from './view.mjs';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const bytes = (text) => {
   check(
@@ -80,28 +82,98 @@ async function exportSVG(elements, files, background) {
 /* Image files a retained contribution can restore must survive pruning. */
 const retainedFiles = (transactions) => new Set(transactions.flatMap((tx) =>
   (tx.changes || []).flatMap((c) => [c.before?.fileId, c.after?.fileId]).filter(Boolean)));
-/* Items of LIBRARIES ({name, text}) as the model sees them: a listing of
-   references and a numbered PNG sheet of the first items. */
-async function librarySheet(libraries) {
+/* Items of LIBRARIES ({name, text}) as the model reads them at
+   shared://library[/NAME]: a listing of references, or a numbered PNG
+   sheet of the first items. */
+const SHEET_ITEMS = 60;
+async function libraryView(libraries, part, at) {
   check(Array.isArray(libraries) && libraries.length <= 100, 'Invalid libraries');
+  check(['list', 'sheet'].includes(part), 'Unknown library view');
   const items = libraries.flatMap(({ name, text }) => parseLibrary(text).map((item) => {
     const [, , width, height] = extent(item.elements);
     return { ref: `${name}/${item.id}`, name: item.name || '', library: name,
       elements: item.elements.length, size: [Math.round(width), Math.round(height)], item };
   }));
-  // ponytail: one sheet of 60 items; filter by library name to see the rest.
-  const shown = items.slice(0, 60), cell = [200, 170], columns = 6;
-  const cells = shown.map(({ item, name }, i) => {
+  if (part === 'list') {
+    if (!items.length) return { text: 'No library items.\n' };
+    return { text: `${items.length} library item${items.length === 1 ? '' : 's'}; insert one with SharedEdit insert and its ref. ` +
+      `The sheet ${at}/sheet.png numbers items 1-${Math.min(SHEET_ITEMS, items.length)}.\n` +
+      items.map(({ ref, name, library, elements, size }, i) =>
+        `${i + 1}. ${ref} · ${JSON.stringify(name)} · ${library} · ${elements} element${elements === 1 ? '' : 's'} · ${size[0]}×${size[1]}`).join('\n') + '\n' };
+  }
+  const sheet = items.slice(0, SHEET_ITEMS), cell = [200, 170], columns = 6;
+  const cells = sheet.map(({ item, name }, i) => {
     const [x, y] = [(i % columns) * cell[0], Math.floor(i / columns) * cell[1]];
     const art = boardSVG(item.elements, { maxEdge: 150, maxScale: 2 }).replace('<svg ', `<svg x="${x + 25}" y="${y + 5}" `);
     return `${art}<text x="${x + 100}" y="${y + 160}" text-anchor="middle" font-family="Noto Sans" font-size="13" fill="#1e1e1e">${i + 1}. ${escape(name.slice(0, 26))}</text>`;
   }).join('');
-  const width = cell[0] * Math.min(columns, Math.max(1, shown.length)), height = cell[1] * Math.max(1, Math.ceil(shown.length / columns));
-  return {
-    items: items.map(({ item, ...entry }, i) => ({ number: i + 1, ...entry })),
-    ...(items.length > shown.length ? { sheet: `The sheet shows items 1-${shown.length}; read fewer libraries to see others.` } : {}),
-    png: await png(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#ffffff"/>${cells}</svg>`),
-  };
+  const width = cell[0] * Math.min(columns, Math.max(1, sheet.length)), height = cell[1] * Math.max(1, Math.ceil(sheet.length / columns));
+  return { png: await png(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#ffffff"/>${cells}</svg>`),
+    mime: 'image/png' };
+}
+/* The model names each target by id and the hash it read. A change gives
+   `after` (null deletes; without a hash it adds), or `set` and `unset` to
+   change fields of an existing element or block. Stale targets fail
+   together with their current lines; unrelated edits are unaffected. */
+const CHANGE_FIELDS = ['id', 'hash', 'after', 'set', 'unset', 'afterId'];
+function resolveChanges(id, kind, content, changes) {
+  check(Array.isArray(changes) && changes.length > 0 && changes.length <= 200, 'Expected 1 to 200 changes');
+  const nodes = nodesOf(kind, content), images = kind === 'document' ? documentImages(content) : null;
+  const noun = kind === 'whiteboard' ? 'element' : 'block', stale = [], seen = new Set();
+  const resolved = changes.map((change) => {
+    check(change && typeof change === 'object' && identifier(change.id) && !seen.has(change.id),
+      'Each change needs a distinct id');
+    seen.add(change.id);
+    const unknown = Object.keys(change).find((key) => !CHANGE_FIELDS.includes(key));
+    check(!unknown, `Unknown change field ${String(unknown).slice(0, 40)}`);
+    const current = nodes.find((n) => nodeId(kind, n) === change.id) || null;
+    const hash = current && contentHash(current);
+    if ((change.hash ?? null) !== hash) {
+      stale.push({ id: change.id, hash, line: current && line(id, kind, current) });
+      return null;
+    }
+    const merge = Object.hasOwn(change, 'set') || Object.hasOwn(change, 'unset');
+    check(merge !== Object.hasOwn(change, 'after'), `${change.id}: give after, or set and unset`);
+    let after = change.after;
+    if (merge) {
+      check(current, `${change.id}: set and unset change an existing ${noun}`);
+      check(change.set === undefined || (change.set && typeof change.set === 'object' && !Array.isArray(change.set)),
+        `${change.id}: set is an object of fields`);
+      check(change.unset === undefined || (Array.isArray(change.unset) && change.unset.length <= 100 &&
+        change.unset.every((key) => typeof key === 'string')), `${change.id}: unset lists field names`);
+      after = { ...current, ...(change.set || {}) };
+      for (const key of change.unset || []) delete after[key];
+    }
+    check(after === null || (after && typeof after === 'object' && !Array.isArray(after)),
+      `${change.id}: after is an ${noun} object or null`);
+    if (after && kind === 'whiteboard') after = { id: change.id, ...after };
+    if (after && kind === 'document') after = restoreImages({ ...after, attrs: { ...after.attrs, id: after.attrs?.id ?? change.id } }, images);
+    return { id: change.id, before: current, after: after ?? null,
+      ...(Object.hasOwn(change, 'afterId') ? { afterId: change.afterId } : {}) };
+  });
+  if (stale.length)
+    throw Object.assign(new Error(`Stale ${stale.map((t) => t.id).join(', ')}; use the current lines below`), {
+      code: 'stale', targets: stale });
+  return resolved;
+}
+/* What an edit tells the model: the stored lines of everything it changed,
+   within a budget, then ids and hashes; the board PNG travels separately. */
+const RESULT_BUDGET = 24 * 1024;
+function modelResult(state, after, transaction, extra = {}) {
+  let budget = RESULT_BUDGET;
+  const changed = [], hashes = [];
+  for (const change of transaction?.changes || []) {
+    if (!change.after) continue;
+    const text = line(state.id, after.kind, change.after);
+    if (text.length <= budget) { changed.push(text); budget -= text.length; }
+    else hashes.push({ id: change.id, hash: contentHash(change.after) });
+  }
+  const deleted = (transaction?.changes || []).filter((c) => !c.after).map((c) => c.id);
+  return { id: state.id, kind: after.kind, title: after.title, revision: state.revision, address: address(state.id),
+    ...(after.background ? { background: after.background } : {}),
+    ...(transaction ? { contribution: transaction.id } : {}),
+    ...(changed.length ? { changed } : {}), ...(hashes.length ? { changedHashes: hashes } : {}),
+    ...(deleted.length ? { deleted } : {}), ...extra };
 }
 function differences(before, after) {
   const a = before.kind === 'whiteboard' ? before.content : before.content.content || [];
@@ -156,9 +228,9 @@ export async function handle(request) {
       doc.destroy();
     }
   }
-  if (action === 'library-sheet') return { result: await librarySheet(request.libraries) };
+  if (action === 'library-view') return { result: await libraryView(request.libraries, request.part, request.at) };
   check(
-    ['create', 'import', 'read', 'update', 'patch', 'insert', 'rename', 'background', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'rename', 'background', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -270,6 +342,31 @@ export async function handle(request) {
         },
       };
     }
+    if (action === 'view') {
+      const { part } = request;
+      const nodes = nodesOf(before.kind, before.content);
+      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.comments || []) } };
+      if (part === 'comments') return { result: { text: commentsView(state.id, readComments(doc, state.comments)) } };
+      if (part === 'history') return { result: { text: historyView(state) } };
+      if (part === 'element') {
+        const node = nodes.find((n) => nodeId(before.kind, n) === request.element);
+        check(node, `No ${before.kind === 'whiteboard' ? 'element' : 'block'} ${request.element}; Read ${address(state.id)} for current ids`);
+        return { result: { text: element(state.id, before.kind, node) } };
+      }
+      if (part === 'png') {
+        check(before.kind === 'whiteboard', `A document has no rendering; Read ${address(state.id)}`);
+        return { result: { png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background })), mime: 'image/png' } };
+      }
+      if (part === 'image') {
+        const file = before.kind === 'whiteboard' ? filesOf(doc)[request.image]
+          : { dataURL: documentImages(before.content).get(request.image) };
+        check(file?.dataURL, `No image ${request.image} in this ${before.kind}`);
+        const [, mime, data] = /^data:([^;]+);base64,(.*)$/s.exec(file.dataURL) || [];
+        check(data, 'Unsupported image encoding');
+        return { result: { png: data, mime } };
+      }
+      check(false, 'Unknown shared view');
+    }
     if (action === 'read') {
       const result = {
         id: state.id,
@@ -347,7 +444,8 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)) },
+        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)),
+          model: modelResult(state, before, null) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
     check(
@@ -387,7 +485,7 @@ export async function handle(request) {
     else if (action === 'insert') {
       check(before.kind === 'whiteboard', 'Library items insert into whiteboards');
       const item = parseLibrary(request.library).find((candidate) => candidate.id === request.item);
-      check(item, `No library item ${request.item}; list items with SharedRead library`);
+      check(item, `No library item ${request.item}; Read shared://library for current refs`);
       check([request.x, request.y].every((v) => Number.isFinite(v) && Math.abs(v) <= 1e6), 'insert needs x and y');
       const [, , width, height] = extent(item.elements);
       const top = before.content.filter((e) => e.index).at(-1)?.index ?? null;
@@ -413,7 +511,7 @@ export async function handle(request) {
       );
       doc.getMap('meta').set('title', request.title);
     } else if (action === 'patch' || action === 'revert') {
-      let changes = request.changes;
+      let changes = action === 'patch' ? resolveChanges(state.id, before.kind, before.content, request.changes) : null;
       let title, background;
       if (action === 'revert') {
         const tx = state.transactions.find((t) => t.id === request.transaction);
@@ -496,6 +594,9 @@ export async function handle(request) {
         transaction: changed ? transaction : null,
         ...(notes?.length ? { notes } : {}),
         ...(inserted ? { inserted: inserted.map((e) => e.id) } : {}),
+        model: modelResult(next, after, changed ? transaction : null, {
+          ...(notes?.length ? { notes } : {}),
+          ...(inserted ? { inserted: inserted.map((e) => e.id) } : {}) }),
       },
     };
   } finally {

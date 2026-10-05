@@ -287,41 +287,74 @@ context.
 
 ## Working with the assistant
 
-Shared tools are discoverable through ToolSearch/ToolCall. Their summaries name
-whiteboards and documents, and ToolSearch's `shared` key separates them from
-artifacts, so a requested whiteboard finds `SharedCreate`. Implementation and
-worker roles can read and edit; discussion, explorer, reviewer, and verifier
-roles can read.
+The model reads shared items with Read and Grep at `shared://` addresses and
+changes them with `SharedCreate` and `SharedEdit`. Every role has Read; the
+editing tools are discoverable through ToolSearch/ToolCall to implementation
+and worker roles. Their summaries name whiteboards and documents, and
+ToolSearch's `shared` key separates them from artifacts, so a requested
+whiteboard finds `SharedCreate`. The prompt's resource roster lists
+`shared://` once the session has an item.
 
-`SharedRead` lists items or reads one with stable shape/block IDs, a revision,
-structured content, and recent attributed transactions. `selection` narrows a
-read; `since` filters recent changes and reports when older history is no
-longer available. Whiteboard reads include a PNG from that same canonical
-snapshot. Models without supported image delivery get structured content and
-an explicit omitted-media note.
-Selected connectors retain their current bound geometry; endpoint objects
-accompany the selection as context.
+| Address | Read returns |
+| --- | --- |
+| `shared://` | the session's items with kind, title and revision, and `shared://library` |
+| `shared://ID` | a header with kind, title, revision and the related addresses, then one line per element in drawing order or per top-level block in document order |
+| `shared://ID/elements/ELEMENT` | one element or block in full, with each stroke point on its own line |
+| `shared://ID/view.png` | the board rendered, long edge at most 2048 px |
+| `shared://ID/images/KEY` | an embedded image: a board file by its `fileId`, a document image by the key its `src` shows |
+| `shared://ID/comments` | comments and their replies with anchor status and live quote |
+| `shared://ID/history` | retained contributions, newest first, with their changed ids |
+| `shared://library`, `shared://library/NAME` | element library items as `LIBRARY/ITEM-ID` references |
+| `shared://library[/NAME]/sheet.png` | a numbered sheet of the first 60 of those items |
 
-`SharedCreate` creates a named item. `SharedEdit` applies patches, renames,
-or targeted inverses. Board patches use Excalidraw elements with Excalidraw's
-field names; absent fields take Excalidraw's defaults, labels are text
-elements with a `containerId`, and connections are arrows with
-`startBinding`/`endBinding`. The derived Excalidraw fields `version`,
-`versionNonce`, `updated`, `isDeleted` and `boundElements` are refused. An
-image element must reference an existing file; the assistant cannot add image
-bytes. `SharedRead` with `library` lists the host's library items as
-`LIBRARY/ITEM-ID` references with a numbered PNG sheet of their appearance,
-optionally only for the libraries named in `selection`. `SharedEdit`'s
-`insert` places such an item with its top-left corner at `x`, `y` as new
-elements and returns their IDs, so the assistant can label or connect them. Whiteboard edits also return a PNG of the resulting
-canonical revision through the normal tool-media path, so the model can inspect
-the visual result without a separate read or a connected browser. A patch carries exact `before` values from a read and
-new `after` values; null adds or deletes. Documents target top-level blocks
-and may specify an `afterId` insertion anchor. Any stale target rejects the
-whole transaction with current target data. Unrelated changes do not
-invalidate an otherwise valid patch. Tools use normal permissions, Plan and
-read-only ceilings, cancellation, and result/media persistence. They work
-with every browser closed and never silently start a share.
+An overview line is `HASH JSON`: a 12-character content hash of the element or
+block, then its JSON. The hash is computed over sorted keys, so writers' key
+order does not matter. Lines stay within Read's 2,000-character cap: past
+1,800 characters a stroke's `points` and `pressures` become a count with the
+element's address. Document images appear as `shared://ID/images/KEY`, never as
+image data. Text pages through Read's ordinary `offset` and `limit` and its
+50 KiB output bound, so an item of any size can be read in parts. Grep searches
+the text views: an item's overview, comments or history, or every item's
+overview under bare `shared://`. Images go through Read's ordinary media
+delivery, so models without image support get its explicit refusal. Glob and
+ApplyPatch do not accept `shared://`. Views are computed by the session's
+editing host from committed state, without a browser.
+
+`SharedCreate` creates a named item and returns its address. `SharedEdit`
+applies patches, inserts library items, renames, sets a board's background,
+or reverts a contribution from `shared://ID/history`. A patch change is
+`{id, hash, set, unset, after, afterId}`:
+
+- `set` merges fields into the current element or block and `unset` removes
+  fields; the result is validated whole.
+- `after` replaces the element or block; `null` deletes it.
+- A new element or block gives `after` without a hash.
+- Document blocks may give an `afterId` insertion anchor, which may name a
+  block inserted earlier in the same patch; insertions sharing an anchor keep
+  patch order, each followed by those anchored to it. Their image `src`
+  values may keep the `shared://ID/images/KEY` form, which the host restores
+  to the image data.
+
+The host compares every given hash, or its absence, with the current target.
+Any mismatch rejects the whole patch and returns each stale target's current
+hash and line. Unrelated changes do not invalidate an otherwise valid patch.
+Board elements use Excalidraw's field names; absent fields take Excalidraw's
+defaults, labels are text elements with a `containerId`, and connections are
+arrows with `startBinding`/`endBinding`. The derived Excalidraw fields
+`version`, `versionNonce`, `updated`, `isDeleted` and `boundElements` are
+refused. An image element must reference an existing file; the assistant cannot
+add image bytes. `insert` places a library item with its top-left corner at
+`x`, `y` as new elements.
+
+An edit result names the item, its revision, address and contribution, the
+deleted ids, and the stored lines of the elements it changed, including
+derived changes such as a label's container growing. Past 24 KiB of lines,
+the rest are reported as ids and hashes. It does not repeat the board. Whiteboard
+edits also return a PNG of the resulting canonical revision through the normal
+tool-media path, so the model can inspect the visual result without a separate
+read or a connected browser. Tools use normal permissions, Plan and read-only
+ceilings, cancellation, and result/media persistence. They work with every
+browser closed and never silently start a share.
 
 ### Questions and comments
 

@@ -208,3 +208,23 @@ test('stored strokes keep 0.1 units and drop samples within one unit', () => {
   assert.equal(compactElement(shape), shape, 'shapes keep their geometry');
   doc.destroy();
 });
+
+test('a document patch can anchor insertions to blocks it inserts', async () => {
+  const { initializeDocument, patchDocument } = await import('../document.mjs');
+  const p = (id, text) => ({ type: 'paragraph', attrs: { id }, content: [{ type: 'text', text }] });
+  const doc = create('document', 'Chain');
+  initializeDocument(doc, { type: 'doc', content: [p('top', 'Top'), p('end', 'End')] });
+  patchDocument(doc, [
+    { id: 'one', before: null, after: p('one', 'One'), afterId: 'top' },
+    { id: 'two', before: null, after: p('two', 'Two'), afterId: 'one' },
+    { id: 'three', before: null, after: p('three', 'Three'), afterId: 'two' },
+    { id: 'side', before: null, after: p('side', 'Side'), afterId: 'one' },
+    { id: 'next', before: null, after: p('next', 'Next'), afterId: 'top' },
+  ]);
+  assert.deepEqual(inspect(doc).content.content.map((n) => n.attrs.id),
+    ['top', 'one', 'two', 'three', 'side', 'next', 'end']);
+  assert.throws(() => patchDocument(doc, [{ id: 'x', before: null, after: p('x', 'X'), afterId: 'later' },
+    { id: 'later', before: null, after: p('later', 'L') }]), /Stale insertion anchor/,
+    'an anchor must come earlier in the patch');
+  doc.destroy();
+});

@@ -374,6 +374,16 @@ History candidates include saved workspace, root and retained conversations."
                              (or (plist-get info :status) "unknown")))
                entries))))))))
 
+(defun mevedel-resource-capf--shared (tail metadata)
+  "Return `shared://' item candidates matching TAIL from METADATA."
+  (unless (string-search "/" tail)
+    (cl-loop for item in (cons (list :id "library" :title "Element libraries")
+                               (plist-get metadata :shared-items))
+             for id = (plist-get item :id)
+             when (string-prefix-p tail id)
+             collect (cons (concat "shared://" id)
+                           (format " [%s]" (plist-get item :title))))))
+
 (defun mevedel-resource-capf ()
   "Complete canonical resource addresses at point from bounded metadata."
   (let* ((end (point))
@@ -392,7 +402,7 @@ History candidates include saved workspace, root and retained conversations."
             (push (cons address (format " [%s] resource" scheme)) entries))))
       (mevedel-resource-capf--result start end (nreverse entries)))
      ((string-match
-       "\\`\\(work\\|artifact\\|skill\\|agent\\|history\\|memory\\|mcp\\|mevedel\\)://\\(.*\\)\\'"
+       "\\`\\(work\\|artifact\\|skill\\|agent\\|history\\|memory\\|mcp\\|shared\\|mevedel\\)://\\(.*\\)\\'"
        token)
       (let* ((scheme (intern (match-string 1 token)))
              (tail (match-string 2 token))
@@ -421,7 +431,8 @@ History candidates include saved workspace, root and retained conversations."
                 ('agent (mevedel-resource-capf--agents tail metadata))
                 ('history (mevedel-resource-capf--agents tail metadata t))
                 ('memory (mevedel-resource-capf--memory tail metadata))
-                ('mcp (mevedel-resource-capf--mcp tail metadata)))))
+                ('mcp (mevedel-resource-capf--mcp tail metadata))
+                ('shared (mevedel-resource-capf--shared tail metadata)))))
         (mevedel-resource-capf--result start end entries)))))
 
 (provide 'mevedel-resource-capf)

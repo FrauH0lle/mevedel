@@ -66,6 +66,10 @@
                   "mevedel-session-artifacts" (session logical
                                                   &optional committed-only))
 
+;; `mevedel-tool-editing'
+(declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback))
+(autoload 'mevedel-tool-editing-view "mevedel-tool-editing")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -1428,11 +1432,53 @@ content, not a read failure.\n</system-reminder>"
              address start-line
              (and line-truncated-p (+ start-line num-lines)))))))))
 
+(defun mevedel-tool-fs-read--shared (args descriptor address k)
+  "Read the shared item view DESCRIPTOR names at ADDRESS, then call K.
+The session's editing host answers asynchronously; K continues in the
+Read's own context, as a helper continuation does.  Text pages like other
+virtual text with ARGS, and an image goes through ordinary media delivery
+from a private copy the Read releases."
+  (let ((values (mapcar (lambda (symbol) (and (boundp symbol) (symbol-value symbol)))
+                        mevedel-tool-fs-read--continuation-variables)))
+    (mevedel-tool-editing-view
+     (plist-get descriptor :shared-view)
+     (mevedel-pipeline-handler-resumable
+      (lambda (view)
+        (cl-progv mevedel-tool-fs-read--continuation-variables values
+          (condition-case err
+              (cond
+               ((plist-get view :error)
+                (error "Cannot read %s: %s" address (plist-get view :error)))
+               ((plist-get view :text)
+                (funcall k (mevedel-tool-fs-read--virtual-text
+                            (plist-get view :text) args address)))
+               (t
+                (let ((file (make-temp-file
+                             "mevedel-shared-" nil
+                             (pcase (plist-get view :mime)
+                               ("image/jpeg" ".jpg") ("image/webp" ".webp") (_ ".png")))))
+                  (push (lambda () (delete-file file)) (car mevedel-tool-fs-read--cleanups))
+                  (let ((coding-system-for-write 'no-conversion))
+                    (with-temp-file file
+                      (set-buffer-multibyte nil)
+                      (insert (base64-decode-string (plist-get view :data)))))
+                  (let ((mevedel-tool-fs-read--resource-address address)
+                        (read-args (copy-sequence args)))
+                    (mevedel-tool-fs-read--file (plist-put read-args :file_path file) k)))))
+            (error
+             (if mevedel-tool-fs-read--fail
+                 (funcall mevedel-tool-fs-read--fail err)
+               (signal (car err) (cdr err)))))))))))
+
 (defun mevedel-tool-fs-read--resource-path (args path address k)
   "Read authorized PATH for ADDRESS with bounded Read ARGS, then call K."
-  (if (and (listp path) (plist-get path :virtual))
-      (funcall k (mevedel-tool-fs-read--virtual-text
-                  (plist-get path :result) args address))
+  (cond
+   ((and (listp path) (plist-member path :shared-view))
+    (mevedel-tool-fs-read--shared args path address k))
+   ((and (listp path) (plist-get path :virtual))
+    (funcall k (mevedel-tool-fs-read--virtual-text
+                (plist-get path :result) args address)))
+   (t
     (unless (and (stringp path) (file-exists-p path))
       (error "File not found: %s" address))
     (when (and (string-prefix-p "memory://" address)
@@ -1443,7 +1489,7 @@ content, not a read failure.\n</system-reminder>"
           (mevedel-tool-fs-read--resource-directory path address k)
         (let ((read-args (copy-sequence args)))
           (plist-put read-args :file_path path)
-          (mevedel-tool-fs-read--file read-args k))))))
+          (mevedel-tool-fs-read--file read-args k)))))))
 
 (defun mevedel-tool-fs-read (callback args)
   "Read ARGS and deliver a canonical handler envelope to CALLBACK.

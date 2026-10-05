@@ -340,7 +340,7 @@ characters so UTF-8 encoding never splits a character between writes."
             (condition-case err
                 (let* ((args (copy-sequence (plist-get job :args)))
                        (action (plist-get args :action))
-                       (mutation (not (member action '("read" "export" "list" "status" "library-sheet")))))
+                       (mutation (not (member action '("read" "view" "export" "list" "status" "library-view")))))
                   (when (plist-get job :cancelled) (error "Editing operation cancelled"))
                   (when-let* ((authorize (plist-get job :authorize)))
                     (unless (funcall authorize) (error "Editing authority ended")))
@@ -358,7 +358,7 @@ characters so UTF-8 encoding never splits a character between writes."
                     (mevedel-shared-editing--finish
                      buffer job (mevedel-shared-editing--delete session args)))
                    (t
-                    (unless (member action '("create" "import" "status" "library-sheet"))
+                    (unless (member action '("create" "import" "status" "library-view"))
                       (setq args (plist-put args :state
                                             (mevedel-shared-editing--read
                                              session (plist-get args :id)))))

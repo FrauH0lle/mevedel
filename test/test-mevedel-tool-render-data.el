@@ -602,7 +602,7 @@
   (skip-unless (fboundp 'gptel-make-openai-responses))
   (let ((backend (gptel-make-openai-responses
                   "mevedel-test-editing-images" :key nil :models '(gpt-test))))
-    (dolist (name '("SharedRead" "SharedEdit" "ToolCall"))
+    (dolist (name '("Read" "SharedEdit" "ToolCall"))
       (test-mevedel-tool-render-data--with-image "call_image"
         (plist-put tc :name name)
         (cl-letf (((symbol-function 'gptel--model-capable-p)

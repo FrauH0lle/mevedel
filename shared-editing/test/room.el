@@ -107,6 +107,25 @@
                                      (list :status "success"
                                            :result (mevedel-shared-editing--json (plist-get reply :result)))))
                                   nil (file-name-concat editing-test-root "reply.json") nil 'silent))))
+                ;; The test's own view of an item: its full state, which the
+                ;; model reads in parts through shared:// addresses instead.
+                ("ReadShared"
+                 (let ((id (plist-get (plist-get command :args) :id))
+                       (reply-file (file-name-concat editing-test-root "reply.json")))
+                   (if (not id)
+                       (write-region (mevedel-shared-editing--json
+                                      (list :status "success"
+                                            :result (mevedel-shared-editing--json
+                                                     (vconcat (mevedel-shared-editing-list editing-test-session)))))
+                                     nil reply-file nil 'silent)
+                     (mevedel-shared-editing-call
+                      editing-test-session (list :action "read" :id id)
+                      (lambda (reply)
+                        (write-region (mevedel-shared-editing--json
+                                       (if (plist-get reply :error) (list :status "error" :result (plist-get reply :error))
+                                         (list :status "success"
+                                               :result (mevedel-shared-editing--json (plist-get reply :result)))))
+                                      nil reply-file nil 'silent))))))
                 ("RestartHelper"
                  (mevedel-shared-editing-stop)
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))

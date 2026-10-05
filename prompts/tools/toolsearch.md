@@ -14,8 +14,9 @@ Useful search keys, subject to the current role and request:
 - `agents`: delegate independent work and coordinate retained agents.
 - `web`: web search and page retrieval.
 - `goal`: create, inspect, or finish a persistent session Goal.
-- `shared`: whiteboards and documents that people and agents edit together.
-  A requested whiteboard is one of these, not an artifact.
+- `shared`: create and edit whiteboards and documents that people and agents
+  edit together; Read `shared://` lists them. A requested whiteboard is one of
+  these, not an artifact.
 
 ### When NOT to use `ToolSearch`
 

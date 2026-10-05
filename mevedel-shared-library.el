@@ -165,7 +165,7 @@ items that carry none."
   (or (plist-get (cl-find library (mevedel-shared-library-libraries)
                           :key (lambda (l) (plist-get l :name)) :test #'equal)
                  :text)
-      (error "No library %s; list items with SharedRead :library t" library)))
+      (error "No library %s; Read shared://library for installed libraries" library)))
 
 (defun mevedel-shared-library--fetch (path parse callback)
   "Fetch PATH below the catalog URL, PARSE its body, then call CALLBACK.

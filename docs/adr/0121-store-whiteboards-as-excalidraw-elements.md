@@ -70,8 +70,9 @@ board was not a pain point; only the data layer and its drawing changed.
   catalog from libraries.excalidraw.com because the editor's sandbox has no
   network access; it fetches only that catalog's library files. Items stay
   opaque JSON in Emacs; inserting one validates it like any other edit.
-- **The model inserts library items by reference.** `SharedRead` lists items
-  as `LIBRARY/ITEM-ID` with a numbered PNG sheet, and `SharedEdit` `insert`
+- **The model inserts library items by reference.** Reading
+  `shared://library` lists items as `LIBRARY/ITEM-ID`, its `sheet.png` shows
+  them numbered, and `SharedEdit` `insert`
   places one with fresh identities in the helper. Copying an item's elements
   into a patch would make the model handle ids, groups and bindings that the
   editor's insertion already remaps.

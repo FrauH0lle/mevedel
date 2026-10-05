@@ -208,7 +208,8 @@ export function patchDocument(doc, changes) {
   const root = doc.getXmlFragment('document'),
     before = documentJSON(doc);
   const nodes = before.content || [],
-    ids = new Set();
+    ids = new Set(),
+    inserted = new Map();
   const plans = changes.map((change) => {
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(change.id) || ids.has(change.id))
       throw new Error('Invalid or duplicate block target');
@@ -232,24 +233,34 @@ export function patchDocument(doc, changes) {
         temp.destroy();
       }
     }
-    let position = index;
+    let position = index, anchor = null;
     if (index < 0) {
-      position = change.afterId
+      // A block this patch inserts earlier can anchor the next one.
+      anchor = change.afterId ? inserted.get(change.afterId) || null : null;
+      position = anchor ? anchor.position : change.afterId
         ? nodes.findIndex((n) => n.attrs?.id === change.afterId) + 1
         : Object.hasOwn(change, 'afterId')
           ? 0
           : nodes.length;
-      if (change.afterId && position === 0) throw new Error('Stale insertion anchor');
+      if (change.afterId && !anchor && position === 0) throw new Error('Stale insertion anchor');
     }
-    return { index, position, replacement, json: change.after };
+    const plan = { index, position, anchor, replacement, json: change.after };
+    if (index < 0 && replacement) inserted.set(change.id, plan);
+    return plan;
   });
+  // Each insertion follows its anchor, and insertions sharing one keep patch order.
+  const children = new Map();
+  for (const plan of plans)
+    if (plan.anchor) children.set(plan.anchor, [...(children.get(plan.anchor) || []), plan]);
+  const following = (list) => list.flatMap((plan) => [plan, ...following(children.get(plan) || [])]);
   const groups = new Map();
   for (const plan of plans) {
     if (!groups.has(plan.position)) groups.set(plan.position, { insert: [], replace: null });
     const group = groups.get(plan.position);
     if (plan.index >= 0) group.replace = plan;
-    else if (plan.replacement) group.insert.push(plan);
+    else if (plan.replacement && !plan.anchor) group.insert.push(plan);
   }
+  for (const group of groups.values()) group.insert = following(group.insert);
   const projected = [];
   for (let i = 0; i <= nodes.length; i++) {
     const group = groups.get(i);

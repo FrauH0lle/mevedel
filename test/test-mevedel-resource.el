@@ -316,6 +316,52 @@
       (delete-directory save-path t)
       (delete-directory outside t))))
 
+(mevedel-deftest mevedel-resource--shared-shape-p ()
+  ,test
+  (test)
+  :doc "names items, their parts and element libraries, and nothing else"
+  (dolist (components '(nil ("library") ("library" "Weather") ("library" "Weather" "sheet.png")
+                        ("board") ("board" "view.png") ("board" "comments") ("board" "history")
+                        ("board" "elements" "api") ("board" "images" "img-0123456789ab")))
+    (should (mevedel-resource--shared-shape-p components)))
+  (dolist (components '(("board" "nope") ("board" "elements") ("board" "elements" "a" "b")
+                        ("bad id") ("board" "elements" "bad.id")))
+    (should-not (mevedel-resource--shared-shape-p components))))
+
+(mevedel-deftest mevedel-resource-prepare-shared ()
+  ,test
+  (test)
+  :doc "reads items and libraries, greps text, and refuses missing items and other operations"
+  (let* ((save-path (make-temp-file "mevedel-resource-shared-" t))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (context (list :session session))
+         (execute (lambda (operation address)
+                    (mevedel-resource-execute
+                     (mevedel-resource-prepare operation address context)))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-shared-editing-ids) (lambda (_) '("board")))
+                  ((symbol-function 'mevedel-shared-editing-list)
+                   (lambda (_) (list (list :id "board" :kind "whiteboard" :title "Plan" :revision 4)))))
+          (should (equal "shared://board\twhiteboard \"Plan\" · revision 4\nshared://library\tWhiteboard element libraries for SharedEdit insert"
+                         (plist-get (funcall execute 'read "shared://") :result)))
+          (should (equal '("board" "elements" "api")
+                         (plist-get (funcall execute 'read "shared://board/elements/api") :shared-view)))
+          (should (equal '("board")
+                         (plist-get (funcall execute 'grep "shared://board") :shared-view)))
+          (should (equal '("library")
+                         (plist-get (funcall execute 'read "shared://library") :shared-view)))
+          (should (eq 'session-relative
+                      (plist-get (mevedel-resource-parse-address "shared://board") :locator-class)))
+          (should (string-search "Shared item not found"
+                                 (cadr (should-error (funcall execute 'read "shared://gone")))))
+          (should (string-search "Unknown shared:// address"
+                                 (cadr (should-error (mevedel-resource-prepare 'read "shared://board/nope" context)))))
+          (should (string-search "Glob does not support shared://"
+                                 (cadr (should-error (mevedel-resource-prepare 'glob "shared://board" context)))))
+          (should (string-search "ApplyPatch does not support shared://"
+                                 (cadr (should-error (mevedel-resource-prepare 'apply-patch "shared://board" context))))))
+      (delete-directory save-path t))))
+
 (mevedel-deftest mevedel-resource-artifact-address ()
   ,test
   (test)

@@ -3,6 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
 import {chromium,firefox} from 'playwright';
 import {handle} from '../host.mjs';
+import {contentHash} from '../view.mjs';
 
 // Packaged iframe and its real host API, connected over the native item port.
 /* An in-memory stand-in for mevedel-shared-library: the personal, installed
@@ -77,6 +78,8 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
           : undefined),
     });
     let state = created.state;
+    // Agent edits name their targets by the hash the model reads.
+    await page.exposeFunction('contentHash', contentHash);
     await page.exposeFunction('apply', async (args) => {
       // Emacs owns the element library; this stands in for mevedel-shared-library.
       if (args.action.startsWith('library')) return library(args);
