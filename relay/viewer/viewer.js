@@ -1298,6 +1298,13 @@
       transport.connect();
     });
   }
+  // A share link differs from this page's only in its fragment, which
+  // the browser treats as an in-page jump, so opening another link in
+  // this tab -- from the address bar, outside, or the lobby -- reloads
+  // to join the room it names. The wipe above fires no hashchange.
+  window.addEventListener('hashchange', () => {
+    if (parseFragment(window.location.hash)) window.location.reload();
+  });
 
   window.mevedelViewer = Object.freeze({
     parseFragment, atLiveEdge, base64urlDecode, base64urlEncode, addFiles,

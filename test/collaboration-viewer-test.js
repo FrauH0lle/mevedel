@@ -825,6 +825,21 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
 
+  // Opening another room's link in this tab only changes the fragment;
+  // the page reloads to join it, but ignores a fragment that is no link.
+  let reloads = 0;
+  window.location.reload = () => { reloads++; };
+  const openedHash = window.location.hash;
+  const hashChange = hash => {
+    window.location.hash = hash;
+    for (const listener of window.listeners.hashchange) listener();
+  };
+  hashChange('#not-a-share-link');
+  assert.equal(reloads, 0);
+  hashChange(`#otherroomotherro.${base64url(keyBytes)}`);
+  assert.equal(reloads, 1);
+  window.location.hash = openedHash;
+
   // Link grammar: view links carry the bare key, full links append the
   // write token, anything else is rejected.
   const api = context.window.mevedelViewer;
