@@ -182,7 +182,12 @@ adds a bend to drag. An elbow arrow leaves and enters its bound shapes at the
 facing side and runs in horizontal and vertical segments between them,
 rerouted as the shapes move. The route does not avoid other shapes.
 Freehand drawing records a pen's pressure for every sample the browser
-reports; mouse and touch strokes simulate pressure from their speed. Elements imported with other Excalidraw values, such as
+reports; mouse and touch strokes simulate pressure from their speed. Stored
+line, arrow and stroke points keep 0.1 board units, and a freehand stroke drops
+samples within one unit of the last one it keeps, retaining its first and last.
+Pointer input repeats and jitters, and every sample costs storage, sync and
+model context. Elements stored before this rule keep their points until next
+written. Elements imported with other Excalidraw values, such as
 the cardinality arrowheads, keep and draw them.
 **Objects** exposes Select all, Clear selection, Edit text, Duplicate
 (Ctrl/Command+D), Group (Ctrl/Command+G), Ungroup (Ctrl/Command+Shift+G), Lock,

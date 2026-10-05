@@ -233,8 +233,30 @@ export function validate(doc) {
   } else check(doc.getXmlFragment('document').length === 0, 'Text document cannot enter a board');
   check(encode(doc).length <= LIMIT, 'Shared content is too large');
 }
+/* Stored strokes keep 0.1 board units, finer than any zoom shows, and a
+   freehand stroke drops samples within one unit of the last one kept:
+   pointer input repeats and jitters, and each sample costs storage, sync
+   and model context. A stroke keeps its first and last samples. */
+export function compactElement(element) {
+  if (!Array.isArray(element.points)) return element;
+  const round = (v, scale) => Math.round(v * scale) / scale || 0;
+  let points = element.points.map(([x, y]) => [round(x, 10), round(y, 10)]);
+  let pressures = element.pressures;
+  if (element.type === 'freedraw' && points.length > 2) {
+    const keep = [0];
+    for (let i = 1; i < points.length - 1; i++) {
+      const [x, y] = points[i], [px, py] = points[keep.at(-1)];
+      if (Math.hypot(x - px, y - py) >= 1) keep.push(i);
+    }
+    keep.push(points.length - 1);
+    if (pressures?.length === points.length) pressures = keep.map((i) => pressures[i]);
+    points = keep.map((i) => points[i]);
+  }
+  return { ...element, points, ...(pressures ? { pressures: pressures.map((p) => round(p, 1000)) } : {}) };
+}
 export function putElement(doc, element) {
   validateElement(element);
+  element = compactElement(element);
   const geometry = {}, properties = {};
   for (const [key, value] of Object.entries(element))
     (GEOMETRY.includes(key) ? geometry : properties)[key] = value;
