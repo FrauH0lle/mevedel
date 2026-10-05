@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { create, restore, encode, inspect, applyUpdate, patch, putElement, putFile, pruneFiles, filesOf } from '../model.mjs';
+import { create, restore, encode, inspect, applyUpdate, patch, putElement, putFile, pruneFiles, filesOf, compactElement } from '../model.mjs';
 import * as Y from 'yjs';
 const rect = (id, x, extra = {}) => ({ id, type: 'rectangle', x, y: 0, width: 100, height: 60, ...extra });
 
@@ -188,5 +188,23 @@ test('image files are validated, shared by reference and pruned when unreference
   assert.deepEqual(Object.keys(filesOf(doc)), ['f1'], 'retained history can keep a file');
   pruneFiles(doc);
   assert.deepEqual(filesOf(doc), {});
+  doc.destroy();
+});
+
+test('stored strokes keep 0.1 units and drop samples within one unit', () => {
+  const doc = create('whiteboard', 'Strokes');
+  putElement(doc, { id: 'pen', type: 'freedraw', x: 0, y: 0, width: 10, height: 0,
+    points: [[0, 0], [0.04, 0.03], [0.5, 0.2], [1.26, 0.01], [1.3, 0], [3.333333, 0.0001], [3.4, 0]],
+    pressures: [0.1, 0.2, 0.3, 0.41234, 0.5, 0.6, 0.7] });
+  putElement(doc, { id: 'bend', type: 'line', x: 0, y: 0, width: 10, height: 10,
+    points: [[0, 0], [0.04, 0.04], [9.99999, 10.00001]] });
+  const [bend, pen] = inspect(doc).content;
+  // The first and last samples stay, with every sample at least a unit apart.
+  assert.deepEqual(pen.points, [[0, 0], [1.3, 0], [3.3, 0], [3.4, 0]]);
+  assert.deepEqual(pen.pressures, [0.1, 0.412, 0.6, 0.7]);
+  // A line's points are its vertices: rounded, never dropped.
+  assert.deepEqual(bend.points, [[0, 0], [0, 0], [10, 10]]);
+  const shape = { id: 'box', type: 'rectangle', x: 0.123456, y: 0, width: 1, height: 1 };
+  assert.equal(compactElement(shape), shape, 'shapes keep their geometry');
   doc.destroy();
 });
