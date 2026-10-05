@@ -764,7 +764,9 @@ test(
             caretBottom: caret.bottom,
           };
         });
-      assert.ok(geometry.height >= 150, JSON.stringify(geometry));
+      // The editor chrome's height follows the system font's line height, so
+      // the room left for text is held to a margin rather than a font's pixel.
+      assert.ok(geometry.height >= 140, JSON.stringify(geometry));
       assert.ok(
         geometry.caretTop >= geometry.top && geometry.caretBottom <= geometry.bottom,
         JSON.stringify(geometry),
