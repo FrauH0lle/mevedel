@@ -36,16 +36,17 @@
 .viewer-panel[hidden] { display: none; }
 /* A panel covers the dock, but not a decision the session is waiting on:
    an item's own conversation runs turns that ask too. While a panel is
-   open the dock rises above it with only its pending interactions, and
-   lets every other pointer through to the panel. */
+   open the dock rises above it with only its pending interactions and
+   sheets, and lets every other pointer through to the panel. */
 body:has(.viewer-panel:not([hidden])) .dock {
   z-index: 31;
   background: none;
   pointer-events: none;
 }
-body:has(.viewer-panel:not([hidden])) .dock > :not(#requests, #editing-panel) {
+body:has(.viewer-panel:not([hidden])) .dock > :not(#requests, #editing-panel, dialog) {
   display: none;
 }
+body:has(.viewer-panel:not([hidden])) .dock > dialog { pointer-events: auto; }
 body:has(.viewer-panel:not([hidden])) #requests {
   position: relative;
   z-index: 31;

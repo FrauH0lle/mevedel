@@ -71,6 +71,11 @@ test('a pending interaction rises above every open panel', async () => {
       assert.equal(await reachable(page, '#card button'), true, `card over ${panel}`);
       // The rest of the dock stays under the panel.
       assert.equal(await reachable(page, '#composer'), false, `composer under ${panel}`);
+      // A sheet the panel opens, such as deleting its item, shows over it.
+      await page.evaluate(() => document.getElementById('delete-shared').showModal());
+      assert.equal(await reachable(page, '#delete-shared button[value="delete"]'), true,
+                   `delete sheet over ${panel}`);
+      await page.evaluate(() => document.getElementById('delete-shared').close());
       await page.evaluate(id => { document.getElementById(id).hidden = true; }, panel);
       assert.equal(await reachable(page, '#composer'), true, 'the room returns');
       assert.equal(await reachable(page, '#card button'), true, 'card in the room');
