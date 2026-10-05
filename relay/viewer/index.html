@@ -46,12 +46,15 @@
     <section id="lobby" class="lobby" aria-labelledby="lobby-title" hidden>
       <div class="lobby-head">
         <h2 id="lobby-title">Sessions</h2>
-        <button id="lobby-refresh" class="btn quiet" type="button">Refresh</button>
-        <button id="lobby-new" class="btn" type="button" hidden><span aria-hidden="true">＋</span> New session</button>
-      </div>
-      <div id="lobby-tabs" class="lobby-tabs" role="tablist" aria-label="Project" hidden>
-        <button id="lobby-tab-sessions" class="lobby-tab" type="button" role="tab" aria-selected="true" aria-controls="lobby-sessions">Sessions</button>
-        <button id="lobby-tab-files" class="lobby-tab" type="button" role="tab" aria-selected="false" aria-controls="lobby-files">Files</button>
+        <div id="lobby-tabs" class="lobby-tabs" role="tablist" aria-label="Project" hidden>
+          <button id="lobby-tab-sessions" class="lobby-tab" type="button" role="tab" aria-selected="true" aria-controls="lobby-sessions">Sessions</button>
+          <button id="lobby-tab-files" class="lobby-tab" type="button" role="tab" aria-selected="false" aria-controls="lobby-files">Files</button>
+        </div>
+        <div class="lobby-actions">
+          <button id="lobby-refresh" class="btn quiet" type="button">Refresh</button>
+          <button id="lobby-new" class="btn" type="button" hidden><span aria-hidden="true">＋</span> New session</button>
+          <button id="files-upload" class="btn" type="button" hidden title="Add files to this folder — or drop them here">Upload</button>
+        </div>
       </div>
       <div id="lobby-sessions" role="tabpanel" aria-labelledby="lobby-tab-sessions">
         <p id="lobby-empty" class="lobby-empty" hidden>No sessions in this project yet.</p>
@@ -59,11 +62,8 @@
         <p id="lobby-omitted" class="lobby-empty" hidden></p>
       </div>
       <div id="lobby-files" class="lobby-files" role="tabpanel" aria-labelledby="lobby-tab-files" hidden>
-        <div class="files-head">
-          <nav id="files-path" class="files-path" aria-label="Folder"></nav>
-          <button id="files-upload" class="btn" type="button" title="Add files to this folder — or drop them here">Upload</button>
-          <input id="files-input" type="file" multiple hidden>
-        </div>
+        <nav id="files-path" class="files-path" aria-label="Folder" hidden></nav>
+        <input id="files-input" type="file" multiple hidden>
         <p id="files-status" class="lobby-empty" role="status" hidden></p>
         <ul id="files-list" class="lobby-list"></ul>
       </div>

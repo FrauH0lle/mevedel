@@ -12,7 +12,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
              'lobby-title', 'lobby-new', 'lobby-refresh', 'lobby-tabs',
              'lobby-tab-sessions', 'lobby-tab-files', 'lobby-sessions',
-             'lobby-files'];
+             'lobby-files', 'files-upload'];
 
 function build({writable = true, owner = false, withFiles = false} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
@@ -39,7 +39,7 @@ function build({writable = true, owner = false, withFiles = false} = {}) {
   const newSession = [];
   const filesCalls = [];
   const files = withFiles ? {
-    show: project => filesCalls.push(['show', project]),
+    show: () => filesCalls.push(['show']),
     refresh: () => filesCalls.push(['refresh']),
   } : null;
   const lobby = window.mevedelLobbyView.create({
@@ -83,7 +83,8 @@ function openButton(nodes, index) {
   assert.equal(lobby.active(), true);
   assert.equal(body.dataset.lobby, '');
   assert.equal(nodes.lobby.hidden, false);
-  assert.equal(textOf(nodes['lobby-title']), 'mevedel sessions');
+  // The header names the project; the heading names only the list.
+  assert.equal(textOf(nodes['lobby-title']), 'Sessions');
   assert.equal(document.title, 'mevedel · mevedel');
   assert.deepEqual(remembered, ['Lobby · mevedel']);
   const rows = nodes['lobby-list'].children.map(row => textOf(row.children[0]));
@@ -213,13 +214,15 @@ function openButton(nodes, index) {
   assert.equal(nodes['lobby-tabs'].hidden, false);
   assert.equal(nodes['lobby-new'].hidden, false);
   nodes['lobby-tab-files'].dispatch('click');
-  assert.deepEqual(filesCalls, [['show', 'mevedel']]);
+  assert.deepEqual(filesCalls, [['show']]);
   assert.equal(nodes['lobby-sessions'].hidden, true);
   assert.equal(nodes['lobby-files'].hidden, false);
   assert.equal(nodes['lobby-tab-files'].attributes['aria-selected'], 'true');
-  assert.equal(textOf(nodes['lobby-title']), 'mevedel files');
-  // New sessions belong to the session list.
+  assert.equal(textOf(nodes['lobby-title']), 'Files');
+  // Each tab shows only its own action: new sessions belong to the
+  // session list, uploads to the files.
   assert.equal(nodes['lobby-new'].hidden, true);
+  assert.equal(nodes['files-upload'].hidden, false);
   // Refresh and a return to the foreground reload the tab on screen.
   nodes['lobby-refresh'].dispatch('click');
   document.listeners.visibilitychange.forEach(f => f());
@@ -227,7 +230,9 @@ function openButton(nodes, index) {
   assert.deepEqual(sent, []);
   nodes['lobby-tab-sessions'].dispatch('click');
   assert.equal(nodes['lobby-files'].hidden, true);
-  assert.equal(textOf(nodes['lobby-title']), 'mevedel sessions');
+  assert.equal(textOf(nodes['lobby-title']), 'Sessions');
+  assert.equal(nodes['lobby-new'].hidden, false);
+  assert.equal(nodes['files-upload'].hidden, true);
   nodes['lobby-refresh'].dispatch('click');
   assert.deepEqual(plain(sent), [{t: 'lobby-refresh'}]);
 }
