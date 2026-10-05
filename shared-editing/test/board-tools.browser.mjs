@@ -365,4 +365,32 @@ test('board tools', async (t) => {
       `pressure follows the pen: ${stroke.pressures}`);
     await page.close();
   });
+
+  await t.test('scrolling pans the board; Ctrl scroll zooms at the pointer', async () => {
+    const {page, frame} = await open({content:[{id:'a', type:'rectangle', x:0, y:0, width:100, height:60}]});
+    const zoom = () => frame.locator('#board-zoom').innerText();
+    const before = await zoom();
+    const [x, y] = await at(page, frame, 50, 30);
+    await page.mouse.move(x, y);
+    await page.mouse.wheel(0, 120);
+    await until(async () => Math.abs((await at(page, frame, 50, 30))[1] - (y - 120)) < 1);
+    assert.equal((await at(page, frame, 50, 30))[0], x);
+    assert.equal(await zoom(), before, 'a plain scroll keeps the zoom');
+    await page.keyboard.down('Shift');
+    await page.mouse.wheel(0, 80);
+    await page.keyboard.up('Shift');
+    await until(async () => Math.abs((await at(page, frame, 50, 30))[0] - (x - 80)) < 1);
+    const [px, py] = await at(page, frame, 50, 30);
+    assert.ok(Math.abs(py - (y - 120)) < 1, 'Shift scrolls sideways only');
+    // Zooming keeps the board point under the pointer in place.
+    await page.mouse.move(px, py);
+    await page.keyboard.down('Control');
+    await page.mouse.wheel(0, -100);
+    await page.keyboard.up('Control');
+    await until(async () => (await zoom()) !== before);
+    assert.ok(parseInt(await zoom()) > parseInt(before), `zoomed in: ${before} → ${await zoom()}`);
+    const [zx, zy] = await at(page, frame, 50, 30);
+    assert.ok(Math.abs(zx - px) < 1 && Math.abs(zy - py) < 1, 'the pointer keeps its board point');
+    await page.close();
+  });
 });

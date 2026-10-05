@@ -190,8 +190,10 @@ cannot be selected, moved or erased until **Unlock all**. Duplicates and
 copies keep the bindings and labels among themselves and drop the others.
 **Shortcuts** lists the canvas keys. Selection handles retain their screen
 size as the view changes.
-Wheel zoom, zoom buttons, Fit, and the percentage button (reset to 100%) affect
-only the local viewport. The board fits existing objects once on opening.
+Scrolling pans the board, and Shift turns a mouse wheel sideways;
+Ctrl/Command+scroll and a trackpad pinch zoom at the pointer, in proportion to
+the scroll. Panning, zooming, the zoom buttons, Fit, and the percentage button
+(reset to 100%) affect only the local viewport. The board fits existing objects once on opening.
 Both whiteboards and documents accept PNG, JPEG, and WebP through the board's
 image button or **Insert → Image…**, clipboard paste, or file drag-and-drop. Dropped images land at the board pointer or document insertion
 position; multiple files insert together and support Undo/Redo. Images are
