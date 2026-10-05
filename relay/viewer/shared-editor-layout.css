@@ -137,7 +137,6 @@ body.editor .conversation-empty,body.editor #comments-empty { font-size:14px; li
 body.editor #selection-actions.document-selection-actions { border-radius:4px; padding:6px; gap:6px; }
 body.editor #selection-actions button { font-size:13px; }
 /* Canvas colors are authored content; only its surrounding controls follow dark mode. */
-body.editor #board { padding:24px 0 48px; }
 body.editor #tools,body.editor.assistant-open #tools { position:relative; top:auto; left:auto; right:auto; flex:none; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:12px; padding:8px 24px; background:var(--surface); border-bottom:1px solid var(--line); }
 body.editor .drawing-tools { border:0; border-radius:0; padding:0; max-width:none; overflow:visible; box-shadow:none; gap:2px; flex-wrap:wrap; justify-content:center; }
 body.editor .drawing-tools button { width:40px; height:40px; }
@@ -236,7 +235,6 @@ body.editor[data-kind="whiteboard"].assistant-open .drawing-tools { grid-column:
   body.editor .drawing-tools button { width:40px; height:40px; }
   .drawing-tools .tool-group-start { margin-left:0; }
   .drawing-tools .tool-group-start::before { display:none; }
-  body.editor #board { padding:12px 0 48px; }
   body.editor .zoom-tools { left:10px; bottom:60px; }
   body.editor #properties .menu-body,.board-menu .editor-menu { max-height:calc(100dvh - 220px); }
   .shortcut-columns { grid-template-columns:1fr; gap:24px; }

@@ -495,12 +495,20 @@ function drawCommentMarkers(scene, scale) {
   if (!peek.hidden && ![...$('comment-markers').children].some((m) => m.dataset.commentId === peek.dataset.commentId))
     peek.hidden = true;
 }
+/* Show board BOX whole, clear of the zoom control floating over the canvas foot. */
+function frame(box) {
+  const c = $('canvas').getBoundingClientRect(), zoom = document.querySelector('.zoom-tools')?.getBoundingClientRect();
+  const room = c.height - (zoom ? Math.max(0, c.bottom - zoom.top) : 0);
+  if (!c.width || room <= 0) { view = box; return; }
+  const [x, y, w, h] = box, scale = Math.min(c.width / w, room / h);
+  view = [x - (c.width / scale - w) / 2, y - (room / scale - h) / 2, c.width / scale, c.height / scale];
+}
 function revealObjects(comment) {
   const scene = currentScene(), box = commentAnchor(comment, scene);
   if (!box) throw new Error('The commented objects were removed');
   selected = new Set(shapeList().filter((s) => comment.selection?.includes(s.id)).map((s) => s.id));
   selectionRegion = comment.region || null;
-  view = [box[0] - 30, box[1] - 30, Math.max(100, box[2] + 60), Math.max(100, box[3] + 60)];
+  frame([box[0] - 30, box[1] - 30, Math.max(100, box[2] + 60), Math.max(100, box[3] + 60)]);
   selectTool('select');
 }
 function regionSVG(region, active) {
@@ -1516,7 +1524,7 @@ function board() {
     view = [view[0] + view[2] * (1 - factor) / 2, view[1] + view[3] * (1 - factor) / 2, next, view[3] * factor];
     draw();
   };
-  button(zoom, 'Fit', () => { view = bounds(shapeList(), currentScene()); draw(); }).title = 'Fit all objects';
+  button(zoom, 'Fit', () => { frame(bounds(shapeList(), currentScene())); draw(); }).title = 'Fit all objects';
   button(zoom, '−', () => zoomBy(1.2)).setAttribute('aria-label', 'Zoom out');
   const percentage = button(zoom, '100%', () => zoomBy(canvas.getScreenCTM()?.a || 1));
   percentage.id = 'board-zoom'; percentage.title = 'Reset zoom to 100%'; percentage.setAttribute('aria-label', 'Reset zoom to 100%');
@@ -2407,7 +2415,7 @@ async function start(event) {
     if (assistant.draft.attachment) assistant.toggle(true);
     else assistant.begin('whole');
     document.activeElement?.blur();
-  } else if (!editor) requestAnimationFrame(() => { view = bounds(shapeList()); draw(); });
+  } else if (!editor) requestAnimationFrame(() => { frame(bounds(shapeList())); draw(); });
   setComments(item.comments || []);
   $('comment-selection').hidden = readOnly;
   $('selection-question').hidden = readOnly;
