@@ -24,7 +24,8 @@
     window.location.reload();
   }
 
-  function create({state, send, el, notice, sessions, files = null, navigate = follow}) {
+  function create({state, send, el, notice, sessions, files = null, navigate = follow,
+                   confirm = text => window.confirm(text)}) {
     const section = document.getElementById('lobby');
     const tabs = document.getElementById('lobby-tabs');
     const sessionsTab = document.getElementById('lobby-tab-sessions');
@@ -43,6 +44,7 @@
     let tab = 'sessions';
     let requestSequence = 0;
     const opening = new Map();
+    const deleting = new Map();
 
     // The header already names the project, and the tabs, when shown,
     // stand in for this heading on screen; it labels the section for
@@ -78,6 +80,15 @@
       send({t: 'open-session', reqId, id: row.id});
     }
 
+    function remove(row, button) {
+      const name = row.name || 'Untitled';
+      if (!confirm(`Delete ${name}? Its saved conversation is gone for good.`)) return;
+      const reqId = ++requestSequence;
+      deleting.set(reqId, button);
+      button.disabled = true;
+      send({t: 'delete-session', reqId, id: row.id});
+    }
+
     function renderRow(row) {
       const item = el('li', 'lobby-row');
       const main = el('div', 'lobby-main');
@@ -93,6 +104,13 @@
         button.type = 'button';
         button.setAttribute('aria-label', `Open ${row.name || 'session'}`);
         button.addEventListener('click', () => open(row, button));
+        item.append(button);
+      }
+      if (state.owner) {
+        const button = el('button', 'btn quiet danger', 'Delete');
+        button.type = 'button';
+        button.setAttribute('aria-label', `Delete ${row.name || 'session'}`);
+        button.addEventListener('click', () => remove(row, button));
         item.append(button);
       }
       return item;
@@ -133,6 +151,17 @@
              : 'The session could not be opened.');
     }
 
+    // A deletion's success arrives as a fresh listing for every guest.
+    function deleted(frame) {
+      const button = deleting.get(frame.reqId);
+      if (!button) return;
+      deleting.delete(frame.reqId);
+      if (frame.ok === true) return;
+      button.disabled = false;
+      notice(typeof frame.message === 'string' ? frame.message
+             : 'The session could not be deleted.');
+    }
+
     // A session created from the lobby is joined straight away; its
     // refusal is already reported by the request notice.
     function created(frame) {
@@ -153,7 +182,7 @@
       if (active && document.visibilityState === 'visible') reload();
     });
 
-    return Object.freeze({show, opened, created, active: () => active});
+    return Object.freeze({show, opened, deleted, created, active: () => active});
   }
 
   window.mevedelLobbyView = Object.freeze({create, age});

@@ -2661,6 +2661,31 @@ active because we cannot probe the remote process."
       ;; Cross-host: cannot verify liveness, treat as active.
       t)))
 
+(defun mevedel-session-persistence--delete-saved
+    (save-path portable max-age-seconds)
+  "Delete saved session SAVE-PATH unless something may still hold it.
+Journal pins always keep it.  PORTABLE storage is deleted only through
+`mevedel-session-durability-delete-abandoned' with MAX-AGE-SECONDS; other
+storage is kept while its PID lock is active.  Return non-nil only when
+the directory was deleted."
+  (and (not (mevedel-journal-pins-present-p save-path))
+       (if portable
+           (mevedel-session-durability-delete-abandoned
+            save-path max-age-seconds)
+         (unless (mevedel-session-persistence--active-lock-p save-path)
+           (delete-directory save-path t)
+           t))))
+
+(defun mevedel-session-persistence-delete (workspace save-path)
+  "Delete WORKSPACE's saved session at SAVE-PATH now.
+The safety rules of `mevedel-session-persistence-cleanup-expired' apply
+without its age cap: a session a client may still hold, or whose journal
+captures are pending, is kept.  Return non-nil only when it was deleted."
+  (mevedel-session-persistence--delete-saved
+   save-path
+   (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))
+   0))
+
 (defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
   "Delete sessions older than `mevedel-session-max-age-days'.
 
@@ -2727,20 +2752,18 @@ throttle has already fired."
           (pcase-dolist (`(,save-path ,updated-secs ,session-id) candidates)
             (when (and updated-secs
                        (> (- now updated-secs) threshold-secs)
-                       (not (mevedel-journal-pins-present-p save-path)))
-              (cond
-               ((not portable)
-                (unless (mevedel-session-persistence--active-lock-p save-path)
-                  (delete-directory save-path t)
-                  (cl-incf deleted)))
-               ;; A session open here may outlive its lease after suspend.
-               ((and session-id
-                     (mevedel-session-control-transfer-root-buffer-for-id session-id)))
-               ;; One unreadable or contested session must not end the sweep.
-               ((condition-case nil
-                    (mevedel-session-durability-delete-abandoned save-path threshold-secs)
-                  (error nil))
-                (cl-incf deleted)))))
+                       ;; A session open here may outlive its lease after
+                       ;; suspend.
+                       (not (and portable session-id
+                                 (mevedel-session-control-transfer-root-buffer-for-id
+                                  session-id)))
+                       ;; One unreadable or contested session must not end
+                       ;; the sweep.
+                       (condition-case nil
+                           (mevedel-session-persistence--delete-saved
+                            save-path portable threshold-secs)
+                         (error nil)))
+              (cl-incf deleted)))
           (when (> deleted 0)
             (message "Cleaned up %d expired session%s"
                      deleted (if (= deleted 1) "" "s")))
