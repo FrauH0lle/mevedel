@@ -177,6 +177,27 @@
            (should (equal (plist-get (plist-get properties :action) :enum)
                           ["patch" "insert" "rename" "background" "revert"]))))))))
 
+(mevedel-deftest mevedel-tool-editing--summaries
+  (:doc "ToolSearch finds the shared tools by what people call shared items")
+  (let ((mevedel-tool--registry (make-hash-table :test #'equal))
+        (gptel--known-tools nil)
+        (session (mevedel-skills-test--make-session)))
+    (mevedel-tool-editing--register)
+    (setf (mevedel-session-tool-catalog session)
+          (mapcar (lambda (name)
+                    (let ((tool (mevedel-tool-get name)))
+                      (cons (list (mevedel-tool-category tool) name)
+                            (mevedel-tool-summary tool))))
+                  '("SharedRead" "SharedCreate" "SharedEdit")))
+    (let ((found (lambda (query)
+                   (mapcar #'cadar (mevedel-tools--search-catalog session query)))))
+      (should (member "SharedCreate" (funcall found "whiteboard")))
+      (should (equal '("SharedRead" "SharedCreate" "SharedEdit")
+                     (funcall found "whiteboard")))
+      (should (equal '("SharedRead" "SharedCreate" "SharedEdit")
+                     (funcall found "shared")))
+      (should (member "SharedCreate" (funcall found "document"))))))
+
 (mevedel-deftest mevedel-tool-editing--restore-nulls
   (:doc "Lower gptel's lossless null marker in model-supplied args before host encoding")
   (let ((shape (list :type "rectangle" :x 0 :y 0 :width 10 :height 10)))

@@ -1,6 +1,6 @@
 ---
 name: artifact
-description: Build a self-contained HTML mockup, prototype, or document as a session artifact the host and collaboration guests can open
+description: Build a self-contained HTML mockup, prototype, or document as a session artifact that others can open; whiteboards and co-edited documents are shared items
 argument-hint: "[what to build]"
 context: inline
 user-invocable: true

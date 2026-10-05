@@ -1,6 +1,6 @@
 ---
 name: artifact-doc
-description: Create a document artifact - a typeset page for a memo, proposal, plan, spec, or meeting notes that someone will read and act on. Use when the document deserves real hierarchy, callouts, tables, and print styling rather than plain prose; a Markdown artifact is the better choice when the reader only needs the text. Only for CREATING a new document; edits to an existing one modify its HTML directly.
+description: Create a document artifact - a typeset page for a memo, proposal, plan, spec, or meeting notes; a document people edit together is a shared item. Use it when someone will read and act on the document and it deserves real hierarchy, callouts, tables, and print styling rather than plain prose; a Markdown artifact is the better choice when the reader only needs the text. Only for CREATING a new document; edits to an existing one modify its HTML directly.
 argument-hint: "[what the document covers]"
 user-invocable: true
 ---
