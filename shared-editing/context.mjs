@@ -1,7 +1,8 @@
 /* The same context capture is used for browser previews and host acceptance. */
-import { inspect, check, same } from './model.mjs';
+import { inspect, check } from './model.mjs';
 import { selectedText } from './document.mjs';
 import { shapesInRegion } from './scene.mjs';
+import { contentHash } from './view.mjs';
 
 /* A board area [x, y, w, h] in integer board units. */
 export function validRegion(region) {
@@ -71,20 +72,18 @@ export function captureContext(doc, { selection = [], range, region } = {}) {
       return text(node);
     }).join('\n');
   const snapshot = { kind, title, scope, content, context, ...(region ? { region } : {}) };
-  check(new TextEncoder().encode(JSON.stringify(snapshot)).length <= 128 * 1024,
-    'Question snapshot is too large; select a smaller portion');
   return { snapshot, quote };
 }
 
-/* An editor question carries the snapshot its sender reviewed and fails when
-   content moved on. A room message about the whole item has no reviewed
+/* An editor question carries the hash of the snapshot its sender reviewed
+   and fails when content moved on; the snapshot itself never travels back. A room message about the whole item has no reviewed
    snapshot; it asks about the item as currently committed. */
 export function checkContext(doc, request) {
   const whole = request.whole === true;
   check(!whole || (!request.range && !request.selection?.length && !request.region),
     'A whole-item question takes no selection');
   const captured = captureContext(doc, whole ? {} : request);
-  check(whole || (request.expected && same(request.expected, captured.snapshot)),
+  check(whole || request.expected === contentHash(captured.snapshot),
     'Content changed. Review and refresh the attached context before sending.');
   return captured;
 }

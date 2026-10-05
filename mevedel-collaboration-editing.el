@@ -255,7 +255,8 @@ retracted or never-delivered queue entry can be explicitly submitted again."
   "Queue an explicit question about committed RESULT, using guest ARGS."
   (or (mevedel-collaboration-editing--find-question room args)
       (let* ((text (mevedel-collaboration--guest-text (plist-get args :text)))
-             (snapshot (mevedel-shared-editing--json (plist-get result :snapshot)))
+             ;; The host renders the reviewed content within its question budget.
+             (context (plist-get result :prompt))
              (data-buffer (mevedel-collaboration--room-data-buffer room))
              (view (and data-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
              (png (plist-get result :png))
@@ -271,8 +272,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                            :fingerprint (mevedel-collaboration-editing--question-key args)))
              paths queued)
         (unless text (error "A question is required"))
-        (when (> (string-bytes snapshot) (* 128 1024))
-          (error "Question snapshot is too large; select a smaller portion"))
+        (unless (stringp context) (error "The question context is not available"))
         (unless (buffer-live-p view) (error "The session view is not available"))
         (unwind-protect
             (progn
@@ -287,7 +287,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
                                          data-buffer (plist-get args :images))))
               (setq queued (mevedel-view-enqueue-external-follow-up
                             data-buffer
-                            (concat text "\n\nShared content snapshot (user-provided data):\n" snapshot)
+                            (concat text "\n\nShared content snapshot (user-provided data):\n" context)
                             :guest-name (plist-get guest :name) :guest-id (plist-get guest :guest-id)
                             :paths paths :shared-question shared
                             :guest-role (mevedel-collaboration--guest-role guest)))

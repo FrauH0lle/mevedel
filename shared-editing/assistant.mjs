@@ -1,9 +1,10 @@
 /* Item conversation UI; the host owns submissions, comments and transcript truth. */
+import { contentHash } from './view.mjs';
 const $ = id => document.getElementById(id);
 // A board quote spans lines (area, count, objects); a thread header shows
 // it on one line, so the parts stay apart once whitespace collapses.
 // Sending a thread asks with its latest human message, so the room and the
-// model read the actual request; the full thread travels in the snapshot.
+// model read the actual request; the full thread travels with its context.
 const threadRequest = (comment) => (comment.replies?.at(-1) || comment).text;
 const headline = (quote) => String(quote || '').split('\n').filter(Boolean).join(' · ');
 const el = (tag, text, className) => {
@@ -235,7 +236,7 @@ export class AssistantPanel {
       const files = this.files.items();
       await this.save();
       const result = await this.request({action:'ask', opId:draft.opId, questionId:draft.opId,
-        text:draft.text, expected:a.snapshot, range:a.range, selection:a.selection, region:a.region,
+        text:draft.text, expected:contentHash(a.snapshot), range:a.range, selection:a.selection, region:a.region,
         ...(files.length ? {images:this.files.frame(files)} : {})});
       this.files.remove(files);
       this.receipt = { ...result, questionId: draft.opId };
@@ -270,7 +271,7 @@ export class AssistantPanel {
       const result = await this.request({action:commentId ? 'reply-comment' : 'comment',
         opId:draft.opId, commentId, text:draft.text,
         ...(commentId ? {} : {range:draft.attachment.range, selection:draft.attachment.selection,
-          region:draft.attachment.region, expected:draft.attachment.snapshot})});
+          region:draft.attachment.region, expected:contentHash(draft.attachment.snapshot)})});
       if (source.opId === draft.opId) {
         Object.assign(source, newDraft());
         if (!commentId) $('comment-text').value = '';
@@ -324,7 +325,7 @@ export class AssistantPanel {
       const a = pending.attachment;
       const result = await this.request({action:'ask', opId:pending.opId, questionId:pending.opId,
         commentId:id, commentVersion:pending.version, text:threadRequest(comment),
-        expected:a.snapshot, range:a.range, selection:a.selection, region:a.region});
+        expected:contentHash(a.snapshot), range:a.range, selection:a.selection, region:a.region});
       const delivered = this.conversation.records.some(r => r.shared?.questionId === pending.opId);
       pending.receipt = !delivered;
       this.notice(delivered || result.delivered ? 'Discussion sent. The assistant answers in this thread.' : 'Discussion queued. The assistant will answer in this thread.');

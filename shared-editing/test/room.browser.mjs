@@ -541,10 +541,9 @@ test(
         return info.queue.length === 2 ? info.queue[1] : null;
       });
       assert.doesNotMatch(rangeAsk, /"anchors":/);
-      assert.match(rangeAsk, /"text":"An"/);
-      assert.match(rangeAsk, /Human revision/);
-      assert.match(rangeAsk, /Include a concrete example/);
-      assert.match(rangeAsk, /"discussion":/);
+      assert.match(rangeAsk, /\nSelected text:\n"An"\n/);
+      assert.match(rangeAsk, /[0-9a-f]{12} \{"type":"paragraph","attrs":\{"id":"agent_paragraph"\}.*Human revision/);
+      assert.match(rangeAsk, /\nDiscussion:\n.*\n.*Include a concrete example/);
       await frame(pages[0]).locator('.tiptap p').last().click();
       await pages[0].keyboard.press('End');
       await pages[0].keyboard.type(' Later edit.');

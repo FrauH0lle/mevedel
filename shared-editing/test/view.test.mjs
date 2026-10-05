@@ -117,7 +117,7 @@ test('comments, history and libraries read as text', async () => {
     content: [rect('a', 0)], actor: 'Guest: Ann', opId: 'create' });
   assert.equal((await view(state, 'comments')).text, 'No comments.\n');
   const doc = restore(Buffer.from(state.crdt, 'base64'));
-  const expected = captureContext(doc, { selection: ['a'] }).snapshot;
+  const expected = contentHash(captureContext(doc, { selection: ['a'] }).snapshot);
   doc.destroy();
   ({ state } = await handle({ action: 'comment', state, actor: 'Guest: Ann', opId: 'note', text: 'Is this the API?',
     selection: ['a'], expected }));
