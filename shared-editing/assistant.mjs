@@ -486,7 +486,7 @@ export class AssistantPanel {
     for (const record of records) {
       if (record.kind === 'user') context = record.shared;
       if (!['user','assistant'].includes(record.kind)) continue;
-      const node = window.mevedelTranscriptRenderer.renderRecord(record, () => '', undefined, previous.get(record.id));
+      const node = window.mevedelTranscriptRenderer.renderRecord(record, () => null, undefined, previous.get(record.id));
       if (context?.commentId) node.dataset.commentId = context.commentId;
       if (record.shared) node.dataset.questionId = record.shared.questionId;
       const thread = context?.commentId && [...$('comments').children].find(n => n.dataset.commentId === context.commentId);

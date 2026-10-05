@@ -9,7 +9,7 @@
   const ACTIVE = new Set(['running', 'blocked', 'waiting']);
   const FINISHED = new Set(['done', 'errored', 'interrupted']);
 
-  function create({send, el, directiveLabel, openArtifact, summarize, openExecution}) {
+  function create({send, el, scopeChip, openArtifact, summarize, openExecution}) {
     const nav = document.getElementById('agents');
     const doneList = document.getElementById('agents-done-list');
     const panel = document.getElementById('agent-panel');
@@ -53,7 +53,7 @@
       records.forEach(record => {
         if (!record || typeof record.id !== 'string') return;
         const turn = renderer.renderRecord(
-          record, directiveLabel, openArtifact, previous.get(record.id), openExecution);
+          record, scopeChip, openArtifact, previous.get(record.id), openExecution);
         transcript.append(turn);
       });
       renderer.markContinuations(transcript);
