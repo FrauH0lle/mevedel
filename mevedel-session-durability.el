@@ -175,6 +175,16 @@ short enough that a picker row stays readable."
     (when (string-match-p "\\S-" name)
       (mevedel--truncate-display (string-trim name) 64))))
 
+(defcustom mevedel-session-durability-accept-target-storage nil
+  "Non-nil stores project state on remote targets without asking first.
+Before its first write to a remote execution target, mevedel asks once
+per target and Emacs process whether to keep the project's state there.
+A host nobody sits at, such as an Emacs daemon serving collaboration
+guests, cannot answer the question; set this there to accept in
+advance."
+  :type 'boolean
+  :group 'mevedel)
+
 (defvar mevedel-session-durability--disclosed-targets
   (make-hash-table :test #'equal)
   "Execution targets disclosed to the user in this Emacs process.")
@@ -183,14 +193,16 @@ short enough that a picker row stays readable."
 (defun mevedel-session-durability-disclose (session)
   "Confirm SESSION's target-side durable storage before its first write.
 
-The acknowledgement is once per target for this Emacs process.  Local
+The acknowledgement is once per target for this Emacs process, or given
+in advance by `mevedel-session-durability-accept-target-storage'.  Local
 project sessions need no disclosure."
   (let ((target (mevedel-session-execution-target session)))
     (when (and target (mevedel-execution-target-remote-p target))
       (let ((key (mevedel-execution-target-identity target)))
         (unless (gethash key mevedel-session-durability--disclosed-targets)
           (unless
-              (yes-or-no-p
+              (or mevedel-session-durability-accept-target-storage
+                  (yes-or-no-p
                (format
                 (concat
                  "Store this project's mevedel state on the target at %s? "
@@ -198,7 +210,7 @@ project sessions need no disclosure."
                  "checkpoints, snapshots, plans, durable tool results, and "
                  "required logs. The data is not encrypted by mevedel. ")
                 (mevedel-workspace-state-dir
-                 (mevedel-session-workspace session))))
+                 (mevedel-session-workspace session)))))
             (user-error "Portable project session storage was not accepted"))
           (puthash key t mevedel-session-durability--disclosed-targets)))))
   t)

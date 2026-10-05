@@ -2990,6 +2990,23 @@
             (when-let* ((save-path (mevedel-session-save-path session)))
               (mevedel-session-persistence-lock-release save-path session))))
       (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+  :doc "an advance acceptance stores target-side state without asking"
+  (let* ((host "accepted-host")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-remote-accepted-" t)))
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal))
+         (mevedel-session-durability-accept-target-storage t)
+         session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (setq session (test-mevedel-session-durability--remote-session
+                         host local-root))
+          ;; A host nobody sits at, such as a daemon serving guests.
+          (let ((inhibit-interaction t))
+            (should (mevedel-session-durability-disclose session))))
+      (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-publication-publish ()

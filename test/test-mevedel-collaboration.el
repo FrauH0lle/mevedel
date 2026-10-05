@@ -907,7 +907,8 @@
                  (lambda (&rest _) nil))
                 ;; The turn would ask in Emacs, e.g. to take over a lease.
                 ((symbol-function 'mevedel-view--dispatch-follow-up-entry)
-                 (lambda (&rest _) (y-or-n-p "Take over the lease? ")))
+                 (lambda (&rest _)
+                   (signal 'inhibited-interaction (list "Take over the lease? (y or n)"))))
                 ((symbol-function 'mevedel-collaboration-notify-guest)
                  (lambda (_session guest-id message)
                    (setq notified (list guest-id message))))
@@ -918,7 +919,34 @@
       (should-not (file-exists-p attachment))
       (should (equal "g1" (car notified)))
       (should (string-search "your message was not sent" (cadr notified)))
-      (should (string-search "Happy Hare" warned)))))
+      (should (string-search "Happy Hare" warned))
+      ;; Only the host sees the question, which can name hosts and paths.
+      (should (string-search ": Take over the lease? (y or n)" warned))
+      (should-not (string-search "lease" (cadr notified))))))
+
+(mevedel-deftest mevedel-collaboration--refuse-unseen-question
+		 (:doc "refuses a question on a daemon's invisible frame while sharing, and only then")
+		 (progn
+		   (should (memq #'mevedel-collaboration--refuse-unseen-question minibuffer-setup-hook))
+		   (let ((mevedel-collaboration--rooms (make-hash-table :test #'eq))
+			 (daemon t) (initial t))
+		     (cl-letf (((symbol-function 'daemonp) (lambda () daemon))
+			       ((symbol-function 'active-minibuffer-window) #'selected-window)
+			       ((symbol-function 'frame-initial-p) (lambda (&rest _) initial))
+			       ((symbol-function 'minibuffer-prompt)
+				(lambda () (propertize "Password for root@target: " 'face 'bold))))
+		       ;; Nothing is shared: questions keep their usual course.
+		       (should-not (mevedel-collaboration--refuse-unseen-question))
+		       (puthash 'room '(:session nil) mevedel-collaboration--rooms)
+		       (should (equal '(inhibited-interaction "Password for root@target:")
+				      (should-error (mevedel-collaboration--refuse-unseen-question)
+						    :type 'inhibited-interaction)))
+		       ;; A person on a client frame answers it.
+		       (setq initial nil)
+		       (should-not (mevedel-collaboration--refuse-unseen-question))
+		       ;; An ordinary Emacs has someone at the keyboard.
+		       (setq initial t daemon nil)
+		       (should-not (mevedel-collaboration--refuse-unseen-question))))))
 
 (mevedel-deftest mevedel-collaboration-notify-queue-changed
   (:doc "re-publishes the queue when it changes without a request")

@@ -228,6 +228,26 @@ signals instead:
 - a queued message is dropped with its attachments, as on a retraction; its
   sender gets the same notice, and the host a warning naming the guest.
 
+Either way the host's warning quotes the question; guests see only the notice,
+since prompts can name hosts and paths.
+
+Later steps of a turn run from timers and process callbacks, outside any
+binding. An Emacs daemon without a client frame reads the minibuffer on its
+invisible initial terminal, where a question waits forever while guests keep
+the event loop running inside it. So while a room or lobby is live, a
+`minibuffer-setup-hook` refuses any minibuffer question on that terminal
+before it waits, with the same `inhibited-interaction` signal and its prompt;
+`sit-for` and other event reads are untouched. This covers TRAMP passwords,
+one-time codes and host-key questions when a connection reopens, taking over a
+portable session lease another client let expire, and GPG passphrases read for
+`auth-source` through loopback pinentry. The failing step reports an error
+instead of hanging. A question on a client frame reaches the person there as
+usual. Before its first write to a remote target, mevedel asks once per target
+and Emacs process whether to keep the project's state there; a daemon nobody
+sits at sets `mevedel-session-durability-accept-target-storage` to accept in
+advance. Questions that read single keys instead of the minibuffer are reached
+only from host commands.
+
 Questions that are only offers are skipped where nobody can be asked: a
 directive turn's offer to save modified file buffers leaves the host's buffers
 alone. The cockpit refuses to open, so a bare `/goal` from a guest is refused
