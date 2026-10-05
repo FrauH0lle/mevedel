@@ -393,4 +393,37 @@ test('board tools', async (t) => {
     assert.ok(Math.abs(zx - px) < 1 && Math.abs(zy - py) < 1, 'the pointer keeps its board point');
     await page.close();
   });
+
+  await t.test('the pen keeps drawing; the lock keeps the shape tools', async () => {
+    const {page, frame} = await open({content:[]});
+    const pressed = (tool) => frame.locator(`[data-tool="${tool}"]`).getAttribute('aria-pressed');
+    const count = async (type) => (await read(page)).filter(e => e.type === type).length;
+    await frame.locator('#canvas').focus();
+    await page.keyboard.press('p');
+    await stroke(page, frame, [[100, 100], [200, 150]], 6);
+    await stroke(page, frame, [[100, 200], [200, 250]], 6);
+    await until(async () => (await count('freedraw')) === 2);
+    assert.equal(await pressed('freedraw'), 'true');
+    assert.deepEqual(await selectedIds(frame), []);
+    // Unlocked, a new shape hands over to selection with the shape selected.
+    await frame.locator('#canvas').focus();
+    await page.keyboard.press('r');
+    await stroke(page, frame, [[300, 100], [400, 160]], 4);
+    await frame.locator('[data-tool="select"][aria-pressed="true"]').waitFor();
+    assert.equal((await selectedIds(frame)).length, 1);
+    await frame.locator('#canvas').focus();
+    await page.keyboard.press('q');
+    assert.equal(await frame.locator('#board-tool-lock').getAttribute('aria-pressed'), 'true');
+    await page.keyboard.press('r');
+    await stroke(page, frame, [[300, 200], [400, 260]], 4);
+    await stroke(page, frame, [[300, 300], [400, 360]], 4);
+    await until(async () => (await count('rectangle')) === 3);
+    assert.equal(await pressed('rectangle'), 'true');
+    assert.deepEqual(await selectedIds(frame), []);
+    await frame.locator('#board-tool-lock').click();
+    assert.equal(await frame.locator('#board-tool-lock').getAttribute('aria-pressed'), 'false');
+    await stroke(page, frame, [[300, 400], [400, 460]], 4);
+    await frame.locator('[data-tool="select"][aria-pressed="true"]').waitFor();
+    await page.close();
+  });
 });

@@ -60,6 +60,8 @@ let port,
   inflight = false,
   initialized = false;
 let tool = 'select',
+  /* Whether drawing tools stay active after each new shape. */
+  toolLocked = false,
   selected = new Set(),
   /* The group a double-click entered, whose members select individually. */
   editingGroup = null,
@@ -697,6 +699,12 @@ function selectTool(value) {
   if (drawable.includes(value)) { selected.clear(); selectionRegion = null; editingGroup = null; }
   draw();
 }
+/* After a new drawing, selection takes over so a double-click edits it,
+   unless the tool is locked; the pen always stays, as strokes come in runs. */
+function finishDrawing(ids) {
+  if (toolLocked || tool === 'freedraw') { selected.clear(); draw(); }
+  else { selected = new Set(ids); selectTool('select'); }
+}
 function button(parent, label, action) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -1082,6 +1090,18 @@ function board() {
     imageButton.setAttribute('aria-keyshortcuts', '9');
     imageButton.className = 'tool-group-start';
     imageButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 18 6-6 4 4 3-4 5 6"/></svg>';
+    // The lock is this browser's own: it is not part of the board.
+    const lock = button(strip, '', () => { toolLocked = !toolLocked; showLock(); });
+    const showLock = () => {
+      lock.setAttribute('aria-pressed', String(toolLocked));
+      lock.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="${toolLocked ? 'M8 11V7a4 4 0 0 1 8 0v4' : 'M8 11V7a4 4 0 0 1 7.7-1.5'}"/></svg><kbd>Q</kbd>`;
+    };
+    lock.id = 'board-tool-lock';
+    lock.className = 'tool-group-start';
+    lock.title = 'Keep the tool after drawing (Q)';
+    lock.setAttribute('aria-label', 'Keep the tool after drawing');
+    lock.setAttribute('aria-keyshortcuts', 'Q');
+    showLock();
   }
   const properties = document.createElement('details');
   properties.id = 'properties';
@@ -1478,7 +1498,7 @@ function board() {
   shortcuts.setAttribute('aria-labelledby', 'board-shortcuts-title');
   shortcuts.innerHTML = `<form method="dialog"><h2 id="board-shortcuts-title">Whiteboard shortcuts</h2>
     <p>Click the canvas before using shortcuts.</p>
-    <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}${readOnly ? '' : '<div><dt>Insert image</dt><dd><kbd>9</kbd></dd></div>'}</dl></section>
+    <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}${readOnly ? '' : '<div><dt>Insert image</dt><dd><kbd>9</kbd></dd></div><div><dt>Keep the tool after drawing</dt><dd><kbd>Q</kbd></dd></div>'}</dl></section>
     <section><h3>Working on the canvas</h3><dl>
     <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
     <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Scroll / middle-button drag</dd></div><div><dt>Pan sideways</dt><dd>Shift + scroll</dd></div><div><dt>Zoom at pointer</dt><dd>Ctrl / ⌘ scroll / pinch</dd></div>
@@ -1756,8 +1776,7 @@ function board() {
     }
     elements.forEach(validateElement);
     doc.transact(() => elements.forEach((e) => putElement(doc, e)), local);
-    selected = new Set(elements.map((e) => e.id));
-    selectTool('select');
+    finishDrawing(elements.map((e) => e.id));
   };
   canvas.onpointerup = (event) => {
     if (!drag) return;
@@ -1780,8 +1799,7 @@ function board() {
       const e = finishedElement(d, event);
       validateElement(e);
       doc.transact(() => putElement(doc, e), local);
-      selected = new Set([e.id]);
-      selectTool('select');
+      finishDrawing([e.id]);
       if (['text', 'stickynote'].includes(e.type)) editText(e.id);
     } else if (d.end) {
       doc.transact(() => {
@@ -1922,6 +1940,10 @@ function board() {
     if (event.key === '9' && !readOnly) {
       event.preventDefault();
       $('board-image').click();
+    }
+    if (event.key.toLowerCase() === 'q' && !readOnly) {
+      event.preventDefault();
+      $('board-tool-lock').click();
     }
     if (event.key === 'Escape') {
       // Escape leaves an entered group with the group selected, then clears.

@@ -1060,6 +1060,9 @@ test(
       await until(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
+      // The pen keeps drawing, so the stroke is selected to ask about it.
+      await frame(ownerPage).locator('[data-tool="select"]').click();
+      await ownerPage.mouse.click(area.x + 400, area.y + 230);
       await frame(ownerPage).locator('#selection-question').click();
       await frame(ownerPage).locator('body').evaluate(() => {
         const post = MessagePort.prototype.postMessage;
