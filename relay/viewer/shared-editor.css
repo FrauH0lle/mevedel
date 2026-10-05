@@ -582,6 +582,7 @@ footer {
 .comment-anchor { background: #ffe8a488; border-bottom: 2px solid #d3a541; cursor: pointer; }
 :is(#conversation, .thread-conversation) .turn { padding: 15px 0; border-bottom: 1px solid var(--line); }
 :is(#conversation, .thread-conversation) .rail { display: none; }
+.thread-conversation .thread-question .prose.prompt > :not(.shared-context) { display: none; }
 :is(#conversation, .thread-conversation) .who { font-size: 11px; font-weight: 600; color: var(--muted); }
 :is(#conversation, .thread-conversation) .who .badge { margin-left: 6px; font-weight: 400; }
 :is(#conversation, .thread-conversation) .body { white-space: pre-wrap; }

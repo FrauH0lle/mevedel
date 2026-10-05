@@ -496,6 +496,9 @@ export class AssistantPanel {
       if (record.shared) node.dataset.questionId = record.shared.questionId;
       const thread = context?.commentId && [...$('comments').children].find(n => n.dataset.commentId === context.commentId);
       const target = thread && [...thread.querySelectorAll('.thread-conversation')].find(n => n.dataset.version === context.commentVersion);
+      // A thread's question is its latest message, already shown above; the
+      // turn keeps only who sent it and the context it carried.
+      if (target && record.kind === 'user' && record.shared && !record.shared.edited) node.classList.add('thread-question');
       (target || $('conversation')).append(node);
     }
     if (!$('conversation').children.length) $('conversation').append(el('p', 'Ask about this item. Questions and answers are shared with the room.', 'conversation-empty'));
