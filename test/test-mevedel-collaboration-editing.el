@@ -222,7 +222,8 @@
                        :text "Why?" :expected (:kind "document" :scope "selection")))
            (result '(:id "document" :title "Notes" :revision 7 :quote "a passage"
                          :snapshot (:id "document" :title "Notes" :revision 7
-                                        :kind "document" :scope "selection" :content "a passage"))))
+                                        :kind "document" :scope "selection" :content "a passage")
+                         :prompt "document \"Notes\" at shared://document, revision 7\nSelected text:\n\"a passage\"")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session mevedel--workspace workspace))
       (mevedel-session-set-pending-input-paused session t)
@@ -264,7 +265,8 @@
            (log (list :mime "text/plain" :data (base64-encode-string "log line\n" t)))
            (result (list :id "board" :title "Board" :revision 3
                          :png (base64-encode-string "\211PNG\r\n" t)
-                         :snapshot '(:id "board" :kind "whiteboard" :scope "whole"))))
+                         :snapshot '(:id "board" :kind "whiteboard" :scope "whole")
+                         :prompt "whiteboard \"Board\" at shared://board, revision 3")))
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-view--media-dir) (lambda () root)))
             (with-current-buffer data-buf

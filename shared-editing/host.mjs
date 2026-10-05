@@ -156,6 +156,41 @@ function resolveChanges(id, kind, content, changes) {
       code: 'stale', targets: stale });
   return resolved;
 }
+/* What a question tells the model: the reviewed content as the same hashed
+   lines it reads at shared://ID, the discussion it continues, and past the
+   budget the address to read on from, so no question is too large to ask. */
+const QUESTION_BUDGET = 128 * 1024;
+function questionPrompt(state, before, snapshot, discussion) {
+  const { kind } = before, id = state.id, noun = kind === 'whiteboard' ? 'ELEMENT' : 'BLOCK';
+  const byId = new Map(nodesOf(kind, before.content).map((n) => [nodeId(kind, n), n]));
+  const lines = (nodes) => nodes.filter(Boolean).map((n) => line(id, kind, n));
+  const scope = snapshot.scope === 'whole' ? `the whole ${kind}` : snapshot.region ? 'an area of it' : 'a selection';
+  const head = [`${kind} ${JSON.stringify(before.title)} at ${address(id)}, revision ${state.revision}; the question is about ${scope}.`];
+  if (snapshot.region) head.push(`Area: x ${snapshot.region[0]}, y ${snapshot.region[1]}, ${snapshot.region[2]} × ${snapshot.region[3]}`);
+  const sections = [];
+  if (discussion) sections.push(['Discussion:', discussion.map(({ actor, text }) => `${actor}: ${JSON.stringify(text)}`)]);
+  if (snapshot.scope === 'whole') sections.push([`Content (HASH ${noun}-JSON):`, lines(nodesOf(kind, before.content))]);
+  else if (kind === 'document') {
+    sections.push(['Selected text:', [JSON.stringify(snapshot.content.text)]]);
+    sections.push([`Blocks containing it (HASH ${noun}-JSON):`, lines(snapshot.context.map((c) => byId.get(c.id)))]);
+  } else {
+    sections.push([`Selected (HASH ${noun}-JSON):`, lines(snapshot.content)]);
+    if (snapshot.context.length)
+      sections.push(['Context: labels, connected and nearby elements:', lines(snapshot.context)]);
+  }
+  const out = [...head];
+  let budget = QUESTION_BUDGET - out.join('\n').length, omitted = 0;
+  for (const [title, entries] of sections) {
+    if (budget > title.length) { out.push(title); budget -= title.length + 1; }
+    for (const entry of entries) {
+      if (entry.length < budget) { out.push(entry); budget -= entry.length + 1; }
+      else omitted += 1;
+    }
+  }
+  if (omitted) out.push(`${omitted} more line${omitted === 1 ? '' : 's'} omitted; Read ${address(id)}` +
+    (discussion ? ` and ${address(id, 'comments')}` : '') + ' for the rest.');
+  return out.join('\n');
+}
 /* What an edit tells the model: the stored lines of everything it changed,
    within a budget, then ids and hashes; the board PNG travels separately. */
 const RESULT_BUDGET = 24 * 1024;
@@ -392,7 +427,7 @@ export async function handle(request) {
         const captured = checkContext(doc, request);
         result.snapshot = { id: state.id, revision: state.revision, ...captured.snapshot,
           ...(result.discussion ? {discussion: result.discussion} : {}) };
-        check(Buffer.byteLength(JSON.stringify(result.snapshot)) <= 128 * 1024, 'Question snapshot is too large; start a smaller discussion');
+        result.prompt = questionPrompt(state, before, captured.snapshot, result.discussion);
         result.quote = captured.quote;
       }
       if (request.since !== undefined) {

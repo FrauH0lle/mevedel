@@ -292,8 +292,8 @@ as transcript turns in the main conversation, which gave them no people-only
 notes, no replies or resolution, and let artifact back-and-forth fill room chat.
 An artifact's messages are now item questions about `artifact:NAME` and its
 comments live in a per-artifact store beside the shared items. Unlike a
-whiteboard or document, whose small structured snapshot travels with each
-question, an artifact can be megabytes of HTML: the request names its file and
+whiteboard or document, whose reviewed content travels with each question
+within a bound and names its address for the rest, an artifact can be megabytes of HTML: the request names its file and
 frames it as untrusted content, and the model reads what it needs.
 
 Read and Grep of `history://root` give scoped conversations deliberate access to
@@ -408,6 +408,13 @@ meant the model writing that stroke out twice. SharedRead and SharedEdit had
 no result bound, while the generic oversized-result spill would have written
 one JSON line that Read cuts at 2,000 characters. Document reads also carried
 embedded images as base64 text, up to 12 MiB.
+
+Questions refused content over 128 KiB: the panel's automatic whole-board
+capture of that board failed before the user had selected anything. The
+browser now sends a hash of the snapshot it showed instead of the snapshot,
+and the model receives the reviewed content as overview lines filled to the
+128 KiB budget, followed by the count of omitted lines and the address to read
+on from. A question therefore gives the model the hashes it edits with.
 
 Hash preconditions keep the same concurrent-edit protection, because a hash
 over sorted keys changes whenever the content does. They cost the model 12

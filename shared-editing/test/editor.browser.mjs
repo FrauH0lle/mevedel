@@ -415,7 +415,8 @@ test('editor interaction regressions', async (t) => {
       const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
       assert.deepEqual(ask.selection, ['a']);
       assert.equal(ask.region.length, 4);
-      assert.deepEqual(ask.expected.region, ask.region);
+      // The host checks the reviewed capture by its hash; the capture stays here.
+      assert.match(ask.expected, /^[0-9a-f]{12}$/);
       await frame.locator('#whole-question').click();
       await frame.locator('#selected-question').click();
       assert.match(await frame.locator('#context-title').innerText(), /Selected area/,
@@ -917,7 +918,8 @@ test('editor interaction regressions', async (t) => {
       await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===2);
       const attempts = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').map(m=>m.args));
       assert.equal(attempts[0].questionId,attempts[1].questionId);
-      assert.equal(attempts[1].expected.content.text,'useful');
+      assert.match(attempts[1].expected,/^[0-9a-f]{12}$/);
+      assert.equal(attempts[1].expected,attempts[0].expected,'a retry asks about the same reviewed capture');
       assert.equal(attempts[1].text,'Please include an example','a thread asks with its latest human message');
       const shared = {questionId:attempts[1].questionId,commentId:attempts[1].commentId,
         commentVersion:attempts[1].commentVersion,itemId:'test',scope:'selection',revision:3,quote:'useful',text:attempts[1].text};
@@ -945,7 +947,7 @@ test('editor interaction regressions', async (t) => {
       await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===3);
       const direct = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').at(-1).args);
       assert.equal(direct.commentId,undefined);
-      assert.equal(direct.expected.content.text,'useful');
+      assert.equal(direct.expected,attempts[1].expected,'the direct question asks about the same selection');
       await frame.locator('#comments-tab').click();
       await card.getByText('Resolve',{exact:true}).click();
       await card.waitFor({state:'hidden'});

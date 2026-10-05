@@ -457,10 +457,18 @@ the previously attached selection, so switching back does not require selecting
 it again. A private document highlight keeps the attached passage visible while
 focus is in the discussion or comment draft; closing discussion removes that
 highlight. The attached quote shows the chosen scope before submission. Opening controls, typing, and toggling the panel retain that capture.
-Pending edits must save first. The host compares the captured content with its
-committed content; a concurrent change rejects the request with an explicit
-**Refresh context** recovery. It never substitutes a whole item for a missing
-selection. Large contexts must be narrowed to fit the 128 KiB snapshot limit.
+Pending edits must save first. The browser sends a content hash of the capture
+it showed, and the host compares it with a capture of its committed content; a
+concurrent change rejects the request with an explicit **Refresh context**
+recovery. It never substitutes a whole item for a missing selection. No
+selection is too large to ask about. The model receives the reviewed content
+as the hashed lines it reads at `shared://ID`, introduced by the item's address
+and revision. A document selection gives its text and the blocks it spans; a
+board selection or area gives its elements, then its labels, connected and
+nearby elements. A thread's discussion comes first. Past a 128 KiB budget the
+remaining lines are counted and the model is told to read on at `shared://ID`
+and, for a thread, `shared://ID/comments`. The board PNG accompanies it as
+before.
 
 Each document and whiteboard has its own model conversation. A question receives
 its reviewed content snapshot and recent turns about the same item, including
@@ -598,8 +606,9 @@ Raster images are limited to 16 megapixels each and 32 megapixels per item; brow
 most 4 MiB. Recent revert snapshots are bounded by both count and bytes as
 described above; they expire before older snapshots block further saves. The
 receipt ledger has a 65,536-operation ceiling. A native export/import begins
-a fresh history when that ceiling is reached. Question snapshots have a
-128 KiB bound with a visible request to select a smaller portion. Transfers
+a fresh history when that ceiling is reached. A question's model context is
+held to 128 KiB, with the remainder named by address rather than refused.
+Transfers
 use bounded chunks; host and viewer queues also bound aggregate input size.
 Browser responses carry CRDT state or its update and compact contribution
 metadata. Full before/after snapshots stay on the host for Revert; image bytes

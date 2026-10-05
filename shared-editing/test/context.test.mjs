@@ -5,6 +5,7 @@ import { handle } from '../host.mjs';
 import { restore } from '../model.mjs';
 import { captureContext, checkContext, readComments } from '../context.mjs';
 import { selectionPositions } from '../document.mjs';
+import { contentHash } from '../view.mjs';
 const load = state => restore(Buffer.from(state.crdt, 'base64'));
 /* A shape and, with TEXT, its bound label. */
 const shape = (id, x, text, type = 'rectangle', y = 0) => [{id, type, x, y, width:100, height:100},
@@ -23,7 +24,7 @@ test('comments retain original quotes while live anchors move, change and disapp
     assert.deepEqual(selectionPositions(doc, range), [3,9]);
     const captured = captureContext(doc, {range});
     assert.equal(captured.quote, 'useful');
-    const request = {action:'comment',opId:'comment-a',actor:'Guest: Alice',text:'Explain this',range,expected:captured.snapshot};
+    const request = {action:'comment',opId:'comment-a',actor:'Guest: Alice',text:'Explain this',range,expected:contentHash(captured.snapshot)};
     ({state} = await handle({...request, state}));
     assert.equal(state.comments[0].quote, 'useful');
     assert.equal(state.comments[0].actor, 'Guest: Alice');
@@ -34,7 +35,7 @@ test('comments retain original quotes while live anchors move, change and disapp
     assert.equal(readComments(doc, state.comments)[0].anchorStatus, 'current');
     text.insert(11, 'very ');
     assert.equal(readComments(doc, state.comments)[0].anchorStatus, 'changed');
-    assert.throws(() => checkContext(doc, {range,expected:captured.snapshot}), /Content changed/);
+    assert.throws(() => checkContext(doc, {range,expected:contentHash(captured.snapshot)}), /Content changed/);
     ({state} = await handle({action:'update',opId:'edit',actor:'Guest: Bob',state,update:Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64')}));
     const read = await handle({action:'read',state});
     assert.equal(read.result.comments[0].quote, 'useful');
@@ -59,15 +60,20 @@ test('cross-block and reversed selections capture exact text and committed item 
     const range = rangeFor(root.get(1).get(0), 6, root.get(0).get(0), 6);
     const captured = captureContext(doc, {range});
     assert.equal(captured.quote, 'passage\nSecond');
-    const {result} = await handle({action:'read',state,range,question:true,expected:captured.snapshot});
+    const {result} = await handle({action:'read',state,range,question:true,expected:contentHash(captured.snapshot)});
     assert.equal(result.snapshot.id, 'doc');
     assert.equal(result.snapshot.title, 'Design notes');
     assert.equal(result.snapshot.revision, state.revision);
     assert.equal(result.snapshot.content.text, 'passage\nSecond');
     assert.equal(result.snapshot.scope, 'selection');
     assert.equal(result.snapshot.content.anchors, undefined);
-    await assert.rejects(handle({action:'read',state,question:true,expected:captured.snapshot}), /Content changed/);
-    await assert.rejects(handle({action:'comment',state,actor:'Alice',opId:'bad',range,text:'',expected:captured.snapshot}), /comment is required/);
+    // The model reads the selection and the blocks it spans as editable lines.
+    assert.deepEqual(result.prompt.split('\n').slice(0, 4), [
+      'document "Design notes" at shared://doc, revision 1; the question is about a selection.',
+      'Selected text:', '"passage\\nSecond"', 'Blocks containing it (HASH BLOCK-JSON):']);
+    assert.match(result.prompt, /\n[0-9a-f]{12} \{"type":"paragraph","attrs":\{"id":"a"\}.*\n[0-9a-f]{12} \{"type":"paragraph","attrs":\{"id":"b"\}/);
+    await assert.rejects(handle({action:'read',state,question:true,expected:contentHash(captured.snapshot)}), /Content changed/);
+    await assert.rejects(handle({action:'comment',state,actor:'Alice',opId:'bad',range,text:'',expected:contentHash(captured.snapshot)}), /comment is required/);
   } finally { doc.destroy(); }
 });
 
@@ -81,15 +87,26 @@ test('board context keeps selection identities, rejects deleted targets and boun
     assert.equal(captured.snapshot.content.length, 2);
     assert.deepEqual(captured.snapshot.context.map(e => e.id), ['label-a','label-b'], 'labels give the selection its meaning');
     assert.match(captured.quote, /rectangle: A\nellipse: B/);
-    const {result} = await handle({action:'read',state,question:true,selection:['a','b'],expected:captured.snapshot,image:true});
+    const {result} = await handle({action:'read',state,question:true,selection:['a','b'],expected:contentHash(captured.snapshot),image:true});
     assert.ok(result.png.length > 100);
+    const prompt = result.prompt.split('\n');
+    assert.equal(prompt[0], 'whiteboard "Whiteboard" at shared://board, revision 1; the question is about a selection.');
+    assert.equal(prompt[1], 'Selected (HASH ELEMENT-JSON):');
+    assert.match(prompt[2], /^[0-9a-f]{12} \{"id":"a","type":"rectangle"/);
+    assert.equal(prompt[4], 'Context: labels, connected and nearby elements:');
+    assert.match(prompt[5], /"id":"label-a"/);
     assert.throws(() => captureContext(doc, {selection:['missing']}), /no longer available/);
   } finally { doc.destroy(); }
   const large = await handle({action:'create',id:'large',opId:'create',actor:'Alice',kind:'document',
     content:{type:'doc',content:[{type:'paragraph',attrs:{id:'a'},content:[{type:'text',text:'x'.repeat(140000)}]}]}});
   const largeDoc = load(large.state);
   try {
-    assert.throws(() => captureContext(largeDoc), /too large/);
+    // Nothing is too large to ask about: past the budget the model reads on.
+    const whole = captureContext(largeDoc);
+    const {result} = await handle({action:'read',state:large.state,question:true,expected:contentHash(whole.snapshot)});
+    assert.ok(result.prompt.length <= 128 * 1024);
+    assert.match(result.prompt, /^document "Document" at shared:\/\/large, revision 1; the question is about the whole document\./);
+    assert.match(result.prompt, /1 more line omitted; Read shared:\/\/large for the rest\.$/);
     const text = largeDoc.getXmlFragment('document').get(0).get(0);
     assert.equal(captureContext(largeDoc, {range:rangeFor(text,0,text,3)}).quote, 'xxx');
   } finally { largeDoc.destroy(); }
@@ -101,7 +118,7 @@ test('thread replies are attributed, retry-safe and included in explicit questio
   const doc = load(state);
   try {
     const text = doc.getXmlFragment('document').get(0).get(0);
-    const range = rangeFor(text,2,text,12), expected = captureContext(doc,{range}).snapshot;
+    const range = rangeFor(text,2,text,12), expected = contentHash(captureContext(doc,{range}).snapshot);
     ({state} = await handle({action:'comment',state,opId:'thread',actor:'Guest: Alice',range,expected,text:'What does this mean?'}));
     const reply = {action:'reply-comment',opId:'reply',actor:'Guest: Bob',commentId:'thread',text:'Please include an example.'};
     ({state} = await handle({...reply,state}));
@@ -111,6 +128,7 @@ test('thread replies are attributed, retry-safe and included in explicit questio
     const {result} = await handle(ask);
     assert.deepEqual(result.snapshot.discussion,[{actor:'Guest: Alice',text:'What does this mean?'},
       {actor:'Guest: Bob',text:'Please include an example.'}]);
+    assert.match(result.prompt, /\nDiscussion:\nGuest: Alice: "What does this mean\?"\nGuest: Bob: "Please include an example\."\nSelected text:/);
     await assert.rejects(handle({...ask,commentVersion:'thread'}),/Discussion changed/);
     await assert.rejects(handle({...reply,state,opId:'empty',text:' '}),/reply is required/);
     await assert.rejects(handle({...reply,state,opId:'unknown',commentId:'missing'}),/no longer available/);
@@ -150,14 +168,15 @@ test('board areas carry their region, nearby objects without image bytes and a c
     for (const bad of [[0,0,0,10], [0.5,0,10,10], [0,0,10], 'area'])
       assert.throws(() => captureContext(doc, {region:bad}), /Invalid board area/);
     const {result} = await handle({action:'read',state,question:true,selection:['a'],region,
-      expected:captured.snapshot,image:true,imageMax:1024});
+      expected:contentHash(captured.snapshot),image:true,imageMax:1024});
     assert.deepEqual(result.snapshot.region, region);
+    assert.equal(result.prompt.split('\n')[1], `Area: x ${region[0]}, y ${region[1]}, ${region[2]} × ${region[3]}`);
     assert.deepEqual(size(result.png), [992, 672], 'area plus margin, upscaled to stay legible');
     const whole = await handle({action:'read',state,question:true,selection:['a'],
-      expected:captureContext(doc, {selection:['a']}).snapshot,image:true});
+      expected:contentHash(captureContext(doc, {selection:['a']}).snapshot),image:true});
     assert.deepEqual(size(whole.result.png), [160, 160], 'object questions keep their own framing');
     await assert.rejects(handle({action:'read',state,question:true,selection:['a'],region:[0,0,10,10],
-      expected:captured.snapshot}), /Content changed/);
+      expected:contentHash(captured.snapshot)}), /Content changed/);
   } finally { doc.destroy(); }
 });
 
@@ -174,8 +193,8 @@ test('board comments anchor to objects and areas, track changes and send survivi
   };
   const statuses = () => { const doc = load(state); try { return readComments(doc, state.comments); } finally { doc.destroy(); } };
   let doc = load(state);
-  const objects = captureContext(doc, {selection:['a','b']}).snapshot;
-  const area = captureContext(doc, {region:[500,0,80,60]}).snapshot;
+  const objects = contentHash(captureContext(doc, {selection:['a','b']}).snapshot);
+  const area = contentHash(captureContext(doc, {region:[500,0,80,60]}).snapshot);
   doc.destroy();
   ({state} = await handle({action:'comment',state,opId:'objects',actor:'Guest: Alice',text:'Align these',
     selection:['a','b'],expected:objects}));
@@ -196,7 +215,7 @@ test('board comments anchor to objects and areas, track changes and send survivi
   assert.deepEqual(thread.liveSelection, ['a']);
   assert.equal(thread.liveQuote, '1 object\nrectangle: A');
   doc = load(state);
-  const surviving = captureContext(doc, {selection:thread.liveSelection}).snapshot;
+  const surviving = contentHash(captureContext(doc, {selection:thread.liveSelection}).snapshot);
   doc.destroy();
   const ask = {action:'read',state,question:true,commentId:'objects',commentVersion:'objects',
     selection:['a'],expected:surviving};
