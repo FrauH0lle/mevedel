@@ -282,7 +282,9 @@ context.
 
 ## Working with the assistant
 
-Shared tools are discoverable through ToolSearch/ToolCall. Implementation and
+Shared tools are discoverable through ToolSearch/ToolCall. Their summaries name
+whiteboards and documents, and ToolSearch's `shared` key separates them from
+artifacts, so a requested whiteboard finds `SharedCreate`. Implementation and
 worker roles can read and edit; discussion, explorer, reviewer, and verifier
 roles can read.
 

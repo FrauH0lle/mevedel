@@ -555,8 +555,8 @@ User extras use `mevedel-preset-extra-tool-specs` and
 `mevedel-agent-extra-tool-specs`; an explicitly native extra remains native.
 
 ToolSearch's static description gives a compact capability index with example
-search keys for Elisp introspection, code navigation, tasks, agents, and web
-tools. These are suitability cues, not a live availability roster or a required
+search keys for Elisp introspection, code navigation, tasks, agents, web tools,
+goals, and shared whiteboards and documents. These are suitability cues, not a live availability roster or a required
 workflow. The current role and request still determine search results. A known,
 appropriate tool can be used directly; a generic tool's ability to reproduce an
 operation does not by itself make specialist discovery unnecessary.

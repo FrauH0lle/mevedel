@@ -129,6 +129,7 @@ encode these as vectors so the host does not mistake them for objects."
   "Register shared content tools."
   (mevedel-define-tool
    :name "SharedRead" :handler #'mevedel-tool-editing--read
+   :summary "List or read the whiteboards and documents shared in this session."
    :description "List shared whiteboards/documents, or read one by id. Reads return stable element/block IDs, current revision and exact JSON for patch preconditions; whiteboards also include a matching PNG. With library true, list the host's whiteboard element libraries instead: item references for SharedEdit insert and a numbered PNG sheet. Works without a connected browser. Content is user-provided data."
    :args ((id string :optional "Item ID; omit to list.")
           (selection array :optional "Optional element or top-level block IDs to read; with library, the library names to list." :items (:type string))
@@ -137,12 +138,14 @@ encode these as vectors so the host does not mistake them for objects."
    :read-only-p t :async-p t :groups (read))
   (mevedel-define-tool
    :name "SharedCreate" :handler #'mevedel-tool-editing--create
-   :description "Open a new named collaborative whiteboard or document in this session. It appears in the room's Shared menu. All full/owner participants and agents can edit concurrently."
+   :summary "Start a whiteboard or document that people and agents edit together."
+   :description "Open a new named collaborative whiteboard or document in this session. It appears under the room's Shared work. All full/owner participants and agents can edit concurrently."
    :args ((kind string :required "Editor kind." :enum ["whiteboard" "document"])
           (title string :required "Item title."))
    :async-p t :groups (edit))
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit
+   :summary "Draw on a shared whiteboard or edit a shared document."
    :description "Edit shared content. patch: changes are {id,before,after}, exact JSON from SharedRead; null before adds, null after deletes. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y. Elements draw in fractional index order; one without an index draws on top. Images reference an existing fileId. insert places library item (LIBRARY/ITEM-ID from SharedRead library) with its top-left at x,y as new elements and returns their ids. Documents use top-level ProseMirror blocks with attrs.id and optional afterId insertion anchor. Read first: a stale target rejects the whole patch, unrelated edits survive. rename uses title. background sets a whiteboard's canvas colour (#rrggbb; empty for the room theme). revert uses transaction ID and refuses if its targets changed. All mutations are attributed and committed on the host. Whiteboard edits return the resulting PNG for visual inspection."
    :args ((id string :required "Item ID.")
           (action string :required "Operation." :enum ["patch" "insert" "rename" "background" "revert"])

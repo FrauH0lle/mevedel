@@ -61,11 +61,9 @@ created as a side effect of registration and handles serialization."
   name              ; string: "Read", "ApplyPatch", "Bash"
   handler           ; function: the actual tool implementation
   description       ; string: short LLM-facing description (for schema, "ToolSearch")
-  summary           ; string or nil: ultra-short one-liner for the
-                    ;   deferred-tools roster reminder.  When nil, the
-                    ;   roster lists just the tool name (some
-                    ;   third-party / wrapped tools have multi-line
-                    ;   descriptions that bloat the system reminder).
+  summary           ; string or nil: ultra-short one-liner that ToolSearch
+                    ;   matches and lists.  When nil, search finds the
+                    ;   tool only by name, category or group.
   prompt            ; string or function: detailed instructions
   prompt-source     ; plist describing the prompt's registration provenance
   args              ; arg spec list in mevedel format
@@ -679,11 +677,10 @@ Required:
   :name         STRING   Tool name
   :description  STRING   Short LLM-facing description
 
-  :summary      STRING   Optional ultra-short one-liner used by the
-                         deferred-tools roster reminder (the roster
-                         falls back to listing just the tool name when
-                         this is omitted; full descriptions are too
-                         long for that listing).
+  :summary      STRING   Optional ultra-short one-liner that ToolSearch
+                         matches and lists.  Without one, search finds
+                         the tool only by name, category or group; full
+                         descriptions are not searched.
 
 Wrap form (:wrap EXPR):
 
