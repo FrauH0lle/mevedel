@@ -618,6 +618,9 @@ boundary checks."
   "Add PATH with MIME to this prompt buffer's gptel media context.
 When BYTES is non-nil, stage those verified bytes locally until request
 teardown instead of letting gptel read PATH."
+  ;; gptel's request transform wraps a non-empty context with this library,
+  ;; which gptel itself loads only from its own context commands.
+  (require 'gptel-context)
   (if (not bytes)
       (progn
         (unless (local-variable-p 'gptel-context)
