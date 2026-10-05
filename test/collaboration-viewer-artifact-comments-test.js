@@ -85,8 +85,9 @@ const markers = posted.filter(message => message.t === 'comment-markers').at(-1)
 assert.deepEqual(JSON.parse(JSON.stringify(markers.markers)),
                  [{id: 'c1', n: 1, anchor, state: 'answered'}]);
 
-// A delivered request spins its marker while the session works on it and
-// until an answer arrives; a queued one spins too, and a turn that ended
+// A delivered request spins its marker while the session's running turn is
+// that request, through its first reply until the turn ends; a queued one
+// spins too, a later user turn is someone else's work, and a turn that ended
 // without a reply leaves the thread merely sent.
 const lastMarker = () => posted.filter(message => message.t === 'comment-markers').at(-1).markers[0];
 const delivered = [
@@ -100,7 +101,14 @@ busy = true;
 controller.activity();
 assert.equal(lastMarker().state, 'working');
 controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
+assert.equal(lastMarker().state, 'working');
+controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'},
+                   {id: 'u2', kind: 'user', text: 'Something else'}]);
 assert.equal(lastMarker().state, 'answered');
+busy = false;
+controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
+assert.equal(lastMarker().state, 'answered');
+busy = true;
 controller.queue([{id: 9, shared: {kind: 'artifact', commentId: 'c1'}}]);
 assert.equal(lastMarker().state, 'working');
 controller.queue([]);
