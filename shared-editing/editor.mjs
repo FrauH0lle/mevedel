@@ -1402,7 +1402,7 @@ function board() {
   }
   const hints = {
     select: 'Drag across empty canvas to box-select (Alt: touched objects). Shift adds. Double-click edits text.',
-    pan: 'Drag to move around the canvas. Scroll to zoom.',
+    pan: 'Drag or scroll to move around the canvas. Ctrl / ⌘ scroll or pinch to zoom.',
     text: 'Click to place text. Ctrl / ⌘ Enter to finish.',
     stickynote: 'Click to place a note. Ctrl / ⌘ Enter to finish.',
     arrow: 'Drag between objects to connect them. Connections follow the objects.',
@@ -1481,7 +1481,7 @@ function board() {
     <div class="shortcut-columns"><section><h3>Tools</h3><dl>${tools.filter(([value]) => !readOnly || ['pan','select'].includes(value)).map(([,label,key]) => `<div><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}${readOnly ? '' : '<div><dt>Insert image</dt><dd><kbd>9</kbd></dd></div>'}</dl></section>
     <section><h3>Working on the canvas</h3><dl>
     <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
-    <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Middle-button drag</dd></div><div><dt>Zoom at pointer</dt><dd>Scroll</dd></div>
+    <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Scroll / middle-button drag</dd></div><div><dt>Pan sideways</dt><dd>Shift + scroll</dd></div><div><dt>Zoom at pointer</dt><dd>Ctrl / ⌘ scroll / pinch</dd></div>
     ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Duplicate</dt><dd>Ctrl / ⌘ D</dd></div><div><dt>Group / ungroup</dt><dd>Ctrl / ⌘ G / Shift G</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Comment on the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
     </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
   document.body.append(shortcuts);
@@ -1849,17 +1849,29 @@ function board() {
     doc.transact(() => putElement(doc, text), local);
     editText(text.id);
   };
+  /* Scrolling pans, as in Excalidraw and Figma; Ctrl or Command zooms at
+     the pointer.  A trackpad pinch arrives as a Ctrl wheel with small
+     deltas, so zoom follows the delta: a mouse notch is about 10%. */
   canvas.onwheel = (event) => {
     event.preventDefault();
-    const point = world(event),
-      factor = event.deltaY > 0 ? 1.1 : 1 / 1.1;
-    if (view[2] * factor < 100 || view[2] * factor > 100000) return;
-    view = [
-      point[0] + (view[0] - point[0]) * factor,
-      point[1] + (view[1] - point[1]) * factor,
-      view[2] * factor,
-      view[3] * factor,
-    ];
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1;
+    let dx = event.deltaX * unit, dy = event.deltaY * unit;
+    if (event.ctrlKey || event.metaKey) {
+      const point = world(event),
+        next = Math.max(100, Math.min(100000, view[2] * Math.exp(Math.max(-100, Math.min(100, dy)) / 1000))),
+        factor = next / view[2];
+      view = [
+        point[0] + (view[0] - point[0]) * factor,
+        point[1] + (view[1] - point[1]) * factor,
+        next,
+        view[3] * factor,
+      ];
+    } else {
+      // A mouse wheel has one axis; Shift turns it sideways.
+      if (event.shiftKey && !dx) [dx, dy] = [dy, 0];
+      const scale = canvas.getScreenCTM()?.a || 1;
+      view = [view[0] + dx / scale, view[1] + dy / scale, view[2], view[3]];
+    }
     draw();
   };
   canvas.onkeydown = (event) => {
