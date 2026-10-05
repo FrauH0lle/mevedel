@@ -103,6 +103,12 @@ therefore involves neither the host nor the relay -- the Invite sheet
 builds the links in the page and copies them. That is also why the tiers
 are a prefix chain rather than three unrelated tokens.
 
+The room header and the tab title name the shared session. The host's
+`status` frame carries the session's display name, which a joining guest
+receives at once and every guest again after a rename, manual or automatic;
+until it arrives the header shows the start of the room ID. A lobby's header
+names its project instead.
+
 Invite sits in the room header and remains available to read-only guests.
 Rooms and New session are in **In this room**. Invite disappears when the room
 ends, because the link goes with it.
@@ -153,14 +159,22 @@ Repeated unchanged requests preserve the open card and draft feedback.
 
 ## Guest-requested sessions
 
-A guest supplies a name and an optional first prompt; the workspace and
-working directory come from the room's own session, never from the guest.
+A guest supplies an optional name and an optional first prompt; the workspace
+and working directory come from the room's own session, never from the guest.
 The browser creation path limits the name to 48 display columns, replaces
 characters outside `[A-Za-z0-9_-]` with underscores, and requires at least one
-ASCII letter or digit. This is narrower than Emacs session renaming. The new
-session still gets an independent ID; its display name does not name its directory.
-A matching name among live root sessions in that workspace is refused; this is
-not a uniqueness check across all saved display names.
+ASCII letter or digit in a typed name. This is narrower than Emacs session
+renaming. The new session still gets an independent ID; its display name does
+not name its directory. A matching name among live root sessions in that
+workspace is refused; this is not a uniqueness check across all saved display
+names.
+
+Without a name, or with one that sanitizes to no letter or digit, the session
+is created unnamed, like one started in Emacs without a name: it shows its ID
+until its first prompt, the guest's or a later one, gives it an automatic title
+(see [session naming](sessions.md)). Outcomes and offers carry the name the
+session starts with, its ID, and the approval prompt says it will be titled
+from the first prompt.
 
 A guest may also pick the session's model. The `welcome` frame lists every
 model registered with gptel, as exact `BACKEND:MODEL` labels, to writable guests;
@@ -203,7 +217,9 @@ the strongest secret it was handed, and a tab presents that room capped
 to its own tier -- truncation again, the same prefix property the Invite
 sheet uses. Writes merge by room ID instead of replacing the list, preserving offers
 received by other tabs. A weaker tab cannot expose a stronger stored bearer. The room a tab is
-currently in is kept but not listed: it is not somewhere to go.
+currently in is kept but not listed: it is not somewhere to go. It is kept
+under the name its host currently gives it, so a session renamed or titled
+after its first prompt is listed by that name.
 
 The new session gets its own room, and the requester is handed the tier it
 already holds -- an owner requester an owner link, a full-control requester

@@ -127,7 +127,18 @@
                   (&optional session))
 (autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
 
+;; `mevedel-session-control-transfer'
+(declare-function mevedel-session-control-transfer-register-observer
+                  "mevedel-session-control-transfer" (session observer))
+(declare-function mevedel-session-control-transfer-unregister-observer
+                  "mevedel-session-control-transfer" (session observer))
+(autoload 'mevedel-session-control-transfer-register-observer
+  "mevedel-session-control-transfer")
+(autoload 'mevedel-session-control-transfer-unregister-observer
+  "mevedel-session-control-transfer")
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-name "mevedel-structs" (session))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
 (declare-function mevedel-session-pending-input-failure-paused
                   "mevedel-structs" (session))
@@ -652,10 +663,13 @@ guest's own pending entries."
 
 Busy drives the viewer\='s turn-finished notification; the model and
 permission mode are what its status strip reports, the same two facts
-the Emacs mode line carries."
+the Emacs mode line carries.  The session's display name heads the
+room, and follows a rename, including an automatic title."
   (let ((busy (mevedel-collaboration--busy-p room))
         (data-buffer (mevedel-collaboration--room-data-buffer room)))
     (list :t "status"
+          :name (when-let* ((session (plist-get room :session)))
+                  (mevedel-session-name session))
           :busy (if busy t :json-false)
           :mode (when-let* ((mode (ignore-errors
                                     (mevedel-permission-mode-effective
@@ -698,6 +712,12 @@ the Emacs mode line carries."
     (condition-case nil
         (mevedel-collaboration--publish-status room)
       (error (mevedel-collaboration--observer-failure room)))))
+
+(defun mevedel-collaboration--on-session-event (data-buffer event)
+  "Publish DATA-BUFFER's status when its session EVENT changes it.
+A rename, manual or automatic, changes the name the room is headed by."
+  (when (eq event 'rename)
+    (mevedel-collaboration-notify-request-changed data-buffer)))
 
 (defun mevedel-collaboration-notify-history-changed (data-buffer)
   "Refresh DATA-BUFFER's browser history after a segment transition commits."
@@ -762,6 +782,9 @@ request or prompt transaction."
                        #'mevedel-collaboration--safe-post-tool))))
     (when-let* ((timer (plist-get room :publish-timer)))
       (cancel-timer timer))
+    (when-let* ((observer (plist-get room :session-observer)))
+      (mevedel-session-control-transfer-unregister-observer
+       (plist-get room :session) observer))
     (when-let* ((transport (plist-get room :transport)))
       (unless (eq reason 'emacs-exit)
         (condition-case nil
@@ -846,7 +869,13 @@ returning the live room."
                          :guests (make-hash-table :test #'eql)
                          :push-guests (make-hash-table :test #'equal)
                          :ui-requests (make-hash-table :test #'eql)
-                         :publish-timer nil)
+                         :publish-timer nil
+                         :session-observer
+                         (mevedel-session-control-transfer-register-observer
+                          session
+                          (lambda (event &rest _)
+                            (mevedel-collaboration--on-session-event
+                             data-buffer event))))
                    (mevedel-collaboration--links
                     web-origin room-id key write-token owner-token))
                   mevedel-collaboration--rooms)

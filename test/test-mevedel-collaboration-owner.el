@@ -193,8 +193,8 @@
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId 4 :name "again"))
       (should (= 2 (length created)))
-      ;; Neither a missing name nor one that sanitizes to punctuation is
-      ;; a session name.
+      ;; A missing name, or one that sanitizes to punctuation, asks for an
+      ;; unnamed session, titled later from its first prompt.
       (remhash 1 guests)
       (puthash 1 (list :name "Owner" :writable t :owner t :ready t) guests)
       (mevedel-collaboration--handle-new-session
@@ -203,9 +203,12 @@
        room 1 '(:reqId 6 :name "///"))
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId 7 :prompt "no name"))
+      (should (equal '((nil . "no name") (nil . nil) (nil . nil))
+                     (seq-take created 3)))
+      ;; An invalid request is still no request.
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId "8" :name "invalid request id"))
-      (should (= 2 (length created)))
+      (should (= 5 (length created)))
       ;; A request already waiting on a person blocks the next one, whose
       ;; approval would only fail on the name the first one took.
       (let (sent)
@@ -221,6 +224,12 @@
           (should (= 9 (plist-get (car sent) :reqId)))
           (should (string-match-p "auth_work"
                                   (plist-get (car sent) :message)))
+          ;; A waiting unnamed request is described without a name.
+          (plist-put (gethash 2 guests) :pending-new-session '(8 . nil))
+          (mevedel-collaboration--handle-new-session room 2 '(:reqId 20))
+          (should (equal "Your request for a new session is still waiting"
+                         (plist-get (car sent) :message)))
+          (should-not (plist-get (car sent) :name))
           ;; It unblocks once that one is answered.
           (plist-put (gethash 2 guests) :pending-new-session nil)
           (mevedel-collaboration--handle-new-session
@@ -265,10 +274,11 @@
               ((symbol-function 'mevedel-collaboration--create-guest-session)
                (lambda (&rest args) (push (cons 'created args) sent)))
               ((symbol-function 'mevedel--prompt-user-with-overlay)
-               (lambda (_title content _question _echo callback &optional
+               (lambda (_title content question _echo callback &optional
                                host-only audience)
                  (setq captured (list :callback callback
                                       :content content
+                                      :question question
                                       :host-only host-only
                                       :audience audience))
                  'overlay)))
@@ -306,7 +316,15 @@
       (funcall (plist-get captured :callback) 'approve)
       (should (eq 'created (car (car sent))))
       (should (equal '("flow" "go" nil "Codex:gpt-6-luna")
-                     (last (cdr (car sent)) 4))))))
+                     (last (cdr (car sent)) 4)))
+      ;; An unnamed request says the session will be titled later.
+      (mevedel-collaboration--ask-host-new-session room 7 guest 43 nil nil)
+      (should (string-match-p "^Name:   (none -- titled from the first prompt)$"
+                              (plist-get captured :content)))
+      (should (equal "Create a new session for Writer?"
+                     (plist-get captured :question)))
+      (funcall (plist-get captured :callback) 'approve)
+      (should (equal '(nil nil nil nil) (last (cdr (car sent)) 4))))))
 
 (mevedel-deftest mevedel-collaboration--offer-room-to-owners
   (:doc "offers a created room to the other owners, never to the requester")
@@ -331,131 +349,158 @@
       (should (equal "owner-link" (plist-get frame :link))))))
 
 (mevedel-deftest mevedel-collaboration--create-guest-session
-  (:doc "creates atomically, rejects collisions, and preserves guest tier")
-  (let* ((session (mevedel-session--create :name "parent"))
-         (room (list :transport 'transport :session session))
-         (new-room (list :link-full "full-link" :link-owner "owner-link"))
-         existing sent enqueued stopped steps)
-    (setf (mevedel-session-workspace session) 'workspace)
-    (setf (mevedel-session-working-directory session) "/tmp/ws/")
-    (cl-letf (((symbol-function 'mevedel--workspace-sessions)
-               (lambda (_workspace) existing))
-              ((symbol-function 'mevedel--chat-buffer)
-               (lambda (&rest _) (current-buffer)))
-              ((symbol-function 'mevedel--display-chat-buffer) #'ignore)
-              ((symbol-function 'mevedel--ensure-chat-preset)
-               (lambda (_buffer) (push 'preset steps)))
-              ((symbol-function 'mevedel-model-resolve-provider)
-               (lambda (spec &optional _noerror) (list :label spec)))
-              ((symbol-function 'mevedel-model-set-session-provider)
-               (lambda (_session provider &optional _buffer)
-                 (push (plist-get provider :label) steps)))
-              ((symbol-function 'mevedel-collaboration--start)
-               (lambda (&rest _) (push 'start steps) new-room))
-              ((symbol-function 'mevedel-collaboration--stop-internal)
-               (lambda (stopped-room _reason)
-                 (push stopped-room stopped)))
-              ((symbol-function 'mevedel-view-enqueue-external-follow-up)
-               (lambda (_buffer text &rest _) (push text enqueued)))
-              ((symbol-function 'mevedel-collaboration--transport-send)
-               (lambda (_transport _peer frame) (push frame sent))))
-      (mevedel-test--with-captured-messages nil
-        (setq existing '(("taken" . nil)))
-        (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Writer" :writable t) 1 "taken" "go")
-        (should (eq :json-false (plist-get (car sent) :ok)))
-        (should-not enqueued)
-        ;; A full-control requester gets a full-control link back:
-        ;; asking for a session is never a way to gain authority.
-        (setq existing nil sent nil)
-        (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Writer" :writable t) 2 "fresh" "go")
-        (should (equal "full-link" (plist-get (car sent) :link)))
-        ;; The approved prompt goes straight into the pending queue,
-        ;; which drains on idle -- nothing further to press.
-        (should (equal '("go") enqueued))
-        ;; Its files are saved into the new session and queued with it.
-        (let (saved queued-paths)
-          (setq existing nil sent nil)
-          (cl-letf (((symbol-function 'mevedel-collaboration--save-guest-files)
-                     (lambda (buffer images) (setq saved (cons buffer images)) '("/media/a.txt")))
-                    ((symbol-function 'mevedel-view-enqueue-external-follow-up)
-                     (lambda (_buffer _text &rest keys)
-                       (setq queued-paths (plist-get keys :paths)))))
-            (mevedel-collaboration--create-guest-session
-             room 1 '(:name "Writer" :writable t) 6 "files" "see" '((:mime "text/plain" :data "eA=="))))
-          (should (equal (cons (current-buffer) '((:mime "text/plain" :data "eA=="))) saved))
-          (should (equal '("/media/a.txt") queued-paths)))
-        (setq sent nil enqueued nil)
-        (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Owner" :writable t :owner t) 3 "fresh" nil)
-        (should (equal "owner-link" (plist-get (car sent) :link)))
-        (should (eq t (plist-get (car sent) :ok)))
-        (should-not enqueued)
-        ;; The default preset lands first, so a model it names cannot
-        ;; replace the guest's choice; both precede the room and prompt.
-        (setq steps nil enqueued nil)
-        (cl-letf (((symbol-function 'mevedel-view-enqueue-external-follow-up)
-                   (lambda (_buffer text &rest _)
-                     (push 'enqueue steps) (push text enqueued))))
-          (mevedel-collaboration--create-guest-session
-           room 1 '(:name "Owner" :writable t :owner t) 8 "luna" "go" nil
-           "Codex:gpt-6-luna"))
-        (should (equal '(preset "Codex:gpt-6-luna" start enqueue)
-                       (reverse steps)))
-        ;; No choice keeps the preset's own model.
-        (setq steps nil)
-        (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Owner" :writable t :owner t) 9 "plain" nil)
-        (should (equal '(preset start) (reverse steps)))
-        ;; A lobby has no session and creates in its own workspace.
-        (let (created-in)
-          (setq sent nil)
-          (cl-letf (((symbol-function 'mevedel--chat-buffer)
-                     (lambda (_name _create workspace directory)
-                       (setq created-in (list workspace directory))
-                       (current-buffer))))
-            (mevedel-collaboration--create-guest-session
-             '(:transport transport :workspace lobby-ws :directory "/lobby/")
-             1 '(:name "Owner" :writable t :owner t) 7 "from-lobby" nil))
-          (should (equal '(lobby-ws "/lobby/") created-in))
-          (should (equal "owner-link" (plist-get (car sent) :link))))
-        ;; Host presentation is incidental: it cannot revoke a room or
-        ;; suppress the successful protocol reply.
-        (setq sent nil stopped nil)
-        (cl-letf (((symbol-function 'mevedel--display-chat-buffer)
-                   (lambda (&rest _) (error "Broken display"))))
-          (mevedel-collaboration--create-guest-session
-           room 1 '(:name "Owner" :writable t :owner t) 4 "display" nil))
-        (should (eq t (plist-get (car sent) :ok)))
-        (should-not stopped)
-        ;; A room with no delivered bearer link is not a successful
-        ;; creation and must not reserve the requested name.
-        (let ((created-buffer (generate-new-buffer " *guest-session-send*")))
-          (setq sent nil stopped nil)
-          (cl-letf (((symbol-function 'mevedel--chat-buffer)
-                     (lambda (&rest _) created-buffer))
-                    ((symbol-function 'mevedel-collaboration--transport-send)
-                     (lambda (&rest _) nil)))
-            (mevedel-collaboration--create-guest-session
-             room 1 '(:name "Writer" :writable t) 5 "disconnected" nil))
-          (should-not (buffer-live-p created-buffer))
-          (should (equal (list new-room) stopped)))
-        ;; Failure to queue an approved prompt rolls back both the room
-        ;; and its new data buffer, without signaling into the parent room.
-        (let ((created-buffer (generate-new-buffer " *guest-session-failure*")))
-          (setq sent nil enqueued nil stopped nil)
-          (cl-letf (((symbol-function 'mevedel--chat-buffer)
-                     (lambda (&rest _) created-buffer))
-                    ((symbol-function 'mevedel-view-enqueue-external-follow-up)
-                     (lambda (&rest _) nil)))
-            (mevedel-collaboration--create-guest-session
-             room 1 '(:name "Writer" :writable t) 6 "broken" "go"))
-          (should-not (buffer-live-p created-buffer))
-          (should (equal (list new-room) stopped))
-          (should (eq :json-false (plist-get (car sent) :ok)))
-          (should (string-match-p "Could not queue"
-                                  (plist-get (car sent) :message))))))))
+		 (:doc "creates atomically, rejects collisions, and preserves guest tier")
+		 (with-temp-buffer
+		   (let* ((session (mevedel-session--create :name "parent"))
+			  (room (list :transport 'transport :session session))
+			  (new-room (list :link-full "full-link" :link-owner "owner-link"))
+			  existing sent enqueued stopped steps)
+		     (setf (mevedel-session-workspace session) 'workspace)
+		     (setf (mevedel-session-working-directory session) "/tmp/ws/")
+		     (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+				(lambda (_workspace) existing))
+			       ;; A created session takes the requested name, or starts
+			       ;; with its id when it has none.
+			       ((symbol-function 'mevedel--chat-buffer)
+				(lambda (name &rest _)
+				  (setq-local mevedel--session
+					      (mevedel-session--create
+					       :name (or name "2026-10-05T17-00-abc")))
+				  (current-buffer)))
+			       ((symbol-function 'mevedel--display-chat-buffer) #'ignore)
+			       ((symbol-function 'mevedel--ensure-chat-preset)
+				(lambda (_buffer) (push 'preset steps)))
+			       ((symbol-function 'mevedel-model-resolve-provider)
+				(lambda (spec &optional _noerror) (list :label spec)))
+			       ((symbol-function 'mevedel-model-set-session-provider)
+				(lambda (_session provider &optional _buffer)
+				  (push (plist-get provider :label) steps)))
+			       ((symbol-function 'mevedel-collaboration--start)
+				(lambda (&rest _) (push 'start steps) new-room))
+			       ((symbol-function 'mevedel-collaboration--stop-internal)
+				(lambda (stopped-room _reason)
+				  (push stopped-room stopped)))
+			       ((symbol-function 'mevedel-view-enqueue-external-follow-up)
+				(lambda (_buffer text &rest _) (push text enqueued)))
+			       ((symbol-function 'mevedel-collaboration--transport-send)
+				(lambda (_transport _peer frame) (push frame sent))))
+		       (mevedel-test--with-captured-messages nil
+							     (setq existing '(("taken" . nil)))
+							     (mevedel-collaboration--create-guest-session
+							      room 1 '(:name "Writer" :writable t) 1 "taken" "go")
+							     (should (eq :json-false (plist-get (car sent) :ok)))
+							     (should-not enqueued)
+							     ;; A full-control requester gets a full-control link back:
+							     ;; asking for a session is never a way to gain authority.
+							     (setq existing nil sent nil)
+							     (mevedel-collaboration--create-guest-session
+							      room 1 '(:name "Writer" :writable t) 2 "fresh" "go")
+							     (should (equal "full-link" (plist-get (car sent) :link)))
+							     (should (equal "fresh" (plist-get (car sent) :name)))
+							     ;; The approved prompt goes straight into the pending queue,
+							     ;; which drains on idle -- nothing further to press.
+							     (should (equal '("go") enqueued))
+							     ;; Its files are saved into the new session and queued with it.
+							     (let (saved queued-paths)
+							       (setq existing nil sent nil)
+							       (cl-letf (((symbol-function 'mevedel-collaboration--save-guest-files)
+									  (lambda (buffer images) (setq saved (cons buffer images)) '("/media/a.txt")))
+									 ((symbol-function 'mevedel-view-enqueue-external-follow-up)
+									  (lambda (_buffer _text &rest keys)
+									    (setq queued-paths (plist-get keys :paths)))))
+								 (mevedel-collaboration--create-guest-session
+								  room 1 '(:name "Writer" :writable t) 6 "files" "see" '((:mime "text/plain" :data "eA=="))))
+							       (should (equal (cons (current-buffer) '((:mime "text/plain" :data "eA=="))) saved))
+							       (should (equal '("/media/a.txt") queued-paths)))
+							     (setq sent nil enqueued nil)
+							     (mevedel-collaboration--create-guest-session
+							      room 1 '(:name "Owner" :writable t :owner t) 3 "fresh" nil)
+							     (should (equal "owner-link" (plist-get (car sent) :link)))
+							     (should (eq t (plist-get (car sent) :ok)))
+							     (should-not enqueued)
+							     ;; An unnamed request creates an unnamed session, whatever names
+							     ;; are taken, and reports the name the session starts with.
+							     (setq sent nil existing '(("taken" . nil)))
+							     (let ((offered nil))
+							       (cl-letf (((symbol-function
+									   'mevedel-collaboration--offer-room-to-owners)
+									  (lambda (_room _except name _link) (push name offered))))
+								 (mevedel-collaboration--create-guest-session
+								  room 1 '(:name "Owner" :writable t :owner t) 10 nil nil))
+							       (should (eq t (plist-get (car sent) :ok)))
+							       (should (equal "2026-10-05T17-00-abc" (plist-get (car sent) :name)))
+							       (should (equal '("2026-10-05T17-00-abc") offered)))
+							     (setq existing nil)
+							     ;; The default preset lands first, so a model it names cannot
+							     ;; replace the guest's choice; both precede the room and prompt.
+							     (setq steps nil enqueued nil)
+							     (cl-letf (((symbol-function 'mevedel-view-enqueue-external-follow-up)
+									(lambda (_buffer text &rest _)
+									  (push 'enqueue steps) (push text enqueued))))
+							       (mevedel-collaboration--create-guest-session
+								room 1 '(:name "Owner" :writable t :owner t) 8 "luna" "go" nil
+								"Codex:gpt-6-luna"))
+							     (should (equal '(preset "Codex:gpt-6-luna" start enqueue)
+									    (reverse steps)))
+							     ;; No choice keeps the preset's own model.
+							     (setq steps nil)
+							     (mevedel-collaboration--create-guest-session
+							      room 1 '(:name "Owner" :writable t :owner t) 9 "plain" nil)
+							     (should (equal '(preset start) (reverse steps)))
+							     ;; A lobby has no session and creates in its own workspace.
+							     (let (created-in)
+							       (setq sent nil)
+							       (cl-letf (((symbol-function 'mevedel--chat-buffer)
+									  (lambda (_name _create workspace directory)
+									    (setq created-in (list workspace directory))
+									    (current-buffer))))
+								 (mevedel-collaboration--create-guest-session
+								  '(:transport transport :workspace lobby-ws :directory "/lobby/")
+								  1 '(:name "Owner" :writable t :owner t) 7 "from-lobby" nil))
+							       (should (equal '(lobby-ws "/lobby/") created-in))
+							       (should (equal "owner-link" (plist-get (car sent) :link))))
+							     ;; Host presentation is incidental: it cannot revoke a room or
+							     ;; suppress the successful protocol reply.
+							     (setq sent nil stopped nil)
+							     (cl-letf (((symbol-function 'mevedel--display-chat-buffer)
+									(lambda (&rest _) (error "Broken display"))))
+							       (mevedel-collaboration--create-guest-session
+								room 1 '(:name "Owner" :writable t :owner t) 4 "display" nil))
+							     (should (eq t (plist-get (car sent) :ok)))
+							     (should-not stopped)
+							     ;; A room with no delivered bearer link is not a successful
+							     ;; creation and must not reserve the requested name.
+							     (let ((created-buffer (generate-new-buffer " *guest-session-send*")))
+							       (with-current-buffer created-buffer
+								 (setq-local mevedel--session
+									     (mevedel-session--create :name "disconnected")))
+							       (setq sent nil stopped nil)
+							       (cl-letf (((symbol-function 'mevedel--chat-buffer)
+									  (lambda (&rest _) created-buffer))
+									 ((symbol-function 'mevedel-collaboration--transport-send)
+									  (lambda (&rest _) nil)))
+								 (mevedel-collaboration--create-guest-session
+								  room 1 '(:name "Writer" :writable t) 5 "disconnected" nil))
+							       (should-not (buffer-live-p created-buffer))
+							       (should (equal (list new-room) stopped)))
+							     ;; Failure to queue an approved prompt rolls back both the room
+							     ;; and its new data buffer, without signaling into the parent room.
+							     (let ((created-buffer (generate-new-buffer " *guest-session-failure*")))
+							       (with-current-buffer created-buffer
+								 (setq-local mevedel--session
+									     (mevedel-session--create :name "broken")))
+							       (setq sent nil enqueued nil stopped nil)
+							       (cl-letf (((symbol-function 'mevedel--chat-buffer)
+									  (lambda (&rest _) created-buffer))
+									 ((symbol-function 'mevedel-view-enqueue-external-follow-up)
+									  (lambda (&rest _) nil)))
+								 (mevedel-collaboration--create-guest-session
+								  room 1 '(:name "Writer" :writable t) 6 "broken" "go"))
+							       (should-not (buffer-live-p created-buffer))
+							       (should (equal (list new-room) stopped))
+							       (should (eq :json-false (plist-get (car sent) :ok)))
+							       (should (string-match-p "Could not queue"
+										       (plist-get (car sent) :message)))))))))
 
 (provide 'test-mevedel-collaboration-owner)
 ;;; test-mevedel-collaboration-owner.el ends here

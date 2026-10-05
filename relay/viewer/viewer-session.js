@@ -82,7 +82,9 @@
       } catch (_error) { /* storage unavailable; this page still has them */ }
     }
 
-    function rememberRoom(name, parts) {
+    // RENAMED marks NAME as the room's current name from its own host,
+    // which replaces whatever name the room was stored under.
+    function rememberRoom(name, parts, renamed = false) {
       const rooms = stored();
       const existing = rooms.find(room => room.room === parts.roomId);
       if (!existing) {
@@ -92,6 +94,8 @@
         // actually handed; what a given tab may present is capped when
         // the link is built, not here.
         existing.secret = parts.secret;
+        existing.name = name;
+      } else if (renamed && existing.name !== name) {
         existing.name = name;
       } else {
         return;
@@ -187,11 +191,15 @@
       modelInput.hidden = modelLabel.hidden = models.length === 0;
     }
 
+    // An empty name leaves naming to the host, which titles the session
+    // from its first prompt; a typed one needs a letter or digit.
     function submitRequest() {
-      const name = nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_');
-      if (!/[A-Za-z0-9]/.test(name)) return;
+      const typed = nameInput.value.trim();
+      const name = typed.replace(/[^A-Za-z0-9_-]/g, '_');
+      if (typed && !/[A-Za-z0-9]/.test(name)) return;
       const reqId = ++requestSequence;
-      const frame = {t: 'new-session', reqId, name, prompt: promptInput.value.trim()};
+      const frame = {t: 'new-session', reqId, prompt: promptInput.value.trim()};
+      if (typed) frame.name = name;
       if (!modelInput.hidden && modelInput.value) frame.model = modelInput.value;
       const request = () => {
         const attached = files.items();
@@ -205,7 +213,7 @@
       // A file still being read goes with the request it was added to.
       if (files.busy()) files.settled().then(request);
       else request();
-      notices.push({reqId, name, status: 'waiting'});
+      notices.push({reqId, name: typed ? name : 'New session', status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
       render();
@@ -394,9 +402,10 @@
       renderRooms();
     }
 
-    // Kept like any other room, so the rooms this one opens can list it.
+    // Kept like any other room, so the rooms this one opens can list it,
+    // under the name its host currently gives it.
     function rememberCurrent(name) {
-      if (secret) rememberRoom(name, {roomId, secret: encode(secret)});
+      if (secret) rememberRoom(name, {roomId, secret: encode(secret)}, true);
     }
 
     // The fragment is wiped from the URL on connect, so the tiers are

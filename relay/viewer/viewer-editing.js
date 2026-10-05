@@ -718,7 +718,7 @@ window.mevedelEditingView = {
       panel.hidden = true;
       onVisibility(false);
       state.editorTitle = null;
-      document.title = 'mevedel live session';
+      document.title = state.sessionName ? `${state.sessionName} · mevedel` : 'mevedel live session';
       requestedItem = null;
       const url = new URL(window.location.href);
       url.searchParams.delete('shared');

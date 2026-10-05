@@ -815,8 +815,17 @@
       (mevedel-workspace-clear-registry))))
 
 
+(mevedel-deftest mevedel-collaboration--on-session-event
+  (:doc "re-publishes status on a rename and ignores other session events")
+  (let (published)
+    (cl-letf (((symbol-function 'mevedel-collaboration-notify-request-changed)
+               (lambda (buffer) (push buffer published))))
+      (mevedel-collaboration--on-session-event 'data 'rename)
+      (mevedel-collaboration--on-session-event 'data 'saved)
+      (should (equal '(data) published)))))
+
 (mevedel-deftest mevedel-collaboration--publish-status
-  (:doc "broadcasts busy transitions once and tells a joining guest directly")
+  (:doc "broadcasts busy and name changes once and tells a joining guest directly")
   (let* ((guests (make-hash-table :test #'eql))
          (data-buffer (generate-new-buffer " *collab-status-data*"))
          (room (list :data-buffer data-buffer :guests guests
@@ -859,7 +868,18 @@
           (setq sent nil controls nil)
           (mevedel-collaboration--publish-status room)
           (should-not sent)
-          (should-not controls))
+          (should-not controls)
+          ;; The session's name heads the room and follows a rename.
+          (let ((session (mevedel-session--create :name "2026-10-05T17-00-abc")))
+            (plist-put room :session session)
+            (mevedel-collaboration--publish-status room)
+            (should (equal "2026-10-05T17-00-abc"
+                           (plist-get (cdr (car sent)) :name)))
+            (setq sent nil)
+            (setf (mevedel-session-name session) "Pretty diagram")
+            (mevedel-collaboration--publish-status room)
+            (should (equal "Pretty diagram" (plist-get (cdr (car sent)) :name)))
+            (should-not controls)))
       (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-view--drain-guest-invocation
@@ -1075,9 +1095,20 @@
               (should-not (equal (plist-get room :owner-token)
                                  (plist-get room :write-token))))
             (should-not scheduled)
+            ;; The room follows its session's renames.
+            (let (published)
+              (cl-letf (((symbol-function
+                          'mevedel-collaboration-notify-request-changed)
+                         (lambda (buffer) (push buffer published))))
+                (mevedel-session-control-transfer-notify
+                 session 'rename "renamed"))
+              (should (equal (list (current-buffer)) published)))
             ;; Restarting for the same session reuses the room.
             (should (eq room (mevedel-collaboration--start
                               session (current-buffer)))))
+        (when room
+          (mevedel-session-control-transfer-unregister-observer
+           session (plist-get room :session-observer)))
         (remove-hook 'kill-emacs-hook
                      #'mevedel-collaboration--stop-for-emacs)
         (remove-hook 'mevedel-interaction-prompt-created-hook
@@ -1144,7 +1175,12 @@
            (cancelled nil)
            (sent nil)
            (transport-stopped nil)
+           (session (mevedel-session--create :name "stopping"))
            (room (list :transport 'transport
+                       :session session
+                       :session-observer
+                       (mevedel-session-control-transfer-register-observer
+                        session #'ignore)
                        :data-buffer (current-buffer)
                        :guests guests
                        :publish-timer 'publish-timer)))
@@ -1166,7 +1202,10 @@
         (should-not (mevedel-collaboration--room-list)))
       (should (equal '(publish-timer) cancelled))
       (should (equal "bye" (plist-get (cdr (car sent)) :t)))
-      (should transport-stopped))))
+      (should transport-stopped)
+      ;; The stopped room no longer follows its session.
+      (should-not (gethash session
+                           mevedel-session-control-transfer--observers)))))
 
 (mevedel-deftest mevedel-collaboration--stop-for-buffer
   (:doc "stops the room when its owning data buffer is killed")
