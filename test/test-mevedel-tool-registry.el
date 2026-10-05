@@ -968,5 +968,19 @@
                       (should (string-empty-p (string-trim (buffer-string)))))))))))
       (delete-directory compiled-root t))))
 
+(mevedel-deftest mevedel-tool--with-quiet-file-visit
+  (:doc "visits a file without any question, even past the large-file size")
+  (let ((file (make-temp-file "mevedel-quiet-visit-" nil ".txt" "0123456789"))
+        (large-file-warning-threshold 1)
+        buffer)
+    (unwind-protect
+        (progn
+          (let ((inhibit-interaction t))
+            (setq buffer (mevedel-tool--with-quiet-file-visit
+                           (find-file-noselect file))))
+          (should (equal "0123456789" (with-current-buffer buffer (buffer-string)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-file file))))
+
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

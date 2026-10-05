@@ -546,9 +546,15 @@ a trailing plist tail on the mevedel spec element."
    gptel-args))
 
 (defmacro mevedel-tool--with-quiet-file-visit (&rest body)
-  "Run BODY while suppressing interactive file-visit side effects."
+  "Run BODY while suppressing interactive file-visit side effects.
+Tools visit files during turns that nobody in Emacs may be there to
+answer, so visiting never asks: unsafe local variables are skipped, a
+large file opens without the size warning, and a version-controlled
+symlink is followed."
   (declare (indent 0) (debug t))
   `(let ((enable-local-variables :safe)
+         (large-file-warning-threshold nil)
+         (vc-follow-symlinks t)
          (find-file-hook nil)
          (hack-local-variables-hook nil))
      ,@body))

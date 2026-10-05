@@ -32,11 +32,14 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-alist)
+(defvar gptel-confirm-tool-calls)
 (defvar gptel-org-convert-response)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts" (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-assert-not-superseded
+                  "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection))
@@ -259,6 +262,9 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
          (signal (car err) (cdr err))))
       (when (and parent-view (buffer-live-p parent-view))
         (setq-local mevedel--view-buffer parent-view))
+      ;; Tool calls go through mevedel's permission pipeline, not gptel's
+      ;; confirmation, which nobody may be there to answer.
+      (setq-local gptel-confirm-tool-calls nil)
       (when parent-specs
         (mevedel-agents-set-specs parent-specs))
       (setq-local mevedel--agent-invocation invocation)
@@ -788,6 +794,7 @@ Return nil when INVOCATION has no live conversation buffer."
                             (set-visited-file-modtime 0)
                             (set-buffer-modified-p nil)
                             (run-hooks 'after-save-hook))
+                        (mevedel-session-artifacts-assert-not-superseded)
                         (basic-save-buffer))))
                   (when (and
                          (mevedel-agent-invocation-sidecar-dirty invocation)

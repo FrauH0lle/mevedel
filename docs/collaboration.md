@@ -215,6 +215,34 @@ that arrives later open a tab by itself, the link arrives in the request
 sheet as something to tap. Creating a session is not idempotent, so a repeat
 request inside the duplicate-prompt window is dropped.
 
+## Questions nobody can answer
+
+A guest may be the only one there, as on an Emacs daemon, so nothing a guest
+does waits for an answer in the minibuffer. Room frames run with
+`inhibit-interaction`, as lobby frames do, and so does the drain step that
+starts a guest's queued message as a turn. A step that would ask in Emacs
+signals instead:
+
+- a frame is refused to its sender with a notice, "This needs a decision in
+  Emacs on the host first", and the room stays up;
+- a queued message is dropped with its attachments, as on a retraction; its
+  sender gets the same notice, and the host a warning naming the guest.
+
+Questions that are only offers are skipped where nobody can be asked: a
+directive turn's offer to save modified file buffers leaves the host's buffers
+alone. The cockpit refuses to open, so a bare `/goal` from a guest is refused
+rather than opening a menu on the host's screen. A guest can scope a message
+only to a directive bound to the room's own session, since another session's
+directive would run, and maybe restore, that session.
+
+Steps that run without the guard never ask either. Tool calls are confirmed by
+mevedel's permission pipeline, whose prompts room participants can answer, so
+session and agent buffers turn off gptel's own confirmation. A session save
+whose visited file changed on disk fails with an error instead of asking
+whether to save anyway. Tool file visits skip unsafe local variables, the
+large-file warning and the version-control symlink question, and session
+segments skip the project's unsafe directory-local variables.
+
 ## The lobby
 
 A lobby is a room bound to a workspace instead of a session: one bookmarkable
@@ -258,7 +286,8 @@ Guests act while nobody may be at the keyboard, so lobby frames run with
 `inhibit-interaction`. A step that would prompt in Emacs refuses the request
 instead of waiting: a session whose lock is held by another live Emacs, or was
 left stale by a crash, must be opened in Emacs first. A clean exit releases
-session locks.
+session locks. Rooms follow the same rule; see
+[questions nobody can answer](#questions-nobody-can-answer).
 
 In the browser, a lobby link renders the session list in place of the
 conversation and composer. Open replaces the page with the session's room.

@@ -593,7 +593,7 @@
       (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-collaboration--guest-directive-id
-  (:doc "accepts an id the workspace still has and drops anything else")
+  (:doc "accepts a directive of the room's own session and drops anything else")
   (let* ((workspace (mevedel-workspace-get-or-create
                      'project "/tmp/collab-dir/" "/tmp/collab-dir/" "collab"))
          (session (mevedel-session-create "main" workspace))
@@ -601,10 +601,19 @@
     (unwind-protect
         (progn
           (setf (mevedel-workspace-directives workspace)
-                (list (mevedel-directive--create :id "dir-1")))
+                (list (mevedel-directive--create
+                       :id "dir-1" :session-id (mevedel-session-session-id session))
+                      (mevedel-directive--create :id "dir-other" :session-id "other-session")
+                      (mevedel-directive--create :id "dir-unbound")))
           (should (equal "dir-1"
                          (mevedel-collaboration--guest-directive-id
                           room (list :directive "dir-1"))))
+          ;; A directive of another session, or none yet, would run its
+          ;; turn outside the room's session.
+          (should-not (mevedel-collaboration--guest-directive-id
+                       room (list :directive "dir-other")))
+          (should-not (mevedel-collaboration--guest-directive-id
+                       room (list :directive "dir-unbound")))
           ;; A stale filter, a non-string, and no filter at all all send
           ;; to main chat rather than failing the prompt.
           (should-not (mevedel-collaboration--guest-directive-id
@@ -1074,7 +1083,24 @@
                 ((symbol-function 'display-warning) (lambda (&rest _) nil)))
         (mevedel-collaboration--on-frame (current-buffer) 5
                                          (list :t "prompt" :text "x"))
-        (should (eq 'observer-failure stopped))))))
+        (should (eq 'observer-failure stopped)))
+      ;; A handler that would ask in Emacs is refused to its sender, and
+      ;; the room stays up.
+      (let (sent (stopped nil))
+        (cl-letf (((symbol-function 'mevedel-collaboration--handle-set-mode)
+                   ;; `yes-or-no-p' would take the dialog path after an
+                   ;; earlier test's mouse event, which ignores the guard.
+                   (lambda (&rest _) (y-or-n-p "Take over? ")))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame) (push (cons peer frame) sent)))
+                  ((symbol-function 'mevedel-collaboration--stop-internal)
+                   (lambda (_room reason) (setq stopped reason))))
+          (mevedel-collaboration--on-frame (current-buffer) 5
+                                           (list :t "set-mode" :mode "ask")))
+        (should-not stopped)
+        (should (equal (list (cons 5 (list :t "notice"
+                                           :message mevedel-collaboration-needs-host-message)))
+                       sent))))))
 
 (mevedel-deftest mevedel-collaboration--on-control
   (:doc "drops a guest on peer-left and waits for hello on peer-joined")

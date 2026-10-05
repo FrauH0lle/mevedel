@@ -4673,6 +4673,23 @@
 (mevedel-deftest mevedel-session-persistence--find-file-noselect ()
   ,test
   (test)
+  :doc "skips a project's unsafe directory-local variables without asking"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-segment-locals-" t)))
+         (file (file-name-concat root "segment-0001.chat.org"))
+         (enable-local-variables t)
+         buffer)
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat root ".dir-locals.el")
+            (insert "((nil . ((eval . (setq mevedel-test-unsafe-local t)))))"))
+          (with-temp-file file (insert "* Segment\n"))
+          ;; Restores run where nobody may be there to confirm them.
+          (let ((inhibit-interaction t))
+            (setq buffer (mevedel-session-persistence--find-file-noselect file)))
+          (should (buffer-live-p buffer))
+          (should-not (boundp 'mevedel-test-unsafe-local)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t)))
   :doc "disables so-long predicate while opening persisted files"
   (let ((observed :unset)
         (opened (generate-new-buffer " *mevedel-so-long-open*"))

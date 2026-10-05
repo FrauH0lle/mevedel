@@ -57,6 +57,7 @@
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (declare-function gptel-request "ext:gptel-request")
 (defvar gptel--request-alist)
+(defvar gptel-confirm-tool-calls)
 (defvar gptel-org-convert-response)
 (defvar gptel-prompt-transform-functions)
 (defvar gptel-stream)
@@ -636,6 +637,9 @@ mutation lease."
       (mevedel--chat-buffer-disable-org-element-cache))
     (setq-local gptel-org-convert-response nil)
     (setq-local gptel-org-branching-context nil)
+    ;; mevedel's permission pipeline decides tool calls, in a form room
+    ;; guests can answer; gptel's own confirmation would wait in Emacs.
+    (setq-local gptel-confirm-tool-calls nil)
     ;; A restored segment may still carry gptel's request-config Org
     ;; properties; gptel's send advice would prefer them over the live
     ;; buffer-locals set below.  The sidecar is the config source, so

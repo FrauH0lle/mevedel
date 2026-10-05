@@ -1060,8 +1060,12 @@ place instead of prompting."
 ;;;###autoload
 (defun mevedel-menu-open (area)
   "Open session cockpit AREA.
-AREA is `top' for the main cockpit, or a named cockpit surface."
+AREA is `top' for the main cockpit, or a named cockpit surface.
+A cockpit waits for keys in Emacs, so it refuses where nobody can be
+asked, such as a collaboration guest's turn."
   (interactive (list 'top))
+  (when inhibit-interaction
+    (signal 'inhibited-interaction (list "The cockpit needs Emacs")))
   (let ((context (mevedel-menu--context)))
     (pcase area
       ('top

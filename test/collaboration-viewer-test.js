@@ -2072,6 +2072,12 @@ async function main() {
   await deliverTo(sockets[1], {t:'remove',ids:['first-message']});
   assert.equal(nodes['empty-state'].hidden, false);
 
+  // A notice reports one refused action; the room stays usable.
+  await deliverTo(sockets[1], {t: 'notice', message: 'This needs a decision in Emacs on the host first'});
+  assert.equal(textOf(nodes.notice), 'This needs a decision in Emacs on the host first');
+  assert.equal(nodes.notice.hidden, false);
+  assert.equal(nodes.composer.hidden, false, 'a notice is not a rejection');
+
   // Bye ends the session: no reconnect, composer gone.
   timer = null;
   sockets[1].dispatch('message', {data: await seal(key, 1, {t: 'bye', reason: 'user-stop'})});

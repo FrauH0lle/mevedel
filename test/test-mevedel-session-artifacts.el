@@ -288,6 +288,30 @@
            after-change-major-mode-hook))))
 
 
+(mevedel-deftest mevedel-session-artifacts-assert-not-superseded
+  (:doc "refuses only a save that would overwrite another writer's text")
+  (let* ((file (make-temp-file "mevedel-superseded-" nil nil "base"))
+         (buffer (find-file-noselect file)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (let ((inhibit-interaction t))
+            ;; Unchanged since the visit.
+            (mevedel-session-artifacts-assert-not-superseded)
+            ;; Touched on disk but the same text: the modtime refreshes.
+            (set-file-times file (time-add nil 2))
+            (mevedel-session-artifacts-assert-not-superseded)
+            (should (verify-visited-file-modtime buffer))
+            ;; Another writer's text.
+            (write-region "theirs" nil file nil 'silent)
+            (set-file-times file (time-add nil 4))
+            (should-error (mevedel-session-artifacts-assert-not-superseded))
+            ;; A buffer retargeted at a file not yet written.
+            (setq buffer-file-name (concat file "-new"))
+            (mevedel-session-artifacts-assert-not-superseded)))
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (delete-file file))))
+
 (mevedel-deftest mevedel-session-artifacts-save-buffer-silently ()
   ,test
   (test)
@@ -315,6 +339,29 @@
                          (with-temp-buffer
                            (insert-file-contents file)
                            (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (set-buffer-modified-p nil)
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file))))
+  :doc "refuses a file changed on disk instead of asking"
+  (let* ((file (make-temp-file "mevedel-silent-save-"))
+         (buffer (find-file-noselect file)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "ours")
+          ;; Another writer changed the file since it was visited.
+          (write-region "theirs" nil file nil 'silent)
+          (set-file-times file (time-add nil 2))
+          ;; A controlled refusal, not a question nobody can answer.
+          (let ((inhibit-interaction t))
+            (should (string-match-p
+                     "\\`Session segment changed on disk"
+                     (cadr (should-error (mevedel-session-artifacts-save-buffer-silently)
+                                         :type 'error)))))
+          (should (equal "theirs" (with-temp-buffer
+                                    (insert-file-contents file)
+                                    (buffer-string)))))
       (when (buffer-live-p buffer)
         (set-buffer-modified-p nil)
         (kill-buffer buffer))

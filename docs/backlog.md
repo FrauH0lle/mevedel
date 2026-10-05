@@ -20,9 +20,13 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Lobby: let a lobby open a session whose same-host lock is provably stale
   (dead PID or PID reuse) without the Emacs prompt; today a crash leaves such
   sessions refusable only from the keyboard. See `docs/collaboration.md#the-lobby`.
-- Headless hosts: audit minibuffer prompts reachable during a guest-driven
-  turn outside the interaction overlays (`yes-or-no-p`, `completing-read`);
-  an Emacs daemon has nobody to answer them.
+- Headless hosts: the guest guard covers frames and the drain's synchronous
+  start of a turn. A guest turn's later steps still reach library prompts:
+  TRAMP reconnect passwords and host keys (bind `non-essential`), a foreign
+  expired lease takeover in `mevedel-session-durability.el`, the remote-target
+  storage disclosure, and GPG pinentry for `auth-source`. Route them through
+  owner-audience overlays or refuse them. See
+  `docs/collaboration.md#questions-nobody-can-answer`.
 
 ## Request lifecycle
 

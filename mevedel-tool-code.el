@@ -100,14 +100,6 @@
 ;;
 ;;; Xref Integration
 
-(defmacro mevedel-tool-code--with-quiet-file-visit (&rest body)
-  "Run BODY while suppressing interactive file-visit side effects."
-  (declare (indent 0) (debug t))
-  `(let ((enable-local-variables :safe)
-         (find-file-hook nil)
-         (hack-local-variables-hook nil))
-     ,@body))
-
 (defun mevedel-tool-code--execution-target (path)
   "Return the execution target containing absolute PATH."
   (mevedel-execution-target-create (file-name-directory path)))
@@ -124,7 +116,7 @@ opens the buffer itself, kill it afterward unless it was modified."
       (error "File %s does not exist" native-path))
     (let* ((existing-buffer (find-buffer-visiting full-path))
            (target-buffer (or existing-buffer
-                              (mevedel-tool-code--with-quiet-file-visit
+                              (mevedel-tool--with-quiet-file-visit
                                 (find-file-noselect full-path)))))
       (unwind-protect
           (funcall callback native-path full-path target-buffer)
@@ -135,7 +127,7 @@ opens the buffer itself, kill it afterward unless it was modified."
 
 (defun mevedel-tool-code--xref-location-line (location)
   "Return LOCATION's line number without leaving visited files behind."
-  (mevedel-tool-code--with-quiet-file-visit
+  (mevedel-tool--with-quiet-file-visit
     (or (xref-location-line location)
         (let ((before-buffers (buffer-list))
               marker marker-buffer line)
@@ -166,7 +158,7 @@ opens the buffer itself, kill it afterward unless it was modified."
 When TARGET is non-nil, render locations in its target-native path domain."
   (string-join
    (mapcar (lambda (item)
-             (mevedel-tool-code--with-quiet-file-visit
+             (mevedel-tool--with-quiet-file-visit
                (let* ((location (xref-item-location item))
                       (file (xref-location-group location))
                       (file (if (and target (stringp file))
@@ -201,7 +193,7 @@ and :file_path."
      (lambda (file-path full-path target-buffer)
        (with-current-buffer target-buffer
          (condition-case err
-             (let* ((backend (mevedel-tool-code--with-quiet-file-visit
+             (let* ((backend (mevedel-tool--with-quiet-file-visit
                                (xref-find-backend)))
                     (target (mevedel-tool-code--execution-target full-path))
                     (backend-error
@@ -220,7 +212,7 @@ and :file_path."
                   (list :result backend-error)))
                 (t
                  (let ((xref-items
-                        (mevedel-tool-code--with-quiet-file-visit
+                        (mevedel-tool--with-quiet-file-visit
                           (if (eq backend 'elisp)
                               (let ((project-files-relative-names nil))
                                 ;; A search must not register a project or
@@ -266,7 +258,7 @@ and :file_path."
      (lambda (file-path full-path target-buffer)
        (with-current-buffer target-buffer
          (condition-case err
-             (let* ((backend (mevedel-tool-code--with-quiet-file-visit
+             (let* ((backend (mevedel-tool--with-quiet-file-visit
                                (xref-find-backend)))
                     (target (mevedel-tool-code--execution-target full-path))
                     (backend-error
@@ -297,7 +289,7 @@ and :file_path."
                                 (format "No tags table available for %s"
                                         file-path))))
                 (t
-                 (let ((xref-items (mevedel-tool-code--with-quiet-file-visit
+                 (let ((xref-items (mevedel-tool--with-quiet-file-visit
                                       (xref-backend-apropos backend pattern))))
                    (funcall callback
                             (list :result

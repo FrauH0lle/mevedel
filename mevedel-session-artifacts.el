@@ -346,8 +346,23 @@ internal state, and a per-turn save report is noise in `*Messages*'."
         (message-log-max nil))
     (run-hooks hook)))
 
+(defun mevedel-session-artifacts-assert-not-superseded ()
+  "Signal unless saving the current buffer would overwrite another writer.
+`save-buffer' asks whether to save anyway when its visited file changed
+on disk since the visit.  Saves run from timers and turns that nobody in
+Emacs may be there to answer, so that is an error here; unchanged disk
+text only refreshes the stale modtime.  A file not yet written, as for
+a buffer just retargeted, is no conflict."
+  (when (and buffer-file-name
+             (file-exists-p buffer-file-name)
+             (not (verify-visited-file-modtime (current-buffer))))
+    (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)))
+
 (defun mevedel-session-artifacts-save-buffer-silently ()
-  "Save the current session buffer without save or hook messages."
+  "Save the current session buffer without save or hook messages.
+A visited file another writer changed is an error, never a question;
+see `mevedel-session-artifacts-assert-not-superseded'."
+  (mevedel-session-artifacts-assert-not-superseded)
   (let ((save-silently t)
         (inhibit-message t)
         (message-log-max nil))

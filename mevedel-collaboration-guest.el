@@ -876,15 +876,20 @@ with literal text, mutually exclusive with `:invoke'."
 (defun mevedel-collaboration--guest-directive-id (room frame)
   "Return the directive id FRAME asks ROOM to scope its prompt to, or nil.
 
-The viewer sends the id its transcript filter is showing.  An id for a
-directive the workspace no longer has yields nil, so a stale filter
-sends to main chat instead of failing the prompt."
+The viewer sends the id its transcript filter is showing, which lists
+directives with activity in this room's session.  An id for a directive
+the workspace no longer has, or one bound to another session, yields
+nil, so the prompt goes to main chat instead of failing.  A room grants
+its own session only: a directive bound elsewhere would run, and maybe
+restore, another session."
   (when-let* ((id (plist-get frame :directive))
               ((stringp id))
               (session (plist-get room :session))
               (workspace (mevedel-session-workspace session))
-              ((cl-find id (mevedel-workspace-directives workspace)
-                        :key #'mevedel-directive-id :test #'equal)))
+              (directive (cl-find id (mevedel-workspace-directives workspace)
+                                  :key #'mevedel-directive-id :test #'equal))
+              ((equal (mevedel-directive-session-id directive)
+                      (mevedel-session-session-id session))))
     id))
 
 (defun mevedel-collaboration--utf8-text-p (bytes)
@@ -1042,49 +1047,62 @@ the failed-enqueue cleanup."
   "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room.
 
 Failure isolation mirrors the gptel observers: a fault in guest input
-handling stops the room instead of leaking into the session."
+handling stops the room instead of leaking into the session.  Guests act
+while nobody may be at the keyboard, so frames run with
+`inhibit-interaction': a step that would ask in Emacs is refused to the
+sending guest instead of waiting for an answer."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (condition-case nil
-        (pcase (plist-get frame :t)
-          ("hello" (mevedel-collaboration--handle-hello room peer frame))
-          ("set-name"
-           (when-let* ((guest (mevedel-collaboration--guest room peer))
-                       ((stringp (plist-get frame :name))))
-             (plist-put guest :name
-                        (mevedel-collaboration--sanitize-guest-name
-                         (plist-get frame :name)))))
-          ((or "push-subscribe" "push-unsubscribe" "push-state")
-           (mevedel-collaboration--handle-push-subscription
-            room peer frame))
-          ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
-          ("abort" (mevedel-collaboration--handle-abort room peer))
-          ("fetch-agent"
-           (mevedel-collaboration--handle-fetch-agent room peer frame))
-          ("execution-result-get"
-           (mevedel-collaboration--handle-execution-result-get room peer frame))
-          ("artifact-get"
-           (mevedel-collaboration--handle-artifact-get room peer frame))
-          ("artifact-delete"
-           (mevedel-collaboration--handle-artifact-delete room peer frame))
-          ("artifact-comment"
-           (mevedel-collaboration--handle-artifact-comment room peer frame))
-          ("file-upload"
-           (mevedel-collaboration-files-handle-upload
-            room peer frame
-            (mevedel-workspace-root
-             (mevedel-session-workspace (plist-get room :session)))))
-          ("history-get"
-           (mevedel-collaboration--handle-history-get room peer frame))
-          ((or "editing" "editing-presence")
-           (mevedel-collaboration-editing-handle room peer frame))
-          ("retract" (mevedel-collaboration--handle-retract room peer frame))
-          ("ui-response"
-           (mevedel-collaboration--handle-ui-response room peer frame))
-          ("set-mode"
-           (mevedel-collaboration--handle-set-mode room peer frame))
-          ("new-session"
-           (mevedel-collaboration--handle-new-session room peer frame)))
+        (condition-case nil
+            (let ((inhibit-interaction t))
+              (mevedel-collaboration--dispatch-frame room peer frame))
+          (inhibited-interaction
+           (mevedel-collaboration--transport-send
+            (plist-get room :transport) peer
+            (list :t "notice" :message mevedel-collaboration-needs-host-message))))
       (error (mevedel-collaboration--observer-failure room)))))
+
+(defun mevedel-collaboration--dispatch-frame (room peer frame)
+  "Handle guest FRAME from PEER in ROOM."
+  (pcase (plist-get frame :t)
+    ("hello" (mevedel-collaboration--handle-hello room peer frame))
+    ("set-name"
+     (when-let* ((guest (mevedel-collaboration--guest room peer))
+                 ((stringp (plist-get frame :name))))
+       (plist-put guest :name
+                  (mevedel-collaboration--sanitize-guest-name
+                   (plist-get frame :name)))))
+    ((or "push-subscribe" "push-unsubscribe" "push-state")
+     (mevedel-collaboration--handle-push-subscription
+      room peer frame))
+    ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
+    ("abort" (mevedel-collaboration--handle-abort room peer))
+    ("fetch-agent"
+     (mevedel-collaboration--handle-fetch-agent room peer frame))
+    ("execution-result-get"
+     (mevedel-collaboration--handle-execution-result-get room peer frame))
+    ("artifact-get"
+     (mevedel-collaboration--handle-artifact-get room peer frame))
+    ("artifact-delete"
+     (mevedel-collaboration--handle-artifact-delete room peer frame))
+    ("artifact-comment"
+     (mevedel-collaboration--handle-artifact-comment room peer frame))
+    ("file-upload"
+     (mevedel-collaboration-files-handle-upload
+      room peer frame
+      (mevedel-workspace-root
+       (mevedel-session-workspace (plist-get room :session)))))
+    ("history-get"
+     (mevedel-collaboration--handle-history-get room peer frame))
+    ((or "editing" "editing-presence")
+     (mevedel-collaboration-editing-handle room peer frame))
+    ("retract" (mevedel-collaboration--handle-retract room peer frame))
+    ("ui-response"
+     (mevedel-collaboration--handle-ui-response room peer frame))
+    ("set-mode"
+     (mevedel-collaboration--handle-set-mode room peer frame))
+    ("new-session"
+     (mevedel-collaboration--handle-new-session room peer frame))))
 
 (defun mevedel-collaboration--on-control (data-buffer event peer)
   "Handle relay control EVENT for PEER in DATA-BUFFER's room."

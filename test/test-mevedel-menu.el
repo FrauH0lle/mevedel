@@ -136,6 +136,16 @@
           (mevedel-menu-open 'top)))
       (should (eq called-prefix 'mevedel-menu--top))))
 
+  :doc "refuses where nobody can answer a cockpit"
+  (mevedel-menu-test--with-buffers
+    (let (called-prefix)
+      (cl-letf (((symbol-function 'transient-setup)
+                 (lambda (prefix &rest _) (setq called-prefix prefix))))
+        (with-current-buffer view-buf
+          (let ((inhibit-interaction t))
+            (should-error (mevedel-menu-open 'goal) :type 'inhibited-interaction))))
+      (should-not called-prefix)))
+
   :doc "opens requested mode, navigate, model, Goal, and Preset surfaces"
   (mevedel-menu-test--with-buffers
     (let (called-prefix)
