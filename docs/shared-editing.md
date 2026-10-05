@@ -148,8 +148,10 @@ starts free text there. A label is an Excalidraw text element bound to its
 container: it wraps to the container, centres in it, moves with it, and grows
 the container when it no longer fits. Arrows carry labels the same way, with a
 gap cut into the line behind them. Clicking a label selects its container.
-Finishing a drawing returns to selection, so a double-click edits the new shape
-instead of creating more shapes. Text is shared while typing; blur or Ctrl/Command+Enter
+Finishing a shape returns to selection with the shape selected, so a
+double-click edits it instead of creating more shapes. Freehand drawing keeps
+its tool, as strokes come in runs. The lock button (Q) after the tools keeps any
+drawing tool active after each shape; it belongs to the browser, not the board. Text is shared while typing; blur or Ctrl/Command+Enter
 finishes, and Escape cancels if another writer has not changed that text.
 Finishing with no text removes the label or text element.
 
