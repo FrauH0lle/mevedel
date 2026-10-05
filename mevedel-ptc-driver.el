@@ -85,6 +85,21 @@
 (defconst mevedel-ptc-driver--preview-length 200
   "Maximum characters of a nested result kept in the audit record.")
 
+(defun mevedel-ptc-driver--object-error (value)
+  "Signal that guest VALUE is not a keyword plist object.
+The message shows the expected form and the value, and names JSON when
+that is what was written: its braces read as symbols and its commas as
+unquote forms, far from where the mistake shows."
+  (let ((json (cl-labels ((json-p (v)
+                            (or (and (symbolp v) (string-match-p "[{}]" (symbol-name v)))
+                                (and (consp v)
+                                     (or (and (symbolp (car v)) (equal (symbol-name (car v)) ","))
+                                         (and (proper-list-p v) (cl-some #'json-p v)))))))
+                (json-p value))))
+    (error "Objects are keyword plists such as (:id \"a\" :after nil), not %s: %s"
+           (if json "JSON {...} with commas" "this value")
+           (truncate-string-to-width (prin1-to-string value) 80 nil nil "..."))))
+
 (defun mevedel-ptc-driver--argument-value (value schema)
   "Convert guest VALUE using the trusted argument SCHEMA.
 Declared object keys become host keywords; undeclared keys remain private.
@@ -95,11 +110,12 @@ JSON booleans and null use the same representations as native tool calls."
    ((and (null value) (eq (plist-get schema :type) 'boolean)) :json-false)
    ((eq (plist-get schema :type) 'object)
     (if (null value) (make-hash-table :test #'equal)
+      (unless (and (proper-list-p value) (cl-evenp (length value))
+                   (cl-loop for key in value by #'cddr always (mevedel-ptc-keyword-p key)))
+        (mevedel-ptc-driver--object-error value))
       (let ((rest value) (properties (plist-get schema :properties)) result)
         (while (consp rest)
           (let* ((key (pop rest))
-                 (_ (unless (and rest (mevedel-ptc-keyword-p key))
-                      (error "Object arguments require keyword/value pairs")))
                  (name (symbol-name key))
                  (declared (cl-find name properties :test #'equal
                                     :key (lambda (item) (and (symbolp item) (symbol-name item)))))
@@ -108,7 +124,6 @@ JSON booleans and null use the same representations as native tool calls."
                   (append result (list (or declared key)
                                        (mevedel-ptc-driver--argument-value
                                         (pop rest) property-schema))))))
-        (when rest (error "Object arguments must be proper lists"))
         result)))
    ((eq (plist-get schema :type) 'array)
     (vconcat (mapcar (lambda (item)
