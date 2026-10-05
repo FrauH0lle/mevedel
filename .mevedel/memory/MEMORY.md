@@ -9,7 +9,6 @@
 - [Replay performance stalls from a restored copy of the real session](replay-real-session-for-performance.md) - Detached test buffers skip agent transcripts, archives and publications; restore a session copy at the stalled state
 - [Sticky prompt presentation: keep it readable and treat compaction as continuation](sticky-prompt-presentation-feedback.md) - Status-row sharing must not truncate the sticky prompt; compaction preserves the prompt, /clear removes it
 - [Terminal transcript-redraw latency measurement report](transcript-redraw-measurement-report.md) - Checked redraw/latency measurements for commit 51a2ffe live in work://shared/transcript-redraw-2026-09-27/
-- [SharedEdit insertion anchors can be rejected as stale](shared-edit-insertion-anchors.md) - A SharedEdit document patch that anchors to blocks inserted by the same patch can fail with Stale insertion anchor; retrying without afterId worked
 - [Reentrant view render corruption is ordering-dependent](reentrant-view-render-ordering.md) - Settlement nested inside an older incremental render duplicates projection output; regress both nesting orders
 - [Completion-time hook reminders cannot change the finished turn](completion-time-hook-reminders.md) - Why the project Stop-hook validation reminder was deleted rather than relocated
 - [Live view reentry during settlement duplicates rendered text](view-render-settlement-reentry.md) - Settlement injected while a live update is fontifying makes the older update resume, duplicate text, and recreate retained-tail state; natural seam still unproven

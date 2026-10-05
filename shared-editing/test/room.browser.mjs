@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { createServer } from 'node:net';
 import { chromium } from 'playwright';
+import { contentHash as h } from '../view.mjs';
+import { compactElement } from '../model.mjs';
 const root = resolve(import.meta.dirname, '../..');
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 15000) {
@@ -217,10 +219,10 @@ test(
           (await frame(pages[0]).locator('#scene [data-shape]').count()) === 2 &&
           (await frame(pages[1]).locator('#scene [data-shape]').count()) === 2,
       );
-      const boardId = JSON.parse((await agent('SharedRead')).result).find(
+      const boardId = JSON.parse((await agent('ReadShared')).result).find(
         (i) => i.kind === 'whiteboard',
       ).id;
-      const snapshot = JSON.parse((await agent('SharedRead', { id: boardId })).result);
+      const snapshot = JSON.parse((await agent('ReadShared', { id: boardId })).result);
       assert.equal(snapshot.content.length, 2);
       const shape = { id: 'agent_box', type: 'rectangle', x: 600, y: 80, width: 140, height: 70 };
       const label = { id: 'agent_label', type: 'text', x: 600, y: 80, width: 0, height: 0,
@@ -228,7 +230,7 @@ test(
       const applied = await agent('SharedEdit', {
         id: boardId,
         action: 'patch',
-        changes: [{ id: shape.id, before: null, after: shape }, { id: label.id, before: null, after: label }],
+        changes: [{ id: shape.id, after: shape }, { id: label.id, after: label }],
       });
       assert.equal(applied.status, 'success', JSON.stringify(applied));
       await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 4);
@@ -237,7 +239,7 @@ test(
       assert.equal(await frame(pages[1]).locator('[data-shape="agent_box"]').count(), 1);
       await frame(pages[0]).locator('#redo').click();
       await until(async () => (await frame(pages[1]).locator('#scene [data-shape]').count()) === 4);
-      const savedBefore = JSON.parse((await agent('SharedRead', { id: boardId })).result).revision;
+      const savedBefore = JSON.parse((await agent('ReadShared', { id: boardId })).result).revision;
       await frame(pages[1]).getByRole('button', { name: 'Zoom in', exact: true }).click();
       await frame(pages[1]).getByRole('button', { name: 'Zoom in', exact: true }).click();
       await frame(pages[0]).locator('[data-tool="laser"]').click();
@@ -282,7 +284,7 @@ test(
       await pages[0].mouse.move(5, 5);
       await until(async () => (await frame(pages[1]).locator('[data-mode="laser"]').count()) === 0);
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: boardId })).result).revision,
+        JSON.parse((await agent('ReadShared', { id: boardId })).result).revision,
         savedBefore,
       );
       // Presence stays disposable while another browser commits durable content.
@@ -301,7 +303,7 @@ test(
       ]);
       await pages[0].mouse.move(5, 5);
       await until(async () => (await frame(pages[1]).locator('[data-mode="laser"]').count()) === 0);
-      assert.equal(JSON.parse((await agent('SharedRead', {id:boardId})).result).revision, savedBefore + 1);
+      assert.equal(JSON.parse((await agent('ReadShared', {id:boardId})).result).revision, savedBefore + 1);
       await frame(pages[1]).locator('#title').fill('Whiteboard');
       await frame(pages[1]).locator('#title').press('Tab');
       await until(async () => (await frame(pages[0]).locator('#title').inputValue()) === 'Whiteboard');
@@ -327,7 +329,7 @@ test(
       await unavailableContext.close();
       await agent('RestartHelper');
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: boardId })).result).content.length,
+        JSON.parse((await agent('ReadShared', { id: boardId })).result).content.length,
         4,
       );
       await pages[0].locator('#editing-close').click();
@@ -396,14 +398,14 @@ test(
       await until(
         async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
       );
-      const documentId = JSON.parse((await agent('SharedRead')).result).find(
+      const documentId = JSON.parse((await agent('ReadShared')).result).find(
         (i) => i.kind === 'document',
       ).id;
       // Deleting an item removes it for everyone; an editor showing it closes.
       await pages[0].locator('#editing-close').click();
       await pages[0].locator('[data-create-editor="whiteboard"]').click();
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
-      const throwaway = JSON.parse((await agent('SharedRead')).result)
+      const throwaway = JSON.parse((await agent('ReadShared')).result)
         .find((i) => i.id !== boardId && i.id !== documentId).id;
       await pages[1].locator('#editing-close').click();
       await pages[1].locator(`#editing-items [data-item-id="${throwaway}"]`).click();
@@ -415,12 +417,12 @@ test(
       await pages[1].locator('#editing-panel').waitFor({ state: 'hidden' });
       await until(async () =>
         (await pages[1].locator(`#editing-items [data-item-id="${throwaway}"]`).count()) === 0);
-      assert.equal(JSON.parse((await agent('SharedRead')).result).some((i) => i.id === throwaway), false);
+      assert.equal(JSON.parse((await agent('ReadShared')).result).some((i) => i.id === throwaway), false);
       for (const p of pages.slice(0, 2)) {
         await p.locator(`#editing-items [data-item-id="${documentId}"]`).click();
         await frame(p).locator('.tiptap').waitFor({ state: 'visible' });
       }
-      const docRead = JSON.parse((await agent('SharedRead', { id: documentId })).result);
+      const docRead = JSON.parse((await agent('ReadShared', { id: documentId })).result);
       const formattedBefore = docRead.content.content[0],
         formattedAfter = structuredClone(formattedBefore);
       formattedAfter.content[0].text += ' Agent review.';
@@ -432,7 +434,7 @@ test(
             changes: [
               {
                 id: formattedBefore.attrs.id,
-                before: formattedBefore,
+                hash: h(formattedBefore),
                 after: formattedAfter,
               },
             ],
@@ -451,13 +453,13 @@ test(
           await agent('SharedEdit', {
             id: documentId,
             action: 'patch',
-            changes: [{ id: 'agent_paragraph', before: null, after: paragraph }],
+            changes: [{ id: 'agent_paragraph', after: paragraph }],
           })
         ).status,
         'success',
       );
       await until(async () => (await documentText(pages[1])).includes('An agent added this.'));
-      const captured = JSON.parse((await agent('SharedRead', { id: documentId })).result);
+      const captured = JSON.parse((await agent('ReadShared', { id: documentId })).result);
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#whole-question').click();
       await frame(pages[0]).locator('#question').fill('Review the current notes');
@@ -480,12 +482,11 @@ test(
         changes: [
           {
             id: 'never_insert',
-            before: null,
             after: { ...paragraph, attrs: { id: 'never_insert' } },
           },
           {
             id: 'agent_paragraph',
-            before: captured.content.content.find((n) => n.attrs.id === 'agent_paragraph'),
+            hash: h(captured.content.content.find((n) => n.attrs.id === 'agent_paragraph')),
             after: paragraph,
           },
         ],
@@ -493,7 +494,7 @@ test(
       assert.equal(stale.status, 'error');
       assert.equal(JSON.parse(stale.result).code, 'stale');
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: documentId })).result).content.content.some(
+        JSON.parse((await agent('ReadShared', { id: documentId })).result).content.content.some(
           (n) => n.attrs.id === 'never_insert',
         ),
         false,
@@ -623,7 +624,7 @@ test(
       await pages[1].reload();
       await frame(pages[1]).locator('.tiptap img').waitFor();
       assert.equal(await frame(pages[1]).locator('.tiptap img').getAttribute('src'),imageData);
-      const illustrated = JSON.parse((await agent('SharedRead', {id:documentId})).result);
+      const illustrated = JSON.parse((await agent('ReadShared', {id:documentId})).result);
       assert.equal(illustrated.content.content.find(n=>n.type==='image').attrs.src,imageData);
       const downloadPromise = pages[2].waitForEvent('download');
       await frame(pages[2])
@@ -640,12 +641,12 @@ test(
         buffer: exported,
       });
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
-      const imported = JSON.parse((await agent('SharedRead')).result).filter(
+      const imported = JSON.parse((await agent('ReadShared')).result).filter(
         (i) => i.kind === 'whiteboard' && i.id !== boardId,
       );
       assert.equal(imported.length, 1);
       assert.deepEqual(
-        JSON.parse((await agent('SharedRead', { id: imported[0].id })).result).content.map(e => e.id),
+        JSON.parse((await agent('ReadShared', { id: imported[0].id })).result).content.map(e => e.id),
         JSON.parse(exported).elements.map(e => e.id),
       );
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
@@ -731,7 +732,7 @@ test(
         /identity/,
       );
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: boardId })).result).title,
+        JSON.parse((await agent('ReadShared', { id: boardId })).result).title,
         'Whiteboard',
       );
       // Real parent/iframe viewport changes, with space for an iPhone-sized keyboard.
@@ -820,7 +821,7 @@ test(
       await rectangle(imageWriter,400,250);
       await until(async()=>await frame(imageReader).locator('#scene [data-shape]').count()===2);
       await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
-      const imageState=JSON.parse((await agent('SharedRead',{id:imageBoard.id})).result);
+      const imageState=JSON.parse((await agent('ReadShared',{id:imageBoard.id})).result);
       assert.equal(imageState.content.length,2);
       assert.ok(!JSON.stringify(imageState.transactions).includes('base64'),
         'image bytes live in files, never in contribution snapshots');
@@ -835,7 +836,7 @@ test(
       await until(async()=>await watching.getAttribute('data-live-preview')==='true',1500);
       assert.ok(Math.abs((await watching.boundingBox()).x-original.x)>30,'other participant sees movement before release');
       console.log(`Remote drag preview arrived in ${Math.round(performance.now()-previewAt)} ms before release`);
-      const whileDragging=JSON.parse((await agent('SharedRead',{id:imageBoard.id})).result);
+      const whileDragging=JSON.parse((await agent('ReadShared',{id:imageBoard.id})).result);
       const place=({x,y,width,height})=>[x,y,width,height];
       assert.deepEqual(place(whileDragging.content.find(s=>s.id===typedShape.id)),place(typedShape),'preview does not save a revision');
       await frame(imageWriter).locator('#canvas').dispatchEvent('pointercancel');
@@ -870,8 +871,8 @@ test(
           await agent('SharedEdit', {
             id: boardId,
             action: 'patch',
-            changes: [{ id: headless.id, before: null, after: headless },
-              { id: headlessLabel.id, before: null, after: headlessLabel }],
+            changes: [{ id: headless.id, after: headless },
+              { id: headlessLabel.id, after: headlessLabel }],
           })
         ).status,
         'success',
@@ -910,7 +911,7 @@ test(
           await agent('SharedEdit', {
             id: boardId,
             action: 'patch',
-            changes: [{ id: duringLoad.id, before: null, after: duringLoad }],
+            changes: [{ id: duringLoad.id, after: duringLoad }],
           })
         ).status,
         'success',
@@ -955,12 +956,13 @@ test(
         buffer: largeBytes,
       });
       await frame(ownerPage).locator('[data-shape="stroke"]').waitFor({ state: 'visible' });
-      const transferred = JSON.parse((await agent('SharedRead')).result).find(
+      const transferred = JSON.parse((await agent('ReadShared')).result).find(
         (i) => i.title === 'Transferred drawing.excalidraw',
       );
+      // The whole file arrived; its stroke is stored compacted.
       assert.deepEqual(
-        JSON.parse((await agent('SharedRead', { id: transferred.id })).result).content,
-        large.elements,
+        JSON.parse((await agent('ReadShared', { id: transferred.id })).result).content,
+        large.elements.map(compactElement),
       );
       const priorRevision = transferred.revision;
       await agent('StorageWritable', { writable: false });
@@ -970,7 +972,7 @@ test(
           (await frame(ownerPage).locator('#saved').getAttribute('data-error')) === 'true',
       );
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: transferred.id })).result).revision,
+        JSON.parse((await agent('ReadShared', { id: transferred.id })).result).revision,
         priorRevision,
       );
       const recoveryWaiting = ownerPage.waitForEvent('download');
@@ -994,7 +996,7 @@ test(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
       await agent('RestartHelper');
-      const recovered = JSON.parse((await agent('SharedRead', { id: transferred.id })).result);
+      const recovered = JSON.parse((await agent('ReadShared', { id: transferred.id })).result);
       assert.equal(recovered.content.length, 2);
       assert.equal(recovered.revision, priorRevision + 1);
       await frame(ownerPage).locator('#canvas').focus();
@@ -1024,7 +1026,7 @@ test(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: transferred.id })).result).content.filter(
+        JSON.parse((await agent('ReadShared', { id: transferred.id })).result).content.filter(
           (s) => s.type === 'diamond',
         ).length,
         1,
@@ -1124,7 +1126,7 @@ test(
       await until(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
-      const beforeEnd = JSON.parse((await agent('SharedRead', { id: transferred.id })).result);
+      const beforeEnd = JSON.parse((await agent('ReadShared', { id: transferred.id })).result);
       await owner.setOffline(true);
       for (const socket of ownerSockets) await socket.close();
       await rectangle(ownerPage, 200, 250);
@@ -1143,7 +1145,7 @@ test(
         beforeEnd.content.length + 1,
       );
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: transferred.id })).result).revision,
+        JSON.parse((await agent('ReadShared', { id: transferred.id })).result).revision,
         beforeEnd.revision,
       );
       await ownerPage.reload();
@@ -1174,7 +1176,7 @@ test(
       });
       assert.notEqual(fenced.status, 'success');
       assert.equal(
-        JSON.parse((await agent('SharedRead', { id: transferred.id })).result).title,
+        JSON.parse((await agent('ReadShared', { id: transferred.id })).result).title,
         beforeEnd.title,
       );
       assert.deepEqual(errors, []);

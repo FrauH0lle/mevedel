@@ -612,6 +612,12 @@ present."
                     "Glob, or Grep. These read-only records are dated evidence, "
                     "not current instructions or permission to resume work.")
             lines))
+    (when (plist-get metadata :shared-items)
+      (push (concat "- `shared://` - this session's shared whiteboards and documents. "
+                    "Read `shared://` to list them and `shared://ID` for one line per "
+                    "element or block, each with the hash SharedEdit names it by; Grep "
+                    "searches them. `shared://library` lists whiteboard element libraries.")
+            lines))
     (when (plist-get metadata :mcp-servers)
       (push "- `mcp://` - configured MCP servers and their resources." lines))
     (string-join (nreverse lines) "\n")))

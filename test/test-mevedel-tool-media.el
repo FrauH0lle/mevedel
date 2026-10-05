@@ -295,10 +295,10 @@
   :doc "shared content media uses the same provider boundary and reports missing vision"
   (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
          (raw (mevedel-tool-media-attach-result "{\"kind\":\"whiteboard\"}"
-                                                media nil "shared-read"))
+                                                media nil "shared-edit"))
          (prepared (mevedel-tool-media-prepare-tool-result
                     'unknown-backend
-                    (list :id "shared-read" :name "SharedRead" :result raw) nil)))
+                    (list :id "shared-edit" :name "SharedEdit" :result raw) nil)))
     (should (string-search "media omitted" (car prepared)))
     (should-not (string-search "QUJD" (car prepared)))
     (should-not (cdr prepared)))

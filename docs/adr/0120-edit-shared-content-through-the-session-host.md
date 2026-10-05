@@ -61,8 +61,9 @@ two-browser room test, the preview arrived in roughly 70 ms before release.
 
 New empty documents share an initial text object: real browser testing found
 that two separately created empty text objects could normalize into one while
-losing a writer's undo history. Agent edits and inverses compare their exact
-targets and reject the entire transaction on overlap.
+losing a writer's undo history. Agent edits compare each target's content
+hash and inverses their exact targets; either rejects the entire transaction
+on overlap.
 
 Presence is bounded, disposable traffic. Explicit questions capture committed
 content and enter the ordinary pending-input queue; synchronization starts no
@@ -357,7 +358,7 @@ rejected despite being documented. The interpreter now accepts bounded vector
 data, and the editing adapter preserves nested arrays and explicit nulls.
 
 SharedEdit returns the canonical post-edit board PNG through the existing tool
-media channel. SharedRead and browser questions already used this renderer;
+media channel. Board reads and browser questions already used this renderer;
 reusing it gives the model immediate visual evidence from the committed revision,
 even with all browsers closed. Rendering happens before publication so a render
 failure cannot be reported as a failed edit after content was already committed.
@@ -380,6 +381,38 @@ is the outline offset by Excalidraw's binding gap, toward the fixed point. Both 
 resizing in the browser and in host snapshots. Hand-drawn wobble remains a
 visual decoration rather than changing attachment geometry. Existing boards
 benefit without content rewrites; unbound endpoints keep their explicit points.
+
+## Reading shared content as resources
+
+The model reads shared items with Read and Grep at `shared://` addresses. An
+item's overview is one `HASH JSON` line per element or block; long strokes,
+comments, history, renderings, embedded images and element libraries have
+addresses of their own. SharedEdit names each target by the hash it read and
+can merge fields with `set` and `unset`. Its result reports the revision and
+the stored lines of what changed, not the item.
+
+The resource family reuses Read's paging, output bound and continuation
+guidance, Grep's search, and ordinary media delivery, so no size mechanics
+are taught to callers. The editing host computes the views from committed
+state; the resolver only validates the address and availability, and Read and
+Grep fetch the view asynchronously before paging or searching it.
+
+### Decision history: one read tool returning the whole item
+
+`SharedRead` returned an item's full JSON, every retained contribution with
+before/after snapshots, all comments and a PNG. Patches carried each target's
+exact current JSON as `before`. A user's board of 23 hand-drawn strokes held
+183 KB of element JSON; its largest stroke was 21 KB. Every read sent all of
+it, every edit returned the whole board again, and changing one stroke's colour
+meant the model writing that stroke out twice. SharedRead and SharedEdit had
+no result bound, while the generic oversized-result spill would have written
+one JSON line that Read cuts at 2,000 characters. Document reads also carried
+embedded images as base64 text, up to 12 MiB.
+
+Hash preconditions keep the same concurrent-edit protection, because a hash
+over sorted keys changes whenever the content does. They cost the model 12
+characters per target. Stroke samples are now also stored at 0.1 units without
+near-duplicates, which brought that board to 53 KB.
 
 ## Deleting shared content
 

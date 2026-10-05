@@ -283,8 +283,14 @@
           (should (string-match-p "mevedel://" roster))
           (should (string-search "history://saved" roster))
           (dolist (scheme '("skill://" "agent://" "history://root"
-                            "mcp://"))
-            (should-not (string-match-p (regexp-quote scheme) roster)))))))
+                            "mcp://" "shared://"))
+            (should-not (string-match-p (regexp-quote scheme) roster)))))
+      ;; Shared items appear with the session's first whiteboard or document.
+      (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () nil))
+                ((symbol-function 'mevedel-shared-editing-list)
+                 (lambda (_) (list (list :id "board" :kind "whiteboard" :title "Plan" :revision 1)))))
+        (should (string-search "`shared://` - this session's shared whiteboards and documents"
+                               (mevedel-system--resource-roster context))))))
 
   :doc "advertises root history without retained agents or reading content"
   (let* ((workspace (mevedel-workspace-get-or-create

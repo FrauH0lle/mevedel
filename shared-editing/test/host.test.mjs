@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { handle } from '../host.mjs';
 import { restore } from '../model.mjs';
 import { resolveScene } from '../scene.mjs';
+import { contentHash as h } from '../view.mjs';
 const rect = (id, x, y, extra = {}) => ({ id, type: 'rectangle', x, y, width: 100, height: 50, ...extra });
 const scene = (elements, files = {}) => JSON.stringify({ type: 'excalidraw', version: 2, elements, files });
 
@@ -12,7 +13,7 @@ test('large retained snapshots expire before repeated moves block new saves', as
   let {state}=await handle({action:'create',id:'large-history',kind:'whiteboard',title:'Large history',content,actor:'Guest: Alice',opId:'create'});
   for(let step=0;step<20;step++) {
     const {result}=await handle({action:'read',state});
-    const changes=result.content.map(shape=>({id:shape.id,before:shape,after:{...shape,y:step+1}}));
+    const changes=result.content.map(shape=>({id:shape.id,hash:h(shape),after:{...shape,y:step+1}}));
     ({state}=await handle({action:'patch',state,actor:'Guest: Alice',opId:`move-${step}`,changes}));
   }
   assert.ok(state.transactions.length<20,'old snapshots expire by size as well as count');
@@ -59,8 +60,8 @@ test('host creates, exports, imports independently, and renders without a browse
     opId: 'edit1',
     image: true,
     changes: [
-      { id: 'one', before: null, after: rect('one', 0, 0) },
-      { id: 'label', before: null, after: { id: 'label', type: 'text', x: 0, y: 0, width: 0, height: 0, text: 'Client', containerId: 'one' } },
+      { id: 'one', after: rect('one', 0, 0) },
+      { id: 'label', after: { id: 'label', type: 'text', x: 0, y: 0, width: 0, height: 0, text: 'Client', containerId: 'one' } },
     ],
   });
   const retried = await handle({
@@ -139,14 +140,14 @@ test('targeted inverses preserve independent work and refuse overlapping changes
     opId: 'delete',
     changes: base.result.content.content
       .slice(0, 2)
-      .map((n) => ({ id: n.attrs.id, before: n, after: null })),
+      .map((n) => ({ id: n.attrs.id, hash: h(n), after: null })),
   });
   const human = await handle({
     action: 'patch',
     state: edit.state,
     actor: 'Guest',
     opId: 'human',
-    changes: [{ id: 'c', before: edit.result.content.content[0], after: p('c', 'Human') }],
+    changes: [{ id: 'c', hash: h(edit.result.content.content[0]), after: p('c', 'Human') }],
   });
   const reverted = await handle({
     action: 'revert',
@@ -188,7 +189,7 @@ test('targeted inverses preserve independent work and refuse overlapping changes
     state: human.state,
     actor: 'Guest',
     opId: 'overlap',
-    changes: [{ id: 'c', before: human.result.content.content[0], after: p('c', 'Later human') }],
+    changes: [{ id: 'c', hash: h(human.result.content.content[0]), after: p('c', 'Later human') }],
   });
   await assert.rejects(
     handle({
@@ -243,20 +244,20 @@ test('agent edits keep image files that retained contributions can restore', asy
   let { state, result } = await handle({ action: 'import', format: 'excalidraw', id: 'pics', actor: 'Guest', opId: 'import',
     data: scene([image], { pic: { id: 'pic', mimeType: 'image/png', dataURL } }) });
   ({ state, result } = await handle({ action: 'patch', state, actor: 'Agent: /root', opId: 'remove',
-    changes: [{ id: 'image', before: result.content[0], after: null }] }));
+    changes: [{ id: 'image', hash: h(result.content[0]), after: null }] }));
   ({ state, result } = await handle({ action: 'revert', state, actor: 'Guest', opId: 'undo', transaction: 'remove' }));
   assert.equal(result.content[0].fileId, 'pic');
   const exported = JSON.parse((await handle({ action: 'export', state, format: 'native' })).result.text);
   assert.equal(exported.files.pic.dataURL, dataURL, 'the restored image still has its pixels');
   for (let i = 0; i < 34; i++)
     ({ state } = await handle({ action: 'patch', state, actor: 'Guest', opId: `noise-${i}`,
-      changes: [{ id: `r${i}`, before: null, after: rect(`r${i}`, i, 0) }] }));
+      changes: [{ id: `r${i}`, after: rect(`r${i}`, i, 0) }] }));
   const restored = (await handle({ action: 'read', state })).result.content.find((e) => e.id === 'image');
   ({ state } = await handle({ action: 'patch', state, actor: 'Guest', opId: 'drop',
-    changes: [{ id: 'image', before: restored, after: null }] }));
+    changes: [{ id: 'image', hash: h(restored), after: null }] }));
   for (let i = 0; i < 33; i++)
     ({ state } = await handle({ action: 'patch', state, actor: 'Guest', opId: `later-${i}`,
-      changes: [{ id: `s${i}`, before: null, after: rect(`s${i}`, i, 100) }] }));
+      changes: [{ id: `s${i}`, after: rect(`s${i}`, i, 100) }] }));
   assert.deepEqual(JSON.parse((await handle({ action: 'export', state, format: 'native' })).result.text).files, {},
     'files nobody can restore any more are pruned');
 });
@@ -279,7 +280,7 @@ test('document images survive saves and native, HTML, and Markdown exports', asy
   for (const attrs of [{src:'https://example.com/image.png'}, {src:'data:image/svg+xml;base64,PHN2Zz4='},
                         {src:'data:image/png;base64,YmFk'}, {width:-1}, {alt:{bad:true}}]) {
     await assert.rejects(handle({action:'patch',state:made.state,actor:'Guest',opId:'bad',changes:[
-      {id:'picture',before:read.result.content.content[0],after:{type:'image',attrs:{...image.attrs,...attrs}}},
+      {id:'picture',hash:h(read.result.content.content[0]),after:{type:'image',attrs:{...image.attrs,...attrs}}},
     ]}));
   }
   assert.equal((await handle({action:'read',state:made.state})).result.content.content[0].attrs.src,src);
@@ -304,7 +305,7 @@ test('document image edits validate at the host and retain their original throug
   ]) {
     const read = await handle({action:'read',state});
     await assert.rejects(handle({action:'patch',state,actor:'Guest',opId:'bad',changes:[{id:'picture',
-      before:read.result.content.content[0],after:{...image,attrs:{...image.attrs,imageEdit:invalid}}}]}),
+      hash:h(read.result.content.content[0]),after:{...image,attrs:{...image.attrs,imageEdit:invalid}}}]}),
       /image (edit|crop|orientation)|embedded image/i);
   }
   const peers = [restore(Buffer.from(state.crdt,'base64')),restore(Buffer.from(state.crdt,'base64'))];
@@ -334,7 +335,7 @@ test('board image crops, flips and rotations are Excalidraw fields that validate
   assert.deepEqual([read.crop, read.scale, read.angle], [crop, [-1,1], Math.PI/2]);
   for (const invalid of [{crop:{...crop,width:'4'}}, {crop:{...crop,extra:1}}, {scale:[2,1]}, {scale:[1]}])
     await assert.rejects(handle({action:'patch',state,actor:'Guest',opId:'bad',
-      changes:[{id:'picture',before:read,after:{...read,...invalid}}]}), /Invalid image (crop|scale)/);
+      changes:[{id:'picture',hash:h(read),after:{...read,...invalid}}]}), /Invalid image (crop|scale)/);
   const peers = [restore(Buffer.from(state.crdt,'base64')),restore(Buffer.from(state.crdt,'base64'))];
   try {
     patch(peers[0],[{id:'picture',before:read,after:{...read,crop:{...crop,x:0}}}]);

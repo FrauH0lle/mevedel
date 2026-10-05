@@ -99,6 +99,12 @@
                   (&optional workspace-root dirs workspace))
 (autoload 'mevedel-skills-scan "mevedel-skills-core")
 
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (session))
+(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (session))
+(autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
+
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session-agent-registry "mevedel-structs" (cl-x) t)
@@ -125,7 +131,7 @@
 (autoload 'mevedel-library-source-directory "mevedel-utilities")
 
 (defconst mevedel-resource-supported-schemes
-  '(work artifact skill agent history memory mcp mevedel)
+  '(work artifact skill agent history memory mcp shared mevedel)
   "Closed set of resource address schemes understood by mevedel.")
 
 (defconst mevedel-resource--unreserved
@@ -676,6 +682,9 @@ SCHEME is nil, include metadata for every scheme."
                             session
                             (mevedel-resource--workspace context session)
                             (mevedel-resource--memory-roots context session)))
+         (shared-items (and (memq scheme '(nil shared))
+                            session
+                            (mevedel-shared-editing-list session)))
          (servers (and (memq scheme '(nil mcp))
                        (fboundp 'mcp-hub-get-servers)
                        (condition-case nil
@@ -746,6 +755,7 @@ SCHEME is nil, include metadata for every scheme."
             (mapcar (lambda (entry) (list :file (plist-get entry :file)))
                     (mevedel-journal-index-entries
                      (mevedel-resource--workspace context session) scheme)))
+          :shared-items shared-items
           :mcp-servers servers)))
 
 (defun mevedel-resource--memory-root-for-key (key context session)
@@ -920,7 +930,7 @@ Physical resolution is intentionally not performed here."
                    ((plist-get specific :dynamic-p) 'dynamic)
                    ((and (eq scheme 'work) (mevedel-resource--shared-work-p components))
                     'exact)
-                   ((memq scheme '(work artifact agent history))
+                   ((memq scheme '(work artifact agent history shared))
                     'session-relative)
                    (t 'exact)))))
         (when (and (eq scheme 'agent)
@@ -1012,6 +1022,48 @@ as Glob or Grep scopes."
                   (memq operation '(glob grep)))
                  ((file-regular-p path)
                   (string-suffix-p ".md" path)))))))
+
+(defconst mevedel-resource--shared-identity "\\`[a-zA-Z0-9_-]\\{1,80\\}\\'"
+  "Identity of a shared item, element, block or image.")
+
+(defun mevedel-resource--shared-shape-p (components)
+  "Return non-nil when COMPONENTS name a `shared://' resource.
+Items are `ID' with `view.png', `comments', `history', `elements/ID' and
+`images/KEY' descendants; `library' lists element libraries, optionally one
+library by name, each with a `sheet.png'."
+  (cl-flet ((id-p (value)
+              (and (stringp value)
+                   (string-match-p mevedel-resource--shared-identity value))))
+    (pcase components
+      ('nil t)
+      (`("library") t)
+      (`("library" ,_) t)
+      (`("library" ,_ "sheet.png") t)
+      (`(,id) (id-p id))
+      (`(,id ,(or "view.png" "comments" "history")) (id-p id))
+      (`(,id ,(or "elements" "images") ,name) (and (id-p id) (id-p name))))))
+
+(defun mevedel-resource--shared-available-p (components session)
+  "Return non-nil when shared COMPONENTS resolve in SESSION.
+Item addresses need an existing item; listings and libraries always resolve."
+  (or (null components)
+      (equal (car components) "library")
+      (and session
+           (member (car components) (mevedel-shared-editing-ids session))
+           t)))
+
+(defun mevedel-resource--shared-list-result (session)
+  "Return SESSION's shared item listing for a bare `shared://' Read."
+  (let ((items (and session (mevedel-shared-editing-list session))))
+    (concat
+     (if items
+         (mapconcat (lambda (item)
+                      (format "shared://%s\t%s %S · revision %s"
+                              (plist-get item :id) (plist-get item :kind)
+                              (plist-get item :title) (plist-get item :revision)))
+                    items "\n")
+       "No shared whiteboards or documents in this session; SharedCreate starts one.")
+     "\nshared://library\tWhiteboard element libraries for SharedEdit insert")))
 
 (defun mevedel-resource--mcp-servers ()
   "Return current MCP server metadata, or signal when mcp.el is absent."
@@ -1475,6 +1527,12 @@ the union index read, which already tolerates missing roots."
                       "No memory roots configured."))))
          (signal 'mevedel-resource-unavailable
                  (list "Internal resource error: memory file reached discovery execution"))))
+      ('shared
+       (if (and (null components) (eq operation 'read))
+           (mevedel-resource--shared-list-result session)
+         ;; Everything else is computed by the session's editing host, which
+         ;; answers asynchronously; Read and Grep fetch it themselves.
+         (list :shared-view components)))
       ('mcp
        (cond
         ((null components)
@@ -1622,7 +1680,10 @@ before an authorized handler receives a backing path or virtual record."
             (setq root (plist-get memory-root :dir)
                   physical (mevedel-resource--safe-path
                             root (cdr components))
-                  data (plist-put data :memory-root memory-root)))))))
+                  data (plist-put data :memory-root memory-root))))))
+     ((eq scheme 'shared)
+      (unless (mevedel-resource--shared-available-p components session)
+        (setq data (plist-put data :unavailable-p t)))))
     (when (and (eq operation 'apply-patch)
                (or (eq scheme 'memory)
                    (and (eq scheme 'work) (mevedel-resource--shared-work-p components)))
@@ -1664,6 +1725,7 @@ errors before any content or handler is reached."
                        :read-only-p (not (eq operation 'apply-patch))))
            physical root logical-p)
       (unless (or (eq operation 'read)
+                  (and (eq operation 'grep) (eq scheme 'shared))
                   (and (memq operation '(glob grep))
                        (or (memq scheme '(work artifact skill memory mevedel))
                            (and (eq scheme 'history)
@@ -1785,7 +1847,14 @@ errors before any content or handler is reached."
                               root (cdr components))
                     data (plist-put data :memory-root memory-root))))))
        ((eq scheme 'mcp)
-        (setq logical-p t)))
+        (setq logical-p t))
+       ((eq scheme 'shared)
+        (unless (mevedel-resource--shared-shape-p components)
+          (signal 'mevedel-resource-error
+                  (list "Unknown shared:// address; Read shared:// for this session's items")))
+        (setq logical-p t)
+        (unless (mevedel-resource--shared-available-p components session)
+          (setq data (plist-put data :unavailable-p t)))))
       (setq data (plist-put data :root root))
       (setq data (plist-put data :physical-path physical))
       (setq data (plist-put data :logical-p logical-p))
@@ -1813,7 +1882,7 @@ errors before any content or handler is reached."
       (unless root "Shared working files require a workspace"))
      ((and (eq scheme 'history) (equal (car components) "saved"))
       (when unavailable "Saved history requires a workspace"))
-     ((and (memq scheme '(work artifact agent history)) (null session))
+     ((and (memq scheme '(work artifact agent history shared)) (null session))
       (format "%s resources require a session"
               (if (eq scheme 'work) "Session working file"
                 (capitalize (symbol-name scheme)))))
@@ -1846,6 +1915,8 @@ errors before any content or handler is reached."
       "Journal resources require a workspace")
      ((eq scheme 'memory)
       "Memory root is not configured; Read memory://root to discover configured roots")
+     ((eq scheme 'shared)
+      "Shared item not found; Read shared:// to list this session's whiteboards and documents")
      (t "Internal resource error: availability failure has no reason"))))
 
 (defun mevedel-resource-attempt-address (attempt)
@@ -1937,7 +2008,9 @@ executor."
                         (setq descriptor (plist-put descriptor :render-data '(:count 0)))))
                     (when (and (listp result) (plist-member result :resource-search-documents))
                       (setq descriptor (append descriptor result)))
-                    (when (and (listp result) (plist-member result :history-workspace))
+                    (when (and (listp result)
+                               (or (plist-member result :history-workspace)
+                                   (plist-member result :shared-view)))
                       (setq descriptor (append descriptor result)))
                     (if executor
                         (funcall executor descriptor (plist-get data :address))

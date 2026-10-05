@@ -102,7 +102,7 @@ test('shared image transformations', async t => {
       const {content}=await window.apply({action:'read'});
       const before=kind==='whiteboard'?content.find(s=>s.type==='image'):content.content.find(n=>n.type==='image');
       const after=kind==='whiteboard'?{...before,box:[...before.box.slice(0,2),100,100]}:{...before,attrs:{...before.attrs,width:100,height:100}};
-      const result=await window.apply({action:'patch',opId:'concurrent-image',changes:[{id:kind==='whiteboard'?before.id:before.attrs.id,before,after}]});
+      const result=await window.apply({action:'patch',opId:'concurrent-image',changes:[{id:kind==='whiteboard'?before.id:before.attrs.id,hash:await window.contentHash(before),after}]});
       window.port.postMessage({type:'changed',...result});
     },kind);
     await dialog.getByRole('button',{name:'Apply image',exact:true}).click();
@@ -198,7 +198,7 @@ test('shared image transformations', async t => {
     await image.click({position:{x:4,y:4}});await frame.getByRole('button',{name:'Crop image',exact:true}).click();await dialog.waitFor();
     await page.evaluate(async () => {
       const before=(await window.apply({action:'read'})).content.find(s=>s.type==='image');
-      const result=await window.apply({action:'patch',opId:'concurrent-image',changes:[{id:before.id,before,after:{...before,width:100,height:100}}]});
+      const result=await window.apply({action:'patch',opId:'concurrent-image',changes:[{id:before.id,hash:await window.contentHash(before),after:{...before,width:100,height:100}}]});
       window.port.postMessage({type:'changed',...result});
     });
     await dialog.getByRole('button',{name:'Apply image',exact:true}).click();
