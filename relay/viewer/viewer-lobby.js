@@ -15,13 +15,11 @@
       undefined, {month: 'short', day: 'numeric'});
   }
 
-  // A session link differs from this page's only in its fragment, which
-  // the browser treats as an in-page jump, so the page reloads itself to
-  // join the new room. Replacing keeps Back from landing on a page whose
-  // fragment was already wiped.
+  // The viewer's hashchange handler reloads into the room a link names.
+  // Replacing keeps Back from landing on a page whose fragment was
+  // already wiped.
   function follow(link) {
     window.location.replace(link);
-    window.location.reload();
   }
 
   function create({state, send, el, notice, sessions, files = null, navigate = follow,
