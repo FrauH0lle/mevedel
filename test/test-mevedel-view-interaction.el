@@ -527,7 +527,22 @@
                         (mevedel-view--interaction-target-buffer)))))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p parent-view) (kill-buffer parent-view))
-      (when (buffer-live-p parent-data) (kill-buffer parent-data)))))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
+
+  :doc "a named owner's view hosts its interactions whatever buffer is current"
+  ;; Timers and process callbacks run with the user's buffer current,
+  ;; which can be another session's view.
+  (mevedel-view-test--with-buffers
+    (let ((own-data data-buf) (own-view view-buf))
+      (mevedel-view-test--with-buffers
+        (with-current-buffer view-buf
+          (should (eq own-view (mevedel-view--interaction-target-buffer own-data)))
+          ;; Without an owner, the current view hosts it.
+          (should (eq view-buf (mevedel-view--interaction-target-buffer))))
+        (with-current-buffer own-view (kill-buffer))
+        ;; An owner without a view never borrows another session's.
+        (with-current-buffer view-buf
+          (should-error (mevedel-view--interaction-target-buffer own-data)))))))
 
 (mevedel-deftest mevedel-view--interaction-zone-render
   (:doc "renders and rebuilds interaction-zone fragments")
@@ -1590,3 +1605,4 @@
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here
+
