@@ -283,13 +283,17 @@ silently placing controls in a data buffer."
                            (parent (mevedel-agent-invocation-parent-data-buffer
                                     inv)))
                  (view-for-data-buffer parent (cons buf seen)))))))
-    (or (and (live-interaction-view-p (current-buffer))
-             (current-buffer))
-        (view-for-data-buffer data-buffer)
-        (view-for-data-buffer (current-buffer))
-        (and (boundp 'mevedel--view-buffer)
-             (live-interaction-view-p mevedel--view-buffer)
-             mevedel--view-buffer)
+    ;; A named owner decides alone.  Interactions are often admitted from
+    ;; timers and process callbacks, where the current buffer is whatever
+    ;; the user is looking at, possibly another session's view.
+    (or (if data-buffer
+            (view-for-data-buffer data-buffer)
+          (or (and (live-interaction-view-p (current-buffer))
+                   (current-buffer))
+              (view-for-data-buffer (current-buffer))
+              (and (boundp 'mevedel--view-buffer)
+                   (live-interaction-view-p mevedel--view-buffer)
+                   mevedel--view-buffer)))
         (error "No live view for queued prompt"))))
 
 
