@@ -32,7 +32,8 @@
     }
 
     function markTitle(on) {
-      const title = state.editorTitle || baseTitle;
+      const title = state.editorTitle
+        || (state.sessionName ? `${state.sessionName} · mevedel` : baseTitle);
       document.title = on ? `\u25cf ${title}` : title;
     }
 

@@ -1589,6 +1589,14 @@ async function main() {
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
                  mode: 'edits'});
   assert.doesNotMatch(textOf(nodes.modeline), /plan/);
+  // The session's name heads the room and the tab, and follows a rename.
+  await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
+                 mode: 'edits', name: '2026-10-05T17-00-abc'});
+  assert.equal(nodes['session-label'].textContent, '2026-10-05T17-00-abc');
+  await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
+                 mode: 'edits', name: 'Pipeline diagram'});
+  assert.equal(nodes['session-label'].textContent, 'Pipeline diagram');
+  assert.equal(document.title, 'Pipeline diagram · mevedel');
 
   // Owner link: the permission mode becomes a picker in the strip, and
   // the strip keeps reporting the mode the session is actually in until
@@ -1664,7 +1672,12 @@ async function main() {
                  link: `http://127.0.0.1:1/#third.${thirdSecret}`});
   assert.equal(nodes.invites.children.length, 3);
   assert.match(textOf(nodes.invites), /handed-over · open/);
-  assert.deepEqual(JSON.parse(storage.get('mevedel-rooms')),
+  // The room this tab stands in is kept too, under its session's name,
+  // but is not counted as somewhere to go.
+  const storedRooms = JSON.parse(storage.get('mevedel-rooms'));
+  assert.deepEqual([storedRooms[0].room, storedRooms[0].name],
+                   ['roomroomroomroom', 'Pipeline diagram']);
+  assert.deepEqual(storedRooms.slice(1),
                    [{room: 'other', name: 'onboarding', secret: otherSecret},
                     {room: 'third', name: 'handed-over',
                      secret: thirdSecret}]);
@@ -1674,13 +1687,13 @@ async function main() {
   await deliver({t: 'room', name: 'handed-over',
                  link: `http://127.0.0.1:1/#third.${thirdSecret}`});
   assert.equal(nodes.invites.children.length, 3);
-  // Dismiss drops the news and nothing else: the two rooms that were
-  // stored are still stored. Only Forget, in the Rooms sheet, removes
-  // one -- see collaboration-viewer-session-test.js.
+  // Dismiss drops the news and nothing else: the rooms that were stored,
+  // this one among them, are still stored. Only Forget, in the Rooms
+  // sheet, removes one -- see collaboration-viewer-session-test.js.
   const refused = nodes.invites.children[1];
   refused.children[refused.children.length - 1].children[0].dispatch('click');
   assert.equal(nodes.invites.children.length, 2);
-  assert.equal(JSON.parse(storage.get('mevedel-rooms')).length, 2);
+  assert.equal(JSON.parse(storage.get('mevedel-rooms')).length, 3);
 
   // Inviting hands on this room's own link, at the holder's tier or any
   // below it -- an owner link can offer all three, and never a fourth.

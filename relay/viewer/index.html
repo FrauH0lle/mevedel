@@ -235,9 +235,11 @@
           <p id="new-session-lede" class="sheet-note">A separate room for
           separate work. This room, and everyone in it, stays exactly where
           it is.</p>
-          <label class="sheet-label" for="new-session-name">Name</label>
+          <label class="sheet-label" for="new-session-name">Name
+            <span class="sheet-hint">optional — otherwise named after the first prompt</span>
+          </label>
           <input id="new-session-name" class="sheet-input" maxlength="48"
-                 required placeholder="letters, digits, - and _">
+                 placeholder="letters, digits, - and _">
           <label id="new-session-model-label" class="sheet-label"
                  for="new-session-model" hidden>Model</label>
           <select id="new-session-model" class="sheet-input" hidden></select>

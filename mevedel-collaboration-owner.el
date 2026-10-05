@@ -88,6 +88,7 @@
                   "mevedel-session-artifacts" (name))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -162,6 +163,8 @@ requester is skipped because its own reply already carried a link."
 (defun mevedel-collaboration--create-guest-session
     (room peer guest request-id name prompt &optional images model)
   "Create session NAME for GUEST and reply to PEER's REQUEST-ID.
+A nil NAME creates an unnamed session; replies and offers then carry the
+name it starts with, its id, until it is titled from its first prompt.
 
 The new room shares only ROOM's workspace and working directory, or a
 lobby's workspace and root.  GUEST receives the same authority tier it
@@ -184,7 +187,7 @@ reports failure without stopping ROOM."
       (mevedel-collaboration--new-session-reply
        room peer request-id name :ok :json-false
        :message "This room has no workspace"))
-     ((assoc name (mevedel--workspace-sessions workspace))
+     ((and name (assoc name (mevedel--workspace-sessions workspace)))
       (mevedel-collaboration--new-session-reply
        room peer request-id name :ok :json-false
        :message (format "A session named %s already exists" name)))
@@ -196,6 +199,7 @@ reports failure without stopping ROOM."
                           (mevedel--chat-buffer name t workspace directory)))
                    (new-session
                     (buffer-local-value 'mevedel--session created-buffer)))
+              (setq name (mevedel-session-name new-session))
               (mevedel--ensure-chat-preset created-buffer)
               (when model
                 (mevedel-model-set-session-provider
@@ -243,7 +247,7 @@ reports failure without stopping ROOM."
     (room peer guest request-id name prompt &optional images model)
   "Ask the host to approve GUEST's REQUEST-ID for a session named NAME.
 PROMPT and its attachment IMAGES start the session once approved, on
-MODEL when given.
+MODEL when given.  A nil NAME asks for an unnamed session.
 
 The prompt reaches Emacs and ROOM's owner-link guests.  An owner may
 create a session outright, so approving someone else's request is no new
@@ -264,14 +268,17 @@ fails on the name that the first one took."
          "New session requested"
          (concat
           (format "Guest:  %s\n" (plist-get guest :name))
-          (format "Name:   %s\n" name)
+          (format "Name:   %s\n"
+                  (or name "(none -- titled from the first prompt)"))
           (format "Model:  %s\n" (or model "default"))
           (format "Prompt: %s\n"
                   (or prompt "(none -- the session starts empty)"))
           (when (> (length images) 0)
             (format "Files:  %d attached\n" (length images))))
-         (format "Create session \"%s\" for %s?"
-                 name (plist-get guest :name))
+         (if name
+             (format "Create session \"%s\" for %s?"
+                     name (plist-get guest :name))
+           (format "Create a new session for %s?" (plist-get guest :name)))
          nil
          (lambda (outcome)
            (when (and (eq room (mevedel-collaboration--room-for-buffer
@@ -298,17 +305,21 @@ fails on the name that the first one took."
 (defun mevedel-collaboration--handle-new-session (room peer frame)
   "Act on writable guest PEER's request in FRAME for a new session.
 FRAME may name the session's model; one this host has not registered
-refuses the request rather than falling back to the default."
+refuses the request rather than falling back to the default.  A request
+without a usable name creates an unnamed session, which is titled from
+its first prompt like one started in Emacs without a name."
   (when-let* ((guest (mevedel-collaboration--guest room peer))
               ((plist-get guest :writable))
               (request-id (plist-get frame :reqId))
-              ((mevedel-collaboration--request-id-p request-id))
-              (raw (mevedel-collaboration--guest-text (plist-get frame :name)))
-              (name (mevedel-session-artifacts-sanitize
-                     (truncate-string-to-width
-                      raw mevedel-collaboration--max-session-name-chars)))
-              ((string-match-p "[A-Za-z0-9]" name)))
-    (let* ((images (plist-get frame :images))
+              ((mevedel-collaboration--request-id-p request-id)))
+    (let* ((raw (mevedel-collaboration--guest-text (plist-get frame :name)))
+           (sanitized (and raw
+                           (mevedel-session-artifacts-sanitize
+                            (truncate-string-to-width
+                             raw mevedel-collaboration--max-session-name-chars))))
+           (name (and sanitized (string-match-p "[A-Za-z0-9]" sanitized)
+                      sanitized))
+           (images (plist-get frame :images))
            (prompt (or (mevedel-collaboration--guest-text
                         (plist-get frame :prompt))
                        ;; Files alone still say what the session is for.
@@ -327,8 +338,10 @@ refuses the request rather than falling back to the default."
        (waiting
         (mevedel-collaboration--new-session-reply
          room peer request-id name :ok :json-false
-         :message (format "Your request for %s is still waiting"
-                          (cdr waiting))))
+         :message (if (cdr waiting)
+                      (format "Your request for %s is still waiting"
+                              (cdr waiting))
+                    "Your request for a new session is still waiting")))
        ((and last
              (eql request-id (car last))
              (< (- now (cdr last))

@@ -219,6 +219,28 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
                    ['same_name · waiting for the host', 'same_name · refused']);
 }
 
+// A name is optional: without one the host names the session, and the
+// room is kept under the name the host reports. A typed name still needs
+// a letter or digit.
+{
+  const {controller, nodes, sent} = build(64);
+  nodes['new-session-button'].dispatch('click');
+  nodes['new-session-name'].value = '   ';
+  nodes['new-session-prompt'].value = 'Draw the pipeline';
+  nodes['new-session'].close('create');
+  assert.equal(sent.length, 1);
+  assert.equal('name' in sent[0], false);
+  assert.equal(sent[0].prompt, 'Draw the pipeline');
+  assert.deepEqual(cards(nodes), ['New session · waiting for the host']);
+  controller.showResult({reqId: 1, ok: true, name: '2026-10-05T17-00-abc',
+                         link: `https://relay.example/#fresh.${secretOf(3, 64)}`});
+  assert.deepEqual(cards(nodes), ['2026-10-05T17-00-abc · open']);
+  assert.deepEqual(rooms(nodes), ['2026-10-05T17-00-abc']);
+  nodes['new-session-name'].value = '///';
+  nodes['new-session'].close('create');
+  assert.equal(sent.length, 1, 'a typed name without a letter or digit is not sent');
+}
+
 // A lobby keeps itself among the rooms, so the rooms it opens list it;
 // the tab standing in it does not.
 {
@@ -228,6 +250,17 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
                    [{room: 'here', name: 'Lobby · mevedel',
                      secret: secretOf(1, 48)}]);
   assert.deepEqual(rooms(nodes), []);
+}
+
+// The room a tab stands in is kept under the name its host gives it now,
+// so a session titled after its first prompt is listed by that title.
+{
+  const {controller} = build(48);
+  controller.rememberCurrent('2026-10-05T17-00-abc');
+  controller.rememberCurrent('Pipeline diagram');
+  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
+                   [{room: 'here', name: 'Pipeline diagram',
+                     secret: secretOf(1, 48)}]);
 }
 
 // The lobby opens the same sheet with its own explanation.

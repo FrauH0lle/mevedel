@@ -1073,6 +1073,19 @@
       if (typeof frame.model === 'string') state.model = frame.model;
       if (typeof frame.mode === 'string') state.mode = frame.mode;
       state.plan = frame.plan === true;
+      // The session's name heads the room and follows a rename, including
+      // the title an unnamed session is given after its first prompt.
+      if (typeof frame.name === 'string' && frame.name
+          && frame.name !== state.sessionName) {
+        state.sessionName = frame.name;
+        if (sessionLabel) sessionLabel.textContent = frame.name;
+        if (!state.editorTitle) {
+          // Keep the unseen-activity marker the notifications set.
+          const marker = document.title.startsWith('● ') ? '● ' : '';
+          document.title = `${marker}${frame.name} · mevedel`;
+        }
+        sessions.rememberCurrent(frame.name);
+      }
       renderModeline();
       editing.conversation();
       artifacts.activity();
