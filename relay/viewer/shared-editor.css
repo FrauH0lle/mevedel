@@ -52,7 +52,8 @@ header {
   border-bottom: 1px solid var(--line);
   flex: none;
   background: var(--paper);
-  z-index: 4;
+  /* Above the toolbars below it, so the editor menu drops over them. */
+  z-index: 5;
 }
 #title {
   min-width: 0;
