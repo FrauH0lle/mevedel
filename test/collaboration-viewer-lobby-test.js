@@ -38,6 +38,8 @@ function build({writable = true, owner = false, withFiles = false} = {}) {
   const remembered = [];
   const newSession = [];
   const filesCalls = [];
+  const confirms = [];
+  const confirmAnswer = {value: true};
   const files = withFiles ? {
     show: () => filesCalls.push(['show']),
     refresh: () => filesCalls.push(['refresh']),
@@ -53,9 +55,11 @@ function build({writable = true, owner = false, withFiles = false} = {}) {
       openNewSession: note => newSession.push(note),
     },
     navigate: link => followed.push(link),
+    confirm: text => { confirms.push(text); return confirmAnswer.value; },
   });
-  return {lobby, nodes, body, document, sent, notices, followed,
-          remembered, newSession, filesCalls, age: window.mevedelLobbyView.age};
+  return {lobby, nodes, body, document, sent, notices, followed, confirms,
+          confirmAnswer, remembered, newSession, filesCalls,
+          age: window.mevedelLobbyView.age};
 }
 
 const now = Math.floor(Date.now() / 1000);
@@ -146,6 +150,36 @@ function openButton(nodes, index) {
   owner.nodes['lobby-new'].dispatch('click');
   assert.equal(owner.newSession.length, 1);
   assert.match(owner.newSession[0], /this project/);
+}
+
+// Only an owner deletes, after confirming; the host's fresh listing is
+// the success, and a refusal restores the button.
+{
+  const full = build({writable: true});
+  full.lobby.show(listing);
+  assert.equal(full.nodes['lobby-list'].children[0].children.length, 2);
+  const {lobby, nodes, sent, notices, confirms, confirmAnswer} =
+    build({writable: true, owner: true});
+  lobby.show(listing);
+  const row = nodes['lobby-list'].children[2];
+  const button = row.children[row.children.length - 1];
+  assert.equal(textOf(button), 'Delete');
+  confirmAnswer.value = false;
+  button.dispatch('click');
+  assert.match(confirms[0], /Delete old\?/);
+  assert.deepEqual(sent, []);
+  confirmAnswer.value = true;
+  button.dispatch('click');
+  assert.deepEqual(plain(sent), [{t: 'delete-session', reqId: 1, id: 'c'}]);
+  assert.equal(button.disabled, true);
+  lobby.deleted({t: 'delete-session', reqId: 1, ok: false,
+                 message: 'Close old in Emacs first'});
+  assert.equal(button.disabled, false);
+  assert.deepEqual(notices, ['Close old in Emacs first']);
+  button.dispatch('click');
+  lobby.deleted({t: 'delete-session', reqId: 2, ok: true});
+  lobby.deleted({t: 'delete-session', reqId: 2, ok: false, message: 'late'});
+  assert.deepEqual(notices, ['Close old in Emacs first']);
 }
 
 // A session created from the lobby is joined; one created from a room is

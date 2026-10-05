@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Tests the per-workspace lobby: persisted credentials, the session
-;; listing, opening and creating sessions from guest frames, and the
-;; lobby lifecycle.
+;; listing, opening, creating and deleting sessions from guest frames,
+;; and the lobby lifecycle.
 
 ;;; Code:
 
@@ -305,6 +305,68 @@
               (should-not sent))))
       (kill-buffer buffer))))
 
+(mevedel-deftest mevedel-collaboration-lobby--handle-delete
+  (:doc "deletes an owner's saved session and relists it for every guest")
+  (let* ((guests (make-hash-table :test #'eql))
+         (lobby (list :transport 'transport :guests guests :workspace 'ws))
+         (live (generate-new-buffer " *lobby-delete-live*"))
+         (in-use nil)
+         sent deleted)
+    (unwind-protect
+        (progn
+          (with-current-buffer live
+            (setq-local mevedel--session
+                        (mevedel-collaboration-lobby-test--session "live")))
+          (puthash 2 '(:name "Writer" :writable t) guests)
+          (puthash 3 '(:name "Owner" :writable t :owner t) guests)
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport peer frame)
+                       (push (cons peer frame) sent) t))
+                    ((symbol-function 'mevedel--workspace-sessions)
+                     (lambda (_workspace) `(("draw" . ,live))))
+                    ((symbol-function
+                      'mevedel-session-persistence-list-sessions)
+                     (lambda (_workspace &optional _cached)
+                       '((:save-path "/sessions/old/"
+                          :summary (:session-id "old")))))
+                    ((symbol-function 'mevedel-session-persistence-delete)
+                     (lambda (workspace path)
+                       (should (eq 'ws workspace))
+                       (when (eq in-use 'error) (error "Disk gone"))
+                       (unless in-use (push path deleted))))
+                    ((symbol-function 'mevedel-collaboration-lobby--frame)
+                     (lambda (_lobby) '(:t "lobby"))))
+            (let ((delete (lambda (peer id)
+                            (setq sent nil)
+                            (mevedel-collaboration-lobby--handle-delete
+                             lobby peer (list :reqId 4 :id id))
+                            (plist-get (cdar (last sent)) :message))))
+              (should (equal "Only an owner link can delete sessions"
+                             (funcall delete 2 "old")))
+              ;; Its buffer would save a live session straight back.
+              (should (equal "Close draw in Emacs first"
+                             (funcall delete 3 "live")))
+              (should (equal "No such session" (funcall delete 3 "../x")))
+              (should (equal "No session named" (funcall delete 3 nil)))
+              (setq in-use t)
+              (should (equal "The session is still in use elsewhere"
+                             (funcall delete 3 "old")))
+              (setq in-use 'error)
+              (should (equal "Session could not be deleted: Disk gone"
+                             (funcall delete 3 "old")))
+              (should-not deleted)
+              (setq in-use nil)
+              (funcall delete 3 "old")
+              (should (equal '("/sessions/old/") deleted))
+              (should (equal '((3 :t "delete-session" :reqId 4 :ok t))
+                             (last sent)))
+              ;; Every guest's list drops the deleted row.
+              (should (equal '(2 3) (sort (mapcar #'car (butlast sent)) #'<)))
+              (should (cl-every (lambda (entry)
+                                  (equal "lobby" (plist-get (cdr entry) :t)))
+                                (butlast sent))))))
+      (kill-buffer live))))
+
 (mevedel-deftest mevedel-collaboration-lobby--on-frame
   (:doc "admits guests, routes lobby frames, and contains failures")
   (let* ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
@@ -328,6 +390,9 @@
                (lambda (room peer _frame)
                  (should (eq lobby room))
                  (push (cons 'new peer) routed)))
+              ((symbol-function 'mevedel-collaboration-lobby--handle-delete)
+               (lambda (_lobby peer _frame)
+                 (push (cons 'delete peer) routed)))
               ((symbol-function 'mevedel-collaboration-files-handle-list)
                (lambda (_lobby peer _frame root)
                  (push (list 'files peer root) routed)))
@@ -367,7 +432,8 @@
       (setq sent (cdr sent))
       (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "open-session"))
       (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "new-session"))
-      (should (equal '((new . 1) (open . 1)) routed))
+      (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "delete-session"))
+      (should (equal '((delete . 1) (new . 1) (open . 1)) routed))
       (should (eq t interaction))
       ;; Project file frames reach the files module with the lobby's root.
       (setq routed nil)

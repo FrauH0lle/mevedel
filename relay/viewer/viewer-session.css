@@ -328,13 +328,13 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
 .files-name:hover { color: var(--accent); }
 .files-icon { color: var(--muted); width: .8rem; flex: 0 0 auto; }
 .files-row .lobby-meta { flex: 0 0 auto; }
-/* A list of files carries a Remove per row; a solid danger block on every
-   row would shout, so it reads as a quiet control until pointed at. */
-.files-row .btn.danger {
+/* A lobby list carries a Remove or Delete per row; a solid danger block on
+   every row would shout, so it reads as a quiet control until pointed at. */
+.lobby-row .btn.danger {
   background: none;
   color: var(--failed);
   border: 1px solid var(--line);
   flex: 0 0 auto;
 }
-.files-row .btn.danger:hover,
-.files-row .btn.danger:focus-visible { border-color: var(--failed); }
+.lobby-row .btn.danger:hover,
+.lobby-row .btn.danger:focus-visible { border-color: var(--failed); }

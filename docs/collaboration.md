@@ -301,7 +301,7 @@ ordinary rooms with the ordinary share lifetime
 
 Link tiers keep their meaning. A view link lists sessions; a full link can
 also open them and use the [project files](#project-files); an owner link can
-also create sessions. Opening a session resumes
+also create and delete sessions. Opening a session resumes
 it when it is not live, shares it when it is not already shared, and returns
 its room's link at the requester's own tier, so the lobby never grants more
 than the link that reached it. The session id in an open request only selects
@@ -310,6 +310,12 @@ the [guest-requested session](#guest-requested-sessions) path with the
 lobby's workspace and root; a non-owner request is refused, because a lobby
 has no session in which to ask the host. For the same reason only an owner's
 listing carries the models it may create a session on.
+
+Deleting removes a saved session's directory for good, under the safety rules
+of expired-session cleanup without its age cap: a session live in this Emacs
+is refused (close it first, or its buffer would save it back), and so is one
+whose lock or lease another client may still hold or whose journal captures
+are pending. After a deletion every lobby guest receives a fresh listing.
 
 Each row carries the session id, display name, last save time, a prompt
 preview of at most 160 characters, and whether the session is live in Emacs
@@ -326,7 +332,8 @@ session locks. Rooms follow the same rule; see
 [questions nobody can answer](#questions-nobody-can-answer).
 
 In the browser, a lobby link renders the session list in place of the
-conversation and composer. Open replaces the page with the session's room.
+conversation and composer. Open replaces the page with the session's room;
+an owner's rows also carry Delete, which asks for confirmation first.
 The lobby stores itself in the browser's room list, so every room it opens
 lists it under Rooms as the way back. A full or owner link adds a **Files**
 tab beside **Sessions**: the [project files](#project-files). Refresh and a

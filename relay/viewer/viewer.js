@@ -1098,6 +1098,8 @@
       setConnection('Connected', 'connected');
     } else if (frame.t === 'open-session') {
       lobby.opened(frame);
+    } else if (frame.t === 'delete-session') {
+      lobby.deleted(frame);
     } else if (frame.t === 'files') {
       files.listed(frame);
     } else if (frame.t === 'file') {

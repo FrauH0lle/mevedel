@@ -4,7 +4,7 @@
 
 ;; Owns the per-workspace lobby: one bookmarkable browser room that lists
 ;; the workspace's live and saved sessions, opens one into its own shared
-;; room, and creates new ones.
+;; room, creates new ones, and deletes saved ones.
 ;;
 ;; A lobby is a room bound to a workspace rather than to a session.  Its
 ;; credentials persist in the workspace state directory, so its links
@@ -12,7 +12,8 @@
 ;; ordinary share lifetime.  Link tiers keep their meaning: a view link
 ;; lists sessions, a full link also opens them and works with the project
 ;; files (`mevedel-collaboration-files'), and an owner link also creates
-;; sessions.  A guest is always handed a session room at its own tier.
+;; and deletes sessions.  A guest is always handed a session room at its
+;; own tier.
 ;;
 ;; Guest frames arrive while nobody may be at the keyboard, so lobby work
 ;; runs with `inhibit-interaction': a step that would ask in Emacs is
@@ -43,6 +44,8 @@
 (autoload 'mevedel-collaboration-share-present "mevedel-collaboration-share")
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-delete
+                  "mevedel-session-persistence" (workspace save-path))
 (declare-function mevedel-session-persistence-list-sessions
                   "mevedel-session-persistence" (workspace &optional cached))
 (declare-function mevedel-session-persistence-parse-iso-time
@@ -51,6 +54,7 @@
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source session-override
                                workspace))
+(autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-list-sessions
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-restore "mevedel-session-persistence")
@@ -224,20 +228,23 @@ An owner also receives the models it may create a session on."
 ;;
 ;;; Opening a session
 
+(defun mevedel-collaboration-lobby--saved-entry (workspace id)
+  "Return WORKSPACE's saved session entry for session ID, or nil.
+The id only selects among sessions the listing would show; it never
+becomes a path of its own."
+  (cl-find id (mevedel-session-persistence-list-sessions workspace)
+           :key (lambda (entry)
+                  (plist-get (plist-get entry :summary) :session-id))
+           :test #'equal))
+
 (defun mevedel-collaboration-lobby--session-buffer (lobby id)
   "Return the data buffer for LOBBY's session ID, restoring it if saved.
 Signal an error when ID names no session of LOBBY's workspace."
   (let ((workspace (plist-get lobby :workspace)))
     (or (cddr (assoc id (mevedel-collaboration-lobby--live-sessions
                          workspace)))
-        ;; The id only selects among sessions the listing would show; it
-        ;; never becomes a path of its own.
-        (if-let* ((entry (cl-find id (mevedel-session-persistence-list-sessions
-                                      workspace)
-                                  :key (lambda (entry)
-                                         (plist-get (plist-get entry :summary)
-                                                    :session-id))
-                                  :test #'equal)))
+        (if-let* ((entry (mevedel-collaboration-lobby--saved-entry
+                          workspace id)))
             (mevedel-session-persistence-restore
              (plist-get entry :save-path) nil nil workspace)
           (error "No such session")))))
@@ -283,6 +290,52 @@ already; PEER receives the room at its own tier."
 
 
 ;;
+;;; Deleting a session
+
+(defun mevedel-collaboration-lobby--delete-failure (lobby guest id)
+  "Delete LOBBY's saved session ID for GUEST; return why not, or nil.
+A session live in Emacs is refused, since its buffer would save it
+straight back, and so is one another client may still hold."
+  (let* ((workspace (plist-get lobby :workspace))
+         (live (assoc id (mevedel-collaboration-lobby--live-sessions
+                          workspace)))
+         entry)
+    (cond
+     ((not (plist-get guest :owner))
+      "Only an owner link can delete sessions")
+     ((not (and (stringp id) (not (string-empty-p id))))
+      "No session named")
+     (live (format "Close %s in Emacs first" (cadr live)))
+     ((not (setq entry (mevedel-collaboration-lobby--saved-entry
+                        workspace id)))
+      "No such session")
+     ((not (mevedel-session-persistence-delete
+            workspace (plist-get entry :save-path)))
+      "The session is still in use elsewhere"))))
+
+(defun mevedel-collaboration-lobby--handle-delete (lobby peer frame)
+  "Delete the saved session FRAME names for owner PEER.
+Every guest of LOBBY receives the new listing after a deletion."
+  (when-let* ((guest (mevedel-collaboration--guest lobby peer))
+              (request-id (plist-get frame :reqId))
+              ((mevedel-collaboration--request-id-p request-id)))
+    (let ((failure (condition-case err
+                       (mevedel-collaboration-lobby--delete-failure
+                        lobby guest (plist-get frame :id))
+                     (error (format "Session could not be deleted: %s"
+                                    (error-message-string err))))))
+      (mevedel-collaboration--transport-send
+       (plist-get lobby :transport) peer
+       (append (list :t "delete-session" :reqId request-id)
+               (if failure (list :ok :json-false :message failure)
+                 (list :ok t))))
+      (unless failure
+        (maphash (lambda (other _guest)
+                   (mevedel-collaboration-lobby--send-listing lobby other))
+                 (plist-get lobby :guests))))))
+
+
+;;
 ;;; Guest frames
 
 (defun mevedel-collaboration-lobby--on-frame (root peer frame)
@@ -303,6 +356,8 @@ whose link is meant to keep working."
              (mevedel-collaboration-lobby--handle-open lobby peer frame))
             ("new-session"
              (mevedel-collaboration--handle-new-session lobby peer frame))
+            ("delete-session"
+             (mevedel-collaboration-lobby--handle-delete lobby peer frame))
             ("files"
              (mevedel-collaboration-files-handle-list lobby peer frame root))
             ("file-get"

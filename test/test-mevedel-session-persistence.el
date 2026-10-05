@@ -4538,6 +4538,38 @@
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-session-persistence-delete (:quiet t)
+  ,test
+  (test)
+  :doc "deletes a fresh session only once nothing holds it"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((buffer (generate-new-buffer " *delete-session*"))
+          (session (mevedel-session-create "doomed" workspace))
+          (capture (make-string 64 ?a)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer (org-mode) (insert "Saved\n"))
+            (mevedel-session-artifacts-save session buffer)
+            (let ((directory (mevedel-session-save-path session)))
+              ;; This Emacs still holds its lock.
+              (should-not (mevedel-session-persistence-delete
+                           workspace directory))
+              (mevedel-session-persistence-lock-release directory session)
+              (mevedel-journal-pins-retain directory capture nil)
+              (should-not (mevedel-session-persistence-delete
+                           workspace directory))
+              (should (file-directory-p directory))
+              (mevedel-journal-pins-release directory capture)
+              (should (mevedel-session-persistence-delete
+                       workspace directory))
+              (should-not (file-directory-p directory))))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry)))))
+
 
 ;;
 ;;; View rerender on resume / rewind
