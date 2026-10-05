@@ -130,9 +130,11 @@
 (autoload 'mevedel-model-candidates "mevedel-models")
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-view--refused-question "mevedel-pending-inputs" (err))
 (declare-function mevedel-view-enqueue-external-follow-up
                   "mevedel-pending-inputs"
                   (data-buffer text &rest keys))
+(autoload 'mevedel-view--refused-question "mevedel-pending-inputs")
 (autoload 'mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs")
 
 ;; `mevedel-skills-core'
@@ -1053,13 +1055,17 @@ while nobody may be at the keyboard, so frames run with
 sending guest instead of waiting for an answer."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (condition-case nil
-        (condition-case nil
+        (condition-case err
             (let ((inhibit-interaction t))
               (mevedel-collaboration--dispatch-frame room peer frame))
           (inhibited-interaction
            (mevedel-collaboration--transport-send
             (plist-get room :transport) peer
-            (list :t "notice" :message mevedel-collaboration-needs-host-message))))
+            (list :t "notice" :message mevedel-collaboration-needs-host-message))
+           (display-warning
+            'mevedel
+            (format "A guest's %s request needed a decision in Emacs and was refused%s"
+                    (plist-get frame :t) (mevedel-view--refused-question err)))))
       (error (mevedel-collaboration--observer-failure room)))))
 
 (defun mevedel-collaboration--dispatch-frame (room peer frame)

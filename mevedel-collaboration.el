@@ -63,6 +63,7 @@
 ;; `mevedel-collaboration-lobby'
 (declare-function mevedel-collaboration-lobby--status
                   "mevedel-collaboration-lobby" ())
+(defvar mevedel-collaboration-lobby--lobbies)
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
@@ -314,6 +315,30 @@ A notice is informational: the guest stays connected."
                       (list :t "notice" :message message))))
                  (plist-get room :guests))
       (error nil))))
+
+(defun mevedel-collaboration--sharing-p ()
+  "Return non-nil while a collaboration room or lobby is live."
+  (or (> (hash-table-count mevedel-collaboration--rooms) 0)
+      (and (boundp 'mevedel-collaboration-lobby--lobbies)
+           (> (hash-table-count mevedel-collaboration-lobby--lobbies) 0))))
+
+(defun mevedel-collaboration--refuse-unseen-question ()
+  "Refuse a minibuffer question nobody can see, from `minibuffer-setup-hook'.
+An Emacs daemon without a client frame reads the minibuffer on its
+invisible initial terminal: the question waits forever while guests keep
+the event loop running inside it.  While a room or lobby is live, such a
+question signals `inhibited-interaction' with its prompt instead, from
+whichever step of a guest's turn asked it, so the step fails visibly.
+A question on a client frame reaches the person there as usual."
+  (when-let* (((daemonp))
+              ((mevedel-collaboration--sharing-p))
+              (window (active-minibuffer-window))
+              ((frame-initial-p (window-frame window))))
+    (signal 'inhibited-interaction
+            (list (string-trim (substring-no-properties
+                                (or (minibuffer-prompt) "")))))))
+
+(add-hook 'minibuffer-setup-hook #'mevedel-collaboration--refuse-unseen-question)
 
 (defun mevedel-collaboration--room-list ()
   "Return every live collaboration room."

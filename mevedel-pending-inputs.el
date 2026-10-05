@@ -862,15 +862,25 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                           before-send after-insert release))
                      (inhibited-interaction
                       (funcall release)
-                      (mevedel-view--refuse-guest-follow-up entry session))
+                      (mevedel-view--refuse-guest-follow-up entry session err))
                      ((error quit)
                       (funcall release)
                       (signal (car err) (cdr err))))))))))))))
 
-(defun mevedel-view--refuse-guest-follow-up (entry session)
+(defun mevedel-view--refused-question (err)
+  "Return \": QUESTION\" for an `inhibited-interaction' ERR naming one, else \"\"."
+  (let ((question (cadr err)))
+    (if (and (stringp question) (not (string-empty-p question)))
+        (concat ": " question)
+      "")))
+
+(defun mevedel-view--refuse-guest-follow-up (entry session &optional err)
   "Drop guest ENTRY of SESSION, whose turn would have asked in Emacs.
+ERR is the `inhibited-interaction' signal, which may carry the question.
 Its attachment files leave with it, as on a retraction; the host is
-warned and the guest told, rather than the queue retrying it forever."
+warned with the question and the guest told, rather than the queue
+retrying it forever.  Prompts can name hosts and paths, so only the
+host sees the question."
   (mevedel-pending-inputs--set-queues
    session 'follow-up (delq entry (mevedel-view--pending-follow-ups session)))
   (dolist (path (plist-get entry :guest-paths))
@@ -879,8 +889,9 @@ warned and the guest told, rather than the queue retrying it forever."
   (mevedel-view--interaction-rebuild)
   (display-warning
    'mevedel
-   (format "A message from %s was not sent: its turn needed a decision in Emacs"
-           (or (plist-get entry :guest-name) "a guest")))
+   (format "A message from %s was not sent: its turn needed a decision in Emacs%s"
+           (or (plist-get entry :guest-name) "a guest")
+           (mevedel-view--refused-question err)))
   (when (fboundp 'mevedel-collaboration-notify-guest)
     (mevedel-collaboration-notify-guest
      session (plist-get entry :guest-id)
