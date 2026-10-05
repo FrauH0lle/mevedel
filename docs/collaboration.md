@@ -780,7 +780,11 @@ share panel can appear while the transport is still connecting; its presence
 does not prove that the relay room is ready. TLS retains Emacs' configured
 certificate and hostname verification policy. Only the current connection may
 report an open room; callbacks from cancelled or replaced attempts cannot
-revive it.
+revive it. A dial the relay has not answered within 30 seconds is abandoned
+and retried like a dropped connection. A nonblocking connect can stall without
+ever failing: a headless host that dialed while its container started stayed
+`connecting` indefinitely, so the relay never knew its lobby room and every
+link to it showed "Room closed".
 
 The host reconnects to the relay with bounded backoff after a network blip;
 the relay garbage-collects the room with the host connection, so guests

@@ -15,7 +15,8 @@
 ;; delivers decoded frames and control events to callbacks and reconnects
 ;; with bounded backoff when the relay connection drops.  It pings the relay
 ;; on its own interval so a connection that died while this machine slept
-;; reports itself instead of looking open forever.
+;; reports itself instead of looking open forever, and gives each dial a
+;; deadline so one that stalls is retried instead of connecting forever.
 
 ;;; Code:
 
@@ -138,6 +139,14 @@ come out of the same budget.")
 (defconst mevedel-collaboration--backoff-max 30)
 (defconst mevedel-collaboration--keepalive-seconds 30)
 
+(defvar mevedel-collaboration--connect-timeout-seconds 30
+  "Seconds a dial may go unanswered before it is abandoned and retried.
+A nonblocking connect can stall without ever failing: an Emacs daemon
+that dialed its relay while starting up was found still `connecting'
+long afterwards, with its room unknown to the relay and every link to
+it reporting the room closed.  Neither the keepalive, which pings only
+open connections, nor a close event would ever have ended it.")
+
 (defvar mevedel-collaboration--dialing nil
   "Transport being created during a call to `websocket-open'.")
 
@@ -180,7 +189,9 @@ unibyte room key.  CALLBACKS is a plist:
 
 Return the transport handle without waiting for TCP/TLS connection setup.
 TLS uses Emacs' configured certificate and hostname verification policy.
-The connection retries with bounded exponential backoff until stopped;
+The connection retries with bounded exponential backoff until stopped,
+and a dial the relay has not answered within
+`mevedel-collaboration--connect-timeout-seconds' counts as a drop;
 undecryptable or malformed input is dropped silently."
   (advice-add 'websocket-ensure-handshake :around
               #'mevedel-collaboration--transport-handshake)
@@ -191,6 +202,7 @@ undecryptable or malformed input is dropped silently."
                          :state 'connecting
                          :backoff mevedel-collaboration--backoff-initial
                          :reconnect-timer nil
+                         :connect-timer nil
                          :on-frame (plist-get callbacks :on-frame)
                          :on-control (plist-get callbacks :on-control)
                          :on-state (plist-get callbacks :on-state)
@@ -235,37 +247,59 @@ deadline, which websocket.el cannot report without patching it."
   (when-let* ((callback (plist-get transport :on-state)))
     (funcall callback state)))
 
+(defun mevedel-collaboration--transport-cancel-connect-timer (transport)
+  "Cancel TRANSPORT's pending dial deadline, if any."
+  (when-let* ((timer (plist-get transport :connect-timer)))
+    (cancel-timer timer)
+    (plist-put transport :connect-timer nil)))
+
+(defun mevedel-collaboration--transport-connect-timeout (transport ws)
+  "Abandon TRANSPORT's dial of WS when the relay still has not answered.
+The dial is dropped like a broken connection, so it is retried with the
+usual backoff."
+  (plist-put transport :connect-timer nil)
+  (when (and (eq (plist-get transport :state) 'connecting)
+             (eq ws (plist-get transport :ws)))
+    (mevedel-collaboration--transport-down transport ws)))
+
 (defun mevedel-collaboration--transport-dial (transport)
-  "Dial TRANSPORT's relay URL asynchronously and install socket callbacks."
+  "Dial TRANSPORT's relay URL asynchronously and install socket callbacks.
+The dial has `mevedel-collaboration--connect-timeout-seconds' to open."
   (plist-put transport :reconnect-timer nil)
   (condition-case nil
-      (plist-put
-       transport :ws
-       (let ((mevedel-collaboration--dialing transport))
-         (websocket-open
-          (plist-get transport :url)
-          :nowait t
-          :custom-header-alist (plist-get transport :headers)
-          :on-open
-          (lambda (ws)
-            (when (and (eq ws (plist-get transport :ws))
-                       (eq (plist-get transport :state) 'connecting))
-              (plist-put transport :state 'open)
-              (plist-put transport :backoff
-			 mevedel-collaboration--backoff-initial)
-              (mevedel-collaboration--transport-notify transport 'open)))
-          :on-message
-          (lambda (ws frame)
-            (when (eq ws (plist-get transport :ws))
-              (mevedel-collaboration--transport-receive transport frame)))
-          :on-close
-          (lambda (ws)
-            (mevedel-collaboration--transport-down transport ws))
-          :on-error
-          (lambda (_ws _type _error)
-            ;; Callback errors must not leak into websocket.el's filter;
-            ;; a broken connection surfaces through on-close.
-            nil))))
+      (let ((ws
+             (let ((mevedel-collaboration--dialing transport))
+               (websocket-open
+                (plist-get transport :url)
+                :nowait t
+                :custom-header-alist (plist-get transport :headers)
+                :on-open
+                (lambda (ws)
+                  (when (and (eq ws (plist-get transport :ws))
+                             (eq (plist-get transport :state) 'connecting))
+                    (mevedel-collaboration--transport-cancel-connect-timer
+                     transport)
+                    (plist-put transport :state 'open)
+                    (plist-put transport :backoff
+                               mevedel-collaboration--backoff-initial)
+                    (mevedel-collaboration--transport-notify transport 'open)))
+                :on-message
+                (lambda (ws frame)
+                  (when (eq ws (plist-get transport :ws))
+                    (mevedel-collaboration--transport-receive transport frame)))
+                :on-close
+                (lambda (ws)
+                  (mevedel-collaboration--transport-down transport ws))
+                :on-error
+                (lambda (_ws _type _error)
+                  ;; Callback errors must not leak into websocket.el's filter;
+                  ;; a broken connection surfaces through on-close.
+                  nil)))))
+        (plist-put transport :ws ws)
+        (plist-put transport :connect-timer
+                   (run-at-time mevedel-collaboration--connect-timeout-seconds nil
+                                #'mevedel-collaboration--transport-connect-timeout
+                                transport ws)))
     ;; A synchronous dial failure (DNS, refused) retries like a drop.
     (error (mevedel-collaboration--transport-down transport nil))))
 
@@ -296,6 +330,7 @@ deadline, which websocket.el cannot report without patching it."
 WS is nil when dialing failed before a connection was created."
   (when (and (not (memq (plist-get transport :state) '(stopped down)))
              (eq ws (plist-get transport :ws)))
+    (mevedel-collaboration--transport-cancel-connect-timer transport)
     (plist-put transport :ws nil)
     (plist-put transport :state 'down)
     (when ws
@@ -374,7 +409,7 @@ Return non-nil when the bounded JSON object was written."
 (defun mevedel-collaboration--transport-stop (transport)
   "Stop TRANSPORT: cancel retries and close the connection."
   (plist-put transport :state 'stopped)
-  (dolist (key '(:reconnect-timer :keepalive-timer))
+  (dolist (key '(:reconnect-timer :connect-timer :keepalive-timer))
     (when-let* ((timer (plist-get transport key)))
       (cancel-timer timer)
       (plist-put transport key nil)))
