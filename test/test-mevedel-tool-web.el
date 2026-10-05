@@ -876,17 +876,23 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
   ,test
   (test)
   :doc "extracts text and removes its temporary file"
-  (let ((before (directory-files temporary-file-directory nil "\\`mevedel-web-"))
-        result)
-    (skip-unless (executable-find "pdftotext"))
-    (mevedel-tool-web--pdf-text test-mevedel-tool-web--pdf "/root"
-                                (lambda (text error) (setq result (list text error))))
-    (let ((deadline (+ (float-time) 4)))
-      (while (and (not result) (< (float-time) deadline))
-        (accept-process-output nil 0.01)))
-    (should (string-search "Hello PDF" (car result)))
-    (should-not (cadr result))
-    (should (equal before (directory-files temporary-file-directory nil "\\`mevedel-web-"))))
+  ;; A private temporary directory: parallel test workers share the
+  ;; system one and create files with the same prefix.
+  (let* ((temporary-file-directory
+          (file-name-as-directory (make-temp-file "mevedel-web-pdf-test-" t)))
+         result)
+    (unwind-protect
+        (progn
+          (skip-unless (executable-find "pdftotext"))
+          (mevedel-tool-web--pdf-text test-mevedel-tool-web--pdf "/root"
+                                      (lambda (text error) (setq result (list text error))))
+          (let ((deadline (+ (float-time) 4)))
+            (while (and (not result) (< (float-time) deadline))
+              (accept-process-output nil 0.01)))
+          (should (string-search "Hello PDF" (car result)))
+          (should-not (cadr result))
+          (should-not (directory-files temporary-file-directory nil "\\`mevedel-web-")))
+      (delete-directory temporary-file-directory t)))
   :doc "reports a missing pdftotext without running anything"
   (let (result)
     (cl-letf (((symbol-function 'executable-find) #'ignore))
