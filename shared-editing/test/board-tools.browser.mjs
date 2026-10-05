@@ -328,7 +328,7 @@ test('board tools', async (t) => {
         points:[[50, 0], [150, 0], [200, 90], [150, 180], [50, 180], [0, 90], [50, 0]]},
       {id:'box', type:'rectangle', x:300, y:0, width:200, height:120},
       {id:'label', type:'text', x:0, y:0, width:0, height:0, text:'Hi', containerId:'box'},
-      {id:'free', type:'text', x:0, y:300, width:0, height:0, text:'Free'},
+      {id:'free', type:'text', x:400, y:300, width:0, height:0, text:'Free'},
     ]});
     await frame.getByRole('button', {name:'Fit', exact:true}).click();
     await page.mouse.click(...await at(page, frame, 103, 91));
@@ -341,7 +341,7 @@ test('board tools', async (t) => {
     await saved(frame);
     const label = (await read(page)).find(e => e.id === 'label');
     assert.deepEqual([label.textAlign, label.verticalAlign], ['right', 'bottom']);
-    await page.mouse.click(...await at(page, frame, 10, 310));
+    await page.mouse.click(...await at(page, frame, 410, 310));
     assert.deepEqual(await selectedIds(frame), ['free']);
     assert.deepEqual([await section('textAlign').isVisible(), await section('verticalAlign').isVisible()], [true, false],
       'free text has no container to align in');
