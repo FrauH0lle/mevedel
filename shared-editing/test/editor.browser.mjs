@@ -495,14 +495,25 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#comment-markers [data-working] .comment-spin').waitFor();
       const delivered = {id:'q', kind:'user', guest:'Alice',
         shared:{questionId:ask.questionId, commentId:posted[0].opId}, text:'Make this blue'};
-      await page.evaluate(records => window.port.postMessage({type:'conversation', connected:true, busy:true, own:[], records}), [delivered]);
+      const update = (records, busy, active) => page.evaluate(([records, busy, active]) =>
+        window.port.postMessage({type:'conversation', connected:true, busy, active, own:[], records}),
+      [records, busy, active]);
+      await update([delivered], true, ask.questionId);
       await page.waitForTimeout(50);
       assert.equal(await spinning(), 1, 'a delivered request spins while the session works');
-      await page.evaluate(records => window.port.postMessage({type:'conversation', connected:true, busy:true, own:[], records}),
-        [delivered, {id:'r', kind:'assistant', text:'Done.'}]);
+      await update([delivered, {id:'r', kind:'assistant', text:'On it.'}], true, ask.questionId);
+      await page.waitForTimeout(50);
+      assert.equal(await spinning(), 1, 'a first reply does not end the turn');
+      await update([delivered, {id:'r', kind:'assistant', text:'On it.'}], true, 'another-question');
       await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`)
         .waitFor({state:'detached'});
-      assert.equal(await spinning(), 0, 'an answered thread stops spinning');
+      assert.equal(await spinning(), 0, 'another turn running is not this thread');
+      await update([delivered, {id:'r', kind:'assistant', text:'Done.'}], true, ask.questionId);
+      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`).waitFor();
+      await update([delivered, {id:'r', kind:'assistant', text:'Done.'}], false, null);
+      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`)
+        .waitFor({state:'detached'});
+      assert.equal(await spinning(), 0, 'a finished turn stops spinning');
       // Resolved elsewhere while its pin is hovered, the peek closes with the pin.
       await frame.locator('#assistant-close').click();
       await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"] .comment-pin`).hover();

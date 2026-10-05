@@ -383,6 +383,19 @@ async function testItemConversations() {
   const latest=()=>messages.filter(m=>m.type==='conversation').at(-1);
   assert.deepEqual(Array.from(latest().records,r=>r.id),['old','old-a','tail','tail-a']);
   assert.equal(latest().records.at(-1).text,'Updated tail answer');
+  // The running turn is the room's latest user turn: another item's is not
+  // this item's, this item's is until the session goes idle.
+  assert.equal(latest().active,null);
+  state.busy=true;
+  api.conversation();
+  assert.equal(latest().active,null);
+  state.records.set('live',user('live','doc','live-q'));
+  state.records.set('live-a',answer('live-a','Working on it'));
+  api.conversation();
+  assert.equal(latest().active,'live-q');
+  state.busy=false;
+  api.conversation();
+  assert.equal(latest().active,null);
   // A compacted snapshot removes old live messages: refill from canonical archives.
   state.records.clear();
   archived.push(user('new','doc','new-q'),answer('new-a','New archived answer'));

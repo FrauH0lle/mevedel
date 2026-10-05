@@ -981,14 +981,17 @@ function createArtifactCommentController(options) {
     let state = '';
     let recordId = null;
     let reply = '';
+    let latest = false;
     for (let index = 0; index < records.length; index++) {
       const record = records[index];
       const shared = record && record.shared;
+      if (record && record.kind === 'user') latest = false;
       if (!record || record.kind !== 'user' || !shared || shared.kind !== 'artifact'
           || shared.commentId !== id) continue;
       state = 'sent';
       recordId = record.id;
       reply = '';
+      latest = true;
       for (let next = index + 1; next < records.length; next++) {
         const later = records[next];
         if (!later) continue;
@@ -1002,9 +1005,10 @@ function createArtifactCommentController(options) {
     }
     if (queued.some(entry => entry && entry.shared && entry.shared.kind === 'artifact'
                     && entry.shared.commentId === id)) state = 'queued';
-    // Delivered and unanswered while the session runs a turn: working on it.
-    // A turn that ended without a reply leaves the thread merely sent.
-    const working = state === 'queued' || (state === 'sent' && busy());
+    // The session's running turn is the room's latest user turn: while it is
+    // this thread's request the assistant is working on it, through its first
+    // reply text and on to the turn's end.
+    const working = state === 'queued' || (latest && busy());
     return {state, recordId, reply, working};
   }
 

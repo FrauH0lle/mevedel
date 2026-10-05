@@ -442,20 +442,15 @@ export class AssistantPanel {
     this.setComments(this.comments);
     this.onConversation();
   }
-  // Whether the assistant is still on comment ID's latest request: sending,
-  // queued, or delivered to a busy session that has not answered it yet.
+  // Whether the assistant is still on comment ID's request: sending, queued,
+  // or the session's running turn, until that turn ends.
   working(id) {
     if (this.sendingComments.has(id) || this.drafts.requests[id]?.receipt) return true;
-    const { records = [], own = [], busy, connected } = this.conversation;
+    const { records = [], own = [], busy, connected, active } = this.conversation;
     if (own.some(entry => entry.shared?.commentId === id)) return true;
-    if (!connected || !busy) return false;
-    const last = records.findLastIndex(r => r.kind === 'user' && r.shared?.commentId === id);
-    if (last < 0) return false;
-    for (const record of records.slice(last + 1)) {
-      if (record.kind === 'user') return false;
-      if (record.kind === 'assistant' && record.text?.trim()) return false;
-    }
-    return true;
+    if (!connected || !busy || !active) return false;
+    return records.some(r => r.kind === 'user' && r.shared?.questionId === active
+      && r.shared.commentId === id);
   }
   renderConversation() {
     const { records = [], own = [], busy, paused, connected, model,

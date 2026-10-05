@@ -660,8 +660,9 @@ still carries the same text fingerprint, and otherwise searches for the element
 whose fingerprint differs least, so a rewritten artifact keeps markers on
 content that survived. A marker whose content is gone is not shown. A ring turns
 around a marker while the assistant works on its thread: its latest request is
-queued, or delivered while the session runs a turn and not yet answered; a turn
-that ends without a reply stops it. Reduced motion shows a still dashed ring.
+queued, or is the turn the session is running. The ring keeps turning through
+the assistant's first reply text, and stops when that turn ends or a later
+request starts. Reduced motion shows a still dashed ring.
 Hovering a marker shows its thread and the assistant's latest reply from the transcript;
 clicking pins it with a reply form, **Resolve**, and **Show in chat**, which
 closes the artifact panel, which covers the conversation, then scrolls to the

@@ -170,9 +170,13 @@ window.mevedelEditingView = {
     function conversation() {
       if (!port || !current) return;
       const live = [], questions = new Set();
-      let shared;
+      // A running request is the room's latest user turn.
+      let shared, active = null;
       for (const record of state.records.values()) {
-        if (record.kind === 'user') shared = record.shared;
+        if (record.kind === 'user') {
+          shared = record.shared;
+          active = shared?.itemId === current ? shared.questionId : null;
+        }
         if (shared?.itemId === current) {
           live.push(record);
           questions.add(shared.questionId);
@@ -189,7 +193,8 @@ window.mevedelEditingView = {
       records.push(...live);
       port.postMessage({type:'conversation', records, conversationTruncated, conversationError,
         own:(state.ownQueue || []).filter(entry => entry.shared?.itemId === current),
-        busy:state.busy, paused:state.paused, connected, model:state.model});
+        busy:state.busy, active:state.busy ? active : null, paused:state.paused, connected,
+        model:state.model});
     }
     function render() {
       box.hidden = false;
