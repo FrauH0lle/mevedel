@@ -547,7 +547,9 @@ Emacs), and Ask questionnaires (the frame carries questions, option
 descriptions and samples, and current answers; the guest answers atomically,
 with a blank answer meaning no preference, or dismisses only the
 questionnaire) — and the first answer,
-from Emacs or any guest, settles everywhere.
+from Emacs or any guest, settles everywhere. Pending interactions stay above
+an open panel, such as a shared editor or an artifact, because an item's own
+conversation runs turns that ask too.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.
