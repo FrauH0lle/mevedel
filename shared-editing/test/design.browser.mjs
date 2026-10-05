@@ -205,6 +205,10 @@ test('approved editor controls on the production bundle', async t => {
       assert.ok(await frame.locator('body').evaluate(n=>n.scrollWidth<=innerWidth));
       // The drawing surface is the whole board the user sees, not an inset band of it.
       if(kind==='whiteboard') assert.deepEqual(await frame.locator('#canvas').boundingBox(),await frame.locator('#board').boundingBox());
+      // The editor menu drops over the toolbars below the header, not under them.
+      await frame.locator('#menu > summary').click();
+      assert.equal(await frame.locator('#export').evaluate(n=>{const b=n.getBoundingClientRect();return n.closest('#menu').contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2));}),true,`${kind} menu over its toolbars at ${width}px`);
+      await frame.locator('#menu > summary').click();
       if(kind==='document') for(const group of ['Text','Lists','Insert']) {
         await frame.locator('#formatting summary').getByText(group,{exact:true}).click();
         const b=await frame.locator('.document-menu[open] .editor-menu').boundingBox();
