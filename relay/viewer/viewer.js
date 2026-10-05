@@ -1106,6 +1106,9 @@
     } else if (frame.t === 'bye') {
       showTerminal('Session ended', 'The host has ended this shared session. '
                    + 'Ask the host for a new invitation to continue.');
+    } else if (frame.t === 'notice') {
+      // Informational: the host refused one action, the room stays usable.
+      if (typeof frame.message === 'string') showNotice(frame.message);
     } else if (frame.t === 'error') {
       showTerminal(
         'Rejected',

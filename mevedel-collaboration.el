@@ -297,6 +297,24 @@ entry that is already gone."
           (mevedel-collaboration--publish-status room))
       (error (mevedel-collaboration--observer-failure room)))))
 
+(defconst mevedel-collaboration-needs-host-message
+  "This needs a decision in Emacs on the host first"
+  "What a guest is told when its action would have asked in Emacs.")
+
+(defun mevedel-collaboration-notify-guest (session guest-id message)
+  "Show MESSAGE to SESSION's guests whose stable identity is GUEST-ID.
+A notice is informational: the guest stays connected."
+  (when-let* ((room (mevedel-collaboration--room-for-session session))
+              ((stringp guest-id)))
+    (condition-case nil
+        (maphash (lambda (peer guest)
+                   (when (equal guest-id (plist-get guest :guest-id))
+                     (mevedel-collaboration--transport-send
+                      (plist-get room :transport) peer
+                      (list :t "notice" :message message))))
+                 (plist-get room :guests))
+      (error nil))))
+
 (defun mevedel-collaboration--room-list ()
   "Return every live collaboration room."
   (let (rooms)

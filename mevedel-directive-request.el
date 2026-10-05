@@ -563,6 +563,13 @@ canonical transcript to its immutable workspace activity record."
           :activity-kind activity-kind
           :sequence sequence))))
 
+(defun mevedel--directive-offer-save ()
+  "Offer to save modified file buffers before a directive turn.
+Only an offer: where nobody can be asked, such as a collaboration
+guest's turn, the host's unsaved buffers are left alone."
+  (unless inhibit-interaction
+    (save-some-buffers nil #'mevedel--directive-save-buffer-p)))
+
 (defun mevedel--directive-save-buffer-p ()
   "Return non-nil when the current buffer should be saved before a directive.
 
@@ -933,7 +940,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	    (setq execution-session-id
 		  (mevedel-session-session-id mevedel--session)))
 
-	  (save-some-buffers nil #'mevedel--directive-save-buffer-p)
+          (mevedel--directive-offer-save)
 
           (when (or discussion-p planning-p implementation-p)
             (mevedel--set-directive-status

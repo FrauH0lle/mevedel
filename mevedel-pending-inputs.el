@@ -60,6 +60,11 @@
 ;; `mevedel-collaboration'
 (defvar mevedel-collaboration-guest-skills)
 
+;; `mevedel-collaboration'
+(defvar mevedel-collaboration-needs-host-message)
+(declare-function mevedel-collaboration-notify-guest
+                  "mevedel-collaboration" (session guest-id message))
+
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--guest-skills-admitted-p
                   "mevedel-collaboration-guest" (names role session))
@@ -846,13 +851,41 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                    ;; A blocked dispatch reports through its own callback,
                    ;; but preparation and the submit hook re-signal instead,
                    ;; so both exits have to release what `before-send' took.
+                   ;; A guest may be the only one there: its turn must not
+                   ;; wait on a question in Emacs that nobody can answer.
                    (condition-case err
-                       (mevedel-view--dispatch-follow-up-entry
-                        kind entry input session data-buffer
-                        before-send after-insert release)
+                       (let ((inhibit-interaction
+                              (or inhibit-interaction
+                                  (and (plist-get entry :guest-id) t))))
+                         (mevedel-view--dispatch-follow-up-entry
+                          kind entry input session data-buffer
+                          before-send after-insert release))
+                     (inhibited-interaction
+                      (funcall release)
+                      (mevedel-view--refuse-guest-follow-up entry session))
                      ((error quit)
                       (funcall release)
                       (signal (car err) (cdr err))))))))))))))
+
+(defun mevedel-view--refuse-guest-follow-up (entry session)
+  "Drop guest ENTRY of SESSION, whose turn would have asked in Emacs.
+Its attachment files leave with it, as on a retraction; the host is
+warned and the guest told, rather than the queue retrying it forever."
+  (mevedel-pending-inputs--set-queues
+   session 'follow-up (delq entry (mevedel-view--pending-follow-ups session)))
+  (dolist (path (plist-get entry :guest-paths))
+    (when (file-exists-p path)
+      (ignore-errors (delete-file path))))
+  (mevedel-view--interaction-rebuild)
+  (display-warning
+   'mevedel
+   (format "A message from %s was not sent: its turn needed a decision in Emacs"
+           (or (plist-get entry :guest-name) "a guest")))
+  (when (fboundp 'mevedel-collaboration-notify-guest)
+    (mevedel-collaboration-notify-guest
+     session (plist-get entry :guest-id)
+     (concat mevedel-collaboration-needs-host-message
+             "; your message was not sent"))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live.

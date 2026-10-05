@@ -1253,6 +1253,10 @@ property lines, especially GPTEL_BOUNDS.  Those lines are expected
 data, and letting `so-long' replace `org-mode' breaks gptel/org state
 restoration and reveal timers."
   (let* ((so-long-predicate #'ignore)
+         ;; Segments live under the project, so its directory-local
+         ;; variables apply; restores run where nobody may be there to
+         ;; confirm unsafe ones.
+         (enable-local-variables :safe)
          ;; Bound around the visit so a stale entry cannot move point either.
          (save-place-mode nil)
          (normal-mode-function (symbol-function 'normal-mode))

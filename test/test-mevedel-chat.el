@@ -32,6 +32,7 @@
 (defvar gptel-reasoning-effort)
 
 ;; `gptel-org'
+(defvar gptel-confirm-tool-calls)
 (defvar gptel-org-branching-context)
 (defvar gptel-org-ignore-elements)
 
@@ -780,6 +781,9 @@
 			 (should (eq validated-workspace workspace))
 			 (should (memq #'mevedel-tool-repair-pre-tool-call
 				       gptel-pre-tool-call-functions))
+			 ;; mevedel's permission pipeline confirms tool calls.
+			 (should (local-variable-p 'gptel-confirm-tool-calls))
+			 (should-not gptel-confirm-tool-calls)
 			 (should (memq #'mevedel-tool-repair-post-tool-call
 				       gptel-post-tool-call-functions))
 			 (should (memq #'mevedel-tool-repair-clear-ledger

@@ -1051,6 +1051,17 @@
                      (kill-buffer bound-buffer)
                      (kill-buffer other-buffer))))
 
+(mevedel-deftest mevedel--directive-offer-save
+  (:doc "offers to save file buffers, except where nobody can be asked")
+  (let (offered)
+    (cl-letf (((symbol-function 'save-some-buffers)
+               (lambda (arg pred) (setq offered (list arg pred)))))
+      (let ((inhibit-interaction t))
+        (mevedel--directive-offer-save))
+      (should-not offered)
+      (mevedel--directive-offer-save)
+      (should (equal (list nil #'mevedel--directive-save-buffer-p) offered)))))
+
 (mevedel-deftest mevedel--process-directive-detached-callback
   (:before-each (mevedel-workspace-clear-registry)
                 :after-each (mevedel-workspace-clear-registry))

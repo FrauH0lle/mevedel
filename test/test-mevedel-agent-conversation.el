@@ -432,6 +432,8 @@
 			   (should (equal "/root/test_agent"
 				          (mevedel-agent-invocation-path inv)))
 			   (should-not gptel-org-branching-context)
+			   (should (local-variable-p 'gptel-confirm-tool-calls))
+			   (should-not gptel-confirm-tool-calls)
                            (should (memq #'mevedel-skills--post-tool-activate
                                          mevedel-post-tool-use-functions))))
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))

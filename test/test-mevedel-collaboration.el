@@ -888,6 +888,38 @@
       (should ran)
       (should-not (mevedel-session-pending-follow-ups session)))))
 
+(mevedel-deftest mevedel-view--refuse-guest-follow-up
+  (:doc "drops a guest entry whose turn would ask in Emacs and tells the guest"
+   :quiet t)
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "refuse"))
+           (attachment (make-temp-file "mevedel-guest-attachment-"))
+           notified warned)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-session-enqueue-pending-input
+       session 'follow-up (list :input "Hello" :guest-name "Happy Hare" :guest-id "g1"
+                               :guest-paths (list attachment)))
+      (cl-letf (((symbol-function
+                  'mevedel-session-artifacts-assert-new-mutation-authority)
+                 (lambda (&rest _) nil))
+                ;; The turn would ask in Emacs, e.g. to take over a lease.
+                ((symbol-function 'mevedel-view--dispatch-follow-up-entry)
+                 (lambda (&rest _) (y-or-n-p "Take over the lease? ")))
+                ((symbol-function 'mevedel-collaboration-notify-guest)
+                 (lambda (_session guest-id message)
+                   (setq notified (list guest-id message))))
+                ((symbol-function 'display-warning)
+                 (lambda (_type message &rest _) (setq warned message))))
+        (mevedel-view--drain-follow-up data-buf))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should-not (file-exists-p attachment))
+      (should (equal "g1" (car notified)))
+      (should (string-search "your message was not sent" (cadr notified)))
+      (should (string-search "Happy Hare" warned)))))
+
 (mevedel-deftest mevedel-collaboration-notify-queue-changed
   (:doc "re-publishes the queue when it changes without a request")
   (let* ((workspace (mevedel-workspace-get-or-create
