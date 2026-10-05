@@ -475,23 +475,37 @@ async function testEditingDeletion() {
     window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  let api;
-  api=context.window.mevedelEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},
-    el:tag=>new Element(tag),flash:message=>flashes.push(message),summarize(){},
-    send:async frame=>{
-      const args=JSON.parse(atob(frame.data));
-      const reply=args.action==='list' ? {result:[{id:'board',kind:'whiteboard',title:'Board'},
-                                                 {id:'doc',kind:'document',title:'Notes'}]}
-        : {result:{available:true}};
-      const data=btoa(JSON.stringify(reply));
-      api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
-      return true;
-    }});
+  let listFails = false;
+  const create = onCatalog => {
+    const view=context.window.mevedelEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},
+      el:tag=>new Element(tag),flash:message=>flashes.push(message),summarize(){},onCatalog,
+      send:async frame=>{
+        const args=JSON.parse(atob(frame.data));
+        const reply=args.action==='list'
+          ? (listFails ? {error:'Listing failed'} : {result:[{id:'board',kind:'whiteboard',title:'Board'},
+                                                             {id:'doc',kind:'document',title:'Notes'}]})
+          : {result:{available:true}};
+        const data=btoa(JSON.stringify(reply));
+        view.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
+        return true;
+      }});
+    return view;
+  };
+  // Item presence is unknown until the host lists its items, and each
+  // change to the list is signalled so discussion tabs can follow it.
+  let catalogChanges = 0;
+  const api = create(() => catalogChanges++);
+  assert.equal(api.present('board'), null);
   await api.welcome();
+  assert.equal(catalogChanges, 1);
+  assert.equal(api.present('board'), true);
+  assert.equal(api.present('missing'), false);
   assert.equal(store.has('mevedel-editing::stale'), false, 'a stale draft without edits is dropped');
   const event = value => { const data=btoa(JSON.stringify(value));
     api.receive({t:'editing',reqId:'event',offset:0,total:data.length,data}); };
   event({event:'deleted', id:'board', actor:'Ann'});
+  assert.equal(api.present('board'), false);
+  assert.equal(catalogChanges, 2);
   assert.deepEqual(node('editing-items').children.map(b => b.dataset.itemId), ['doc']);
   assert.equal(flashes.at(-1), '“Board” was deleted by Ann.');
   assert.equal(store.has('mevedel-editing::board'), false);
@@ -503,6 +517,13 @@ async function testEditingDeletion() {
   draft('unlisted', 'whiteboard', []);
   api.connection(false);
   assert.equal(store.has('mevedel-editing::unlisted'), true);
+  // A host that cannot list its items leaves every discussion in place.
+  listFails = true;
+  let failedChanges = 0;
+  const unlisted = create(() => failedChanges++);
+  await unlisted.welcome();
+  assert.equal(failedChanges, 1);
+  assert.equal(unlisted.present('anything'), true);
 }
 
 // A room message in an item's discussion asks about the whole item, with a
@@ -1916,8 +1937,10 @@ async function main() {
   await waitFor(() => sockets[1].sent.length > reconnectSent, 'reconnected shared item catalog');
   const reconnectedCatalog = await unseal(key, sockets[1].sent[reconnectSent]);
   assert.equal(reconnectedCatalog.t, 'editing');
+  const boardCatalog = btoa(JSON.stringify({result: [
+    {id: 'board-1', kind: 'whiteboard', title: 'Pipeline', revision: 1}]}));
   await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedCatalog.reqId, offset: 0,
-                             total: catalogReply.length, data: catalogReply});
+                             total: boardCatalog.length, data: boardCatalog});
   await waitFor(() => sockets[1].sent.length === reconnectSent + 2, 'reconnected availability');
   const reconnectedStatus = await unseal(key, sockets[1].sent[reconnectSent + 1]);
   await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedStatus.reqId, offset: 0,
@@ -2017,8 +2040,32 @@ async function main() {
   nodes.filter.children[0].dispatch('click'); // All
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
+  // Deleting the item keeps its turns under All but ends its discussion:
+  // the open tab falls back to All, the tab goes, and the chip says why.
+  boardTab().dispatch('click');
+  const deletion = btoa(JSON.stringify({event: 'deleted', id: 'board-1', actor: 'Ross'}));
+  await deliverTo(sockets[1], {t: 'editing', reqId: 'event', offset: 0,
+                               total: deletion.length, data: deletion});
+  assert.equal(boardTab(), undefined, 'a deleted item has no tab');
+  assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, false);
+  assert.equal(findByRecordId(nodes.transcript, 'artifact-comment').hidden, false);
+  assert.equal(nodes['composer-scope'].hidden, true);
+  const deletedChip = findByClass(findByRecordId(nodes.transcript, 'board-question'), 'dirchip');
+  assert.equal(textOf(deletedChip), '◇ Pipeline · deleted');
+  assert.equal(deletedChip.disabled, true);
+  // An artifact whose latest card reads missing has lost its discussion too.
+  const artifactTab = () => nodes.filter.children.find(b => /◇ a\.html/.test(textOf(b)));
+  await deliverTo(sockets[1], {t: 'record', record: {
+    id: 'artifact-question', kind: 'user', guest: 'Joey', item: 'artifact:a.html',
+    text: 'Bigger', shared: {kind: 'artifact', artifact: 'a.html', questionId: 'q-artifact', text: 'Bigger'}}});
+  await deliverTo(sockets[1], {t: 'record', record: {id: 'a-card', kind: 'tool', artifact: 'a.html'}});
+  assert.ok(artifactTab(), 'a published artifact has a tab');
+  await deliverTo(sockets[1], {t: 'record', record: {id: 'a-card', kind: 'tool', artifact: 'a.html', missing: true}});
+  assert.equal(artifactTab(), undefined, 'a deleted artifact has no tab');
+  assert.equal(findByClass(findByRecordId(nodes.transcript, 'artifact-question'), 'dirchip').disabled, true);
+
   await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-comment',
-                                            'board-question','board-answer']});
+                                            'board-question','board-answer','artifact-question','a-card']});
   assert.equal(nodes['empty-state'].hidden, false, 'removing the final turn restores the empty state');
   await deliverTo(sockets[1], {t:'record',record:{id:'first-message',kind:'assistant',text:'Ready'}});
   assert.equal(nodes['empty-state'].hidden, true, 'the first turn replaces the empty state');

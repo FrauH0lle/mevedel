@@ -326,7 +326,9 @@ Directives and shared items are the room's discussions. Records inside a
 directive turn carry its id and records inside a shared-item turn carry the
 item's id, so the filter strip lists **All**, **Main chat**, each directive
 (◆) and each whiteboard, document or artifact with turns (◇). **Main chat** hides every
-discussion. A turn's discussion chip selects that discussion too.
+discussion. A turn's discussion chip selects that discussion too. A deleted item
+has no tab: its turns stay under **All** with a disabled chip marked **deleted**
+(see [deleting](shared-editing.md#deleting)).
 
 Selecting a directive scopes ordinary guest text to discussion of that directive;
 the host rechecks its workspace identity on receipt. A missing or invalid

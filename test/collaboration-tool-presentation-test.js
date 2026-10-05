@@ -55,10 +55,16 @@ assert.equal(changedTurn.disclosures.get('root/env/2').open, false);
 assert.equal(changedTurn.disclosures.get('root/new').open, true);
 assert.equal(changedTurn.disclosures.has('root/env/1'), false);
 assert.match(textOf(changedTurn), /Recovered/);
-// An item's own panel supplies no discussion label, so its turns get no chip.
+// An item's own panel supplies no discussion chip; a deleted item's chip
+// keeps its name but switches nowhere.
 const itemTurn = {id: 'board-answer', kind: 'assistant', item: 'board-1', text: 'Styled it.'};
 const chips = (node) => [node, ...(node.children || []).flatMap(chips)]
   .filter((child) => child.className === 'dirchip');
-assert.equal(chips(renderer.renderRecord(itemTurn, () => '')).length, 0);
-assert.equal(textOf(chips(renderer.renderRecord(itemTurn, () => '◇ Board'))[0]), '◇ Board');
+assert.equal(chips(renderer.renderRecord(itemTurn, () => null)).length, 0);
+const live = chips(renderer.renderRecord(itemTurn, () => ({label: '◇ Board', gone: false})))[0];
+assert.equal(textOf(live), '◇ Board');
+assert.equal(live.disabled, false);
+const gone = chips(renderer.renderRecord(itemTurn, () => ({label: '◇ Board', gone: true})))[0];
+assert.equal(textOf(gone), '◇ Board · deleted');
+assert.equal(gone.disabled, true);
 console.log('Tool presentation renderer passed');

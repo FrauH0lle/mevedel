@@ -478,7 +478,7 @@ its reviewed content snapshot and recent turns about the same item, including
 questions sent from its comment threads. Other items and ordinary room chat are
 excluded. Ordinary room requests and room compaction summaries likewise exclude
 item discussion turns. The room transcript still shows their shared chronology,
-and lists each item as a discussion of its own: selecting it in the room shows
+and lists each existing item as a discussion of its own: selecting it in the room shows
 its turns and sends room messages into its conversation as whole-item questions
 about the committed content (see [scoped prompts](collaboration.md#scoped-prompts-and-attachments)).
 This is context selection, not a privacy boundary or a separate execution agent.
@@ -568,8 +568,13 @@ Save As and Fork do not bring the item back. An editor showing the item in
 another browser closes and names who deleted it; a later save to it fails
 with "This item no longer exists". A browser keeps its local draft of a
 deleted item only while it holds edits that never reached the host, listed
-as a local recovery. The transcript keeps the item's discussion. The model
-cannot delete items.
+as a local recovery. The transcript keeps the item's discussion: its turns stay
+in the room under **All**, their chip marked **deleted**, but the item loses its
+tab, so nothing can be sent into a conversation about an item that no longer
+exists. A browser showing that tab returns to **All**. A deleted HTML artifact's
+discussion goes the same way. The room lists an item's tab only once the host
+has listed its items, so a deleted item's tab does not reappear on reload. The
+model cannot delete items.
 
 ## Downloads and imports
 

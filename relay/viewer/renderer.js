@@ -433,7 +433,7 @@
     return typeof record.item === 'string' && record.item ? `item:${record.item}` : null;
   }
 
-  function whoLine(record, directiveLabel) {
+  function whoLine(record, scopeChip) {
     const who = el('div', 'who');
     if (record.kind === 'user') {
       who.append(el('span', 'name', record.guest || 'Host'));
@@ -447,15 +447,18 @@
     }
     // A turn in a directive or item discussion names it; the chip is also
     // the way to switch the room into that discussion to reply there.  A
-    // view already inside that discussion supplies no label and gets no chip.
+    // view already inside that discussion supplies no chip.  A deleted
+    // item's turns keep their name but have no discussion to switch to.
     const scope = scopeKey(record);
-    const label = scope && directiveLabel(scope);
-    if (label) {
-      const chip = el('button', 'dirchip', label);
-      chip.type = 'button';
-      chip.dataset.scope = scope;
-      chip.setAttribute('title', `Show and reply in ${label}`);
-      who.append(chip);
+    const chip = scope && scopeChip(scope);
+    if (chip) {
+      const button = el('button', 'dirchip', chip.gone ? `${chip.label} · deleted` : chip.label);
+      button.type = 'button';
+      button.dataset.scope = scope;
+      button.disabled = chip.gone === true;
+      button.setAttribute('title', chip.gone ? `${chip.label} was deleted`
+        : `Show and reply in ${chip.label}`);
+      who.append(button);
     }
     return who;
   }
@@ -626,7 +629,7 @@
     }
   }
 
-  function renderRecord(record, directiveLabel, onArtifactOpen, previous, onExecutionOpen) {
+  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
@@ -636,7 +639,7 @@
     rail.append(el('div', 'glyph', glyphText));
     turn.append(rail);
     const content = el('div', 'content');
-    content.append(whoLine(record, directiveLabel));
+    content.append(whoLine(record, scopeChip));
     turn.disclosures = new Map();
     const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen);
     content.append(rendered);

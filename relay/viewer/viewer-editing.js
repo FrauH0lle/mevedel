@@ -1,7 +1,7 @@
 /* Trusted room controller. The opaque editor gets only an item-scoped port. */
 'use strict';
 window.mevedelEditingView = {
-  create({ state, send, el, flash, summarize, onVisibility = () => {} }) {
+  create({ state, send, el, flash, summarize, onVisibility = () => {}, onCatalog = () => {} }) {
     const box = document.getElementById('editing-box'),
       list = document.getElementById('editing-items');
     const panel = document.getElementById('editing-panel'),
@@ -12,6 +12,8 @@ window.mevedelEditingView = {
       transfers = new Map(),
       catalog = new Map();
     let port = null,
+      catalogKnown = false,
+      catalogFailed = false,
       current = null,
       connected = false,
       room = window.mevedelViewerTransport.parseFragment(window.location.hash)?.roomId || '',
@@ -410,11 +412,17 @@ window.mevedelEditingView = {
         if (generation !== availabilityGeneration) return;
         catalog.clear();
         items.forEach((item) => catalog.set(item.id, item));
+        catalogKnown = true;
         recoveryCatalog(true);
         render();
+        onCatalog();
       } catch (error) {
         if (generation !== availabilityGeneration) return;
         flash(error.message);
+        if (!catalogKnown && !catalogFailed) {
+          catalogFailed = true;
+          onCatalog();
+        }
       }
       checking = false;
       await recheck();
@@ -605,6 +613,7 @@ window.mevedelEditingView = {
       recoveryCatalog();
       render();
       if (id === current && !panel.hidden) document.getElementById('editing-close').click();
+      onCatalog();
       if (item) flash(`“${item.title}” was deleted${actor ? ` by ${actor}` : ''}.`);
     }
     document.querySelectorAll('[data-create-editor]').forEach(
@@ -730,6 +739,11 @@ window.mevedelEditingView = {
       return request({ action: 'ask', id, opId: questionId, questionId, text, whole: true,
         ...(images.length ? { images } : {}) });
     }
-    return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance, ask };
+    // Whether item ID still exists on the host: null until the host has
+    // listed its items, and assumed when it could not list them.
+    function present(id) {
+      return catalogKnown ? catalog.has(id) : catalogFailed ? true : null;
+    }
+    return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance, ask, present };
   },
 };

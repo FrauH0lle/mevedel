@@ -182,14 +182,15 @@
   const history = window.mevedelHistoryView.create({
     send, el, onArtifacts:refreshFilter,
     renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
-      record, directiveLabel, artifacts.open, null, openExecutionResult),
+      record, scopeChip, artifacts.open, null, openExecutionResult),
   });
   const agents = window.mevedelAgentView.create({
-    send, el, directiveLabel, openArtifact: artifacts.open,
+    send, el, scopeChip, openArtifact: artifacts.open,
     summarize: summarizeSession, openExecution: openExecutionResult,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
-  const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession, onVisibility: window.mevedelAppearance.editorVisible});
+  const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
+    onVisibility: window.mevedelAppearance.editorVisible, onCatalog: refreshFilter});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession, notice: flashNotice});
@@ -295,7 +296,7 @@
   function updateRecordElement(record, previous) {
     const current = state.elements.get(record.id);
     const turn = window.mevedelTranscriptRenderer.renderRecord(
-      record, directiveLabel, artifacts.open, previous || current, openExecutionResult);
+      record, scopeChip, artifacts.open, previous || current, openExecutionResult);
     if (current) {
       turn.hidden = current.hidden;
       current.replaceWith(turn);
@@ -392,6 +393,23 @@
     return `◆ ${id.slice(0, 8)}`;
   }
 
+  // A deleted item's turns stay in the room, under All, but it has no
+  // discussion left to show or send into: no tab, and a chip that says so.
+  let deletedScopes = new Set();
+  function scopeChip(scope) {
+    return {label: directiveLabel(scope), gone: deletedScopes.has(scope)};
+  }
+
+  // Whether SCOPE's discussion still has its item: false once the host has
+  // deleted it, null while the host has not yet listed its shared items.
+  // CARDS returns the latest artifact card per name.
+  function scopePresent(scope, cards) {
+    if (!itemScope(scope)) return true;
+    const id = scope.slice('item:'.length);
+    if (!id.startsWith('artifact:')) return editing.present(id);
+    return cards().get(id.slice('artifact:'.length))?.missing !== true;
+  }
+
   // Send TEXT and attachment IMAGES into item ID's conversation; say why
   // when that fails.
   async function discussItem(id, text, images = []) {
@@ -440,11 +458,33 @@
           counts.main++;
         }
       });
+      let cards = null;
+      const latestCards = () => {
+        if (!cards) {
+          cards = new Map();
+          for (const record of [...history.artifacts(), ...state.records.values()]) {
+            if (record.artifact) cards.set(record.artifact, record);
+          }
+        }
+        return cards;
+      };
+      const presence = new Map(ids.map(id => [id, scopePresent(id, latestCards)]));
+      const deleted = new Set(ids.filter(id => presence.get(id) === false));
+      const changed = [...deleted, ...deletedScopes].filter(id => deleted.has(id) !== deletedScopes.has(id));
+      deletedScopes = deleted;
+      if (changed.length) {
+        state.records.forEach(record => {
+          if (changed.includes(scopeKey(record))) updateRecordElement(record);
+        });
+      }
+      // A shared item's tab waits for the host's item list, so a deleted
+      // item's tab does not flash up while a reload replays its turns.
+      const listed = ids.filter(id => presence.get(id) === true);
       // The strip is part of the surface once connected, even with no
       // directive yet: an always-present control needs no discovering.
       filterNav.hidden = !state.connected;
       if (state.filter !== 'all' && state.filter !== 'main'
-          && !ids.includes(state.filter)) {
+          && !listed.includes(state.filter)) {
         state.filter = 'all';
       }
       filterNav.replaceChildren();
@@ -468,8 +508,8 @@
         filterNav.append(button);
       };
       add('all', 'All');
-      if (ids.length) add('main', 'Main chat');
-      ids.forEach(id => add(id, directiveLabel(id), true));
+      if (listed.length) add('main', 'Main chat');
+      listed.forEach(id => add(id, directiveLabel(id), true));
     }
     state.records.forEach(record => {
       const turn = state.elements.get(record.id);
