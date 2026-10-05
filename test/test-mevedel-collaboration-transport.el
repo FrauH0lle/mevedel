@@ -325,6 +325,7 @@ relay's room plist."
               (should (equal '(stopped) states))
               (should-not (plist-get transport :ws))
               (should-not (plist-get transport :reconnect-timer))
+              (should-not (plist-get transport :connect-timer))
               (should-not (plist-get transport :keepalive-timer))))
         (when transport
           (mevedel-collaboration--transport-stop transport)))))
@@ -357,12 +358,74 @@ relay's room plist."
           ;; This listener deliberately has no TLS responder.  No handshake
           ;; can have completed when dialing returns to the caller.
           (should (eq 'connecting (plist-get transport :state)))
+          (should (timerp (plist-get transport :connect-timer)))
           (should (plist-get options :nowait))
           (should (eq t (plist-get (cdr (plist-get options :tls-parameters))
                                    :verify-error)))
           (should gnutls-verify-error))
       (when transport (mevedel-collaboration--transport-stop transport))
       (delete-process server))))
+
+(mevedel-deftest mevedel-collaboration--transport-connect-timeout
+  ()
+  ,test
+  (test)
+  :doc "abandons a dial nobody answers and retries it with backoff"
+  ;; A listener that accepts and never answers: the dial stays
+  ;; `connecting' until its deadline drops it.
+  (let* ((server (make-network-process :name "mevedel-test-silent-relay"
+                                       :server t :host 'local :service t
+                                       :noquery t))
+         (port (process-contact server :service))
+         (mevedel-collaboration--connect-timeout-seconds 0.2)
+         transport states)
+    (unwind-protect
+        (progn
+          (setq transport
+                (mevedel-collaboration--transport-open
+                 (format "ws://127.0.0.1:%d/r/silent?role=host" port)
+                 (make-string 32 5)
+                 :on-state (lambda (value) (push value states))))
+          (let ((ws (plist-get transport :ws)))
+            (should (eq 'connecting (plist-get transport :state)))
+            (should (mevedel-test--pump (lambda () (memq 'down states)) 3))
+            (should (equal '(down) states))
+            (should (eq 'down (plist-get transport :state)))
+            (should-not (plist-get transport :ws))
+            (should-not (process-live-p (websocket-conn ws)))
+            (should-not (plist-get transport :connect-timer))
+            (should (timerp (plist-get transport :reconnect-timer)))))
+      (when transport (mevedel-collaboration--transport-stop transport))
+      (delete-process server)))
+
+  :doc "ignores a deadline that outlived its dial"
+  (let* ((stale (list 'stale))
+         (transport (list :state 'connecting :ws (list 'current)
+                          :connect-timer 'fired)))
+    (mevedel-collaboration--transport-connect-timeout transport stale)
+    (should (eq 'connecting (plist-get transport :state)))
+    (should (equal '(current) (plist-get transport :ws)))
+    (should-not (plist-get transport :connect-timer))
+    ;; An opened connection is no longer the deadline's concern.
+    (setq transport (list :state 'open :ws stale :connect-timer 'fired))
+    (mevedel-collaboration--transport-connect-timeout transport stale)
+    (should (eq 'open (plist-get transport :state)))
+    (should (eq stale (plist-get transport :ws)))))
+
+(mevedel-deftest mevedel-collaboration--transport-cancel-connect-timer
+  (:doc "cancels a pending dial deadline and tolerates none")
+  (let* ((fired nil)
+         (timer (run-at-time 60 nil (lambda () (setq fired t))))
+         (transport (list :connect-timer timer)))
+    (unwind-protect
+        (progn
+          (mevedel-collaboration--transport-cancel-connect-timer transport)
+          (should-not (plist-get transport :connect-timer))
+          (should-not (memq timer timer-list))
+          (mevedel-collaboration--transport-cancel-connect-timer transport)
+          (should-not (plist-get transport :connect-timer))
+          (should-not fired))
+      (cancel-timer timer))))
 
 (mevedel-deftest mevedel-collaboration--transport-open
   (:doc "delivers sealed frames and control messages both ways through a relay")
@@ -384,6 +447,8 @@ relay's room plist."
                      (lambda ()
                        (mevedel-collaboration--transport-open-p transport))))
             (should (equal '(open) states))
+            ;; An answered dial has no deadline left.
+            (should-not (plist-get transport :connect-timer))
             ;; A guest joins: the host sees the relay control message.
             (let* ((guest-frames nil)
                    (guest (websocket-open
