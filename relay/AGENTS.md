@@ -27,6 +27,8 @@ For artifact comment changes, also run
 `node test/collaboration-viewer-artifact-comments-test.js` and
 `node --test test/collaboration-artifact-comments.browser.mjs`, which needs
 `npm ci --prefix shared-editing` and Playwright Chromium.
+For dock or panel layout changes, also run
+`node --test test/collaboration-viewer-requests.browser.mjs`.
 For shared-editor integration changes, also use the
 [shared-editing checks](../docs/shared-editing.md#checks).
 Host-side Elisp checks follow [the development guide](../docs/development.md).
