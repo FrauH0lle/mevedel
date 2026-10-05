@@ -105,6 +105,21 @@
       (should (<= (test-mevedel-collaboration-guest--chunk-frame-bytes chunk)
                   mevedel-collaboration--max-message-bytes)))))
 
+(mevedel-deftest mevedel-collaboration--workspace-key
+  (:doc "names a room's workspace opaquely, alike for its sessions and lobby")
+  (let* ((make (lambda (root)
+                 (mevedel-workspace--create :type 'project :id root :root root)))
+         (here (funcall make "/home/u/proj/"))
+         (session (mevedel-session--create :workspace here))
+         (key (mevedel-collaboration--workspace-key (list :session session))))
+    (should (stringp key))
+    (should-not (string-match-p "proj" key))
+    (should (equal key (mevedel-collaboration--workspace-key
+                        (list :workspace here))))
+    (should-not (equal key (mevedel-collaboration--workspace-key
+                            (list :workspace (funcall make "/home/u/other/")))))
+    (should-not (mevedel-collaboration--workspace-key nil))))
+
 (mevedel-deftest mevedel-collaboration--send-snapshot
   (:doc "sends a targeted welcome then final-flagged snapshot chunks")
   (let* ((guests (make-hash-table :test #'eql))

@@ -203,6 +203,13 @@ reaching it and knowing it exists. Offers and replies land in one dock
 strip as notices, and every reachable one is kept in browser storage per
 relay origin and listed in the Rooms sheet beside Invite.
 
+One relay serves every host and project, so the store is grouped by
+workspace. Every welcome and lobby listing carries an opaque `workspace`
+key, a hash of the host's system name and the workspace's type and id, and
+a room is kept under the key of the tab that was handed it; a session
+requested from a room or lobby is created in that same workspace. The
+Rooms sheet lists only rooms under the current tab's key.
+
 The two surfaces answer different questions. A notice says what just
 happened -- approved, refused, someone handed you a room -- and Dismiss
 dismisses the news. The Rooms sheet answers which rooms this browser can

@@ -65,6 +65,7 @@ function build(tierBytes, seed, models = []) {
     writeToken: tierBytes >= 48 ? new Uint8Array(16).fill(1) : null,
     ownerToken: tierBytes >= 64 ? new Uint8Array(16).fill(1) : null,
   });
+  controller.setWorkspace('ws');
   return {controller, nodes, sent, copied, document};
 }
 
@@ -138,7 +139,8 @@ function roomLink(nodes, index) {
 // A full-control tab in the same browser reads that stored owner link
 // and must not be able to use it: one origin can hold several tiers,
 // and a tab may never present a link stronger than its own.
-const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
+const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
+                    workspace: 'ws'}];
 {
   const {nodes} = build(48, ownerSeed);
   // A reload restores rooms, not news: the approval is not fresh any
@@ -181,12 +183,32 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
 // tab's rooms must not vanish because another tab saved its own.
 {
   const {controller} = build(
-    64, [{room: 'elsewhere', name: 'theirs', secret: secretOf(4, 48)}]);
+    64, [{room: 'elsewhere', name: 'theirs', secret: secretOf(4, 48),
+          workspace: 'ws'}]);
   controller.offerRoom({name: 'mine',
                         link: `https://relay.example/#other.${secretOf(5, 64)}`});
   assert.deepEqual(JSON.parse(store.get('mevedel-rooms'))
                    .map(room => room.room).sort(),
                    ['elsewhere', 'other']);
+}
+
+// One relay serves every host and project: a tab lists only the rooms
+// of its own workspace, and keeps nothing before its host names one.
+{
+  const {controller, nodes} = build(64, [
+    {room: 'remote', name: 'Lobby · general', secret: secretOf(6, 64),
+     workspace: 'other-ws'},
+    {room: 'local', name: 'draw_test', secret: secretOf(7, 64), workspace: 'ws'},
+    {room: 'untagged', name: 'old', secret: secretOf(8, 64)},
+  ]);
+  assert.deepEqual(rooms(nodes), ['draw_test']);
+  controller.setWorkspace('other-ws');
+  assert.deepEqual(rooms(nodes), ['Lobby · general']);
+  controller.setWorkspace(undefined);
+  assert.deepEqual(rooms(nodes), []);
+  controller.offerRoom({name: 'unplaced',
+                        link: `https://relay.example/#nowhere.${secretOf(9, 64)}`});
+  assert.equal(JSON.parse(store.get('mevedel-rooms')).length, 3);
 }
 
 // A refusal is news, not a room: it shows, and it is not kept.
@@ -248,7 +270,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
   controller.rememberCurrent('Lobby · mevedel');
   assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
                    [{room: 'here', name: 'Lobby · mevedel',
-                     secret: secretOf(1, 48)}]);
+                     secret: secretOf(1, 48), workspace: 'ws'}]);
   assert.deepEqual(rooms(nodes), []);
 }
 
@@ -260,7 +282,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
   controller.rememberCurrent('Pipeline diagram');
   assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
                    [{room: 'here', name: 'Pipeline diagram',
-                     secret: secretOf(1, 48)}]);
+                     secret: secretOf(1, 48), workspace: 'ws'}]);
 }
 
 // The lobby opens the same sheet with its own explanation.

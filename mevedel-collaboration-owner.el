@@ -54,6 +54,8 @@
                   "mevedel-collaboration-guest" (room audience))
 (declare-function mevedel-collaboration--request-id-p
                   "mevedel-collaboration-guest" (value))
+(declare-function mevedel-collaboration--room-workspace
+                  "mevedel-collaboration-guest" (room))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
@@ -91,7 +93,6 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 
@@ -176,9 +177,7 @@ given, is queued with attachment IMAGES only after the new room starts;
 a failed start, save or enqueue discards the partial session and
 reports failure without stopping ROOM."
   (let* ((session (plist-get room :session))
-         ;; A lobby has no session; it carries its workspace instead.
-         (workspace (or (plist-get room :workspace)
-                        (and session (mevedel-session-workspace session))))
+         (workspace (mevedel-collaboration--room-workspace room))
          (directory (or (plist-get room :directory)
                         (and session
                              (mevedel-session-working-directory session)))))

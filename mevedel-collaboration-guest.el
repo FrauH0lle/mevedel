@@ -158,7 +158,9 @@
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (session))
 (declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
+(declare-function mevedel-workspace-id "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
+(declare-function mevedel-workspace-type "mevedel-structs" (cl-x))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-sanitize
@@ -350,6 +352,24 @@ than offered as a button that cannot work."
   "Return the models a guest may pick for a new session, as labels."
   (vconcat (mapcar #'car (mevedel-model-candidates))))
 
+(defun mevedel-collaboration--room-workspace (room)
+  "Return ROOM's workspace, or nil.
+A lobby has no session; it carries its workspace instead."
+  (or (plist-get room :workspace)
+      (when-let* ((session (plist-get room :session)))
+        (mevedel-session-workspace session))))
+
+(defun mevedel-collaboration--workspace-key (room)
+  "Return an opaque key naming ROOM's workspace on this host, or nil.
+A browser keeps the rooms it was given under it, so a room lists only
+its own workspace's rooms; the key reveals no path."
+  (when-let* ((workspace (mevedel-collaboration--room-workspace room)))
+    (substring (secure-hash 'sha256
+                            (format "%s\0%s\0%s" (system-name)
+                                    (mevedel-workspace-type workspace)
+                                    (mevedel-workspace-id workspace)))
+               0 32)))
+
 (defun mevedel-collaboration--send-snapshot (room peer)
   "Send ROOM's welcome and chunked snapshot to guest PEER."
   (let* ((transport (plist-get room :transport))
@@ -363,6 +383,7 @@ than offered as a button that cannot work."
       (list :t "welcome"
             :proto mevedel-collaboration--protocol-version
             :readOnly (if (plist-get guest :writable) :json-false t)
+            :workspace (mevedel-collaboration--workspace-key room)
             ;; Count what is actually sent: a record too large for a frame of
             ;; its own is dropped, and promising it would leave the guest
             ;; waiting for a chunk that never arrives.

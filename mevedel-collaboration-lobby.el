@@ -210,6 +210,7 @@ own order, marked live or shared when they are open here.  A row's
                (plist-get lobby :workspace))))
     (list :t "lobby"
           :project (plist-get lobby :project)
+          :workspace (mevedel-collaboration--workspace-key lobby)
           :sessions (vconcat (seq-take
                               rows mevedel-collaboration-lobby--max-sessions))
           :omitted (max 0 (- (length rows)

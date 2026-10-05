@@ -52,11 +52,16 @@
     let requestSequence = 0;
     let secret = null;
     let roomId = null;
+    let workspace = null;
 
     // Only settled, reachable rooms persist: a waiting request belongs
     // to the socket that made it, and a refusal is news, not a room.
     // Rooms die with the host's share, so a stored link outlives
     // nothing -- it only saves the guest from losing one to a reload.
+    //
+    // Each room is kept under its host's opaque workspace key, and a tab
+    // lists only its own workspace's rooms: one relay serves every host
+    // and project, and their rooms have nothing to do with each other.
     //
     // A room is stored by its id rather than by a whole link, because
     // the store is per relay origin and one origin can hold several
@@ -70,7 +75,8 @@
         if (!Array.isArray(raw)) return [];
         return raw.filter(room => room && typeof room.room === 'string'
                           && typeof room.name === 'string'
-                          && typeof room.secret === 'string');
+                          && typeof room.secret === 'string'
+                          && typeof room.workspace === 'string');
       } catch (_error) { return []; }
     }
 
@@ -84,11 +90,14 @@
 
     // RENAMED marks NAME as the room's current name from its own host,
     // which replaces whatever name the room was stored under.
+    // Rooms are handed out in this tab's workspace: a session requested
+    // here is created in it, so nothing is kept before the host names it.
     function rememberRoom(name, parts, renamed = false) {
+      if (!workspace) return;
       const rooms = stored();
       const existing = rooms.find(room => room.room === parts.roomId);
       if (!existing) {
-        rooms.push({room: parts.roomId, name, secret: parts.secret});
+        rooms.push({room: parts.roomId, name, secret: parts.secret, workspace});
       } else if (existing.secret.length < parts.secret.length) {
         // The stronger secret wins -- it is what this browser was
         // actually handed; what a given tab may present is capped when
@@ -111,7 +120,14 @@
     // The room a tab is standing in is kept but never listed: it is not
     // somewhere to go.
     function elsewhere() {
-      return stored().filter(room => room.room !== roomId);
+      return stored().filter(room => room.workspace === workspace
+                             && room.room !== roomId);
+    }
+
+    // KEY arrives with the host's welcome or lobby listing.
+    function setWorkspace(key) {
+      workspace = typeof key === 'string' && key ? key : null;
+      render();
     }
 
     // A link is split rather than kept whole so the tier can be capped
@@ -437,7 +453,7 @@
     }
 
     return Object.freeze({modePicker, setVisible, setInviteVisible,
-                          showResult, offerRoom, useCredentials,
+                          showResult, offerRoom, useCredentials, setWorkspace,
                           rememberCurrent, openNewSession: open});
   }
 
