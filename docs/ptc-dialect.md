@@ -25,6 +25,10 @@ feedback are delivered even when an intermediate result is discarded.
 For object arguments use keyword plists, arrays use vectors or lists, JSON
 false uses `:json-false` (or nil for a boolean argument), and JSON null uses
 `:null`. Declared object keys are converted to the native adapter's keys.
+JSON object syntax is not part of the dialect: its braces read as symbols and
+its commas as unquote forms. A value that is not a keyword plist where an
+object is expected is refused with the expected form, the value, and a note
+when it looks like JSON.
 Wrapped tools use the qualified `category/name` shown by ToolSearch; this
 prevents collisions across servers. The installed MCP text adapter exposes
 text content only. ToolCall cannot recover media or error metadata discarded

@@ -284,7 +284,46 @@ With RAW-P, retain the full pipeline result including hidden render data."
               (should (plist-get reply :media))))
           (let* ((state (mevedel-shared-editing--read session id))
                  (revision (plist-get state :revision)))
-            (should (= revision 3)))))
+            (should (= revision 3)))
+          ;; A model's redraw: deletions by hash with null, then shapes with
+          ;; nested plists, point vectors and floats, in one patch.
+          (let* ((view (let (text)
+                         (with-current-buffer buffer
+                           (mevedel-tool-editing-view (list id) (lambda (v) (setq text (plist-get v :text)))))
+                         (let ((deadline (+ (float-time) 10)))
+                           (while (and (not text) (< (float-time) deadline))
+                             (accept-process-output nil 0.01)))
+                         text))
+                 (hash (and (string-match "\\([0-9a-f]\\{12\\}\\) {\"id\":\"v\"" view)
+                            (match-string 1 view)))
+                 reply)
+            (should hash)
+            (with-current-buffer buffer
+              (mevedel-ptc-driver-run
+               (lambda (value) (setq reply value))
+               (format "(SharedEdit :id %S :action \"patch\" :changes [(:id \"v\" :hash %S :after :null) (:id \"box\" :after (:id \"box\" :type \"rectangle\" :x 0 :y 140 :width 300 :height 160 :roundness (:type 3) :roughness 0)) (:id \"link\" :after (:id \"link\" :type \"arrow\" :x 310 :y 220 :width 280 :height 0 :points [[0 0] [280 0]] :startBinding (:elementId \"box\" :fixedPoint [1 0.5] :mode \"orbit\") :startArrowhead :null :endArrowhead \"arrow\"))])"
+                       id hash)
+               '("SharedEdit") '("SharedEdit")))
+            (let ((deadline (+ (float-time) 10)))
+              (while (and (not reply) (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should (equal 'success (plist-get reply :status)))
+            (should (= 4 (plist-get (mevedel-shared-editing--read session id) :revision))))
+          ;; Malformed objects say what an object is, and name JSON when written.
+          (dolist (case '(("[{\"id\":\"v\",\"after\":null}]" . "not JSON {...} with commas: {")
+                          ("[(:id \"v\" :after)]" . "not this value: (:id \"v\" :after)")))
+            (let (reply)
+              (with-current-buffer buffer
+                (mevedel-ptc-driver-run
+                 (lambda (value) (setq reply value))
+                 (format "(SharedEdit :id %S :action \"patch\" :changes %s)" id (car case))
+                 '("SharedEdit") '("SharedEdit")))
+              (let ((deadline (+ (float-time) 10)))
+                (while (and (not reply) (< (float-time) deadline))
+                  (accept-process-output nil 0.01)))
+              (should (string-search "Objects are keyword plists such as (:id \"a\" :after nil)"
+                                     (plist-get reply :result)))
+              (should (string-search (cdr case) (plist-get reply :result)))))))
     (with-current-buffer buffer (mevedel-shared-editing-stop)))
 
   :doc "indirect argument calls finish before the outer call and retain both audits"
