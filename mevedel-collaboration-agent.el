@@ -20,6 +20,13 @@
 (declare-function mevedel-agent-record-settled-outcome
                   "mevedel-agent-control" (record))
 
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-ensure-conversation
+                  "mevedel-agent-persistence"
+                  (session record root-buffer &optional readonly-p))
+(autoload 'mevedel-agent-persistence-ensure-conversation
+  "mevedel-agent-persistence")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--broadcast
                   "mevedel-collaboration" (room frame))
@@ -27,6 +34,8 @@
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--observer-failure
                   "mevedel-collaboration" (room))
+(declare-function mevedel-collaboration--room-for-buffer
+                  "mevedel-collaboration" (buffer))
 (declare-function mevedel-collaboration--room-for-session
                   "mevedel-collaboration" (session))
 (declare-function mevedel-collaboration--schedule-publish
@@ -143,14 +152,57 @@ transcript stays reachable from the viewer's finished-agents list."
           :digest (make-string 64 ?0) :records (vconcat nil)
           :final :json-false))))
 
+(defun mevedel-collaboration--agent-record (room path)
+  "Return the registry record for canonical PATH in ROOM, or nil."
+  (when-let* ((session (plist-get room :session))
+              ((stringp path)))
+    (cdr (assoc path (mevedel-session-agent-registry session)))))
+
 (defun mevedel-collaboration--agent-conversation (room path)
   "Return the live conversation buffer for canonical PATH in ROOM, or nil."
-  (when-let* ((session (plist-get room :session))
-              ((stringp path))
-              (entry (assoc path (mevedel-session-agent-registry session)))
-              (buffer (mevedel-agent-record-conversation-buffer (cdr entry)))
+  (when-let* ((record (mevedel-collaboration--agent-record room path))
+              (buffer (mevedel-agent-record-conversation-buffer record))
               ((buffer-live-p buffer)))
     buffer))
+
+(defun mevedel-collaboration--set-agent-load (room path state)
+  "Record agent PATH's load STATE in ROOM, in place; nil clears it."
+  ;; `plist-put' extends the shared room plist in place; a `setf' on
+  ;; `plist-get' would only rebind the local variable.
+  (plist-put room :agent-loads
+             (let ((loads (assoc-delete-all path (plist-get room :agent-loads))))
+               (if state (cons (cons path state) loads) loads))))
+
+(defun mevedel-collaboration--queue-agent-load (room path)
+  "Queue loading the retained conversation of agent PATH for ROOM.
+A settled agent of a resumed session stays on disk until first opened.
+Load it from a timer, never inside the guest's frame handler.  Return
+non-nil while the load is pending, nil for an unknown or failed agent."
+  (when (mevedel-collaboration--agent-record room path)
+    (pcase (alist-get path (plist-get room :agent-loads) nil nil #'equal)
+      ('failed nil)
+      ('pending t)
+      (_ (mevedel-collaboration--set-agent-load room path 'pending)
+         (run-at-time 0 nil #'mevedel-collaboration--load-agent room path)
+         t))))
+
+(defun mevedel-collaboration--load-agent (room path)
+  "Load agent PATH's conversation for ROOM, as the host's own open does.
+A failure is remembered, so later guest polls are refused, not retried."
+  (let ((data (plist-get room :data-buffer)))
+    (when (eq room (mevedel-collaboration--room-for-buffer data))
+      (mevedel-collaboration--set-agent-load
+       room path
+       (condition-case nil
+           (progn
+             (mevedel-agent-persistence-ensure-conversation
+              (plist-get room :session)
+              (mevedel-collaboration--agent-record room path)
+              data
+              (with-current-buffer data
+                (bound-and-true-p mevedel-session--read-only-mode)))
+             nil)
+         (error 'failed))))))
 
 (defun mevedel-collaboration--handle-fetch-agent (room peer frame)
   "Answer guest PEER's agent-transcript fetch FRAME for ROOM."
@@ -208,11 +260,14 @@ transcript stays reachable from the viewer's finished-agents list."
                                   :digest digest
                                   :records (vconcat (car rest))
                                   :final (if (cdr rest) :json-false t))))))
-            (plist-put guest :agent-artifacts nil)
-            (mevedel-collaboration--transport-send
-             transport peer
-             (list :t "agent" :reqId req-id
-                   :error "This agent's transcript is not available"))))))))
+            ;; While the conversation loads, the viewer keeps showing its
+            ;; loading note and its next poll finds the resident buffer.
+            (unless (mevedel-collaboration--queue-agent-load room path)
+              (plist-put guest :agent-artifacts nil)
+              (mevedel-collaboration--transport-send
+               transport peer
+               (list :t "agent" :reqId req-id
+                     :error "This agent's transcript is not available")))))))))
 
 (defun mevedel-collaboration--find-transcript-evidence (session live-buffer find)
   "Run FIND on SESSION's readable source-backed segments of LIVE-BUFFER.

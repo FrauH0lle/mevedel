@@ -547,8 +547,12 @@ internal render data. A digest rides
 each reply; a poll carrying a still-matching digest is answered with
 one `unchanged` frame instead of the transcript, and a per-guest
 throttle bounds what a hostile client can make the host project. A
-cold or historical agent is refused rather than hydrated: a guest poll
-must never start target I/O. Artifact cards in an agent reply receive
+settled agent of a resumed session stays on disk until first opened; a
+guest fetch queues that one load on a timer, as the host's own open would
+perform it, and sends nothing while it runs, so the viewer's loading note
+stays until a later poll finds the conversation. A failed load is
+remembered for the room and refused instead of retried. The frame handler
+itself never starts target I/O. Artifact cards in an agent reply receive
 room-wide ids derived from the agent path and transcript-local id, so they
 remain openable without colliding with a root-transcript card. Agent control
 -- chat, interrupt, kill -- stays in Emacs.
