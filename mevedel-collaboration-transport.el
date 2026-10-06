@@ -14,9 +14,11 @@
 ;; This module knows nothing about rooms, guests, or the projection: it
 ;; delivers decoded frames and control events to callbacks and reconnects
 ;; with bounded backoff when the relay connection drops.  It pings the relay
-;; on its own interval so a connection that died while this machine slept
-;; reports itself instead of looking open forever, and gives each dial a
-;; deadline so one that stalls is retried instead of connecting forever.
+;; on its own interval and drops a connection that has carried nothing back
+;; for longer than its liveness window, so a connection that died while this
+;; machine slept or changed networks is redialed instead of looking open
+;; forever.  Each dial gets a deadline too, so one that stalls is retried
+;; instead of connecting forever.
 
 ;;; Code:
 
@@ -137,7 +139,18 @@ come out of the same budget.")
 
 (defconst mevedel-collaboration--backoff-initial 1)
 (defconst mevedel-collaboration--backoff-max 30)
-(defconst mevedel-collaboration--keepalive-seconds 30)
+(defconst mevedel-collaboration--keepalive-seconds 15
+  "Seconds between the host's pings to the relay.")
+
+(defconst mevedel-collaboration--liveness-seconds 45
+  "Seconds a live relay connection may go without inbound bytes.
+A healthy connection answers each keepalive ping with a pong and also
+carries the relay's own pings, so silence for this long means the path
+to the relay is gone even though nothing reported it.  The window spans
+several keepalives so one late pong is not a drop, and it outlasts the
+relay's own dead-host detection (a 30 second ping with a 10 second
+timeout), so the redial finds the old room already collected instead of
+being refused as a second host.")
 
 (defvar mevedel-collaboration--connect-timeout-seconds 30
   "Seconds a dial may go unanswered before it is abandoned and retried.
@@ -189,10 +202,11 @@ unibyte room key.  CALLBACKS is a plist:
 
 Return the transport handle without waiting for TCP/TLS connection setup.
 TLS uses Emacs' configured certificate and hostname verification policy.
-The connection retries with bounded exponential backoff until stopped,
-and a dial the relay has not answered within
-`mevedel-collaboration--connect-timeout-seconds' counts as a drop;
-undecryptable or malformed input is dropped silently."
+The connection retries with bounded exponential backoff until stopped.
+A dial the relay has not answered within
+`mevedel-collaboration--connect-timeout-seconds', and an open connection
+that has received nothing within `mevedel-collaboration--liveness-seconds',
+count as drops; undecryptable or malformed input is dropped silently."
   (advice-add 'websocket-ensure-handshake :around
               #'mevedel-collaboration--transport-handshake)
   (let ((transport (list :url url
@@ -206,6 +220,7 @@ undecryptable or malformed input is dropped silently."
                          :on-frame (plist-get callbacks :on-frame)
                          :on-control (plist-get callbacks :on-control)
                          :on-state (plist-get callbacks :on-state)
+                         :inbound-at nil
                          :keepalive-timer nil)))
     (mevedel-collaboration--transport-dial transport)
     (plist-put transport :keepalive-timer
@@ -216,31 +231,56 @@ undecryptable or malformed input is dropped silently."
     transport))
 
 (defun mevedel-collaboration--transport-keepalive (transport)
-  "Write a ping to TRANSPORT so a dead relay connection reports itself.
+  "Ping the relay through TRANSPORT, or drop a connection gone silent.
 
 The relay pings every 30 seconds and collects the room when a ping times
 out, but websocket.el answers a ping inside its own filter and never
-surfaces one: a host cannot notice the relay's pings stopping.  A machine
-that suspends therefore wakes with a socket its kernel still calls open, a
-room the relay collected while it slept, and no reason to redial -- the
-share link stays dead until something happens to be sent.  Writing is what
-ends it: the relay closed its side, so the peer answers with a reset, the
-process sentinel closes the websocket, and the redial re-creates the room.
+surfaces one or a pong: a host cannot see the relay's traffic stop.  A
+connection whose path died -- a suspended machine, a network change, a
+relay that became unreachable -- therefore keeps a socket the kernel
+calls open, and a write only fails once the kernel receives a reset or
+gives up retransmitting, which can take far longer than guests wait.
+
+So every keepalive first checks that something arrived within
+`mevedel-collaboration--liveness-seconds'; `:inbound-at' records the last
+bytes the connection's process received, pongs and relay pings included.
+A silent connection is dropped and redialed, which re-creates the room.
+Otherwise a ping is written, and a write that fails drops it too.
 
 The ping carries a payload because websocket.el encodes a payload-less one
-unmasked, which is exactly the frame a server must refuse.
-
-The reset is what makes this prompt, so a relay that has become entirely
-unreachable -- packets dropped rather than refused -- is still only noticed
-when the kernel gives up retransmitting.  Detecting that would need a pong
-deadline, which websocket.el cannot report without patching it."
+unmasked, which is exactly the frame a server must refuse."
   (when (mevedel-collaboration--transport-open-p transport)
     (let ((ws (plist-get transport :ws)))
-      (condition-case nil
-          (websocket-send ws
-                          (make-websocket-frame
-                           :opcode 'ping :payload "m" :completep t))
-        (error (mevedel-collaboration--transport-down transport ws))))))
+      (when (mevedel-collaboration--transport-silent-p transport)
+        ;; Emacs runs due timers before reading waiting output, so after a
+        ;; long busy spell the pongs may be queued unread: read them first.
+        (ignore-errors
+          (accept-process-output (websocket-conn ws) 0 nil 1)))
+      (cond
+       ;; Reading the queued input closed the connection itself.
+       ((not (eq ws (plist-get transport :ws))))
+       ((mevedel-collaboration--transport-silent-p transport)
+        (mevedel-collaboration--transport-down transport ws))
+       (t
+        (condition-case nil
+            (websocket-send ws
+                            (make-websocket-frame
+                             :opcode 'ping :payload "m" :completep t))
+          (error (mevedel-collaboration--transport-down transport ws))))))))
+
+(defun mevedel-collaboration--transport-silent-p (transport)
+  "Return non-nil when TRANSPORT received nothing within its liveness window."
+  (> (- (float-time) (or (plist-get transport :inbound-at) 0))
+     mevedel-collaboration--liveness-seconds))
+
+(defun mevedel-collaboration--transport-watch-inbound (transport ws)
+  "Record in TRANSPORT's `:inbound-at' when WS's process receives bytes.
+The connection's own filter is wrapped, so every frame counts, including
+the pongs and pings websocket.el handles without surfacing them."
+  (add-function :before (process-filter (websocket-conn ws))
+                (lambda (_process _output)
+                  (when (eq ws (plist-get transport :ws))
+                    (plist-put transport :inbound-at (float-time))))))
 
 (defun mevedel-collaboration--transport-notify (transport state)
   "Report STATE through TRANSPORT's `:on-state' callback, if any."
@@ -296,6 +336,7 @@ The dial has `mevedel-collaboration--connect-timeout-seconds' to open."
                   ;; a broken connection surfaces through on-close.
                   nil)))))
         (plist-put transport :ws ws)
+        (mevedel-collaboration--transport-watch-inbound transport ws)
         (plist-put transport :connect-timer
                    (run-at-time mevedel-collaboration--connect-timeout-seconds nil
                                 #'mevedel-collaboration--transport-connect-timeout

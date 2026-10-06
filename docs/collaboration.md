@@ -297,10 +297,22 @@ starts one with `(mevedel-collaboration-lobby-start DIRECTORY)`, which
 returns the lobby with its links under `:link-view`, `:link-full` and
 `:link-owner`. `/collab status` reports running lobbies beside rooms.
 
-Unlike a room, a lobby's credentials persist. They are generated once and
-stored in `.mevedel/lobby` in the workspace state directory, readable only by
-the user, so a restarted Emacs recreates the same relay room and its links
-keep working; open browser tabs reconnect on their own. Stopping the lobby
+Unlike a room, a lobby's credentials persist, and so does the lobby itself.
+The credentials are generated once and stored in `.mevedel/lobby` in the
+workspace state directory, readable only by the user. A lobby runs until it is
+stopped: starting one records its workspace root in `lobbies.el` under
+`mevedel-user-dir`, and exiting Emacs leaves that record in place. When the
+next Emacs runs `mevedel-install`, it restarts every recorded lobby, after
+startup has finished when it is installed from the init file, so the relay
+settings that follow it apply. The restarted lobby dials the same relay room,
+its links keep working, and browser tabs still within their reconnect window
+rejoin on their own. A lobby that cannot restart is reported as a warning and
+stays recorded for the next start; `/collab lobby stop` in that workspace
+removes the record. A recorded workspace whose directory no longer exists is
+forgotten with a warning.
+
+`/collab lobby stop` stops the lobby and removes the record, so it stays
+stopped across restarts; starting it again revives the same links. Stopping
 leaves the credentials in place. Rotating them is the revocation operation:
 every earlier lobby link stops working. The rooms a lobby hands out are
 ordinary rooms with the ordinary share lifetime
@@ -818,10 +830,21 @@ ever failing: a headless host that dialed while its container started stayed
 `connecting` indefinitely, so the relay never knew its lobby room and every
 link to it showed "Room closed".
 
-The host reconnects to the relay with bounded backoff after a network blip;
-the relay garbage-collects the room with the host connection, so guests
-treat `room-closed` as retryable, rejoin the same room id, and re-hello for
-a fresh welcome and snapshot within a bounded give-up window.
+The host reconnects to the relay with bounded backoff, from 1 up to 30
+seconds, after a network blip; the relay garbage-collects the room with the
+host connection, so guests treat `room-closed` as retryable, rejoin the same
+room id, and re-hello for a fresh welcome and snapshot. A guest gives up
+after three minutes without its room.
+
+A connection can also die without any notice: after a suspend or a network
+change the host's socket still reads as open, and a write fails only once the
+kernel stops retransmitting, long after guests gave up. The host therefore
+pings the relay every 15 seconds and requires inbound bytes, a pong or the
+relay's own 30-second ping, within 45 seconds. A connection silent for longer
+is dropped and redialed, so a dead path is replaced within about a minute.
+The window outlasts the relay's own dead-host detection (a 10-second ping
+timeout), so the redial finds the old room collected rather than being
+refused as a second host.
 
 Starting a room confirms that visible text, paths, and tool results may
 contain credentials or secrets and that the links are bearer credentials.

@@ -171,6 +171,11 @@
                              &optional directory-scoped))
 (defvar mevedel--view-buffer)
 
+;; `mevedel-collaboration-lobby'
+(declare-function mevedel-collaboration-lobby-restore
+                  "mevedel-collaboration-lobby" ())
+(autoload 'mevedel-collaboration-lobby-restore "mevedel-collaboration-lobby")
+
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto
                   "mevedel-compact" (continue fsm))
@@ -766,6 +771,12 @@ always prompt for the session name."
   (mevedel-telemetry-usage-install)
   (mevedel-gptel-bridge-install)
 
+  ;; Restart the collaboration lobbies still running when Emacs last
+  ;; exited, once startup has applied the user's relay configuration.
+  (if after-init-time
+      (mevedel-collaboration-lobby-restore)
+    (add-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore))
+
   (message "mevedel installed successfully"))
 
 ;;;###autoload
@@ -841,6 +852,8 @@ always prompt for the session name."
   ;; Stop event-loop lag watching and its timer advice.
   (when (featurep 'mevedel-telemetry)
     (mevedel-telemetry--lag-stop))
+
+  (remove-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
 
   (message "mevedel uninstalled successfully"))
 
