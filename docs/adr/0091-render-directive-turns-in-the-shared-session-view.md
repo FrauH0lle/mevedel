@@ -11,6 +11,15 @@ user, response, and tool roles. Durable directive boundaries let request-time
 projection exclude these turns from ordinary-chat provider context; directive
 prompts use the workspace record and directive-local history.
 
+For Claude Code, each directive request starts an isolated ACP conversation from
+that selected prompt. It does not resume previous hidden native directive
+history. The root retains its own native conversation. Directive provider
+selection remains request-local, and directive turns do not establish root
+model history. Native and ACP completion share the final patch, terminal
+callback, and publication sequence. An ACP directive identity is committed in
+the sidecar before dispatch, after publishing the preceding complete transcript;
+the new directive frame is published when its terminal boundary is available.
+
 One accepted request reserves one session turn identity for snapshots, attempt
 links, transcript metadata, and Rewind. The first accepted request binds the
 workspace-owned directive to an execution session, reused on later requests.
@@ -60,3 +69,13 @@ turn identity remove that coordination. Workspace records retain ownership and
 inspection data, while durable prompt projection preserves isolation. This also
 replaces only the activity/composer placement in ADRs 0087 and 0089; their identity,
 recovery, and revision decisions remain independent.
+
+**ACP integration preserves selected directive evidence with isolated native
+requests.** gptel's directive path sends an explicitly selected prompt rather
+than the shared transcript. Reusing a native conversation would accumulate
+previous attempts beyond that selection. Workflow fixtures now exercise local
+discussion, scoped model overrides, denied discussion mutation, implementation
+patch capture, errors, cancellation and Plan approval while retaining the root
+conversation. Publishing the native ID through a full transcript save failed on
+the intentionally open directive boundary; a strict metadata commit preserves
+identity-before-effects without pretending the directive already completed.

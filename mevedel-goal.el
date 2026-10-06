@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-engine)
 (eval-when-compile
   ;; The FSM slot setter needs its struct expander during compilation.
   (require 'gptel-request)
@@ -19,7 +20,6 @@
   (require 'subr-x))
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-steer-user
@@ -28,7 +28,7 @@
 (autoload 'mevedel-agent-control-steer-user "mevedel-agent-control")
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-goal-fsm "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-goal-owner "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-chat'
 (declare-function mevedel--submit-generated-turn
@@ -76,7 +76,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-input
                   "mevedel-structs" (session category entry))
 (declare-function mevedel-session-enqueue-pending-reminder
@@ -433,11 +432,11 @@ Reads the current buffer's request for request-scoped Plan mode."
                             ((not (or (mevedel-request-ephemeral-p request)
                                       (mevedel-request-cancelled-p request)
                                       (mevedel-request-directive-uuid request))))
-                            (machine (mevedel-request-fsm request))
+                            (machine (mevedel-engine-owner request))
                             ((eq (current-buffer)
-                                 (plist-get (gptel-fsm-info machine) :buffer))))
+                                 (plist-get (mevedel-engine-info machine) :buffer))))
                   machine))
-           (info (and fsm (gptel-fsm-info fsm)))
+           (info (and fsm (mevedel-engine-info fsm)))
            (replacing (and current
                            (equal (mevedel-goal-id current)
                                   (plist-get info :mevedel-goal-accounting-id))))
@@ -450,13 +449,13 @@ Reads the current buffer's request for request-scoped Plan mode."
       (when replacing (mevedel-goal-settle-turn fsm))
       (let ((goal (mevedel-goal-create objective mevedel--session)))
         (when fsm
-          (setq info (gptel-fsm-info fsm))
+          (setq info (mevedel-engine-info fsm))
           (when replacing
             (dolist (key '(:mevedel-goal-id :mevedel-goal-accounting-id
                                             :mevedel-goal-accounted :mevedel-goal-budget-warnings))
               (cl-remf info key))
             (setq info (plist-put info :mevedel-goal-token-baseline baseline)))
-          (setf (gptel-fsm-info fsm) info)
+          (setf (mevedel-engine-info fsm) info)
           (mevedel-goal-capture-request fsm))
         (mevedel-goal-schedule-continuation
          mevedel--session (current-buffer) prompt-submission)
@@ -470,9 +469,9 @@ long turn.  A turn waiting in WaitAgent reaches that boundary only when the
 wait returns, so MESSAGE is also delivered as steering to wake it.  REASON
 names the control for telemetry."
   (when-let* ((request mevedel--current-request)
-              (fsm (mevedel-request-fsm request))
+              (fsm (mevedel-engine-owner request))
               ((equal (mevedel-goal-id goal)
-                      (plist-get (gptel-fsm-info fsm)
+                      (plist-get (mevedel-engine-info fsm)
                                  :mevedel-goal-accounting-id)))
               ((mevedel-turn-end-at-boundary fsm reason)))
     (ignore-errors
@@ -600,12 +599,12 @@ The string `none' removes the limit."
       (when (equal old-id (plist-get entry :queued-at-goal-id))
         (plist-put entry :queued-at-goal-id new-id)))
     (when-let* ((request mevedel--current-request)
-                (fsm (mevedel-request-fsm request))
-                (info (gptel-fsm-info fsm))
+                (fsm (mevedel-engine-owner request))
+                (info (mevedel-engine-info fsm))
                 ((equal old-id
                         (plist-get info :mevedel-goal-accounting-id))))
       (plist-put info :mevedel-goal-accounting-id new-id)
-      (setf (gptel-fsm-info fsm) info))
+      (setf (mevedel-engine-info fsm) info))
     (mevedel-goal--touch goal)
     (mevedel-session-enqueue-pending-reminder
      session
@@ -646,7 +645,7 @@ A hook that stops the turn pauses the Goal through here as well."
 
 (defun mevedel-goal-capture-request (fsm)
   "Capture active Goal attribution on root request FSM exactly once."
-  (let* ((info (gptel-fsm-info fsm))
+  (let* ((info (mevedel-engine-info fsm))
          (buffer (plist-get info :buffer)))
     (when (and (not (plist-member info :mevedel-goal-id))
                (not (or (plist-get info :mevedel-agent-invocation)
@@ -671,7 +670,7 @@ A hook that stops the turn pauses the Goal through here as well."
               (setf (mevedel-request-goal-plan-read-path
                      mevedel--current-request)
                     plan-path))
-            (setf (gptel-fsm-info fsm) info)))))))
+            (setf (mevedel-engine-info fsm) info)))))))
 
 (defun mevedel-goal--known-token-count (info)
   "Return known normalized input plus output tokens from request INFO."
@@ -715,7 +714,7 @@ a crossing reaches it at its next provider request; otherwise it waits for the
 next root request."
   (when-let* (((eq (mevedel-goal-status goal) 'active))
               (budget (mevedel-goal-token-budget goal)))
-    (let* ((info (gptel-fsm-info fsm))
+    (let* ((info (mevedel-engine-info fsm))
            (after (mevedel-goal-tokens-used goal))
            (warned (plist-get info :mevedel-goal-budget-warnings)))
       (dolist (percentage mevedel-goal--budget-thresholds)
@@ -731,7 +730,7 @@ next root request."
                           (mevedel-goal--budget-event-key percentage) body))
               (mevedel-session-enqueue-pending-reminder session body)))))
       (plist-put info :mevedel-goal-budget-warnings warned)
-      (setf (gptel-fsm-info fsm) info))))
+      (setf (mevedel-engine-info fsm) info))))
 
 (defun mevedel-goal--settle-budget (fsm session goal before)
   "Apply post-charge budget policy to GOAL for FSM in SESSION."
@@ -752,7 +751,7 @@ skip a cleared or replaced one.  Budget crossings are reported now; the root
 turn's settlement still applies the budget limit."
   (when-let* (((natnump tokens))
               ((> tokens 0))
-              (info (gptel-fsm-info fsm))
+              (info (mevedel-engine-info fsm))
               (buffer (plist-get info :buffer))
               ((buffer-live-p buffer))
               (session (buffer-local-value 'mevedel--session buffer))
@@ -771,7 +770,7 @@ SESSION owns FSM's Goal.  Durable usage plus the turn's known provider usage
 is compared with the budget at a tool-result boundary, so a long turn hears
 about each crossing before it settles.  Each entry holds `:key', `:body', and
 a `:commit' that records delivery once the injector reaches the payload."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (goal (mevedel-session-goal session))
               ((eq (mevedel-goal-status goal) 'active))
               ((not (plist-get info :mevedel-goal-accounted)))
@@ -793,27 +792,27 @@ a `:commit' that records delivery once the injector reaches the payload."
           :body (mevedel-goal--budget-crossing-body percentage after budget)
           :commit
           (lambda ()
-            (let ((current (gptel-fsm-info fsm)))
+            (let ((current (mevedel-engine-info fsm)))
               (unless (memq percentage
                             (plist-get current :mevedel-goal-budget-warnings))
                 (plist-put current :mevedel-goal-budget-warnings
                            (cons percentage
                                  (plist-get current
                                             :mevedel-goal-budget-warnings)))
-                (setf (gptel-fsm-info fsm) current))))))))))
+                (setf (mevedel-engine-info fsm) current))))))))))
 
-(defun mevedel-goal-accounting-fsm (&optional buffer)
-  "Return the root request FSM whose Goal pays for work started in BUFFER.
-In an agent's buffer this is the FSM its invocation inherited; otherwise it
+(defun mevedel-goal-accounting-owner (&optional buffer)
+  "Return the root engine owner whose Goal pays for work started in BUFFER.
+In an agent's buffer this is the owner its invocation inherited; otherwise it
 is BUFFER's running root request when that request is charged to a Goal."
   (with-current-buffer (or buffer (current-buffer))
     (if-let* ((invocation (and (boundp 'mevedel--agent-invocation)
                                mevedel--agent-invocation)))
-        (mevedel-agent-invocation-goal-fsm invocation)
+        (mevedel-agent-invocation-goal-owner invocation)
       (when-let* ((request (and (boundp 'mevedel--current-request)
                                 mevedel--current-request))
-                  (fsm (mevedel-request-fsm request))
-                  ((plist-get (gptel-fsm-info fsm)
+                  (fsm (mevedel-engine-owner request))
+                  ((plist-get (mevedel-engine-info fsm)
                               :mevedel-goal-accounting-id)))
         fsm))))
 
@@ -821,24 +820,24 @@ is BUFFER's running root request when that request is charged to a Goal."
   "Charge agent request FSM's usage since its last charge to its Goal.
 Runs after each tool batch and at the end of the request, so the Goal budget
 tracks agent work while it happens rather than once it returns."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (invocation (plist-get info :mevedel-agent-invocation))
-              (goal-fsm (mevedel-agent-invocation-goal-fsm invocation))
+              (goal-owner (mevedel-agent-invocation-goal-owner invocation))
               (known (mevedel-goal--known-token-count info))
               (delta (- known (or (plist-get info :mevedel-goal-charged) 0)))
               ((> delta 0)))
-    (setf (gptel-fsm-info fsm) (plist-put info :mevedel-goal-charged known))
-    (mevedel-goal-charge-tokens goal-fsm delta)))
+    (setf (mevedel-engine-info fsm) (plist-put info :mevedel-goal-charged known))
+    (mevedel-goal-charge-tokens goal-owner delta)))
 
 (defun mevedel-goal-agent-budget-notice (fsm)
   "Return a budget notice entry for agent request FSM, or nil.
 The notice names the highest threshold its Goal has reached that this request
 was not yet told about.  Usage includes the root turn's known in-flight usage.
 The entry holds `:body' and a delivery `:commit'."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (invocation (plist-get info :mevedel-agent-invocation))
-              (goal-fsm (mevedel-agent-invocation-goal-fsm invocation))
-              (root (gptel-fsm-info goal-fsm))
+              (goal-owner (mevedel-agent-invocation-goal-owner invocation))
+              (root (mevedel-engine-info goal-owner))
               (buffer (plist-get root :buffer))
               ((buffer-live-p buffer))
               (session (buffer-local-value 'mevedel--session buffer))
@@ -868,13 +867,13 @@ The entry holds `:body' and a delivery `:commit'."
                  "Prioritize what your caller needs.")))
      :commit
      (lambda ()
-       (setf (gptel-fsm-info fsm)
-             (plist-put (gptel-fsm-info fsm)
+       (setf (mevedel-engine-info fsm)
+             (plist-put (mevedel-engine-info fsm)
                         :mevedel-goal-budget-level level))))))
 
 (defun mevedel-goal--settle-accounting (fsm)
   "Charge FSM and return its session, Goal, and prior usage, or nil."
-  (let* ((info (gptel-fsm-info fsm))
+  (let* ((info (mevedel-engine-info fsm))
          (captured-id (plist-get info :mevedel-goal-id))
          (accounting-id (plist-get info :mevedel-goal-accounting-id))
          (buffer (plist-get info :buffer)))
@@ -894,7 +893,7 @@ The entry holds `:body' and a delivery `:commit'."
                                            info :mevedel-goal-started-at)
                                           (float-time))))))
             (cl-incf (mevedel-goal-turns-run goal))
-            (setf (gptel-fsm-info fsm)
+            (setf (mevedel-engine-info fsm)
                   (plist-put info :mevedel-goal-accounted t))
             (mevedel-goal--touch goal)
             (when (fboundp 'mevedel-telemetry-record)
@@ -908,7 +907,7 @@ The entry holds `:body' and a delivery `:commit'."
 
 (defun mevedel-goal--fsm-failure-reason (fsm status)
   "Return a concrete failure reason from FSM and terminal STATUS."
-  (let* ((info (gptel-fsm-info fsm))
+  (let* ((info (mevedel-engine-info fsm))
          (value (plist-get info :error)))
     (string-trim
      (format "%s"
@@ -938,7 +937,7 @@ The entry holds `:body' and a delivery `:commit'."
     (let ((session (nth 0 settled))
           (goal (nth 1 settled))
           (before (nth 2 settled)))
-      (with-current-buffer (plist-get (gptel-fsm-info fsm) :buffer)
+      (with-current-buffer (plist-get (mevedel-engine-info fsm) :buffer)
         (setq mevedel-goal--transient-retries 0))
       (mevedel-goal--settle-budget fsm session goal before))))
 
@@ -948,7 +947,7 @@ The entry holds `:body' and a delivery `:commit'."
     (let ((session (nth 0 settled))
           (goal (nth 1 settled))
           (before (nth 2 settled)))
-      (with-current-buffer (plist-get (gptel-fsm-info fsm) :buffer)
+      (with-current-buffer (plist-get (mevedel-engine-info fsm) :buffer)
         (when (eq (mevedel-goal-status goal) 'active)
           (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
             (if (and (mevedel-goal--transient-failure-p reason)
@@ -965,7 +964,7 @@ The entry holds `:body' and a delivery `:commit'."
 
 (defun mevedel-goal-persist-failure (fsm)
   "Persist Goal failure state after FSM teardown steps."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               ((plist-get info :mevedel-goal-id))
               (buffer (plist-get info :buffer))
               ((buffer-live-p buffer)))
@@ -977,7 +976,7 @@ The entry holds `:body' and a delivery `:commit'."
 A SUCCEEDED root turn leaves any active Goal free to continue; a failed or
 interrupted turn continues only the Goal it was attributed to, after the
 backoff delay of a retried transient failure."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               ((or succeeded (plist-get info :mevedel-goal-id)))
               (buffer (plist-get info :buffer)))
     (with-current-buffer buffer

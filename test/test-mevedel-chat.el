@@ -845,9 +845,10 @@
 				       kill-buffer-hook))
 			 (with-temp-buffer
 			   (setq-local mevedel--session session)
-			   (mevedel-test--with-captured-messages inspection-messages
-			     (mevedel--chat-buffer-init-common
-			      (current-buffer) workspace "resume" t)))
+                           (cl-letf (((symbol-function 'mevedel-view--ensure) #'ignore))
+			     (mevedel-test--with-captured-messages inspection-messages
+			       (mevedel--chat-buffer-init-common
+			        (current-buffer) workspace "resume" t))))
 			 (should-not (string-match-p
 			              "mevedel-retry-plan-implementation"
 			              inspection-messages)))
@@ -1218,7 +1219,7 @@
 		     (when (buffer-live-p view-buffer)
 		       (kill-buffer view-buffer)))))
 
-(mevedel-deftest mevedel--gptel-send-request ()
+(mevedel-deftest mevedel--send-request ()
   ,test
   (test)
   :doc "returns the FSM for a standard transformed streaming request"
@@ -1233,7 +1234,7 @@
                          request-args args)
                    (setq-local mevedel--pending-model-input nil)
                    (plist-get args :fsm))))
-        (let ((fsm (mevedel--gptel-send-request "derived prompt")))
+        (let ((fsm (mevedel--send-request "derived prompt")))
           (should fsm)
           (should (eq fsm (plist-get request-args :fsm)))
           (should (equal "derived prompt" model-input))

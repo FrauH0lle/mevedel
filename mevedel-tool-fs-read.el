@@ -56,6 +56,9 @@
 (declare-function mevedel-resource-execute
                   "mevedel-resource" (attempt &optional executor options))
 
+;; `mevedel-request'
+(defvar mevedel--current-request)
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
@@ -1577,6 +1580,60 @@ Saved history returns a canceller while preparation continues asynchronously."
            (mevedel-agent-invocation-path mevedel--agent-invocation))
       "/root"))
 
+(defun mevedel-tool-fs-read--instruction-hashes (scope)
+  "Return acknowledged instruction hashes for session or directive SCOPE."
+  (if (mevedel-request-p scope)
+      (mevedel-request-workspace-instruction-hashes scope)
+    (mevedel-session-workspace-instruction-hashes scope)))
+
+(defun mevedel-tool-fs-read--workspace-instruction (scope owner file)
+  "Render instruction FILE for SCOPE and OWNER with a deferred hash commit.
+A removed file explicitly withdraws its earlier instructions.  Its empty-content
+hash keeps that absence restorable until new instructions are discovered."
+  (let* ((present (file-exists-p file))
+         (content (if present (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
+         (hash (secure-hash 'sha256 content))
+         (key (list owner file)))
+    (list :hash hash
+          :body (if present
+                    (format
+                     (concat "The following host-loaded path-scoped workspace instructions apply. "
+                             "These contents replace earlier instructions from this file; other paths are unchanged. "
+                             "More deeply nested instructions override broader ones on conflict:"
+                             "\n\n<workspace-instructions path=\"%s\">\n%s\n</workspace-instructions>")
+                     (xml-escape-string file) content)
+                  (format "Path-scoped instruction file %s is no longer present. Its earlier instructions no longer apply; other path scopes are unchanged."
+                          file))
+          :commit (lambda ()
+                    (let ((hashes (mevedel-tool-fs-read--instruction-hashes scope)))
+                      (setf (alist-get key hashes nil nil #'equal) hash)
+                      (if (mevedel-request-p scope)
+                          (setf (mevedel-request-workspace-instruction-hashes scope) hashes)
+                        (setf (mevedel-session-workspace-instruction-hashes scope) hashes)))))))
+
+(defun mevedel-tool-fs-read-workspace-context (scope owner)
+  "Prepare current path instructions already learned by OWNER in SCOPE.
+SCOPE is the session, or the request for a fresh directive conversation.
+Return reminder entries and deferred commits, ordered broadest scope first and
+AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
+  (let ((files (cl-loop for (key . _hash) in (mevedel-tool-fs-read--instruction-hashes scope)
+                        when (equal owner (car key)) collect (cadr key)))
+        entries commits)
+    (setq files
+          (sort (delete-dups files)
+                (lambda (a b)
+                  (let ((a-dir (file-name-directory a)) (b-dir (file-name-directory b)))
+                    (if (equal a-dir b-dir)
+                        (let ((a-local (equal (file-name-nondirectory a) "AGENTS.local.md"))
+                              (b-local (equal (file-name-nondirectory b) "AGENTS.local.md")))
+                          (if (eq a-local b-local) (string-lessp a b) (not a-local)))
+                      (string-lessp a-dir b-dir))))))
+    (dolist (file files)
+      (let ((instruction (mevedel-tool-fs-read--workspace-instruction scope owner file)))
+        (push (list :type (cons 'workspace-instructions file) :body (plist-get instruction :body)) entries)
+        (push (plist-get instruction :commit) commits)))
+    (list :entries (nreverse entries) :commits (nreverse commits))))
+
 (defun mevedel-tool-fs-read--queue-workspace-instructions (path)
   "Queue newly applicable workspace instructions after reading PATH."
   (when-let* ((session (bound-and-true-p mevedel--session))
@@ -1591,7 +1648,12 @@ Saved history returns a canceller while preparation continues asynchronously."
     (let ((baseline
            (mapcar #'file-truename
                    (mevedel-system-workspace-config-files workspace cwd)))
-          (owner (mevedel-tool-fs-read--workspace-instruction-owner)))
+          (owner (mevedel-tool-fs-read--workspace-instruction-owner))
+          (scope (if (and (not (bound-and-true-p mevedel--agent-invocation))
+                          (bound-and-true-p mevedel--current-request)
+                          (mevedel-request-directive-uuid mevedel--current-request))
+                     mevedel--current-request
+                   session)))
       ;; Queue one event per instruction file, broadest scope first, so a
       ;; shared ancestor read via several sibling directories in the same
       ;; turn coalesces into a single delivery.
@@ -1599,35 +1661,19 @@ Saved history returns a canceller while preparation continues asynchronously."
                      workspace target-dir))
         (let ((file (file-truename file)))
           (unless (or (equal file path) (member file baseline))
-            (let* ((content (with-temp-buffer
-                              (insert-file-contents file)
-                              (buffer-string)))
-                   (hash (secure-hash 'sha256 content))
+            (let* ((instruction (mevedel-tool-fs-read--workspace-instruction scope owner file))
+                   (hash (plist-get instruction :hash))
                    (key (list owner file)))
               (unless (equal hash
                              (alist-get
                               key
-                              (mevedel-session-workspace-instruction-hashes
-                               session)
+                              (mevedel-tool-fs-read--instruction-hashes scope)
                               nil nil #'equal))
                 (mevedel-reminders-queue-turn-event
                  (current-buffer)
                  (cons 'workspace-instructions file)
-                 (format
-                  (concat
-                   "The following host-loaded path-scoped workspace "
-                   "instructions apply to the file just read. More deeply "
-                   "nested instructions override broader ones on conflict:"
-                   "\n\n<workspace-instructions path=\"%s\">\n%s\n"
-                   "</workspace-instructions>")
-                  (xml-escape-string file) content)
-                 (lambda ()
-                   (setf (alist-get
-                          key
-                          (mevedel-session-workspace-instruction-hashes
-                           session)
-                          nil nil #'equal)
-                         hash)))))))))))
+                 (plist-get instruction :body)
+                 (plist-get instruction :commit))))))))))
 
 (provide 'mevedel-tool-fs-read)
 

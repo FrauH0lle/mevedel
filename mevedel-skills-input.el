@@ -26,7 +26,6 @@
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-(declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-at
@@ -669,11 +668,7 @@ observe the completed response."
                     (error-message-string err))
             :warning)))
         (mevedel-transcript-restore-ignored-properties start end)
-        (mevedel--complete-turn
-         (gptel-make-fsm
-          :info (list :buffer (current-buffer)
-                      :mevedel-request request
-                      :mevedel-request-id (mevedel-request-id request))))
+        (mevedel--complete-turn request)
         (gptel--update-status " Ready" 'success)))))
 
 (defun mevedel-skills-input-command-delete-start (command-pos)

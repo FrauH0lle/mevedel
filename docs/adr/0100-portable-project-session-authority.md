@@ -46,7 +46,9 @@ after proving the claim's bytes are still the newest generation. A competing
 claim from another client therefore always wins.
 
 A missing or contradictory authority profile is an error. The session codec
-accepts one current format without migrations or a dual reader. See
+accepts one current format without automatic migration or a dual reader. The
+explicit `v0.5.6` conversion tool operates on a separate closed-session copy;
+it does not change the runtime authority or codec contract. See
 [Sessions](../sessions.md) for the current storage contract.
 
 ## Decision history

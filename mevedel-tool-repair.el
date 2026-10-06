@@ -726,14 +726,16 @@ Invalid outcomes intentionally omit tentative args and repair records."
     (mevedel-tool-repair-record-result entry result))
   nil)
 
-(defun mevedel-tool-repair-pre-tool-call (info)
-  "Repair raw gptel tool-call INFO before dispatch.
+(defun mevedel-tool-repair-pre-tool-call (info &optional tool)
+  "Repair raw provider tool-call INFO before dispatch.
+TOOL supplies the exact tool in a captured external scope; otherwise resolve
+INFO's name through the registry.
 
 Invalid or internally failed repairs return a synthetic `:result' beginning
 with `Error:' so gptel settles the call without invoking its handler."
   (let* ((name (plist-get info :name))
          (args (plist-get info :args))
-         (tool (and name (mevedel-tool-get name)))
+         (tool (or tool (and name (mevedel-tool-get name))))
          (session (and tool (mevedel-tool-repair--current-session)))
          ;; A span cannot express "record only when interesting": the
          ;; outcome is unknown at start time and every recorded start

@@ -13,6 +13,7 @@
 (require 'mevedel-system)
 (require 'mevedel-workspace)
 (require 'gptel)
+(require 'mevedel-claude-code)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -25,6 +26,66 @@
 
 (defvar mevedel-test--buddy-buffers nil
   "Buffers created by the buddy tests, killed in teardown.")
+
+(defconst mevedel-test--buddy-acp-peer
+  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                    "fixtures" "acp-agent.py"))
+
+(mevedel-deftest mevedel-buddy-guide/claude
+    (:quiet t
+     :vars* ((source (mevedel-test--buddy-buffer "buddy-claude.el" "alpha\n"))
+             (foreign (mevedel-test--buddy-buffer "buddy-foreign.el" "beta\n"))
+             (gptel--known-backends nil)
+             (mevedel-model-workloads '((buddy :provider "Claude Code:sonnet" :effort nil)))
+             (mevedel-buddy-note--notes nil)
+             (mevedel-buddy-max-iterations 8)
+             models batches)
+     :after-each (mevedel-test--buddy-cleanup))
+  (progn
+    (mevedel-claude-code-register)
+    (with-current-buffer source
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (lambda (_system mcp model _effort &optional id hook)
+                   (should-not id) (push model models)
+                   (list :command (executable-find "python3")
+                         :args (list mevedel-test--buddy-acp-peer)
+                         :cwd temporary-file-directory :mcp mcp
+                         :tool-id-field :claudecode/toolUseId
+                         :control #'mevedel-claude-code--control
+                         :meta `((hookCommand . ,hook) (toolBatches . ,batches))))))
+        (cl-labels ((note (id buffer text)
+                      `((name . "add_note") (id . ,id)
+                        (args . ((buffer . ,(buffer-name buffer)) (line_number . 1)
+                                 (note . ,text) (severity . "significant")))))
+                    (run (command)
+                      (funcall command)
+                      (with-timeout (5 (ert-fail "Subscription Buddy did not settle"))
+                        (while mevedel-buddy--running (accept-process-output nil 0.01)))
+                      (should (equal '("sonnet") models))
+                      (should-not mevedel-buddy-note--scope-buffers)
+                      (should-not mevedel-buddy--request-buffer)))
+          ,test))))
+  (test)
+  :doc "Claude guidance can annotate only the captured source buffer"
+  (progn
+    (setq batches (vector (vector (note "note-owned" source "Check this expression")
+                                  (note "note-foreign" foreign "Must not appear"))))
+    (run #'mevedel-buddy-guide)
+    (should (= 1 (length mevedel-buddy-note--notes)))
+    (let ((note (car mevedel-buddy-note--notes)))
+      (should (equal "Check this expression" (plist-get note :note)))
+      (should (eq source (overlay-buffer (plist-get note :overlay))))))
+  :doc "the native batch boundary stops further notes and preserves unreviewed edits"
+  (progn
+    (goto-char (point-max)) (insert "beta\n")
+    (should (mevedel-test--buddy-all-changes))
+    (setq mevedel-buddy-max-iterations 0
+          batches (vector (vector (note "first" source "First note"))
+                          (vector (note "late" source "Must not appear"))))
+    (run #'mevedel-buddy-review)
+    (should (= 1 (length mevedel-buddy-note--notes)))
+    (should (equal "First note" (plist-get (car mevedel-buddy-note--notes) :note)))
+    (should (mevedel-test--buddy-all-changes))))
 
 (defun mevedel-test--buddy-buffer (name content &optional mode)
   "Return a tracked buffer NAME holding CONTENT in MODE."

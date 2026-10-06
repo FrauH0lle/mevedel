@@ -1501,7 +1501,7 @@ spanning lines")))
       (goto-char (point-max))
       ;; Simulate a leaked stash (e.g., from a prior failed dispatch).
       (setq-local mevedel-skills--pending-request-context
-                  '(:permission-rules nil :model haiku))
+                  '(:permission-rules nil))
       (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
       (mevedel-test--with-captured-messages nil
@@ -1515,7 +1515,7 @@ spanning lines")))
       (insert "plain text")
       (goto-char (point-max))
       (setq-local mevedel-skills--pending-request-context
-                  '(:permission-rules nil :model haiku))
+                  '(:permission-rules nil))
       (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
       (ignore-errors

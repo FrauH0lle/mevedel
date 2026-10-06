@@ -48,6 +48,11 @@
 ;; `mevedel-chat'
 (defvar mevedel--session)
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-external-p "mevedel-engine" (backend))
+(declare-function mevedel-engine-request-workload "mevedel-engine"
+                  (backend prompt system tools callback before-tool boundary))
+
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
@@ -643,6 +648,7 @@ is recorded when the review settles on its own.  AUTOMATIC marks a run
 started by the idle timer, which an explicit request may preempt."
   (require 'gptel)
   (require 'mevedel-buddy-note)
+  (require 'mevedel-engine)
   (require 'mevedel-models)
   (require 'mevedel-system)
   (let ((policy (mevedel-model-resolve-workload 'buddy))
@@ -712,25 +718,40 @@ started by the idle timer, which an explicit request may preempt."
                            (lambda ()
                              (mevedel-buddy--current-generation-p
                               generation))))
-              (gptel-request
-               (concat payload (mevedel-buddy-note-serialize))
-               :buffer request-buffer
-               :fsm (mevedel-buddy--request-fsm #'finish)
-               ;; Follow the user's streaming setting rather than forcing it
-               ;; off.  Buddy has no use for streamed prose, but some
-               ;; providers reject a request with `stream' false outright.
-               :stream stream
-               :transforms nil
-               :system system
-               :callback
-               (lambda (response _info)
-                 (when (eq (mevedel-buddy--response-action response)
-                           'tool-round)
-                   (setq rounds (1+ rounds))
-                   (when (> rounds mevedel-buddy-max-iterations)
-                     ;; Aborting reaches the machine's ABRT state, which
-                     ;; settles the review without retiring its changes.
-                     (ignore-errors (gptel-abort request-buffer))))))))
+              (if (mevedel-engine-external-p gptel-backend)
+                  (mevedel-engine-request-workload
+                   gptel-backend (concat payload (mevedel-buddy-note-serialize))
+                   system gptel-tools
+                   (lambda (response _info)
+                     (when (memq response '(t nil abort)) (finish (eq response t))))
+                   (lambda (_tool _args)
+                     (unless (mevedel-buddy--current-generation-p generation)
+                       (error "Buddy review has ended")))
+                   (lambda ()
+                     (cl-incf rounds)
+                     (when (> rounds mevedel-buddy-max-iterations)
+                       (finish nil)
+                       (error "Buddy tool-round limit exceeded"))
+                     nil))
+                (gptel-request
+                 (concat payload (mevedel-buddy-note-serialize))
+                 :buffer request-buffer
+                 :fsm (mevedel-buddy--request-fsm #'finish)
+                 ;; Follow the user's streaming setting rather than forcing it
+                 ;; off.  Buddy has no use for streamed prose, but some
+                 ;; providers reject a request with `stream' false outright.
+                 :stream stream
+                 :transforms nil
+                 :system system
+                 :callback
+                 (lambda (response _info)
+                   (when (eq (mevedel-buddy--response-action response)
+                             'tool-round)
+                     (setq rounds (1+ rounds))
+                     (when (> rounds mevedel-buddy-max-iterations)
+                       ;; Aborting reaches the machine's ABRT state, which
+                       ;; settles the review without retiring its changes.
+                       (ignore-errors (gptel-abort request-buffer)))))))))
         (error (finish nil))))))
 
 (defun mevedel-buddy--workspace ()

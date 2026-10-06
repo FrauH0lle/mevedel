@@ -31,6 +31,14 @@ idle work when its last pending interaction closes, and the composer offers
 queued follow-ups when an edit empties the draft that held them. Every offered
 path rechecks its own gates, so a spurious offer is harmless.
 
+The lifecycle is shared by gptel and native ACP turns. Claude's SDK reports
+usage for each model sample before its post-tool hook; message identities let
+the engine merge cumulative deltas and duplicate assistant snapshots without
+double charging. Its final prompt totals replace reported counters, while
+missing fields preserve earlier known usage. Existing Goal accounting and
+acknowledged budget reminders consume those normalized counters. No separate
+native Goal controller or final-turn-only budget mode is needed.
+
 ## Decision history
 
 Continuation was first scheduled only at Goal start, resume, budget and
@@ -42,6 +50,16 @@ active Goal stalled, despite the README promising automatic continuation while
 idle, until the user typed something or ran `/goal resume`. Offering the work
 again where interactions close and where the draft empties fixes every
 interaction kind at once without per-kind scheduling calls.
+
+The subscription integration initially had only final prompt totals, leaving
+within-turn budget reminders unproven. A bounded native probe observed three
+sample identities whose summed usage exactly matched the final prompt total.
+A second probe delivered the 100% reminder at the first tool boundary and
+Claude wrapped up without the next planned read. This establishes the existing
+reminder and settlement semantics; it does not establish a server token cap or
+subscription quota measurement. Workflow tests also exercise automatic
+continuation, queued-input priority, pause/resume and independent completion
+verification through ACP and the real MCP pipeline.
 
 Initially creation was a user command or accepted-plan handoff, and the model
 could only complete or block an existing Goal. The requested natural-language

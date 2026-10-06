@@ -4127,7 +4127,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
 
   :doc "rejects reentrant queueing as an uncommitted strict marker"
   (with-temp-buffer
-    (let ((session (mevedel-session--create :name "queued")))
+    (let ((session (mevedel-session--create :name "queued" :authority-mode 'portable)))
       (cl-letf
           (((symbol-function
              'mevedel-session-artifacts--sidecar-publication-artifact)
@@ -4144,6 +4144,38 @@ rotation never saves through a rebound temporary visited filename or prompts"
          (mevedel-session-artifacts-publish-sidecar-state
           session (current-buffer))
          :type 'user-error)))))
+
+
+(mevedel-deftest mevedel-session-artifacts-publish-sidecar-state/file (:quiet t)
+  (let* ((root (make-temp-file "mevedel-sidecar-file-" t))
+         (workspace (test-mevedel-session-persistence--make-file-workspace root))
+         (session (mevedel-session-create "metadata" workspace))
+         (buffer (generate-new-buffer " *sidecar-file*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (mevedel-chat-prepare-transcript-buffer)
+          (setq-local mevedel--session session mevedel--workspace workspace
+                      default-directory (file-name-as-directory root))
+          (mevedel-session-set-root-buffer session buffer)
+          (insert "Published prompt")
+          (mevedel-session-artifacts-save session buffer)
+          (let* ((segment (file-name-nondirectory buffer-file-name))
+                 (before (mevedel-session-artifacts-read-artifact session segment)))
+            (goto-char (point-max)) (insert "\nUnpublished input")
+            (setf (mevedel-session-external-conversations session)
+                  (list (list "root" :engine 'claude-code :id "native-id"
+                              :host (system-name) :directory root :state 'in-flight)))
+            (mevedel-session-artifacts-publish-sidecar-state session buffer)
+            (should (equal before (mevedel-session-artifacts-read-artifact session segment)))
+            (should
+             (equal (mevedel-session-external-conversations session)
+                    (plist-get
+                     (mevedel-session-codec-read
+                      (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session)))
+                     :external-conversations)))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
 
 
 ;;

@@ -9,7 +9,7 @@ flowchart TD
     W[Workspace] -->|shared records| D[Directives and source anchors]
     W -->|one or more| S[Sessions]
     S -->|owns| T[Canonical transcript in data buffer]
-    S -->|admits| R[Request and gptel state machine]
+    S -->|admits| R[Request and selected turn engine]
     R -->|validated and authorized calls| X[Tool pipeline and agent runtime]
     R -->|responses and results| T
     T -->|projects into| V[Emacs view and browser view]
@@ -23,6 +23,16 @@ the owning session. A request has its own admission and settlement boundary.
 Tool and agent failures return through that boundary; a rendering failure does
 not settle the request. See [tool execution](tools.md), [agent lifecycle](agents.md)
 and [session publication and recovery](sessions.md) for their failure paths.
+
+A turn engine supplies model communication and model-history behavior. The
+gptel engine keeps its native state machine; the Claude Code engine runs the
+installed agent through ACP and exposes mevedel tools through MCP. Both retain
+the admitted request's authority, pipeline, transcript and settlement boundary.
+Claude-specific authentication and adapter options stay behind that engine;
+ACP alone does not guarantee prompt replacement or disabled built-in tools.
+See [ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md) for the ownership
+decision and [external conversation lifecycle](sessions.md#external-conversation-references)
+for its persistence and capability limits.
 
 Memory has separate workspace and user scopes. Selected memory indexes become
 request context; memory is not a transcript or a session-owned storage slot.
@@ -116,9 +126,10 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   request start time, accumulated active-work pause time, file-snapshots,
   directive UUID, immutable Plan read-only authority, cancellers,
   skill-scoped permission rules, user-attached skill records, hook rules, and
-  transient one-shot-mutation/ephemeral-artifact boundaries.
-  Skill model and effort policy is consumed before
-  gptel realizes an owning request rather than stored for late mutation.
+  transient one-shot-mutation/ephemeral-artifact boundaries. Effective
+  backend/model/effort policy is captured at admission, before pending skill
+  context is consumed; later context generation uses that frozen policy.
+  Request-only overrides do not change the session's saved selection.
 - **`mevedel-tool`**: name, handler, description, summary, prompt and prompt
   provenance,
   args, category, read-only/destructive/async/snapshot flags, sync/async
@@ -202,9 +213,11 @@ Terminal settlement keeps the complete turn in the transcript and writes the
 immutable attempt or discussion turn to the workspace record even if the source
 overlay detached while the request was in flight; this bounded duplication
 keeps chronological presentation separate from durable follow-up context.
-The FSM terminal transition captures the final patch before publishing the
-request outcome, including on abort; the provider's earlier raw abort callback
-does not settle the directive.
+The native FSM terminal transition or ACP terminal response captures the final
+patch before a shared terminal callback and publication transaction, including
+on abort. The provider's earlier raw abort callback does not settle the directive.
+Callbacks inspect engine context through the same accessor; external turns own
+that context on their admitted request without a synthetic gptel FSM.
 Overlay updates remain optional presentation work. A successful implementation
 records immutable snapshots of, then consumes, exactly the subdirectives present
 at dispatch. Failure and abort consume none; details authored while a request is
@@ -239,8 +252,11 @@ workspace root through the session working directory. A successful `Read` of a
 deeper file queues any newly applicable instruction files as a host-generated
 same-turn reminder. Content hashes deduplicate unchanged files independently
 for `/root` and each retained agent only while that owner's model-visible
-context remains current. Each `SessionStart` context epoch resets `/root`;
-resume resets every owner, and retained-agent compaction resets that agent.
+context remains current. Fresh directive requests own separate hashes. Each
+mevedel `SessionStart` context epoch resets local-history `/root`;
+resume resets local-history owners, and retained-agent compaction resets that
+agent. Native-history owners keep their learned scopes across reopening and
+refresh their current instruction contents in the next acknowledged prompt.
 
 `M-x mevedel-inspect-effective-prompt` and `/prompt` open the same read-only
 report of the live preset, profile, prompt components, exact final prompt,
@@ -446,8 +462,8 @@ not another preset. Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
-Directive overrides are validated before processing starts and appended as the
-final prompt transform. They therefore win for that directive request and its
+Directive overrides are validated before processing starts and applied at
+dispatch (as the final prompt transform for gptel). They win for that request and its
 continuations without mutating the session model.
 Ordinary-chat prompt assembly also runs the directive-boundary transform in
 gptel's temporary request copy. It applies `gptel 'ignore` to complete directive
@@ -597,6 +613,36 @@ style, skill dispatch, memory-use policy and a short memory-manual retrieval
 requirement. Named workspace configuration, environment, memory indexes, skill
 catalogs, resource availability, the main journal map and root Goal context are
 delivered after current input through the existing reminder transaction.
+
+The Claude engine supplies selected observations as a complete system-prompt
+baseline for each launched turn. It explicitly disables the SDK's first-prompt
+snapshot so resume can apply the newly composed baseline. PostToolBatch hooks
+deliver changed selected observations and queued turn events, including
+path-scoped instructions discovered by Read. Exact successful SDK receipts
+acknowledge the captured context before subsequent tool effects or successful
+settlement. Later queued events survive an earlier receipt. Unchanged sections
+are omitted; a change back to the baseline is still an update.
+
+Root and child turns collect configured reminders at prompt submission through
+the same reminder owner as gptel. Receipt commits their firing marks, pending
+events and pending root hook context. Direct-child rosters use a shared producer:
+the prompt carries the initial roster and tool-batch hooks carry newly available
+children. These deliveries require acknowledgment before more tools can run.
+
+Native compaction retains the system input. A SessionStart(compact) hook
+re-renders the recipient's selected observations and restores differences from
+that baseline, including updates acknowledged before compaction. It also
+restores the direct-child roster, active root Plan guidance, eligible accepted-plan
+references and current contents of path instructions already learned by that
+conversation. Missing files
+explicitly withdraw old guidance. Root, retained children and fresh directives
+use separate instruction acknowledgments. Oversized changes automatically
+continue the same admitted turn with their full captured body in a new native
+prompt. Exact SDK user receipt is required before further tool effects. A
+pre-tool hook denies and stops any call attempted while oversized restoration
+awaits that prompt: SessionStart(compact) itself has no reliable stop control.
+The conversation and effect ledger remain owned by the admitted turn, which
+settles once. User stops and child sample limits still apply.
 
 Environment context identifies the execution target as `local` or a TRAMP
 method and destination, such as `ssh:alice@build` or `podman:dev`, before the

@@ -19,9 +19,110 @@
 (require 'mevedel-memory-review)
 (require 'mevedel-memory-list)
 (require 'mevedel-system)
+(require 'mevedel-claude-code)
 
 (defconst mevedel-test-memory-review--none
   "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes.")
+
+(defconst mevedel-test-memory-review--acp-peer
+  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                    "fixtures" "acp-agent.py"))
+
+(mevedel-deftest mevedel-memory-review-request/claude
+    (:quiet t
+     :vars* ((directory (make-temp-file "mevedel-memory-acp-" t))
+             (workspace (mevedel-workspace--create :root directory))
+             (mevedel-memory-dirs nil)
+             (gptel--known-backends nil)
+             (mevedel-model-context-limit 128000)
+             (mevedel-model-workloads '((memory :provider "Claude Code:sonnet" :effort nil)))
+             (mevedel-memory-review-max-bytes (* 256 1024))
+             (batches [[((name . "Grep") (id . "scoped-search")
+                         (args . ((root . "workspace") (path . ".") (pattern . "evidence"))))]
+                       [((name . "Read") (id . "scoped-read")
+                         (args . ((root . "workspace") (path . "source.txt"))))]])
+             (response mevedel-test-memory-review--none)
+             (calls 0) handle result models)
+     :after-each ((when handle (funcall (plist-get handle :cancel)))
+                  (delete-directory directory t)))
+  (progn
+    (write-region "evidence: retained scope\n" nil (file-name-concat directory "source.txt") nil 'silent)
+    (mevedel-claude-code-register)
+    (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+               (lambda (_system mcp model _effort &optional id hook)
+                 (push model models) (should-not id)
+                 (should-not mevedel--session)
+                 (should-not mevedel--current-request)
+                 (list :command (executable-find "python3")
+                       :args (list mevedel-test-memory-review--acp-peer)
+                       :cwd directory :mcp mcp
+                       :tool-id-field :claudecode/toolUseId
+                       :control #'mevedel-claude-code--control
+                       :normalize-outcome #'mevedel-claude-code--outcome
+                       :meta `((hookCommand . ,hook) (responseText . ,response)
+                               (toolBatches . ,batches)
+                               (promptResponse . ((stopReason . "end_turn")
+                                                  (usage . ((inputTokens . 11) (cachedWriteTokens . 6)
+                                                            (cachedReadTokens . 20) (outputTokens . 3))))))))))
+      (cl-labels ((start ()
+                    (setq handle (mevedel-memory-review-request
+                                  (mevedel-memory-scope-capture workspace) nil
+                                  (lambda (outcome) (cl-incf calls) (setq result outcome)) :memory-only t)))
+                  (wait ()
+                    (with-timeout (5 (ert-fail "Subscription consolidation did not settle"))
+                      (while (not result) (accept-process-output nil 0.01)))
+                    (should (= 1 calls))
+                    (should-not (buffer-live-p (plist-get handle :buffer)))))
+        ,test)))
+  (test)
+  :doc "scoped investigation, terminal usage, and validated proposals use ACP without session authority"
+  (progn
+    (start) (wait)
+    (ert-info ((format "Consolidation failed: %S" result))
+      (should (eq 'success (plist-get result :outcome))))
+    (should (equal '("sonnet") models))
+    (should (equal mevedel-test-memory-review--none (plist-get result :reply)))
+    (should (= 2 (plist-get result :tool-call-count)))
+    (should (= 3 (plist-get result :rounds)))
+    (should (> (plist-get result :tool-call-bytes) 0))
+    (should (= 17 (plist-get result :input-tokens)))
+    (should (= 20 (plist-get result :cached-tokens)))
+    (should (= 3 (plist-get result :output-tokens)))
+    (should-not (file-exists-p (file-name-concat directory ".mevedel"))))
+  :doc "an unavailable tool retires the review rather than accepting a later final reply"
+  (progn
+    (setq batches [[((name . "Write") (id . "forbidden") (args . ((path . "source.txt"))))]])
+    (start) (wait)
+    (should (eq 'error (plist-get result :outcome)))
+    (should (= 0 (plist-get result :tool-call-count)))
+    (should-not (plist-get result :proposals)))
+  :doc "normalized argument budget exhaustion prevents the first tool from executing"
+  (progn
+    (setq mevedel-memory-review-max-bytes 20)
+    (start) (wait)
+    (should (eq 'error (plist-get result :outcome)))
+    (should (eq 'output-bytes (plist-get result :budget-kind)))
+    (should (= 20 (plist-get result :output-limit)))
+    (should (= 0 (plist-get result :tool-call-count))))
+  :doc "the investigation call cap is enforced across native tool batches"
+  (progn
+    (setq batches
+          (vconcat (cl-loop for index below 65 collect
+                            (vector `((name . "Read") (id . ,(format "read-%d" index))
+                                      (args . ((root . "workspace") (path . "source.txt"))))))))
+    (start) (wait)
+    (should (eq 'error (plist-get result :outcome)))
+    (should (string-match-p "Tool call budget" (plist-get result :error)))
+    (should (= 64 (plist-get result :tool-call-count))))
+  :doc "cancellation closes the scope and settles once before a late peer response"
+  (progn
+    (start)
+    (funcall (plist-get handle :cancel))
+    (wait)
+    (should (eq 'aborted (plist-get result :outcome)))
+    (should (= 0 (plist-get result :tool-call-count)))
+    (accept-process-output nil 0.05)
+    (should (= 1 calls))))
 
 (mevedel-deftest mevedel-memory-review-request
     (:vars* ((directory (make-temp-file "mevedel-memory-review-" t))

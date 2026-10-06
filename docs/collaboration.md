@@ -491,6 +491,8 @@ The browser is an observer of the canonical data buffer plus, for full
 links, a remote input source. It receives visible user and assistant text
 and tool records whose start and settlement state are explicitly published,
 never raw hidden audit or internal render data or arbitrary mutation commands.
+Each projection builds one tool-boundary index, avoiding repeated searches
+through historical tool results as new text arrives.
 A tool record keeps
 one stable identity from running through its settled canonical result. A
 guest prompt enters the ordinary pending-input queue as a queued follow-up;

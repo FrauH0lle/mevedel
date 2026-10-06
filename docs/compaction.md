@@ -10,6 +10,41 @@ transcript projection and tool-safe truncation in
 `mevedel-session-artifacts.el`. Model generation is delegated to the
 stateless `mevedel-context-summary.el` generator.
 
+## Native Claude compaction
+
+Claude owns compaction of its external history. Root and retained-child ACP
+connections advertise session compaction support; `mevedel-acp-compaction.el`
+consumes its lifecycle and retained-summary events. It does not request another
+summary from a model. A completed root compaction publishes a successor segment
+with Claude's summary through the ordinary segment transaction. A retained
+child uses its private transcript archive and keeps its task anchor; its
+compaction never replaces root history. Fresh directive conversations do not
+advertise this segment operation, because their selected history cannot replace
+the containing session's root history.
+
+The boundary follows gptel's insertion marker when compaction starts. Output
+received after that boundary is preserved as a tail after the summary, so a
+mid-turn compaction loses neither intervening output nor subsequent tools.
+Stream markers are reset after publication; the admitted turn keeps its native
+identity, tool ledger and once-only settlement. Archived managed-command rows
+use the same durable execution records as ordinary compaction. Queued, running
+and stopping commands remain live archive records even without an open view;
+their terminal events replace those records when the commands finish. The
+composer draft survives the view rebuild.
+
+A terminal summary supersedes streamed summary chunks. Duplicate terminal
+updates cannot publish another segment. Failed or cancelled compaction leaves
+the transcript intact; completion without a usable summary fails the turn
+visibly. The summary is labelled as Claude-authored and may refer to context
+delivered through hooks. Publication does not itself acknowledge delivery of
+instructions: native context restoration still requires the exact hook receipt
+before further relevant work.
+
+The ACP runner processes native events, hooks and tool admission in order when
+the execution target's transport is idle. Cancellation fences queued work;
+late callbacks cannot rotate a replacement request's transcript. Isolated text
+workloads have no transcript segments and do not advertise this capability.
+
 ## Compaction flow
 
 The diagram follows automatic admission for a root session. Manual compaction starts explicitly

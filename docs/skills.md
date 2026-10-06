@@ -749,6 +749,19 @@ follow-ups and other terminal cleanup run through that shared boundary.
 uses gptel's public `gptel-reasoning-effort` values. Both fields are policy of
 the request that a skill owns, not ambient changes to the session.
 
+Root composer, generated turns and raw `gptel-send` submissions resolve this
+policy before selecting gptel or Claude Code. Raw sends retain slash/skill
+preparation and reject busy or read-only sessions before launch; prefix-zero
+steering reports that it is unavailable for an external engine. `/init` uses
+the same engine dispatcher even without a paired view.
+Plan's planning workload and a leading skill's override
+therefore apply to native subscription turns too. Admission captures the
+effective policy before consuming pending skill state, so later skill-roster
+context sizing uses the actual request model. The session's selected provider
+and effort stay unchanged. Switching engines after root history exists starts
+a visibly labelled excerpt continuation from the effective canonical history;
+it does not replay tools or reuse another engine's hidden conversation.
+
 The existing `mevedel-model-workloads` map can tune an external skill without
 editing its `SKILL.md`. The key must be an Emacs symbol consisting of `$`
 followed by the skill's final visible name; string keys and unprefixed symbols

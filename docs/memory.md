@@ -290,7 +290,7 @@ inherits a deleted investigation snapshot as its working directory.
 ### Request limits and settlement
 
 `mevedel-memory-review-request` combines that scope, reference pre-check, and
-investigation in a sessionless gptel request using the `memory` workload (default
+investigation in a sessionless request using the `memory` workload (default
 tier `balanced`). It admits a prefix of at most 20 complete candidate digests and
 reports omissions. The
 initial prepared provider payload, including tools and roles, must fit both
@@ -310,6 +310,7 @@ the estimate is not the provider's tokenizer and charges non-ASCII text
 conservatively. Tool results have the separate investigation limits above.
 The client charges tool calls at TOOL using a normalized JSON encoding of
 their executable names and parsed arguments, not their raw wire spelling.
+Claude Code charges each MCP call before invoking the same investigation tools.
 Whitespace and escape spelling in argument JSON are not preserved in that
 charge, and in-flight argument fragments have not yet been charged. The byte
 counter is therefore an accounted-output size, not a bound on raw transport
@@ -317,7 +318,7 @@ traffic. Provider-reported usage, when available, supplies the separate token
 guard; the deadline still bounds an interrupted argument stream.
 
 The final proposal reply alone must fit the parser's independent **32 KiB**
-limit, checked at terminal DONE; reasoning and earlier rounds do not consume
+limit, checked at terminal completion; reasoning and earlier rounds do not consume
 that allowance. Increasing the cumulative budgets does not increase the amount
 of proposal text that may be accepted.
 
@@ -333,7 +334,7 @@ proposal, and deadline limits. It asks the model to reserve room for its final
 proposals or No action response, and to use focused evidence checks rather than
 exhaustive validation. After completed tool results, before a follow-up's context
 check and dispatch, the request may inject a budget reminder through native
-gptel prompt APIs. Reminders fire at 75% and 90% of any cumulative output,
+gptel prompt APIs or Claude's post-tool-batch hook. Reminders fire at 75% and 90% of any cumulative output,
 investigation-call, tool-result-byte, or elapsed-time allowance, at most twice;
 a jump across both thresholds emits only the highest stage. They report the
 remaining allowances. The last stage asks the model to stop tools and return
@@ -349,7 +350,9 @@ reasoning, replies across all response rounds, and the normalized tool-call
 charge. Thus `:reply-bytes` can exceed `:result-bytes`; only the latter is the
 final proposal size at DONE. `:tool-call-count` records admitted investigation
 calls, including calls that return errors, but not calls refused after exhaustion.
-`:rounds` counts completed HTTP rounds independently of provider token metadata.
+`:rounds` counts completed HTTP rounds for gptel. For Claude Code it counts
+completed native tool batches plus final prompt completion; hidden provider
+retries are not counted. Neither count depends on provider token metadata.
 Output guard failures
 include `:budget-kind` (`output-bytes`, `output-estimated-tokens`, `output-tokens`,
 or `proposal-bytes`) and the numeric `:output-limit`; the error message also names
@@ -358,9 +361,23 @@ telemetry retain these counters, including on cancellation and publication
 failure, without retaining generated text. A streaming abort can occur before
 the provider reports the interrupted round's usage.
 Read tools execute within their captured authority without interactive gptel
-confirmation; unavailable tool names fail the review. Only gptel's terminal
-DONE state validates the final proposal response. An intermediate HTTP completion
-does not finish the tool loop or consume coverage.
+confirmation; unavailable tool names fail the review. Only terminal model-turn
+completion validates the final proposal response (gptel DONE or successful ACP
+prompt completion). An intermediate response or tool batch does not finish the
+tool loop or consume coverage.
+
+When `memory` resolves to Claude Code, an isolated ACP conversation receives
+only the request's Read/Glob/Grep tools through private MCP. Captured roots,
+search cancellation, call and result limits stay in the existing investigation
+owner; it acquires no root-session permission authority. Initial admission
+estimates the explicit system, input and tool definitions. At native batch
+boundaries, the client checks the initial estimate plus accumulated visible
+output, tool results and budget reminders against usable context. This is a
+conservative estimate, not inspection of Claude's exact payload or compaction.
+Client output checks run during streaming and before tools; batch boundaries
+refuse further model work after exhaustion. Available final-turn usage is
+charged once. This path currently has no server per-response token ceiling and
+cannot enforce exact provider token spending between batches.
 
 While running, its read-only buffer displays admitted evidence, model output,
 and tool results. Closing it or invoking the returned cancel function retires

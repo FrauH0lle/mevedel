@@ -22,6 +22,12 @@ Retention consumes historical context and local storage; sparse firing,
 deduplication, and compaction control that cost. The rationale and prior delivery
 behavior are recorded in [ADR 0115](adr/0115-retain-delivered-conversation-fragments.md).
 
+Claude records acknowledged typed entries through the same hidden injection
+record as the gptel engine, including guidance restored after native compaction.
+The shared view therefore shows the reminder count and source labels. Initial
+prompt deliveries attach to that user turn; later deliveries remain at their
+position among assistant activity. Unacknowledged entries do not create a row.
+
 Staged entries and turn events share this delivery contract. Unsent events remain
 owner-bound and transient; cancellation must not manufacture delivered history.
 Position-bound text such as Read truncation notices, the `/btw` interruption
@@ -93,19 +99,48 @@ A trigger that mutates state has no commit channel, so a reminder
 whose trigger consumes still reports once per attempt rather than once
 per delivery.
 
+The Claude engine collects configured reminders once at prompt submission,
+using the same session or invocation context and firing policy as gptel. Pending
+root hook context joins that delivery. Native SDK receipt commits firing marks
+and consumes only captured pending events and hook context; later arrivals stay
+pending. Silent commits require receipt too. Large initial reminder bodies use
+the prompt, which has no inline hook-string limit. Local transcript estimates
+do not produce context-pressure reminders for externally owned model history.
+
+During a Claude turn, tool-batch hooks carry queued turn events, changed selected
+observations, new direct children and mail. Exact SDK receipts run their commits;
+event consumption preserves objects queued or replaced during delivery. Missing
+required-context receipts block further tools and successful settlement. Native
+compaction restores selected observations, the full direct-child roster,
+active root Plan guidance, eligible accepted-plan references and current contents
+of previously learned path instructions. Removed instruction files explicitly withdraw their earlier
+guidance. Oversized required updates or restoration stop the native prompt and
+automatically continue the same admitted turn with the complete captured body
+in a new prompt. Its exact SDK user receipt runs the original commits; no hook
+preview counts as delivery. Pause, cancellation and child sample caps still
+apply, and a failed prompt is not retried automatically.
+
 Reminder eligibility is evaluated from current session state; delivered
 observations remain historical context rather than current authority. Root and retained-agent queues
 remain isolated.
 
+Native receipt markers (`<!-- mevedel-delivery:... -->`) remain in the stored
+transcript as delivery evidence. The paired view omits the marker and folds
+the following system reminder into the usual expandable row, including when
+the receipt follows authored text in the same user-role span.
+
 ## The injection record
 
-Every successful injection writes one trusted hidden record
+Every successful gptel injection writes one trusted hidden record
 (`:type injected-reminders`, phase `turn-start` or `mid-turn`) containing each
 entry's type and complete body. Bodies are not truncated: the record supplies
 reconstruction as well as inspection. Missing insertion markers or recording
 failures prevent committing delivery; injection failures retain pending state.
 
-The encoded record stays out of provider text. `mevedel-history.el` decodes it
+Claude receipts instead record the exact accepted body as a user-role block in
+the canonical transcript. They do not claim that a gptel payload exists.
+
+The encoded gptel record stays out of provider text. `mevedel-history.el` decodes it
 as a separate message during prompt preparation, including fresh-process
 restore. Compaction evidence includes its instruction bodies, and local token
 estimates count the decoded guidance instead of encoded metadata. The record
@@ -128,6 +163,13 @@ the shared WAIT injector. The max-turns warning is instead evaluated at
 every agent WAIT, where each model sample is counted, so it fires inside
 long tool loops ([Agents](agents.md)). Turn events queue against the
 invocation as owner exactly as on the root path.
+
+Claude children count the initial sample at prompt preparation and subsequent
+samples at PostToolBatch. The same warning producer stages a turn event near
+the cap; its firing mark waits for exact SDK receipt. Final-sample guidance has
+one shared producer with gptel and is restored after native compaction. Once
+the final sample's tools settle, the hook ends the loop and the child result
+discloses that it stopped before a final answer.
 
 ## Implemented reminders
 
@@ -163,7 +205,9 @@ invocation as owner exactly as on the root path.
   carries that exact accepted-plan reference, because the Goal's retained current-context
   delivery supplies the binding plan address. A Goal with
   no plan or a different plan does not suppress it. Standalone Plan Direct
-  handoff does not use this reminder.
+  handoff does not use this reminder. Native Claude compaction restores an
+  eligible reference through the same producer immediately, requiring its exact
+  receipt before further tools; it does not wait for the next user prompt.
 - **Recent-edit verification:** `verification-suggestion` requires a
   recorded file modification in the latest committed turn or the active
   turn, and fires at most once every ten turns. Reading a file does not
@@ -222,8 +266,14 @@ or restore. If all selected sections are absent, all are delivered again. Explic
   the session working directory queues changed `AGENTS.md` and
   `AGENTS.local.md` files as turn events, ordered broad to narrow and
   deduplicated by owner, path, and content. Delivery is acknowledged only at
-  payload injection, so cancellation leaves the guidance eligible for retry.
-  Compaction, rewind, and cold resume reset the relevant delivery acknowledgements.
+  payload injection or exact native SDK receipt, so cancellation leaves the
+  guidance eligible for retry. Fresh directive requests keep their own hashes;
+  root history cannot suppress their guidance. Local compaction, rewind, and
+  cold resume reset the relevant local-history delivery acknowledgements.
+  Native conversations retain their learned scopes across reopening and refresh
+  the complete current instructions in each resumed prompt. Native compaction
+  instead restores current instruction contents for that conversation, broad
+  to narrow with local overrides last, and acknowledges the restoration.
   This post-read discovery helps subsequent model decisions: it is not an edit
   gate and cannot affect another tool already scheduled in the same batch.
   The shared task policy therefore still requires inspecting applicable project

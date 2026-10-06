@@ -5,7 +5,7 @@ tests, compiling, or committing. These are repository requirements.
 
 ## External dependencies
 
-- **gptel**, **yaml**, **orderless**, **websocket**, **qrencode**, **Emacs >=31.1**,
+- **gptel**, **acp >=0.15.2**, **yaml**, **orderless**, **websocket**, **qrencode**, **Emacs >=31.1**,
   **org-mode**
 
 Eask dependency installs can get stale.

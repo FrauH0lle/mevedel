@@ -11,6 +11,7 @@
 (eval-when-compile (require 'cl-lib))
 (require 'gptel-request)
 (require 'mevedel-context-summary)
+(require 'mevedel-engine)
 (require 'mevedel-memory-investigation)
 (require 'mevedel-memory-proposal)
 (require 'mevedel-memory-reference)
@@ -96,7 +97,9 @@ tool arguments; :result-bytes measures the current round's reply alone.
 The breakdown is :reasoning-bytes, :reply-bytes (all rounds), and
 :tool-call-bytes, plus admitted :tool-call-count and completed :rounds.
 A guard failure adds :budget-kind and :output-limit, naming the guard and
-its numeric threshold. Sparse reminders report remaining budgets at WAIT."
+its numeric threshold. Sparse reminders report remaining budgets before another
+model step. ACP uses completed tool batches plus final completion for :rounds;
+its exact provider payload and per-step token usage are not exposed."
   (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
          (stream gptel-stream)
@@ -104,6 +107,7 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
          (byte-budget mevedel-memory-review-max-bytes)
          (deadline (+ (float-time) 180))
          settled timer investigation policy references system input admitted response-start
+         external cancel-engine (external-input-tokens 0) (external-evidence "")
          (documents nil) (chunks nil) (output "")
          (reply-bytes 0) budget-kind output-limit
          (reasoning-bytes 0) (reply-total-bytes 0) (tool-call-bytes 0)
@@ -117,6 +121,7 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
              (setq settled t)
              (when timer (cancel-timer timer))
              (when investigation (mevedel-memory-investigation-stop investigation))
+             (when cancel-engine (funcall cancel-engine))
              (when (buffer-live-p buffer)
                (unless (eq outcome 'success) (ignore-errors (gptel-abort buffer)))
                (unless buffer-killed (kill-buffer buffer)))
@@ -186,11 +191,13 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
                       (charge text 'reasoning) (show (concat "\n[Reasoning]\n" text)))
                      (`(tool-result . ,results)
                       (dolist (row results)
+                        (when external
+                          (setq external-evidence (concat external-evidence (nth 2 row))))
                         (show (format "\n\n[%s]\n%s\n" (gptel-tool-name (car row)) (nth 2 row)))))
                      ('t (record-usage info t)))
                    (check-output))
                (error (finish 'error (error-message-string err))))))
-         (budget-reminder (fsm)
+         (budget-reminder (&optional fsm)
            ;; Like agent turn warnings, fire sparsely at request boundaries.
            ;; This request owns no session transcript or reminder queue.
            (when (> round 0)
@@ -216,36 +223,39 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
                                  "Avoid new lines of investigation; finish essential checks and prepare the final review.")
                                mevedel-memory-proposal--max-bytes))
                         (block (mevedel-reminders-format-block body))
-                        (info (gptel-fsm-info fsm))
+                        (info (and fsm (gptel-fsm-info fsm)))
                         (backend (plist-get info :backend)))
-                   (with-current-buffer buffer
-                     ;; Administrative messages must not accumulate provider
-                     ;; cache breakpoints. The simple format also fits Bedrock.
-                     (let ((gptel-cache nil))
-                       (gptel--inject-prompt
-                        backend (plist-get info :data)
-                        (car (gptel--parse-list backend (list block))))))
+                   (when fsm
+                     (with-current-buffer buffer
+                       ;; Administrative messages must not accumulate provider
+                       ;; cache breakpoints. The simple format also fits Bedrock.
+                       (let ((gptel-cache nil))
+                         (gptel--inject-prompt
+                          backend (plist-get info :data)
+                          (car (gptel--parse-list backend (list block)))))))
                    (setq reminder-level level)
                    block)))))
+         (remaining-output ()
+           (check-output)
+           (when (>= (string-bytes output) byte-budget)
+             (setq budget-kind 'output-bytes output-limit byte-budget)
+             (error "Review output-bytes budget exhausted (%d/%d)"
+                    (string-bytes output) byte-budget))
+           (let* ((spent (max (estimated) (plist-get usage :output-tokens)))
+                  (remaining (- token-budget spent)))
+             (when (<= remaining 0)
+               (setq budget-kind (if (>= (plist-get usage :output-tokens) (estimated))
+                                     'output-tokens 'output-estimated-tokens)
+                     output-limit token-budget)
+               (error "Review %s budget exhausted (%d/%d)" budget-kind spent token-budget))
+             remaining))
          (wait-handler (fsm)
            (unless settled
              (condition-case err
                  (progn
                    (ensure-live)
-                   (check-output)
-                   (when (>= (string-bytes output) byte-budget)
-                     (setq budget-kind 'output-bytes output-limit byte-budget)
-                     (error "Review output-bytes budget exhausted (%d/%d)"
-                            (string-bytes output) byte-budget))
-                   (let* ((spent (max (estimated) (plist-get usage :output-tokens)))
-                          (remaining (- token-budget spent)))
-                     (when (<= remaining 0)
-                       (setq budget-kind (if (>= (plist-get usage :output-tokens) (estimated))
-                                             'output-tokens 'output-estimated-tokens)
-                             output-limit token-budget)
-                       (error "Review %s budget exhausted (%d/%d)" budget-kind spent token-budget))
-                     (mevedel-context-summary--limit-digest-request
-                      fsm (min remaining (plist-get policy :max-tokens))))
+                   (mevedel-context-summary--limit-digest-request
+                    fsm (min (remaining-output) (plist-get policy :max-tokens)))
                    (let ((reminder (budget-reminder fsm)))
                      ;; Account for injected guidance before provider dispatch.
                      (when (> (mevedel-memory-review--tokens fsm)
@@ -275,12 +285,12 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
                    (check-output)
                    (with-current-buffer buffer (gptel--handle-tool-use fsm)))
                (error (finish 'error (error-message-string err))))))
-         (done-handler (fsm)
+         (complete-info (info)
            (unless settled
              (condition-case err
                  (progn
                    (ensure-live)
-                   (record-usage (gptel-fsm-info fsm) t)
+                   (record-usage info t)
                    (check-output)
                    (let ((reply (apply #'concat (nreverse chunks))))
                      (check-limit 'proposal-bytes (string-bytes reply) mevedel-memory-proposal--max-bytes)
@@ -290,6 +300,36 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
                                       (mapcar (lambda (entry) (plist-get entry :id)) admitted))
                                      (list :reply reply)))))
                (error (finish 'error (error-message-string err))))))
+         (done-handler (fsm) (complete-info (gptel-fsm-info fsm)))
+         (external-provider (response info)
+           (pcase response
+             ('t (complete-info info))
+             ('nil (finish 'error (or (plist-get info :error) "Review request failed")))
+             ('abort (finish 'aborted))
+             (_ (provider response info))))
+         (external-before-tool (tool args)
+           (ensure-live)
+           (charge (decode-coding-string
+                    (gptel--json-encode (vector (list :name (gptel-tool-name tool) :args args)))
+                    'utf-8-unix) 'tool)
+           (check-output))
+         (external-boundary ()
+           (ensure-live)
+           (record-usage nil t)
+           (remaining-output)
+           (let ((reminder (budget-reminder)))
+             (when reminder
+               (setq external-evidence (concat external-evidence reminder))
+               (show (concat "\n\n" reminder "\n")))
+             ;; ACP owns the exact payload. Bound all visible accumulated
+             ;; input conservatively, without assuming native compaction.
+             (when (> (+ external-input-tokens (estimated)
+                         (mevedel-context-summary--estimated-tokens "" external-evidence))
+                      (mevedel-model-usable-input-tokens policy))
+               (error "Review request exceeds usable input context"))
+             (setq chunks nil reply-bytes 0)
+             (cl-incf round)
+             reminder))
          (machine ()
            (gptel-make-fsm
             :handlers
@@ -302,10 +342,18 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
            (ensure-live)
            (let* ((text (mevedel-memory-review--input scope candidate-entries candidate-documents references focus rejections
                                                     (- (length entries) (length candidate-entries))))
-                  (fsm (with-current-buffer buffer
-                         (gptel-request text :buffer buffer :system system :stream stream
-                                        :transforms nil :dry-run t))))
-             (when (<= (mevedel-memory-review--tokens fsm) (min 32000 (mevedel-model-usable-input-tokens policy))) text)))
+                  (tokens
+                   (with-current-buffer buffer
+                     (if external
+                         (mevedel-context-summary--estimated-tokens
+                          "" (gptel--json-encode
+                              (list :system system :user text :tools (gptel--parse-tools nil gptel-tools))))
+                       (mevedel-memory-review--tokens
+                        (gptel-request text :buffer buffer :system system :stream stream
+                                       :transforms nil :dry-run t))))))
+             (when (<= tokens (min 32000 (mevedel-model-usable-input-tokens policy)))
+               (setq external-input-tokens tokens)
+               text)))
          (add-document (document)
            (when-let* ((text (prepare admitted (append documents (list document)))))
              (setq documents (append documents (list document)) input text))))
@@ -319,7 +367,8 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
             (dolist (text (list focus rejections))
               (unless (or (null text) (and (stringp text) (<= (string-bytes text) 8192)))
                 (error "Review guidance exceeds its text bound")))
-            (setq policy (copy-sequence (mevedel-model-resolve-workload 'memory)))
+            (setq policy (copy-sequence (mevedel-model-resolve-workload 'memory))
+                  external (mevedel-engine-external-p (plist-get policy :backend)))
             (unless (and (plist-get policy :backend) (plist-get policy :model))
               (error "No model resolves for the memory workload"))
             (setq policy (plist-put policy :max-tokens
@@ -328,8 +377,11 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
             (setq system (mevedel-system-render-prompt-file
                           "prompts/memory/consolidation.md"
                           `(("REVIEW_LIMITS" . ,(format
-                                                "- Cumulative output: %d tokens and %d accounted bytes, including reasoning, intermediate replies, and normalized tool calls.\n- Initial per-response output ceiling: %d tokens; followups have only the remaining cumulative budget.\n- Investigation: at most %d tool calls and %d tool-result bytes total (8 KiB per result).\n- Final proposal reply: at most %d bytes, independently of reasoning and earlier rounds.\n- Deadline: 180 seconds for the entire review, including preparation and tools."
-                                                token-budget byte-budget (plist-get policy :max-tokens)
+                                                "- Cumulative output: %d tokens and %d accounted bytes, including reasoning, intermediate replies, and normalized tool calls.\n- %s: %d tokens; followups have only the remaining cumulative budget.\n- Investigation: at most %d tool calls and %d tool-result bytes total (8 KiB per result).\n- Final proposal reply: at most %d bytes, independently of reasoning and earlier rounds.\n- Deadline: 180 seconds for the entire review, including preparation and tools."
+                                                token-budget byte-budget
+                                                (if external "Requested per-response output target (client guards only)"
+                                                  "Initial per-response output ceiling")
+                                                (plist-get policy :max-tokens)
                                                 mevedel-memory-investigation--max-calls
                                                 mevedel-memory-investigation--max-bytes
                                                 mevedel-memory-proposal--max-bytes))))
@@ -370,8 +422,17 @@ its numeric threshold. Sparse reminders report remaining budgets at WAIT."
               (setq response-start (copy-marker (point-max))
                     buffer-read-only t)
               (add-hook 'kill-buffer-hook (lambda () (finish 'aborted nil nil t)) nil t)
-              (gptel-request input :buffer buffer :system system :stream stream :transforms nil
-                             :fsm (machine) :callback #'provider)))
+              (if external
+                  (progn
+                    (remaining-output)
+                    (setq round 1
+                          cancel-engine
+                          (mevedel-engine-request-workload
+                           gptel-backend input system gptel-tools #'external-provider
+                           #'external-before-tool #'external-boundary))
+                    (when (and settled cancel-engine) (funcall cancel-engine)))
+                (gptel-request input :buffer buffer :system system :stream stream :transforms nil
+                               :fsm (machine) :callback #'provider))))
         (error (finish 'error (error-message-string err))))
       (list :buffer buffer :cancel (lambda () (finish 'aborted))
             :report (lambda ()

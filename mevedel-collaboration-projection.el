@@ -891,7 +891,8 @@ COMPLETION-BUFFER and COMPLETIONS supply later terminal evidence for archived
 segments."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
-      (let ((ranges (mevedel-collaboration--directive-ranges))
+      (let ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+            (ranges (mevedel-collaboration--directive-ranges))
             ;; Item turns are ranges too; a malformed attribution leaves
             ;; records in the main conversation instead of failing.
             (items (ignore-errors (mevedel-shared-conversation-ranges)))

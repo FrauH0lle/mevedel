@@ -145,7 +145,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.6"
+(defconst mevedel-session-codec-format-version "v0.5.9"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -167,7 +167,7 @@ add more, and we don't want to act on actions we don't understand).")
     :worktree-source-root :worktree-directory :worktree-branch
     :worktree-base-commit
     :permission-mode :sandbox-mode :plan-mode :permission-rules :resource-grants
-    :preset-name :model-provider :reasoning-effort
+    :preset-name :model-provider :reasoning-effort :external-conversations
     :last-observed-date
     :agent-types-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
@@ -266,8 +266,9 @@ an error rather than an implicit PID-lock fallback."
                            (mevedel-agent-path-p (car key)))
                        (stringp (cadr key))
                        (file-name-absolute-p (cadr key))
-                       (stringp hash)
-                       (string-match-p "\\`[[:xdigit:]]\\{64\\}\\'" hash))
+                       (or (null hash)
+                           (and (stringp hash)
+                                (string-match-p "\\`[[:xdigit:]]\\{64\\}\\'" hash))))
              collect (cons (copy-sequence key) hash))))
 
 (defun mevedel-session-codec--workspace-to-plist (workspace)
@@ -586,6 +587,7 @@ The resulting plist is round-trippable via
    :resource-grants        (plist-get authority :resource-grants)
    :preset-name            (mevedel-session-preset-name session)
    :model-provider         (mevedel-session-model-provider session)
+   :external-conversations (copy-tree (mevedel-session-external-conversations session))
    :reasoning-effort       (mevedel-session-reasoning-effort session)
    :last-observed-date     (mevedel-session-last-observed-date session)
    :agent-types-snapshot   (mevedel-session-agent-types-snapshot session)
@@ -672,6 +674,38 @@ session's sidecar, rewritten by every save."
   (dolist (key mevedel-session-codec--required-sidecar-keys)
     (unless (plist-member plist key)
       (error "Missing session sidecar key: %s" key)))
+  (let ((histories (plist-get plist :external-conversations)) scopes)
+    (unless (proper-list-p histories) (error "Invalid external conversation histories"))
+    (dolist (entry histories)
+      (unless (and (consp entry) (stringp (car entry))
+                   (not (string-empty-p (car entry)))
+                   (not (member (car entry) scopes))
+                   (proper-list-p (cdr entry))
+                   (eq 'claude-code (plist-get (cdr entry) :engine))
+                   (if (eq 'unstarted (plist-get (cdr entry) :state))
+                       ;; No installed history or effects can exist yet.
+                       (= 4 (length (cdr entry)))
+                     (and
+                      (cl-every (lambda (key)
+                                  (let ((value (plist-get (cdr entry) key)))
+                                    (and (stringp value) (string-match-p "\\S-" value))))
+                                '(:id :host :directory))
+                      (file-name-absolute-p (plist-get (cdr entry) :directory))
+                      (not (file-remote-p (plist-get (cdr entry) :directory)))
+                      (memq (plist-get (cdr entry) :state) '(ready in-flight uncertain diverged)))))
+        (error "Invalid external conversation history: %S" entry))
+      (let ((calls (plist-get (cdr entry) :tool-calls)) ids)
+        (when-let* ((boundary (plist-get (cdr entry) :input-boundary)))
+          (unless (and (consp boundary) (natnump (car boundary)) (natnump (cdr boundary)))
+            (error "Invalid external submitted-input boundary")))
+        (unless (proper-list-p calls) (error "Invalid native tool admissions"))
+        (dolist (call calls)
+          (unless (and (consp call) (stringp (car call)) (string-match-p "\\S-" (car call))
+                       (stringp (cdr call)) (string-match-p "\\S-" (cdr call))
+                       (not (member (car call) ids)))
+            (error "Invalid native tool admission"))
+          (push (car call) ids)))
+      (push (car entry) scopes)))
   (mevedel-session-codec-validate-authority-mode
    (plist-get plist :authority-mode)
    (plist-get plist :workspace))
@@ -817,6 +851,13 @@ their hygiene filters."
                      :plan-mode        (plist-get plist :plan-mode)
                      :preset-name      (plist-get plist :preset-name)
                      :model-provider   (plist-get plist :model-provider)
+                     :external-conversations
+                     (mapcar (lambda (entry)
+                               (let ((record (copy-tree entry)))
+                                 (when (eq 'in-flight (plist-get (cdr record) :state))
+                                   (plist-put (cdr record) :state 'uncertain))
+                                 record))
+                             (plist-get plist :external-conversations))
                      :reasoning-effort (plist-get plist :reasoning-effort)
                      :turn-count       (plist-get plist :total-turn-count)
                      :last-observed-date (plist-get plist :last-observed-date)

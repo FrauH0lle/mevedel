@@ -30,6 +30,11 @@
 (require 'mevedel-compact-estimation)
 (require 'mevedel-models)
 
+;; `mevedel-claude-code-agent'
+(declare-function mevedel-claude-code-agent-run
+                  "mevedel-claude-code-agent" (invocation callback))
+(autoload 'mevedel-claude-code-agent-run "mevedel-claude-code-agent")
+
 ;; `gptel'
 (declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
 (declare-function gptel--handle-abort "ext:gptel" (fsm))
@@ -112,6 +117,7 @@
 (declare-function mevedel-reminders--stage-batch
                   "mevedel-reminders" (fsm entries commits))
 (declare-function mevedel-reminder-type "mevedel-reminders" (cl-x) t)
+(declare-function mevedel-reminders-agent-turn-limit-context "mevedel-reminders" (invocation))
 (declare-function mevedel-reminders-stage-entry
                   "mevedel-reminders" (fsm type body &optional commit))
 
@@ -207,8 +213,7 @@ it still calls, settling with its latest response."
             (when (mevedel-turn-end-at-boundary fsm 'agent-turn-limit)
               (mevedel-reminders-stage-entry
                fsm 'max-turns-limit
-               (format "This is your final turn (%d of %d). Reply now with your findings for the caller; any tools you still call run, then your turn ends."
-                       count max-turns)))
+               (mevedel-reminders-agent-turn-limit-context inv)))
           (let ((staged
                  (mevedel-reminders--collect-from
                   (seq-filter (lambda (reminder)
@@ -419,7 +424,7 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 ;;
 ;;; Task runner
 
-(defun mevedel-agent-exec-run (main-cb agent-type description
+(cl-defun mevedel-agent-exec-run (main-cb agent-type description
                                         invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
@@ -444,7 +449,7 @@ callback before running the mevedel bookkeeping, so the agent buffer
 reflects the event before the wrapper's `partial` accumulator acts on
 it. Terminal events (t, nil, abort) skip the forward step.
 
-Returns the spawned FSM."
+Returns the native FSM or external invocation handle."
   (unless (mevedel-agent-invocation-p invocation)
     (error "Invalid sub-agent invocation"))
   (unless (buffer-live-p agent-buffer)
@@ -453,6 +458,14 @@ Returns the spawned FSM."
          (mevedel-agent-invocation-frozen-configuration invocation)))
     (unless (mevedel-agent-configuration-p frozen)
       (error "Agent request configuration is not frozen"))
+    (when (mevedel-engine-external-p
+           (alist-get 'gptel-backend (mevedel-agent-configuration-request-locals frozen)))
+      (cl-return-from mevedel-agent-exec-run
+        (mevedel-claude-code-agent-run
+         invocation
+         (mevedel-agent-exec--make-callback
+          main-cb agent-type description (with-current-buffer agent-buffer (copy-marker (point-max)))
+          (list (format "%s result for task: %s\n\n" (capitalize agent-type) description))))))
     (let* ((request-locals
             (copy-tree
              (mevedel-agent-configuration-request-locals frozen)))

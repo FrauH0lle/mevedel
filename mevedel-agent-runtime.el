@@ -92,8 +92,8 @@
 (autoload 'mevedel-execution-stop-owner "mevedel-execution")
 
 ;; `mevedel-goal'
-(declare-function mevedel-goal-accounting-fsm "mevedel-goal" (&optional buffer))
-(autoload 'mevedel-goal-accounting-fsm "mevedel-goal")
+(declare-function mevedel-goal-accounting-owner "mevedel-goal" (&optional buffer))
+(autoload 'mevedel-goal-accounting-owner "mevedel-goal")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
@@ -544,6 +544,7 @@
         (funcall (cdr transaction)))
       (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
             (mevedel-agent-invocation-runtime-fsm invocation) nil
+            (mevedel-agent-invocation-runtime-cancel invocation) nil
             (mevedel-agent-invocation-runtime-pending-response invocation) nil)
       (mevedel-agent-runtime--release-settled-state invocation)
       (when-let* ((timer
@@ -663,24 +664,27 @@ the result, and a held response settles after its last owned execution."
             (mevedel-agent-invocation-terminal-reason invocation)))
       (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
       (condition-case err
-          (when (mevedel-agent-runtime--request-live-p invocation)
-            (let* ((info (gptel-fsm-info fsm))
-                   (provider-callback (plist-get info :callback)))
-              (unwind-protect
-                  (progn
-                    (setf (gptel-fsm-info fsm)
-                          (plist-put info :callback #'ignore))
-                    (gptel-abort buffer))
-                (setf (gptel-fsm-info fsm)
-                      (plist-put (gptel-fsm-info fsm)
-                                 :callback provider-callback)))))
+          (if-let* ((cancel (mevedel-agent-invocation-runtime-cancel invocation)))
+              (funcall cancel)
+            (when (mevedel-agent-runtime--request-live-p invocation)
+              (let* ((info (gptel-fsm-info fsm))
+                     (provider-callback (plist-get info :callback)))
+                (unwind-protect
+                    (progn
+                      (setf (gptel-fsm-info fsm)
+                            (plist-put info :callback #'ignore))
+                      (gptel-abort buffer))
+                  (setf (gptel-fsm-info fsm)
+                        (plist-put (gptel-fsm-info fsm)
+                                   :callback provider-callback))))))
         (error
          (setf (mevedel-agent-invocation-terminal-reason invocation)
                previous-reason)
          (signal (car err) (cdr err))))
-      (mevedel-agent-runtime--settle
-       invocation response
-       (list :mevedel-agent-terminal-status 'aborted :response response)))))
+      (or (mevedel-agent-runtime--settle
+           invocation response
+           (list :mevedel-agent-terminal-status 'aborted :response response))
+          response))))
 
 
 ;;
@@ -965,8 +969,8 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-parent-data-buffer invocation) parent-buffer
           (mevedel-agent-invocation-parent-turn invocation)
           (mevedel-current-turn session)
-          (mevedel-agent-invocation-goal-fsm invocation)
-          (mevedel-goal-accounting-fsm parent-buffer)
+          (mevedel-agent-invocation-goal-owner invocation)
+          (mevedel-goal-accounting-owner parent-buffer)
           (mevedel-agent-invocation-plan-read-only invocation)
           (mevedel-plan-read-only-request-p)
           (mevedel-agent-invocation-parent-tool-use-id invocation)
@@ -1029,6 +1033,10 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
               (mevedel-agent-runtime--insert-prompt
                invocation buffer description (plist-get turn :prompt)
                context-snapshot retained-p (plist-get turn :audits))
+              (setf (mevedel-engine-info invocation)
+                    (plist-put (mevedel-engine-info invocation) :mevedel-agent-prompt
+                               (concat context-snapshot (when context-snapshot "\n\n")
+                                       (plist-get turn :prompt))))
               (when (and pending-hook-context on-hook-context)
                 (funcall on-hook-context nil))
               (when (and on-settle
@@ -1067,10 +1075,14 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                   invocation nil
                   (list :mevedel-agent-terminal-status 'error
                         :error-details (error-message-string err))))
-             (when (mevedel-agent-invocation-runtime-fsm invocation)
+             (when (or (mevedel-agent-invocation-runtime-fsm invocation)
+                       (mevedel-agent-invocation-runtime-cancel invocation))
+               (when-let* ((cancel (mevedel-agent-invocation-runtime-cancel invocation)))
+                 (funcall cancel))
                (mevedel-agent-runtime--finalize invocation 'error)
                (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
-                     (mevedel-agent-invocation-runtime-fsm invocation) nil))
+                     (mevedel-agent-invocation-runtime-fsm invocation) nil
+                     (mevedel-agent-invocation-runtime-cancel invocation) nil))
              (unless retained-p
                (mevedel-agent-runtime-abandon-persistence invocation)
                (when (buffer-live-p buffer)

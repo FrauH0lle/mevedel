@@ -11,6 +11,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 ;; `setf' on a slot of a struct defined elsewhere needs that
 ;; `cl-defstruct' at compile time: `declare-function' supplies the
 ;; accessor but not the setter, and without the expander the form
@@ -141,6 +143,7 @@
 NEW-NAME, NEW-ID, and NEW-SAVE-PATH identify the child.  The source path and
 id are read from SESSION so the transaction cannot silently target a stale
 parent identity."
+  (mevedel-engine-assert-local-history session "Save As")
   (unless (mevedel-session-save-path session)
     (error "Portable Save As requires a materialized parent session"))
   (unless (mevedel-session-execution-target session)

@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-engine)
 
 ;; `gptel-request'
 (declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
@@ -198,7 +199,7 @@ The split happens at the first colon so model names such as
     (list (match-string 1 value)
           (match-string 2 value))))
 
-(defun mevedel-model--find-model (backend model-name)
+(cl-defmethod mevedel-model--find-model ((backend gptel-backend) model-name)
   "Return BACKEND's model matching MODEL-NAME, or nil."
   (cl-find-if
    (lambda (model)

@@ -49,9 +49,12 @@
                         ""))
                  (error "Bash policy behavior has the wrong owner"))))
             (approval-review
-             (progn
+            (progn
                (require 'mevedel-permission-review)
+               (require 'gptel-openai)
                (let ((mevedel-permission-reviewer 'auto)
+                     (gptel-backend (gptel-make-openai "Cold reviewer" :key "unused"))
+                     (gptel-model 'gpt-4o-mini)
                      results)
                  (with-temp-buffer
                    (org-mode)

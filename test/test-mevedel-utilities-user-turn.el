@@ -35,7 +35,8 @@
           (with-current-buffer data-buf
             (insert (propertize initial 'gptel 'response))
             (setq-local gptel-response-separator separator))
-          (cl-letf (((symbol-function 'gptel-send) #'ignore))
+          (cl-letf (((symbol-function 'gptel-send) #'ignore)
+                    ((symbol-function 'gptel-request) #'ignore))
             (pcase producer
               ('chat
                (with-current-buffer data-buf

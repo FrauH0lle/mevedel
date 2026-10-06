@@ -22,6 +22,11 @@ so their partial responses enter the interruption result. Frozen configuration,
 mailbox and topology do not depend on buffer residency. Failed hydration does not
 publish a partial resident buffer or start a provider request.
 
+Frozen built-in tool references resolve through their owning mevedel registrars
+when a cold editor has not loaded those tools yet. Registration reconstructs the
+same current schema without executing a tool. Unknown names and foreign-category
+paths remain invalid persisted data; they are not substituted with another tool.
+
 ## Decision history
 
 On 2026-09-21, a complete archive restored in 4.71 seconds, including 1.58 seconds
@@ -37,3 +42,12 @@ during reviewer follow-up startup. The old result remained attached to the
 save to fail with `Invalid live agent registry entry`. Clearing it at startup,
 with rollback on dispatch failure, replaces that transient invalid state. A
 regression delivers execution mail through registry serialization during setup.
+
+On 2026-10-06, a two-process Claude restart test restored the root but dropped
+its retained child because the frozen roster referenced an unloaded `ToolCall`.
+The in-process tests had already populated the global gptel registry and missed
+this dependency. Cold decoding now initializes missing mevedel built-ins through
+the existing registrar owner. Separate-editor deterministic and live tests resume
+both native histories, preserve each call ledger and transcript, and retain the
+child's frozen model after the parent's selection changes. Opening the session
+starts no model work; the saved active Goal restores paused.

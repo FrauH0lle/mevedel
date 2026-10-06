@@ -13,6 +13,7 @@
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
 (require 'mevedel-session-durability)
+(require 'mevedel-claude-code)
 (require 'mevedel-mention-bindings)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-pending-inputs)
@@ -41,6 +42,8 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
+(declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send))
+(autoload 'mevedel--dispatch-request "mevedel-chat")
 (defvar mevedel--pending-model-input)
 
 ;; `mevedel-collaboration'
@@ -120,7 +123,7 @@
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-expand-user-input
-		  "mevedel-mentions" (text session))
+		  "mevedel-mentions" (text session &optional fresh-p))
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions"
@@ -2446,6 +2449,8 @@ instead of the composer, preserving its draft."
 		(funcall restore)
 		(mevedel-view--occupied-root-workflow-error
 		 occupied))
+               ((plist-get (mevedel-request-context active-request) :external-history)
+                (mevedel-view--queue-follow-up input))
                ((not (mevedel-view--steerable-root-request-p active-request))
 		(funcall restore)
 		(user-error
@@ -2840,7 +2845,6 @@ asynchronous preparation ran is left alone instead of cleared."
        (with-current-buffer mevedel--data-buffer
          (mevedel-view--activate-dropped-file-grants
           dropped-file-grants session)
-         (setq-local mevedel--pending-model-input model-input)
          (let ((gptel-send--handlers (copy-tree gptel-send--handlers))
                startup-fsm)
            ;; Capture the send's FSM before admission: startup can reenter and
@@ -2849,9 +2853,7 @@ asynchronous preparation ran is left alone instead of cleared."
              (push (lambda (fsm) (unless startup-fsm (setq startup-fsm fsm)))
                    (cdr wait)))
            (condition-case err
-               (unwind-protect
-                   (gptel-send)
-                 (setq-local mevedel--pending-model-input nil))
+               (mevedel--dispatch-request (or model-input input) #'gptel-send)
              ((error quit)
               (let ((request (and startup-fsm
                                   (plist-get (gptel-fsm-info startup-fsm)

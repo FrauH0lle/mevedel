@@ -214,6 +214,7 @@ workspace."
   directive-planning ; transient active directive-planning record
   preset-name       ; selected mevedel preset symbol
   model-provider    ; exact "BACKEND:MODEL" session selector or nil
+  external-conversations ; scope -> native ownership, installed history and turn state
   reasoning-effort  ; explicit session effort symbol or nil for default
   turn-count        ; integer: for reminder throttling
   reminders         ; list of active mevedel-reminder structs
@@ -235,7 +236,7 @@ workspace."
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
-  workspace-instruction-hashes ; alist: (OWNER PATH) -> SHA-256 content hash
+  workspace-instruction-hashes ; (OWNER PATH) -> SHA-256 hash; nil needs delivery
   skills            ; list of mevedel-skill structs available to this session
   hook-rules         ; transient session-scoped declarative hook rules
   hook-log           ; transient per-session hook execution log
@@ -723,6 +724,9 @@ Created at request start, cleared in the termination handler."
   session           ; back-reference to mevedel-session
   turn              ; reserved session turn committed at settlement
   fsm               ; owning root gptel FSM, or nil for non-provider requests
+  context           ; request-owned workflow context for external engines
+  model-policy      ; frozen effective backend/model/effort, independent of selection
+  workspace-instruction-hashes ; fresh directive's acknowledged path instructions
   file-snapshots    ; hash-table: filepath -> original content at request start
   untracked-effects ; alist: source -> reason capture cannot be complete
   directive-uuid    ; UUID of directive being processed, if any

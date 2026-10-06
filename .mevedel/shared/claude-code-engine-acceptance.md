@@ -1,0 +1,113 @@
+# Claude subscription engine acceptance
+
+Worktree: `feature/claude-code-engine`, based on
+`5adfcfb28c4504968bc76b70a8bed18e8038f776`. This index connects the local
+[PRD](../../.scratch/claude-code-engine/PRD.md) to retained implementation
+and verification evidence. The [progress log](claude-code-engine-progress.md)
+records individual runs, including failures and their resolutions.
+
+## Acceptance coverage
+
+Test paths below are relative to `test/`. They exercise the normal admitted
+session workflow and focused real subprocess ACP/MCP boundaries. Deterministic
+peers do not establish real model behavior; live evidence is identified separately.
+
+| Case | Evidence |
+| --- | --- |
+| A01 Setup/login | `test-mevedel-claude-code.el`: guided setup, managed adapter, supported authentication status, fail-before-dispatch; live production probes in progress log. |
+| A02 Turns/composer | `test-mevedel-claude-code-session.el`, `test-mevedel-claude-code-input.el`: streaming, sequential turns, paired draft preservation, FIFO busy input. |
+| A03 Authoritative tools/review | `test-mevedel-mcp-tools.el`, `test-mevedel-pipeline-provider.el` and existing patch-review suites; A16 reviewed five-file patch and Bash. |
+| A04 Wait/interrupt | `test-mevedel-acp.el`, `test-mevedel-acp-turn.el`, `test-mevedel-claude-code-wait.el`: asynchronous waits, cancellation, stale callback ownership and child approval. |
+| A05 Authority/targets | Existing permission and pipeline suites plus `test-mevedel-claude-code-remote.el`; provisioned SSH and Podman acceptance passed (`native-remote-final.log`). |
+| A06 Media/large outputs/jobs | `test-mevedel-claude-code-input.el`, `test-mevedel-mcp-tools.el`, `test-mevedel-pipeline-provider.el` and existing execution/result persistence tests; native image input/output and A16 PNG read. |
+| A07 Failure/replay | `test-mevedel-acp.el`, `test-mevedel-claude-code-session.el`, `test-mevedel-claude-code-recovery.el`: durable tool admission, crash/uncertain history, no implicit replay or API fallback. |
+| A08 Persistence/restart | `test-mevedel-claude-code-restart.el` uses separate Emacs processes; session/recovery suites exercise retained root/child IDs, missing history and explicit excerpt recovery. |
+| A09 Scope isolation | Session/context/policy suites cover root, directives, retained children and path-scoped instructions without borrowing unrelated context. |
+| A10 Retained agents | Session/agent/wait suites cover spawn, follow-up, mail acknowledgement, waiting parent, permission decision, interruption and capacity cleanup. |
+| A11 Background workloads | Session, Buddy and memory-review suites exercise naming, guardian, summary, journal and bounded consolidation through the selected engine. |
+| A12 Context receipts | Context/selected-context/continuation suites and native mailbox/compaction probes: receipt-bound delivery, restoration before subsequent work, automatic bounded continuation. |
+| A13 Goals/usage | `test-mevedel-claude-code-goal.el`: continuation, queued input precedence, pause/resume, boundary settlement, shared child usage and verification; unknown usage remains unknown. |
+| A14 Capability guards | `test-mevedel-claude-code-capabilities.el`: command/menu guards, HTTP controls, cooperative transfer; session tests guard raw historical edits, including no-output interruption and reopen. |
+| A15 Existing regressions | Complete Eask suite and warning-free compilation; final result recorded below. |
+| A16 Real programming | Eventfold task: five source modules, twenty independent JSON fixtures, reviewed 5,464-byte patch, Bash unittest and image read; 80 distinct calls, 71.10 seconds. Original driver assertion failed; retained-output offline verification and independent tests pass. See progress log for failures and limits. |
+| A17 Claude to gptel | `test-mevedel-claude-code-transfer.el`: actual outgoing request uses effective summary/tail, strips foreign signed reasoning, redelivers current context, preserves chronology. |
+| A18 gptel to Claude | Same transfer suite: labelled excerpt into a fresh native ID, return switch, subsequent save/reopen and resume. |
+| A19 Native compaction | ACP compaction/session/context/continuation suites: lifecycle, exactly-once rotation, retained summary/tail, tool attribution and context restoration. |
+| A20 Models/effort | Claude setup/catalog and policy suites: aliases including Fable, pre-connection effort selection, acknowledged live configuration and default fallback, unavailable IDs across session/preset/workload/directive fail before dispatch. |
+| A21 Change model in place | Deterministic selection/session coverage and live Sonnet 5.5 to Opus 5.5 acceptance preserve native ID and prior context; see progress log. |
+
+The normal implementation preset's full system prompt was also verified in the
+production launch, with all seven direct tools, workspace/file canaries and
+successful Read. Its original driver failed an incorrect tool-count assertion;
+offline verification of retained artifacts passes. It is not described as a
+passing original ERT run.
+
+## Environment and limits
+
+Live validation used the user's existing **Enterprise** subscription login via
+Claude's supported process. This establishes the subscription route used by
+Pro/Max, but is **not a separate live Pro/Max account test**. No credentials were
+read or copied, API fallback was disabled, and paid overflow was not enabled.
+Recorded live runtime: Claude CLI 2.1.291, adapter 0.86.0, Agent SDK 0.3.287,
+ACP SDK 1.7.0, acp.el 0.15.2, Emacs 31.1 and Node 26.10.0. Earlier probes used
+CLI 2.1.290. Subscription availability follows the provider's current support
+policy; the integration does not guarantee future plan terms.
+
+Final deterministic validation refreshes isolated gptel to upstream
+`edb3fee3b5266e9060f6d121e9b3914eb7c3409d` for its corrected API error ordering.
+The original live evidence retains its original dependency hashes. The local
+`gptel-validation-snapshot.json` records the replacement; no live editor or
+main-checkout dependency was changed.
+
+Native exact fork/rewind/redo/save-as, manual compaction, side conversation,
+exact child-history copying, cooperative control transfer and gptel HTTP controls
+have explicit unavailable paths. Cross-engine summary continuation and explicit
+history recovery are supported. Provider history stays local to the Claude
+installation. Unknown usage is not a zero-token estimate or subscription quota.
+
+The persisted session schema is now `v0.5.9`. The runtime rejects older
+sidecars and has no dual-format reader. At the user's explicit request, the
+standalone `scripts/migrate-session-v0.5.6.el` converter preserves selected
+pre-Claude sessions by converting a separate copy, including every retained
+publication sidecar and its manifest checksums. Older formats such as `v0.5.0`
+remain unsupported; the original files are not deleted.
+
+## Two-axis review
+
+### Standards
+
+Read-only review found **zero hard documented-standard violations** and one
+nonblocking P3 judgment: some root/child native-record construction and lifecycle
+operations are duplicated. They remain in their owning launchers for this
+change; root submission-boundary tracking and child invocation settlement have
+different contracts. Further consolidation is a maintainability opportunity,
+not an unimplemented feature or a claimed resolved finding.
+
+### Spec
+
+Review found three actionable gaps: raw transcript divergence, busy composer
+queueing, and cooperative control transfer. All were corrected. Follow-up review
+identified the no-output submitted-prompt case; its persisted input boundary now
+covers active and interrupted/reopened turns. Final focused read-only review
+found no remaining spec gaps. Reviewers did not run tests; the implementation
+agent ran the verification reported here and in the progress log.
+
+Standards: 0 hard violations, 1 nonblocking P3 judgment. Spec: 0 unresolved findings.
+
+## Final verification
+
+- Production compilation: 229 files, no warnings (`ui-followup-compile.log`).
+- Focused session/transfer run: 29/29 (`review-prefix-final.log`).
+- First-use follow-up: acknowledged effort configuration/default fallback,
+  cancellation, alias availability and native reminder projection covered by
+  the complete run; paired-view expansion/restoration preserves composer text.
+- Full isolated Eask run: **9,391 cases, zero unexpected results, 23 conditional
+  skips**, all eight workers exit 0, 143.75 seconds. Report
+  `.scratch/test-suite-performance/20261006-225855/summary.json`; log
+  `.scratch/claude-code-engine/ui-full-suite.log`. The runner cleaned bytecode
+  before discovering and executing every case exactly once.
+- Subsequent explicit migration: 63 migration/codec cases pass; the standalone
+  converter compiles with warnings treated as errors. Two selected real
+  sessions decode in the configured editor, preserving retained agents and
+  all non-metadata file bytes; originals remain backed up.
+- `git diff --check`: clean. Earlier failed runs remain in the progress log.

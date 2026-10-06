@@ -105,6 +105,40 @@ thunk that settles its current pipeline continuation exactly once;
 already-started tool-specific effects remain cancellable only when their owner
 exposes that capability.
 
+External providers can request `:projection provider` on the structured outcome
+entry point. This keeps typed status, tool identity and media while applying the
+same persistence, feedback and display side channels as direct gptel calls.
+`mevedel-mcp-tools` uses that projection after verifying that the captured root
+request or retained-child invocation still owns its buffer. Child ownership
+requires the same running invocation and root session, with no borrowed root
+request. Settled, replaced and boundary-stopped owners cannot admit another
+call. Child Plan restrictions still apply through the ordinary permission
+pipeline. Its MCP result removes trusted display metadata and
+includes captured media blocks; the separate outcome retains canonical display
+data. Pipeline context carries the owning engine, so Goal tools and nested
+ToolCall retain request authority with either a real gptel FSM or an external
+request. The private asynchronous MCP transport owns connection cleanup and
+pending call cancellation.
+
+Retained invocations expose their native FSM context or their own external
+context through the shared engine accessor. Their ACP driver uses the same
+transport and projection runner, while the agent runtime owns child terminal
+publication, independently of root-request settlement.
+
+`mevedel-acp-turn` binds that endpoint to one admitted request, publishes ACP text
+and MCP results through the canonical gptel renderers, and shares final patch
+capture and terminal settlement. Native Claude post-tool hooks query the same
+private endpoint for boundary-stop decisions; they are absent from tool
+discovery. Hook handlers complete asynchronously, allowing the runner to queue
+events, hook decisions and tool admission until target transport is idle.
+Reentrant arrivals cannot overtake an in-progress segment publication, and
+cancelled queued calls cannot acquire a replacement turn's authority.
+The Claude Code provider routes ordinary root submissions through
+this runner. The adapter normalizes final prompt usage separately from context
+occupancy and model-level quota reports: normalized input includes cache
+creation, cached input contains cache reads, and output stays separate.
+Duplicate terminal replies cannot charge or publish the turn again.
+
 Handler-owned cleanup registers before the outer pipeline canceller, so a
 compound async tool can cancel and audit its active children before its own
 provider-facing result settles.

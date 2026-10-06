@@ -14,6 +14,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
@@ -25,7 +27,6 @@
 (defvar gptel-tools)
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (declare-function gptel-tool-category "ext:gptel-request" (tool))
 (declare-function gptel-tool-name "ext:gptel-request" (tool))
 
@@ -59,7 +60,7 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--ctx-tool-catalog "mevedel-tools" (ctx))
 (declare-function mevedel-tools--current-context "mevedel-tools" ())
-(defvar mevedel-tools--current-fsm)
+(defvar mevedel-tools--current-engine)
 
 
 ;;;; Roster
@@ -91,8 +92,8 @@ and interaction tools require a model turn to consume their result."
 
 (defun mevedel-tool-ptc--active-tool-names ()
   "Return canonical names of registered tools active in the current request."
-  (let* ((fsm (bound-and-true-p mevedel-tools--current-fsm))
-         (tools (or (and fsm (plist-get (gptel-fsm-info fsm) :tools))
+  (let* ((fsm (bound-and-true-p mevedel-tools--current-engine))
+         (tools (or (and fsm (plist-get (mevedel-engine-info fsm) :tools))
                     (bound-and-true-p gptel-tools))))
     (delq nil
           (mapcar (lambda (tool)

@@ -443,7 +443,9 @@ Inspect archived records once per call, only when a live row is missing."
                                      :render-data)))))
                   ((or (plist-get render-data :execution-id)
                        (plist-get render-data :live-execution-p))))
-        (if (plist-get render-data :live-execution-p)
+        ;; Public execution facts exist even without a view.  A renderer's
+        ;; progress flag is not the authority for command completion.
+        (if (memq (plist-get render-data :state) '(queued running stopping))
             (push (cons tool-use-id render-data) live)
           (push (cons tool-use-id render-data) completed))))
     (list :live (nreverse live) :completed (nreverse completed))))

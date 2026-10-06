@@ -17,6 +17,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
 (require 'mevedel-structs)
+(require 'mevedel-tool-registry)
 (require 'mevedel-utilities)
 
 ;; `gptel-request'
@@ -314,7 +315,12 @@ succeed after silently losing an addressable agent."
                     (cl-every #'stringp path))
          (mevedel-agent-persistence--invalid
           "Invalid persisted agent tool path"))
-       (let ((tool (ignore-errors (gptel-get-tool path))))
+       (let ((tool (or (ignore-errors (gptel-get-tool path))
+                       (when (equal (car path) "mevedel")
+                         ;; A cold editor has not necessarily used this built-in
+                         ;; yet.  Its owning registrar supplies the same schema.
+                         (mevedel-tool-ensure (cadr path))
+                         (ignore-errors (gptel-get-tool path))))))
          (unless (gptel-tool-p tool)
            (mevedel-agent-persistence--invalid
             "Unknown persisted agent tool: %S" path))

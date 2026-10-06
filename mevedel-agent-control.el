@@ -19,9 +19,6 @@
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (backend))
 
-;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-final-response
                   "mevedel-agent-conversation" (invocation))
@@ -71,8 +68,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-runtime-fsm
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
@@ -111,6 +106,9 @@
 (declare-function mevedel-context-summary-generate
                   "mevedel-context-summary" t t)
 (autoload 'mevedel-context-summary-generate "mevedel-context-summary")
+
+;; `mevedel-engine'
+(declare-function mevedel-engine-info "mevedel-engine" (owner))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-parse-effort "mevedel-models" (value))
@@ -450,6 +448,20 @@ agent clears its mailbox, and almost all of them find it empty."
                           session context)))))
     (when (and path (mevedel-agent-control--mailbox-queue session path))
       (mevedel-agent-control--set-mailbox-queue session path nil)
+      (mevedel-agent-control--persist-session session))))
+
+(defun mevedel-agent-control-acknowledge-mail (context messages)
+  "Consume only captured MESSAGES from CONTEXT's retained mailbox.
+Messages queued since capture remain unread.  As with native mailbox delivery,
+persistence is observational; process loss before its save may redeliver mail."
+  (let* ((session (if (mevedel-session-p context) context
+                    (mevedel-agent-invocation-parent-session context)))
+         (path (mevedel-agent-control-context-path context)))
+    (when path
+      (mevedel-agent-control--set-mailbox-queue
+       session path
+       (cl-remove-if (lambda (message) (memq message messages))
+                     (mevedel-agent-control--mailbox-queue session path)))
       (mevedel-agent-control--persist-session session))))
 
 (defun mevedel-agent-control--waiter (session path)
@@ -905,10 +917,9 @@ Return rollback and post-commit delivery closures for INVOCATION."
                     (equal (plist-get item :sender) own-path)))
              own-queue))
            ;; Normalized input plus output, excluding cached input, while the
-           ;; child FSM is still attached.  Callers may charge it elsewhere.
+           ;; child engine context is still attached.  Callers may charge it elsewhere.
            (usage
-            (when-let* ((fsm (mevedel-agent-invocation-runtime-fsm invocation))
-                        (tokens (plist-get (gptel-fsm-info fsm) :tokens-full)))
+            (when-let* ((tokens (plist-get (mevedel-engine-info invocation) :tokens-full)))
               (+ (or (plist-get tokens :input) 0)
                  (or (plist-get tokens :output) 0))))
            result)

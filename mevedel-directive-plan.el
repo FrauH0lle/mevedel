@@ -14,6 +14,7 @@
 ;; accessor but not the setter, and without the expander the form
 ;; compiles to a call to a function that does not exist.
 (eval-when-compile (require 'mevedel-structs))
+(require 'mevedel-engine)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -21,9 +22,6 @@
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-duplicates "cl-seq" (cl-seq &rest cl-keys))
-
-;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request")
 
 ;; `mevedel-directive-request'
 (declare-function mevedel--directive-model-policy
@@ -359,7 +357,7 @@ card's selection stays authoritative once retained."
 (defun mevedel-directive-plan--settle-planning
     (directive record callback err fsm attempt &optional owner-session)
   "Settle DIRECTIVE planning ATTEMPT for RECORD after ERR and FSM."
-  (let* ((info (and fsm (gptel-fsm-info fsm)))
+  (let* ((info (and fsm (mevedel-engine-info fsm)))
          (chat-buffer (and info (plist-get info :buffer)))
          (session (or owner-session
                       (and (buffer-live-p chat-buffer)
@@ -452,7 +450,7 @@ CALLBACK runs after implementation settles."
                       :model-policy
                       (mevedel-directive-plan--planning-model-policy
                        directive)))))
-          (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+          (when-let* ((info (and fsm (mevedel-engine-info fsm)))
                       (chat-buffer (plist-get info :buffer))
                       ((buffer-live-p chat-buffer)))
             (setq owner-session

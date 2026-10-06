@@ -9,6 +9,7 @@
 
 (package-file "mevedel.el")
 (files :defaults
+       '("scripts" "scripts/mevedel-mcp-stdio.py")
        '("agents" "agents/*.md")
        '("prompts/context-summary" "prompts/context-summary/*.md")
        '("prompts/goals" "prompts/goals/*.md")
@@ -42,6 +43,7 @@
 
 (depends-on "emacs" "31.1")
 (depends-on "gptel")
+(depends-on "acp" "0.15.2")
 (depends-on "yaml")
 (depends-on "orderless")
 (depends-on "websocket")

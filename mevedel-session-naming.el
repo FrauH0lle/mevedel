@@ -25,10 +25,13 @@
 
 ;; `gptel-request'
 (declare-function gptel-abort "ext:gptel-request" (buf))
-(declare-function gptel-request "ext:gptel-request" (&optional prompt &rest keys))
 (defvar gptel-reasoning-effort)
 (defvar gptel-stream)
 (defvar gptel-track-response)
+
+;; `mevedel-engine'
+(declare-function mevedel-engine-request-text "mevedel-engine"
+                  (backend prompt system callback &optional stream context))
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-discard-rolled-back
@@ -257,13 +260,10 @@ considered again until reset by clear."
                                     30 nil
                                     (lambda ()
                                       (finish 'timeout '(:error-class timeout)))))
-                             (gptel-request input :buffer request-buffer
-                                            :system gptel-system-prompt
-                                            :transforms nil :stream stream
-                                            :context
-                                            (list :mevedel-telemetry-session session
-                                                  :mevedel-telemetry-workload 'naming)
-                                            :callback #'receive))))
+                             (mevedel-engine-request-text
+                              gptel-backend input gptel-system-prompt #'receive stream
+                              (list :mevedel-telemetry-session session
+                                    :mevedel-telemetry-workload 'naming)))))
                      (error
                       (finish)
                       (report 'error (list :error-class (car-safe err)))))))

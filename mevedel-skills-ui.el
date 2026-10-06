@@ -27,7 +27,9 @@
 (defvar gptel-model)
 
 ;; `mevedel-chat'
+(declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+(autoload 'mevedel--dispatch-request "mevedel-chat")
 (autoload 'mevedel--run-session-start-hooks "mevedel-chat")
 
 ;; `mevedel-collaboration'
@@ -106,6 +108,11 @@
   "mevedel-compact-estimation")
 (autoload 'mevedel-compact-estimation-estimate-tokens
   "mevedel-compact-estimation")
+
+;; `mevedel-engine'
+(declare-function mevedel-engine-assert-local-history
+                  "mevedel-engine" (session operation &optional backend))
+(autoload 'mevedel-engine-assert-local-history "mevedel-engine")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-stop-all-user
@@ -267,6 +274,10 @@
 ;; `mevedel-system'
 (declare-function mevedel-inspect-effective-prompt "mevedel-system" ())
 (autoload 'mevedel-inspect-effective-prompt "mevedel-system")
+
+;; `mevedel-turn'
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-refresh-associated-input-prompt
@@ -938,49 +949,59 @@ ORIG-FN and ARGS are the original `gptel-send' function and arguments.
 Dispatches the leading `/command' or `$skill' on the prompt region first.
 - Local commands and unknown slashes abort the send (do not call
   ORIG-FN).
-- Inline skills install body + pending-stash, then ORIG-FN is called
-  from the invocation callback.
+- Inline skills install body + pending-stash, then the invocation
+  callback dispatches through the selected conversation engine.
 - Fork skills dispatch an agent directly and never call ORIG-FN for
   the `$skill' command.
-- No command present -> proceed unchanged.
+- No command present -> dispatch through the selected engine.
+ORIG-FN remains the send implementation for the gptel engine.
 
 Paired mevedel view/data buffers already own a deterministic submission plan;
 the advice must not rescan their derived prompt text.  Pending-stash cleanup
-is tied to the continuation that actually resumes ORIG-FN so async shell
+is tied to the continuation that actually submits the turn so async shell
 preparation does not clear the stash before the request begin handler can
 drain it."
+  (when (and (eq (car args) 0) (bound-and-true-p mevedel--session))
+    (mevedel-engine-assert-local-history nil "Steering" gptel-backend))
   (if (or (eq (car args) 0) ;Steering does not submit the buffer prompt.
-          (not (bound-and-true-p mevedel--session))
-          (and (boundp 'mevedel--view-buffer)
-               (buffer-live-p mevedel--view-buffer)))
+          (equal (car args) '(4)) ;The menu does not submit either.
+          (not (bound-and-true-p mevedel--session)))
       (apply orig-fn args)
     (cl-labels
-        ((continue ()
+	((continue ()
            (unwind-protect
-               (apply orig-fn args)
+               (progn
+                 (when (mevedel-turn-busy-p)
+                   (user-error "A request is already active -- wait or abort first"))
+                 (when (bound-and-true-p mevedel-session--read-only-mode)
+                   (user-error "Session is open read-only (another host holds the lock)"))
+                 (mevedel--dispatch-request nil (lambda () (apply orig-fn args))))
              (mevedel-skills-input-clear-pending))))
-      (when-let* ((region (mevedel-skills-input-current-prompt-region)))
-        (let* ((text (buffer-substring (car region) (cdr region)))
-               (prepared
-                (mevedel-mentions-prepare-user-input
-                 (mevedel-skills-input-prepare-user-input
-                  text mevedel--session)
-                 mevedel--session)))
-          (dolist (range (mevedel-mention-bindings-ranges prepared))
-            (mevedel-mention-bindings-set
-             (+ (car region) (plist-get range :start))
-             (+ (car region) (plist-get range :end))
-             (plist-get range :binding)))))
-      (pcase (mevedel-skills--dispatch-slash-command)
-        ((or 'local 'unknown) nil)
-        (_
-         (pcase (mevedel-skills-input-dispatch-command #'continue)
-           ((or 'unknown 'skill) nil)
-           (_
-            (pcase (mevedel-skills-input-dispatch-inline-attachments
-                    #'continue t)
-              ((or 'unknown 'skill) nil)
-              (_ (continue))))))))))
+      (if (and (boundp 'mevedel--view-buffer)
+               (buffer-live-p mevedel--view-buffer))
+          (continue)
+	(when-let* ((region (mevedel-skills-input-current-prompt-region)))
+          (let* ((text (buffer-substring (car region) (cdr region)))
+		 (prepared
+                  (mevedel-mentions-prepare-user-input
+                   (mevedel-skills-input-prepare-user-input
+                    text mevedel--session)
+                   mevedel--session)))
+            (dolist (range (mevedel-mention-bindings-ranges prepared))
+              (mevedel-mention-bindings-set
+               (+ (car region) (plist-get range :start))
+               (+ (car region) (plist-get range :end))
+               (plist-get range :binding)))))
+	(pcase (mevedel-skills--dispatch-slash-command)
+          ((or 'local 'unknown) nil)
+          (_
+           (pcase (mevedel-skills-input-dispatch-command #'continue)
+             ((or 'unknown 'skill) nil)
+             (_
+              (pcase (mevedel-skills-input-dispatch-inline-attachments
+                      #'continue t)
+		((or 'unknown 'skill) nil)
+		(_ (continue)))))))))))
 
 
 ;;

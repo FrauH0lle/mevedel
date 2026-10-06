@@ -16,11 +16,10 @@
 (require 'mevedel-structs)
 (require 'mevedel-system)
 
-;; `gptel'
-(declare-function gptel-send "ext:gptel" (&optional arg))
-
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
+(declare-function mevedel--send-request "mevedel-chat" (&optional model-input))
+(autoload 'mevedel--send-request "mevedel-chat")
 
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-in-flight)
@@ -144,12 +143,12 @@
     (user-error "Session is open read-only (another host holds the lock)")))
 
 (defun mevedel-init--send-direct (prompt data-buffer)
-  "Insert PROMPT into DATA-BUFFER and send it with `gptel-send'."
+  "Insert PROMPT into DATA-BUFFER and send through its selected engine."
   (with-current-buffer data-buffer
     (mevedel-init--ensure-sendable)
     (goto-char (point-max))
     (mevedel--insert-user-turn prompt)
-    (gptel-send)))
+    (mevedel--send-request prompt)))
 
 (defun mevedel-init--dispatch (focus)
   "Dispatch `/init' with optional FOCUS."

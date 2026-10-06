@@ -1110,6 +1110,12 @@ Restores the window configuration and kills the buffer afterwards."
 (defvar url-privacy-level)
 (defvar url-proxy-services)
 
+;; `url-cookie'
+(defvar url-cookie-save-interval)
+
+;; `url-history'
+(defvar url-history-save-interval)
+
 (defun mevedel-test-http (respond action)
   "Run ACTION with a local server URL whose requests call RESPOND.
 RESPOND receives a request line and returns (STATUS HEADERS BODY), or nil
@@ -1140,7 +1146,11 @@ to leave the request unanswered.  All server processes are cleaned up."
                                             bytes))
                            (process-send-eof process))))))))
           (let ((url-proxy-services nil)
-                (url-privacy-level 'paranoid))
+                (url-privacy-level 'paranoid)
+                ;; URL lazily starts global persistence timers on first use.
+                ;; Local HTTP fixtures have no persistent cookie/history state.
+                (url-cookie-save-interval nil)
+                (url-history-save-interval nil))
             (funcall action (format "http://127.0.0.1:%s"
                                     (plist-get (process-contact server t) :service)))))
       (dolist (process (cons server clients))

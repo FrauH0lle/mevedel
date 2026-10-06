@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (eval-when-compile
   (require 'mevedel-tool-registry)
   (require 'mevedel-structs)
@@ -16,7 +18,6 @@
 (require 'mevedel-goal)
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-pipeline'
 (defvar mevedel-pipeline--handler-active-p)
@@ -41,7 +42,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--context-for "mevedel-tools" (fsm))
-(defvar mevedel-tools--current-fsm)
+(defvar mevedel-tools--current-engine)
 
 ;; `mevedel-turn'
 (declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
@@ -53,8 +54,8 @@
   "Return whether Goal tool NAME is available to root request FSM.
 Other tool names are unaffected.  Apply this to native and discovered tools."
   (or (not (member name mevedel-tool-goal-names))
-      (when-let* ((fsm (or fsm (bound-and-true-p mevedel-tools--current-fsm)))
-                  (info (gptel-fsm-info fsm))
+      (when-let* ((fsm (or fsm (bound-and-true-p mevedel-tools--current-engine)))
+                  (info (mevedel-engine-info fsm))
                   (session (mevedel-tools--context-for fsm))
                   ((mevedel-session-p session))
                   ((not (mevedel-goal--context-summary-request-p info)))
@@ -78,11 +79,11 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
 
 (defun mevedel-tool-goal--request (name)
   "Return the current owning root FSM authorized to call NAME."
-  (let ((fsm (bound-and-true-p mevedel-tools--current-fsm)))
+  (let ((fsm (bound-and-true-p mevedel-tools--current-engine)))
     (unless (and fsm
-                 (eq (plist-get (gptel-fsm-info fsm) :buffer) (current-buffer))
+                 (eq (plist-get (mevedel-engine-info fsm) :buffer) (current-buffer))
                  mevedel--current-request
-                 (eq fsm (mevedel-request-fsm mevedel--current-request))
+                 (eq fsm (mevedel-engine-owner mevedel--current-request))
                  (eq mevedel--session
                      (mevedel-request-session mevedel--current-request))
                  (mevedel-tool-goal-available-p name fsm))
@@ -92,7 +93,7 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
 (defun mevedel-tool-goal--handle-get (_args)
   "Return the current Goal and known usage without changing its state."
   (let* ((fsm (mevedel-tool-goal--request "GetGoal"))
-         (info (gptel-fsm-info fsm))
+         (info (mevedel-engine-info fsm))
          (goal (mevedel-session-goal mevedel--session))
          plan-error
          (plan-address
@@ -205,7 +206,7 @@ active, and ends the turn at this tool boundary so the rejected attempt
 settles as its own Goal turn before continuation."
   (let* ((fsm (mevedel-tool-goal--request "UpdateGoal"))
          (session mevedel--session)
-         (goal-id (plist-get (gptel-fsm-info fsm) :mevedel-goal-id))
+         (goal-id (plist-get (mevedel-engine-info fsm) :mevedel-goal-id))
          (status (plist-get args :status))
          ;; Captured now: the pipeline binds these only while this runs.
          (active-p (or mevedel-pipeline--handler-active-p #'always))

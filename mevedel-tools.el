@@ -11,6 +11,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'cl-lib)
 (eval-when-compile
   (require 'gptel-request))
@@ -69,7 +71,7 @@
 (declare-function mevedel-mentions-commit-expansion
                   "mevedel-mentions" (session expansion))
 (declare-function mevedel-mentions-expand-user-input
-                  "mevedel-mentions" (text session))
+                  "mevedel-mentions" (text session &optional fresh-p))
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
 
 ;; `mevedel-reminders'
@@ -241,13 +243,13 @@ Keep them request-local across temporary removal of all callable tools."
         (list 'setf (list 'mevedel-session-tool-catalog ctx) value)))
 
 ;;
-;;; FSM tracking for pipeline context dispatch
+;;; Engine tracking for pipeline context dispatch
 
-(defvar mevedel-tools--current-fsm nil
-  "Dynamically bound to the currently-executing gptel FSM.
+(defvar mevedel-tools--current-engine nil
+  "Dynamically bound to the current tool call's engine owner.
 
-Set by `mevedel-tools--handle-tool-use-advice' around
-`gptel--handle-tool-use' so the pipeline and ToolSearch can determine
+Set by native gptel dispatch or the external tool pipeline so
+tool handlers and ToolSearch can determine
 which context (session vs agent invocation) owns the current tool
 call.  Nil outside tool dispatch.")
 
@@ -294,13 +296,13 @@ call.  Nil outside tool dispatch.")
              (mevedel-tools--unknown-tool-result ctx name))))))))
 
 (defun mevedel-tools--handle-tool-use-advice (orig-fun fsm)
-  "Dyn-bind `mevedel-tools--current-fsm' around ORIG-FUN.
+  "Dyn-bind `mevedel-tools--current-engine' around ORIG-FUN.
 Used as an `:around' advice on `gptel--handle-tool-use' so that tool
 handlers (via the pipeline) can recover the FSM that triggered them
 without threading it through every call site.  Settle unknown tool calls
 before ORIG-FUN so mevedel can preserve specialist guidance before
 gptel's generic unknown-tool fallback consumes those calls."
-  (let ((mevedel-tools--current-fsm fsm))
+  (let ((mevedel-tools--current-engine fsm))
     (mevedel-tools--settle-unknown-tool-calls fsm)
     (funcall orig-fun fsm)))
 
@@ -331,7 +333,7 @@ local `mevedel--agent-invocation' before its parent
 `mevedel--session', because agent transcript buffers intentionally
 carry both."
   (when fsm
-    (let* ((info (gptel-fsm-info fsm))
+    (let* ((info (mevedel-engine-info fsm))
            (inv (plist-get info :mevedel-agent-invocation))
            (buffer (plist-get info :buffer)))
       (or (and (mevedel-agent-invocation-p inv) inv)
@@ -341,12 +343,12 @@ carry both."
 (defun mevedel-tools--current-context ()
   "Return the tool context for the currently-executing tool call.
 
-Prefers `mevedel-tools--current-fsm' (set during tool dispatch).
+Prefers `mevedel-tools--current-engine' (set during tool dispatch).
 Falls back to the current buffer's `mevedel--agent-invocation' before
 `mevedel--session' when no FSM is bound (e.g., direct calls from
 tests or tool dispatch paths already inside an agent buffer)."
-  (if mevedel-tools--current-fsm
-      (mevedel-tools--context-for mevedel-tools--current-fsm)
+  (if mevedel-tools--current-engine
+      (mevedel-tools--context-for mevedel-tools--current-engine)
     (or (and (boundp 'mevedel--agent-invocation)
              (mevedel-agent-invocation-p mevedel--agent-invocation)
              mevedel--agent-invocation)
@@ -710,45 +712,52 @@ model-visible communication in conversation history."
       (when (or (null messages) data)
         (mevedel-agent-control-clear-context-mailbox ctx)))))
 
-(defun mevedel-tools--handle-agent-roster-inject (fsm)
-  "WAIT-state handler: expose direct children to FSM exactly once."
-  (when-let* ((ctx (mevedel-tools--context-for fsm))
+(defun mevedel-tools-agent-roster (owner &optional full-p)
+  "Return OWNER's new direct children as reminder body and deferred commit.
+The engine commits the captured roster only after acknowledging delivery.
+With FULL-P, restore all direct children after context loss."
+  (when-let* ((ctx (mevedel-tools--context-for owner))
               (session
                (if (mevedel-session-p ctx)
                    ctx
                  (mevedel-agent-invocation-parent-session ctx)))
               (parent-path
                (mevedel-agent-control-context-path ctx)))
-    (let* ((info (gptel-fsm-info fsm))
+    (let* ((info (mevedel-engine-info owner))
            (initialized-p
-            (plist-member info :mevedel-agent-child-paths))
+            (and (not full-p) (plist-member info :mevedel-agent-child-paths)))
            (children
             (mevedel-agent-control-direct-children session parent-path))
            (paths (mapcar (lambda (entry) (plist-get entry :path)) children))
-           (known (plist-get info :mevedel-agent-child-paths))
+           (known (unless full-p (plist-get info :mevedel-agent-child-paths)))
            (new
             (cl-remove-if
              (lambda (entry)
                (member (plist-get entry :path) known))
-             children))
-           (data (plist-get info :data)))
-      (when (or (null new) data)
-        (when new
-          (mevedel-reminders-stage-entry
-           fsm 'agent-roster
-           (concat
-            "<agent-roster>\n"
-            (if initialized-p "New direct child agents:\n" "Direct child agents:\n")
-            (mapconcat
-             (lambda (entry)
-               (format "- `%s` (`%s`)"
-                       (plist-get entry :path) (plist-get entry :role)))
-             new "\n")
-            "\n</agent-roster>")
-           (lambda ()
-             (setf (gptel-fsm-info fsm)
-                   (plist-put (gptel-fsm-info fsm)
-                              :mevedel-agent-child-paths paths)))))))))
+             children)))
+      (when new
+        (list :body
+              (concat
+               "<agent-roster>\n"
+               (if initialized-p "New direct child agents:\n" "Direct child agents:\n")
+               (mapconcat
+                (lambda (entry)
+                  (format "- `%s` (`%s`)"
+                          (plist-get entry :path) (plist-get entry :role)))
+                new "\n")
+               "\n</agent-roster>")
+              :commit
+              (lambda ()
+                (setf (mevedel-engine-info owner)
+                      (plist-put (mevedel-engine-info owner)
+                                 :mevedel-agent-child-paths paths))))))))
+
+(defun mevedel-tools--handle-agent-roster-inject (fsm)
+  "WAIT-state handler: expose direct children to FSM exactly once."
+  (when-let* (((plist-get (gptel-fsm-info fsm) :data))
+              (roster (mevedel-tools-agent-roster fsm)))
+    (mevedel-reminders-stage-entry
+     fsm 'agent-roster (plist-get roster :body) (plist-get roster :commit))))
 
 
 (defun mevedel-tools--handle-agent-turn-terminal (fsm)

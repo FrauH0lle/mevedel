@@ -15,6 +15,7 @@ the agent entry point. The documentation map below locates area contracts;
 
 Good starting points:
 
+- [Claude subscription setup](../README.md#claude-promax-subscriptions) — use an installed Claude Pro/Max login through the guided setup.
 - [Architecture](architecture.md) — data structures, workspace context chain,
   gptel integration, persistence layout
 - [Tools](tools.md) and [Permissions](permissions.md) — the tool pipeline and

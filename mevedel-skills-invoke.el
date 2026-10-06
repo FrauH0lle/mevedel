@@ -216,7 +216,7 @@ is present.
 The stash plist keys map onto request/session state:
 
 - :permission-rules -> `mevedel-request-skill-permission-rules'
-- :model/:effort    -> consumed by the pre-realization prompt transform
+- :model/:effort    -> resolved before engine dispatch and request realization
 - :hook-rules       -> `mevedel-request-hook-rules'
 - :ptc-primitives   -> `mevedel-request-ptc-primitives'
 - :invoked-skills   -> user-origin records identify skill bodies already
@@ -250,14 +250,17 @@ gptel funcalls the function-valued system prompt before the prompt
 transforms apply this policy to the temp buffer, so any request-time
 consumer of the effective model -- the roster budget included -- must
 resolve through this one seam rather than read the buffer's
-`gptel-model' directly."
-  (mevedel-model-resolve-workload
-   (and (bound-and-true-p mevedel--session)
-        (not (bound-and-true-p mevedel--agent-invocation))
-        (mevedel-session-plan-mode mevedel--session)
-        'planning)
-   (plist-get mevedel-skills--pending-request-context :model)
-   (plist-get mevedel-skills--pending-request-context :effort)))
+`gptel-model' directly.  Once admitted, use the captured effective policy
+even after the pending skill context has been consumed."
+  (or (and mevedel--current-request
+           (mevedel-request-model-policy mevedel--current-request))
+      (mevedel-model-resolve-workload
+       (and (bound-and-true-p mevedel--session)
+            (not (bound-and-true-p mevedel--agent-invocation))
+            (mevedel-session-plan-mode mevedel--session)
+            'planning)
+       (plist-get mevedel-skills--pending-request-context :model)
+       (plist-get mevedel-skills--pending-request-context :effort))))
 
 (defun mevedel-skills--transform-apply-request-model-policy (fsm)
   "Pre-realize transform: apply the root request policy to prompt locals.

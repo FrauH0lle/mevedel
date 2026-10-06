@@ -17,12 +17,14 @@
 
 
 (require 'cl-lib)
+(require 'mevedel-engine)
 (require 'mevedel-structs)
 
 (eval-when-compile
   (require 'gptel-request nil t))
 
 ;; `gptel'
+(defvar gptel-backend)
 (defvar gptel-prompt-transform-functions)
 
 ;; `gptel-request'
@@ -83,6 +85,8 @@
                   "mevedel-hooks" (session entries))
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
                   (entries))
+(autoload 'mevedel-hooks-consume-session-context "mevedel-hooks")
+(autoload 'mevedel-hooks-format-context "mevedel-hooks")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-resource-address "mevedel-plan"
@@ -158,6 +162,15 @@
 Bound dynamically by `mevedel-reminders--transform' so reminder
 triggers can distinguish the real chat buffer from gptel's temporary
 prompt buffer.")
+
+(defconst mevedel-reminders-reconciliation-body
+  (concat "A previous session or request ended without proving that all "
+          "effects settled. Processes may still be running, and aborted "
+          "tools or commands may have partially changed files, tasks, or "
+          "external state. Reconcile current state before continuing, "
+          "prioritize the newest user request over any older ghost request, "
+          "and verify effects before making final success claims.")
+  "Recovery guidance shared by resumed native and external conversations.")
 
 (defvar-local mevedel-reminders--turn-events nil
   "Owner-bound reminder events for the current model turn.
@@ -431,6 +444,31 @@ with `:entries' in reminder order, each (:type TYPE :body BODY), and
     (list :entries (nreverse entries)
           :commits (nreverse commits))))
 
+(defun mevedel-reminders-collect (owner)
+  "Collect OWNER's configured reminders and pending hook context for delivery.
+Use the owning buffer's session or retained invocation and existing turn count.
+Do not acknowledge or consume the captured context until the returned commits."
+  (when-let* ((buffer (plist-get (mevedel-engine-info owner) :buffer))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (let* ((invocation (bound-and-true-p mevedel--agent-invocation))
+             (context (or invocation (bound-and-true-p mevedel--session)))
+             (mevedel-reminders--current-chat-buffer buffer))
+        (when context
+          (let* ((batch (mevedel-reminders--collect-from
+                         (if invocation (mevedel-agent-invocation-reminders invocation)
+                           (mevedel-session-reminders context))
+                         (if invocation (mevedel-agent-invocation-turn-count invocation)
+                           (mevedel-session-turn-count context))
+                         context))
+                 (hooks (and (not invocation) (mevedel-session-hook-context-pending context))))
+            (when-let* ((body (mevedel-hooks-format-context hooks)))
+              (setq batch
+                    (list :entries (cons (list :type 'hook-context :body body) (plist-get batch :entries))
+                          :commits (cons (lambda () (mevedel-hooks-consume-session-context context hooks))
+                                         (plist-get batch :commits)))))
+            batch))))))
+
 (defun mevedel-reminders--current-buffer ()
   "Return the chat buffer currently collecting reminders, or nil."
   (and (buffer-live-p mevedel-reminders--current-chat-buffer)
@@ -438,20 +476,21 @@ with `:entries' in reminder order, each (:type TYPE :body BODY), and
 
 (defun mevedel-reminders--compact-token-state ()
   "Return context-pressure state for the current chat buffer.
-The returned plist contains `:tokens', `:threshold', `:usable',
-and `:ratio', or nil when no chat buffer is collecting reminders."
+The returned plist contains `:tokens', `:threshold', `:usable', and `:ratio'.
+Return nil without an active collection buffer or for external model history."
   (when-let* ((buf (mevedel-reminders--current-buffer)))
     (with-current-buffer buf
-      (let* ((tokens (mevedel-compact-estimation-estimate-tokens))
-             (threshold (mevedel-compact-estimation-threshold-tokens))
-             (usable (mevedel-compact-estimation-usable-tokens))
-             (ratio (and (numberp usable)
-                         (> usable 0)
-                         (/ (float tokens) usable))))
-        (list :tokens tokens
-              :threshold threshold
-              :usable usable
-              :ratio ratio)))))
+      (unless (mevedel-engine-external-p gptel-backend)
+        (let* ((tokens (mevedel-compact-estimation-estimate-tokens))
+               (threshold (mevedel-compact-estimation-threshold-tokens))
+               (usable (mevedel-compact-estimation-usable-tokens))
+               (ratio (and (numberp usable)
+                           (> usable 0)
+                           (/ (float tokens) usable))))
+          (list :tokens tokens
+                :threshold threshold
+                :usable usable
+                :ratio ratio))))))
 
 (defun mevedel-reminders--compact-auto-available-p ()
   "Return non-nil when auto-compaction can run in the current chat buffer."
@@ -512,7 +551,7 @@ the current chat buffer has no request-local agent roster yet."
 (defun mevedel-reminders-queue-turn-event (buffer key body &optional commit)
   "Queue BODY under KEY for BUFFER's current model turn.
 Replacing an existing KEY coalesces repeated observations.  Run COMMIT after
-the event reaches the request payload.  Return non-nil when BUFFER has a live
+the engine acknowledges delivery.  Return non-nil when BUFFER has a live
 request or agent invocation that owns the event."
   (when (and (buffer-live-p buffer)
              (stringp body)
@@ -546,7 +585,8 @@ context reserved for it is offered to the next request instead of lost."
 (defun mevedel-reminders--stage-turn-events (buffer)
   "Return live turn-event entries and commits queued for BUFFER.
 The queue is not cleared here: dequeueing is the last of the returned
-`:commits', so events survive a request that never reaches injection."
+`:commits', so staging alone acknowledges nothing.  Receipt removes only the
+captured objects, preserving later events even when they replace the same key."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (let ((owner (mevedel-reminders-turn-owner buffer)))
@@ -568,13 +608,18 @@ The queue is not cleared here: dequeueing is the last of the returned
                     (mapcar (lambda (entry)
                               (plist-get (cdr entry) :commit))
                             items))
-              ;; Dequeue last, so a payload that never reaches the
-              ;; request leaves these events queued for the next turn.
+              ;; Dequeue last, after committing the captured observations.
               (list
                (lambda ()
                  (when (buffer-live-p buffer)
                    (with-current-buffer buffer
-                     (setq mevedel-reminders--turn-events nil)))))))))))))
+                     (when (eq owner (plist-get mevedel-reminders--turn-events :owner))
+                       (let ((remaining
+                              (cl-remove-if
+                               (lambda (entry) (memq entry items))
+                               (plist-get mevedel-reminders--turn-events :items))))
+                         (setq mevedel-reminders--turn-events
+                               (and remaining (list :owner owner :items remaining)))))))))))))))))
 
 (defun mevedel-reminders--injection-record (entries phase)
   "Return the complete delivered reminder record for ENTRIES in PHASE."
@@ -712,10 +757,7 @@ Runs after `mevedel--transform-expand-mentions'."
             (remove-text-properties
              start (point)
              '(gptel nil response nil invisible nil front-sticky nil))))
-        (let ((staged (mevedel-reminders--collect-from
-                       (mevedel-session-reminders session)
-                       (mevedel-session-turn-count session)
-                       session)))
+        (let ((staged (mevedel-reminders-collect fsm)))
           ;; Append: transforms at earlier depths (mentions,
           ;; skills-input) may already have staged entries.
           (mevedel-reminders--stage-batch
@@ -742,10 +784,7 @@ FSM is mandatory for the same arity-dispatch reason as
                       (mevedel-agent-invocation-p mevedel--agent-invocation)
                       mevedel--agent-invocation))))
     (let ((mevedel-reminders--current-chat-buffer buffer))
-      (let ((staged (mevedel-reminders--collect-from
-                     (mevedel-agent-invocation-reminders invocation)
-                     (mevedel-agent-invocation-turn-count invocation)
-                     invocation)))
+      (let ((staged (mevedel-reminders-collect fsm)))
         (mevedel-reminders--stage-batch
          fsm (plist-get staged :entries) (plist-get staged :commits))))))
 
@@ -977,8 +1016,7 @@ re-sent sparsely instead of costing tokens in every request's history."
   "Create the `pending-events' reminder.
 
 Fires when runtime subsystems have queued explicit reminder text on
-SESSION.  The pending FIFO is consumed by the content function so each
-event is shown once."
+SESSION.  Receipt consumes only the captured events, preserving late arrivals."
   (mevedel-reminder-create
    :type 'pending-events
    :recipe '(pending-events)
@@ -990,8 +1028,10 @@ event is shown once."
                 (list :body (mapconcat #'identity items "\n\n")
                       :commit
                       (lambda ()
-                        (setf (mevedel-session-pending-reminders session)
-                              nil)))))
+                        (dolist (item items)
+                          (setf (mevedel-session-pending-reminders session)
+                                (cl-delete item (mevedel-session-pending-reminders session)
+                                           :test #'eq :count 1)))))))
    :interval nil))
 
 (defun mevedel-reminders-make-date-change ()
@@ -1139,6 +1179,17 @@ nothing for agents without a configured max-turns cap."
                   (format "You have used %d of %d turns (%d remaining). Wrap up your investigation and return your findings to the caller before you hit the turn limit."
                           count max-turns remaining)))
      :interval 'one-shot)))
+
+(defun mevedel-reminders-agent-turn-limit-context (invocation)
+  "Return current sample-limit guidance for INVOCATION, or nil without a cap.
+This producer does not consume the ordinary one-shot warning.  Engines can
+restore current guidance after replacing model history."
+  (when-let* ((limit (mevedel-agent-max-turns (mevedel-agent-invocation-agent invocation))))
+    (let ((count (mevedel-agent-invocation-turn-count invocation)))
+      (if (>= count limit)
+          (format "This is your final turn (%d of %d). Reply now with your findings for the caller; any tools you still call run, then your turn ends."
+                  count limit)
+        (funcall (mevedel-reminder-content (mevedel-reminders-make-max-turns-warning)) invocation)))))
 
 
 ;;

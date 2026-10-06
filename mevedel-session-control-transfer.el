@@ -14,6 +14,11 @@
                   "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-assert-local-history "mevedel-engine"
+                  (session operation &optional backend))
+(autoload 'mevedel-engine-assert-local-history "mevedel-engine")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p
                   "mevedel-execution" (session))
@@ -609,6 +614,7 @@ the live session or buffer changes."
           (error "Transferred session has no valid committed sidecar"))
         (unwind-protect
             (progn
+              (mevedel-engine-assert-local-history refreshed "Session control transfer")
               (mevedel-session-control-transfer--stage-session
                session refreshed publication staging-buffer)
               (mevedel-session-control-transfer--insert-committed-segment
@@ -657,6 +663,7 @@ the live session or buffer changes."
              (mevedel-session-save-path session)
              (memq (plist-get (mevedel-session-control-transfer session) :state)
                    '(requested quiescing)))
+    (mevedel-engine-assert-local-history session "Session control transfer")
     (mevedel-session-control-transfer-register-root-buffer session buffer)
     (when (buffer-modified-p buffer)
       (user-error "Read-only session changed locally; refresh before transfer"))
@@ -690,6 +697,7 @@ For a lease nobody holds there is no owner to request control from, and for
 an expired one the lease layer's own takeover confirmation is the whole
 negotiation.  Both reduce to acquiring and adopting committed state, which is
 also what a granted transfer ends with."
+  (mevedel-engine-assert-local-history session "Session control transfer")
   (unless (buffer-live-p buffer)
     (error "Session buffer is not live"))
   (unless (mevedel-session-save-path session)
