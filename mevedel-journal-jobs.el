@@ -63,7 +63,7 @@
                       ((condition-case unavailable
                            (progn (mevedel-journal-process--policy workspace capture) nil)
                          (error (setq detail (error-message-string unavailable)) t)) 'unavailable)
-                      ((>= attempts 3) 'exhausted)
+                      ((>= attempts mevedel-journal-process--automatic-attempts) 'exhausted)
                       ((> attempts 0) 'failed)
                       (t 'pending)))
                (when (and (eq status 'recovery) (not (plist-get capture :unreadable)))

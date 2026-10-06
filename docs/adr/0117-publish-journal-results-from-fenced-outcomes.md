@@ -20,8 +20,10 @@ or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
 Successful completed-turn saves freeze one immutable evidence bundle and pin its
-source before marking it ready. Compaction, clear, or session-end sealing admits
-digest work without capturing incomplete responses. Clear sealing uses selected
+source before marking it ready. Compaction, clear, session-end, or idle sealing
+admits digest work without capturing incomplete responses. Idle sealing ends a
+configurable quiet period after the last completed root turn of a session that
+stays open and runs no request, so long-running sessions produce digests. Clear sealing uses selected
 pre-clear checkpoints, preserving their evidence and captured session title.
 Capture, seal, and public metadata admit the same closed trigger vocabulary;
 repeated sealing preserves the first trigger. Stable fork-point identities define
@@ -48,13 +50,19 @@ selected digest evidence. It uses scoped read-only tools in a sessionless reques
 Only a terminal validated reply can be accepted. A published general review
 advances coverage; focused reviews, failures, private results, and timestamps do
 not. Proposals retain exact before-state and evidence until their decisions and
-recovery dependencies are resolved. Propose is the default; auto uses the same
-checked application, while instruction changes always await approval.
+recovery dependencies are resolved. Propose is the default; auto applies memory
+and instruction proposals through the same checked application.
 
 Completed, durably saved root turns provide automatic opportunities for journal
 recovery/cleanup and memory review/reconciliation. Publication and explicit
-memory operations retain their existing opportunities. Opening a conversation
-or the session chooser does not launch workspace-wide maintenance. For local
+memory operations retain their existing opportunities. Opening a session only
+queues journal recovery, digest processing and a consolidation offer; the
+session chooser launches nothing, and cleanup and memory-decision recovery stay
+off session startup. While a root session is open, one idle maintenance timer
+gives each local Linux workspace a processing opportunity, a consolidation offer
+and the hourly-throttled cleanup once Emacs has been without input briefly. A
+capture that exhausts its three automatic attempts is reported once per Emacs
+session and waits for explicit retry or discard. For local
 Linux workspaces, deferred root-turn checkpoint preparation, scheduled journal
 recovery, digest discovery/admission and retention execute in short-lived batch
 Emacs workers. Checkpoint preparation reads a frozen committed publication without
@@ -414,7 +422,8 @@ scheduled workspace-wide maintenance on immediate timers; those callbacks still
 blocked the Emacs UI. These opportunities now run after completed, durably saved
 root turns. Explicit memory operations retain checked recovery, and publication
 still schedules its existing processing and cleanup. Merely opening a session
-no longer launches consolidation or workspace recovery scans.
+no longer launches consolidation or workspace recovery scans. (Partially
+reversed on 2026-10-06 for journal processing; see below.)
 
 The 2026-09-22 follow-up found a remaining synchronous journal-retention call
 inside file-session expiry, also reached by project choosers and exit. A chooser
@@ -577,3 +586,42 @@ in the user, feedback, enduring project, and reference categories. The direct-sa
 prompt and manual follow the same boundary; the journal's Unfinished field holds
 uncertainty about qualifying knowledge rather than pending work. Existing records
 remain unchanged, while subsequent reviews apply the stricter criteria.
+
+### 2026-10-06: make advertised automatic maintenance run
+
+The user required that behavior described as automatic actually happen. An audit
+found four gaps. Digest generation admits only sealed captures, and sealing
+happened only at compaction, `/clear`, session close and Emacs exit, so a
+session left open for days never produced a digest. Work sealed at exit started
+no request, by design, and then waited for the next completed root turn in that
+workspace. The "hourly idle cleanup opportunity" had no timer: one hour was only
+the throttle on cleanup offered after root turns. And in every workspace type
+except `project`, artifact cleanup triggered at turn settlement always found the
+settling session's own PID lock and postponed itself.
+
+Idle sealing now closes a checkpoint after a quiet period
+(`mevedel-journal-seal-idle-minutes`, default 20) with the new closed trigger
+`idle`, under the same root, read-only and lease rules as other seals. Opening
+a session queues recovery, processing and a consolidation offer. This partially
+reverses the 2026-09-19 decision: the startup cost it measured was journal
+cleanup (12.2% of samples) and memory-decision recovery (4.2%) on immediate
+timers in the editor. Both stay off session startup. Recovery and digest
+admission have run in batch children on local workspaces since 2026-09-22, and
+the remaining editor work only queues behind transport idleness. Remote
+workspaces still do this work synchronously when the transport is idle, as they
+already did after every root turn. A single maintenance timer
+(`mevedel-journal-idle-maintenance-minutes`, default 10) offers local workspaces
+processing, consolidation and cleanup while Emacs is quiet. It drains one digest
+per opportunity and makes the hourly cleanup throttle describe a real schedule.
+Remote workspaces are skipped because their editor-side storage work would block
+input without a triggering user action. Artifact cleanup no longer treats locks
+held by this Emacs, whose buffers it searches directly, or stale same-host locks
+of dead holders as foreign owners. Exhausted captures previously disappeared
+from automatic processing silently; they now warn once and point to the job
+browser.
+
+`auto` previously held instruction proposals, including `AGENTS.md` changes,
+for approval. That made the mode only partly automatic. Instruction proposals
+already use the checked decision path, with exact before-state, a durable intent
+marker and checked reversal, so `auto` now applies them like memory proposals.
+`propose` remains the default for users who want to approve every change.

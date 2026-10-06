@@ -25,10 +25,11 @@
 
 (defcustom mevedel-memory-consolidation-mode 'propose
   "How memory consolidation is scheduled and proposals are handled.
-Manual runs only on request. Propose also runs after digest publication and
-completed root turns. Auto uses the same gate and applies fresh memory proposals
-with checked writes.
-Instruction proposals always wait for explicit approval."
+Manual runs only on request.  Propose also runs automatically, at digest
+publication, completed root turns, session opening and idle maintenance, and
+leaves its proposals for approval.  Auto uses the same gate and applies fresh
+memory and instruction proposals, including `AGENTS.md' changes, through the
+checked decision path without prior review."
   :type '(choice (const manual) (const propose) (const auto))
   :group 'mevedel)
 
@@ -181,14 +182,15 @@ represented by the target claim and does not grant local cancellation rights."
 
 (defun mevedel-memory-pass--apply (state accepted)
   "Apply ACCEPTED memory proposals sequentially for completed pass STATE.
-Each application reacquires workspace and original-target ownership. Hold
-instructions and stop before further proposals if cancellation was requested.
+Each application reacquires workspace and original-target ownership, for
+instruction proposals as for memory ones.  Stop before further proposals if
+cancellation was requested, holding the rest.
 Count distinct files only through this call's confirmed-write notification."
   (let ((workspace (plist-get state :workspace))
         (pass (plist-get (plist-get accepted :prepared) :id))
         (applied 0) (held 0) (unapplied 0) files)
     (dolist (proposal (plist-get accepted :proposals))
-      (if (or (plist-get state :stop-apply) (eq (plist-get proposal :action) 'instructions))
+      (if (plist-get state :stop-apply)
           (cl-incf held)
         (condition-case nil
             (let ((decision

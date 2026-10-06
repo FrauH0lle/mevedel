@@ -16,6 +16,10 @@
 
 (define-error 'mevedel-journal-store-invalid "Invalid journal entry")
 
+(defconst mevedel-journal-store-triggers '(compaction session-end clear idle)
+  "Closed vocabulary of lifecycle events that seal completed-work captures.
+Capture descriptors, seal records, and public digest metadata admit only these.")
+
 (defcustom mevedel-journal-max-age-days 14
   "Age in days after which journal entries leave ordinary recall.
 Age uses the immutable entry creation timestamp.  Nil disables ordinary
@@ -212,7 +216,7 @@ KIND selects the digest, consolidation, or decision schema."
                  (pcase key
                    ((or :capture-id :pass-id :decision-id :proposal-id :state-hash :workspace :source-revision)
                     (mevedel-journal-store-id-p value))
-                   (:trigger (memq value '(compaction session-end clear)))
+                   (:trigger (memq value mevedel-journal-store-triggers))
                    ((or :focus :reason) (and (stringp value) (<= (string-bytes value) 4096)))
                    (:status (memq value '(applied rejected stale unavailable recovery-required reversed)))
                    ((or :digests :proposals)

@@ -1671,8 +1671,10 @@ Workspace journal expiry runs before session-cleanup eligibility checks, so
 disabling session expiry or using a TRAMP workspace does not disable it.
 `mevedel-journal-max-age-days` independently defaults to 14 days of ordinary
 recall from immutable entry creation (nil disables recall age filtering). Expired entries
-are hidden from ordinary recall even when their bytes must remain. An hourly
-cleanup opportunity, plus idle work after decisions, retires eligible evidence through recoverable accepted
+are hidden from ordinary recall even when their bytes must remain. A cleanup
+opportunity throttled to once an hour, offered by completed root turns and, on
+local Linux workspaces with an open root session, by the idle maintenance timer,
+plus idle work after decisions, retires eligible evidence through recoverable accepted
 manifests, preserving unreviewed digests, pending captures, evidence pins and
 unresolved proposal/write dependencies. A successful general no-action review
 counts as processing. Processed notes retire once references end, regardless of
@@ -1693,12 +1695,16 @@ prepares evidence in a child and retains admission until the editor validates th
 unchanged source and publishes the pin; explicit checkpoints remain synchronous.
 A checkpoint containing all of an
 unsealed predecessor's turns replaces that predecessor's pin only after its
-own pin and ready marker are durable. Compaction success, root-buffer close,
-and Emacs exit seal completed checkpoints. Turn completion, successful root
-compaction, and session close queue background processing; Emacs exit cancels
-queued/active processing and starts no inference. Accepted digest outcomes
-recover on the next processing opportunity before replacement inference.
-Workspace activation also queues abandoned-checkpoint recovery before processing.
+own pin and ready marker are durable. Compaction success, `/clear`, a quiet
+period of `mevedel-journal-seal-idle-minutes` after the last completed root turn,
+root-buffer close, and Emacs exit seal completed checkpoints. Turn completion,
+idle sealing, successful root compaction, session close, session opening, and
+the idle maintenance timer queue background processing; Emacs exit cancels
+queued/active processing and timers and starts no inference. Accepted digest
+outcomes recover on the next processing opportunity before replacement
+inference. Completed root turns, session opening, and idle maintenance also
+queue abandoned-checkpoint recovery before processing, so work sealed at exit is
+processed when a session next opens. See [memory](memory.md#digest-generation).
 It repairs unready captures and seals frozen completed work under temporary source
 authority, without resuming a conversation or retaining authority during inference.
 Live or foreign PID holders, unreadable locks, live portable leases, publishing

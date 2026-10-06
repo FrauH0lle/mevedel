@@ -324,7 +324,8 @@ in-memory admission fence supplies cancellation cleanup so transport teardown
 cannot leave the session permanently busy. Lifecycle events that may fire
 repeatedly (turn completion, activation, buffer kill) arm one coalesced
 opportunity per key through `mevedel-transport-schedule-idle`, which the
-journal processor, the memory pass, and memory recovery share.
+journal processor, idle journal sealing, the memory pass, and memory recovery
+share.
 
 Each pending transport entry owns its retry timer and cancellation callback
 together. Deferred retries execute and remove entries only while their exact
@@ -727,16 +728,22 @@ coordination (`memory-write/`), clipboard images (`media/`), Git evidence packag
 not a disposable cache: journal recovery and target write coordination retain
 their own cleanup rules, and plugins own their runtime data.
 
-The hourly idle cleanup opportunity also collects generated clipboard/guest PNGs
-and review packages older than seven days, up to 100 deletions per run. A complete
+The workspace cleanup opportunity, throttled to once an hour, also collects
+generated clipboard/guest PNGs and review packages older than seven days, up to
+100 deletions per run. Completed root turns offer it, and on local Linux
+workspaces the idle maintenance timer offers it while a root session is open,
+so it runs hourly while Emacs is idle. A complete
 target-side ripgrep search of `.mevedel/` retains files mentioned in saved
 conversations, historical publication snapshots, input history, memory, journal,
 and other retained state. The artifact and diagnostics directories themselves
 are excluded. Live buffers, input rings, drafts, and gptel file contexts also
 retain files. References are conservative basename matches; unrelated mentions
 can retain a file. References outside managed workspace state are not tracked.
-Foreign session ownership, linked candidate directories, or an incomplete search
-postpone collection. Unknown filenames and files over 32 MiB are retained; a
+A live foreign session owner (a PID lock held by another live process,
+an unreadable or cross-host lock, or a live portable lease), linked candidate
+directories, or an incomplete search postpone collection. PID locks held by this
+Emacs, whose buffers are searched directly, and stale locks whose same-host
+holder is dead do not. Unknown filenames and files over 32 MiB are retained; a
 file changed since selection is skipped. Cleanup runs even without public journal
 entries and never calls a model.
 

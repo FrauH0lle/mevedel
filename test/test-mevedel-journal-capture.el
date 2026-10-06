@@ -252,7 +252,7 @@
   ,test
   (test)
   :doc "clear sealing preserves selected evidence, title, first trigger, and turn coverage"
-  (dolist (first-trigger '(clear compaction session-end))
+  (dolist (first-trigger '(clear compaction session-end idle))
     (mevedel-test-journal-capture--with-session
      (lambda (session buffer)
        (mevedel-test-journal-capture--turn session buffer "First request" "Completed first result")
@@ -502,7 +502,7 @@
 (mevedel-deftest mevedel-journal-capture--read ()
   ,test
   (test)
-  :doc "capture metadata admits clear while rejecting triggers outside the closed vocabulary"
+  :doc "capture metadata admits clear and idle while rejecting triggers outside the closed vocabulary"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
      (mevedel-test-journal-capture--turn session buffer "Request" "Completed result")
@@ -512,11 +512,11 @@
             (path (mevedel-journal-capture--file workspace id "capture.json"))
             (original (mevedel-session-control-fs-read-file path)))
        (unwind-protect
-           (dolist (trigger '("clear" "compaction" "session-end" "manual" "CLEAR"))
+           (dolist (trigger '("clear" "compaction" "session-end" "idle" "manual" "CLEAR"))
              (let ((record (json-parse-string original)))
                (puthash "trigger" trigger (gethash "metadata" record))
                (write-region (json-serialize record) nil path nil 'silent)
-               (if (member trigger '("clear" "compaction" "session-end"))
+               (if (member trigger '("clear" "compaction" "session-end" "idle"))
                    (should (eq (intern trigger)
                                (plist-get (mevedel-journal-capture--metadata
                                            (mevedel-journal-capture--read workspace id)) :trigger)))

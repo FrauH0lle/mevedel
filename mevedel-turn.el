@@ -84,6 +84,10 @@
 (declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace &optional force))
 (autoload 'mevedel-journal-cleanup-schedule "mevedel-journal-cleanup")
 
+;; `mevedel-journal-idle'
+(declare-function mevedel-journal-idle-arm-seal "mevedel-journal-idle" (session buffer))
+(autoload 'mevedel-journal-idle-arm-seal "mevedel-journal-idle")
+
 ;; `mevedel-journal-process'
 (declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
 (autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
@@ -670,7 +674,8 @@ The terminal admission hold stays live between publication and this phase."
                                                       :mevedel-checkpoint-error)))
                         (error "%s" failure)))
                   (mevedel-journal-capture-checkpoint mevedel--session chat-buffer))
-                (mevedel-journal-process-schedule workspace root-p))
+                (mevedel-journal-process-schedule workspace root-p)
+                (when root-p (mevedel-journal-idle-arm-seal mevedel--session chat-buffer)))
             (error
              (mevedel--warn-once 'journal-capture "Journal capture checkpoint failed: %s"
                                  (error-message-string err))))

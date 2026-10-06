@@ -102,6 +102,7 @@
 (require 'mevedel-session-codec)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
+(require 'mevedel-journal-idle)
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-fork)
 (require 'mevedel-session-naming)

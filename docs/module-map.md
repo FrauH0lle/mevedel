@@ -19,6 +19,7 @@ Data model
   mevedel-state-cleanup.el     reference-aware generated media and review-package collection
   mevedel-journal-capture.el   completed-turn checkpoints and lifecycle sealing
   mevedel-journal-process.el   bounded digest requests, outcome recovery, and scheduling
+  mevedel-journal-idle.el      idle sealing, session-open and idle maintenance opportunities
   mevedel-journal-recovery.el  abandoned checkpoint recovery through source authority
   mevedel-journal-discard.el   accepted omissions and recoverable source-pin release
   mevedel-journal-jobs.el      pending journal inspection, retry, and discard commands
