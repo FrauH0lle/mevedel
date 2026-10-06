@@ -1017,13 +1017,14 @@ The bundled `artifact` skill carries the conventions (write there,
 self-contained, keep it small) and resolves the concrete directory at
 invocation. In Emacs, the artifacts cockpit (cockpit `A`) lists the
 folder's files and the session's whiteboards and documents, opens a file
-locally, and deletes either. A file goes with its artifact comments; a
+locally or an item in the session's room (see
+[shared editing](shared-editing.md)), and deletes either. A file goes with its artifact comments; a
 whiteboard or document is deleted as a shared item (see
 [deleting](shared-editing.md#deleting)). A project session commits each
 deletion at once, so Resume, Save As and Fork cannot bring it back before the
 next full save. A live room learns of it; the item state below
-`artifacts/shared-editing/` never lists as files. All of this works with no
-room and no relay.
+`artifacts/shared-editing/` never lists as files. Everything except opening
+an item works with no room and no relay.
 
 See [Browser artifact viewing](collaboration.md#artifact-viewing) for cards,
 on-demand transfer, sandboxed HTML, and supported formats.
@@ -1345,6 +1346,14 @@ Markdown rendering adds small view-only affordances:
   that the artifact exists. One projection resolves each distinct path once,
   and a bare path is considered for inline image display only when it has an
   image extension.
+- resource addresses, bare, in inline code, or as a Markdown link target, are
+  buttons. A click resolves them; a redraw never does. `shared://ID[/PART]`
+  opens the whiteboard or document in the session's room, like `o` in the
+  artifacts cockpit; `agent://root/PATH` and `history://root/PATH` open that
+  agent's transcript; `work://` and `memory://` files open for editing; and
+  `artifact://`, `mevedel://` and `skill://` files open read-only. An address
+  with no backing file, such as a listing, reports that there is nothing to
+  open. `mcp://` addresses stay text.
 
 Markdown links, local images, paths, and fenced source-panel projection are
 isolated in `mevedel-view-markdown.el`, deferred target path verification in

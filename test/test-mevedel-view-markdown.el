@@ -156,6 +156,7 @@
   (:doc "`mevedel-view--decorate-markdown-in-range' renders Markdown links")
   ,test
   (test)
+  :doc "a web link becomes a button visiting its URL"
   (with-temp-buffer
     (insert "[Engineer](http://x.com)\n")
     (add-text-properties (point-min) (point-max)
@@ -169,7 +170,46 @@
     (let ((button (button-at (match-beginning 0))))
       (should button)
       (should (equal "http://x.com"
-                     (button-get button 'mevedel-view-url))))))
+                     (button-get button 'mevedel-view-url)))))
+  :doc "a shared:// item link opens the item in the session's room"
+  (with-temp-buffer
+    (insert "[Plan](shared://ab12)\n")
+    (setq-local mevedel--data-buffer (current-buffer))
+    (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+    (should (equal "Plan\n" (buffer-string)))
+    (let (opened)
+      (cl-letf (((symbol-function 'mevedel-collaboration-open-shared-item)
+                 (lambda (buffer id) (setq opened (list buffer id)))))
+        (button-activate (button-at (point-min))))
+      (should (equal (list (current-buffer) "ab12") opened))))
+  :doc "bare resource addresses open their file, agent or item on click"
+  (with-temp-buffer
+    (insert "See `work://notes.md`, agent://root/review#/result and shared://ab12/view.png.\n"
+            "```\nwork://code.md\n```\n")
+    (setq-local mevedel--data-buffer (current-buffer))
+    (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+    (let (visited agent item)
+      (cl-letf (((symbol-function 'mevedel-resource-visit-path)
+                 (lambda (address &rest _) (and (equal address "work://notes.md") "/tmp/notes.md")))
+                ((symbol-function 'file-exists-p) (lambda (_) t))
+                ((symbol-function 'find-file-other-window) (lambda (path) (setq visited path)))
+                ((symbol-function 'mevedel-view-open-agent-transcript)
+                 (lambda (path) (setq agent path)))
+                ((symbol-function 'mevedel-collaboration-open-shared-item)
+                 (lambda (_ id) (setq item id))))
+        (dolist (address '("work://notes.md" "agent://root/review#/result" "shared://ab12/view.png"))
+          (goto-char (point-min))
+          (search-forward address)
+          (let ((button (button-at (match-beginning 0))))
+            (should button)
+            (should (= (match-end 0) (button-end button)))
+            (button-activate button)))
+        (should (equal "/tmp/notes.md" visited))
+        (should (equal "/root/review" agent))
+        (should (equal "ab12" item))
+        (goto-char (point-min))
+        (search-forward "work://code.md")
+        (should-not (button-at (match-beginning 0)))))))
 
 (mevedel-deftest mevedel-view--decorate-local-images-in-range
   (:doc "`mevedel-view--decorate-local-images-in-range' displays local image references")

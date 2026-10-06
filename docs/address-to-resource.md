@@ -478,6 +478,12 @@ Once a scheme prefix is present, completion constructs only that scheme's
 metadata. Remote backing roots are not enumerated during completion; their
 bare prefix remains usable until an explicit resource operation resolves it.
 
+Addresses in the transcript view are buttons (see [the view](view.md)).
+Rendering only recognizes their spelling; a click resolves the address through
+the same Read preparation, with the same validation and containment, and
+`mevedel-resource-visit-path` returns the backing file of a file-backed
+address. No attempt outlives the click.
+
 ## Execution target and Plan mode
 
 Session-owned `work://` descendants, `artifact://`, `agent://`, and live `history://root[/PATH]` resources

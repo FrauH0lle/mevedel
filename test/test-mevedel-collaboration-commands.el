@@ -247,6 +247,44 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-collaboration-open-shared-item
+  (:doc "opens the item in the session's room, starting it only after consent")
+  (let ((session (mevedel-session--create :name "share"))
+        (data-buffer (generate-new-buffer " *collaboration-open-item*"))
+        (room (list :session-label "share"
+                    :link-full "https://relay.example/#room123456.secret"))
+        live consent started opened)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
+                     (lambda (_) live))
+                    ((symbol-function 'yes-or-no-p) (lambda (_) consent))
+                    ((symbol-function 'mevedel-collaboration--start)
+                     (lambda (seen buffer)
+                       (should (eq session seen))
+                       (should (eq data-buffer buffer))
+                       (setq started t)
+                       room))
+                    ((symbol-function 'browse-url)
+                     (lambda (url &rest _) (setq opened url)))
+                    ((symbol-function 'message) #'ignore))
+            ;; Declining leaves the session unshared and opens nothing.
+            (should-error (mevedel-collaboration-open-shared-item data-buffer "ab12")
+                          :type 'user-error)
+            (should-not (or started opened))
+            (setq consent t)
+            (mevedel-collaboration-open-shared-item data-buffer "ab12")
+            (should started)
+            (should (equal "https://relay.example/?shared=ab12#room123456.secret" opened))
+            ;; A live room opens directly, without asking again.
+            (setq live room started nil consent nil opened nil)
+            (mevedel-collaboration-open-shared-item data-buffer "cd34")
+            (should-not started)
+            (should (equal "https://relay.example/?shared=cd34#room123456.secret" opened))))
+      (kill-buffer data-buffer))))
+
 (mevedel-deftest mevedel-cmd--collab
   (:doc "does not return a bearer URL to slash dispatch")
   (cl-letf (((symbol-function 'mevedel-collaboration-view)

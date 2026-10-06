@@ -13,6 +13,13 @@ An editor tab shows its loading state immediately. If the item cannot be read,
 it keeps the requested item and displays an error with Retry; it does not fall
 back silently to the room. Back to room cancels a pending editor opening.
 
+From Emacs, `o` on an item's row in the artifacts cockpit, or clicking a
+`[title](shared://ID)` link in the transcript, opens that item's editor tab in
+the default browser with the session's full-control link. The editor exists
+only in a room, so for a session that is not shared this first asks, with
+`/collab`'s disclosure, to start sharing it; the room then stays up until
+`/collab stop`.
+
 Documents use a continuous paper surface, serif body text, and grouped **Text**,
 **Lists**, and **Insert** menus. Room and editor controls share cool and warm
 palettes and system/light/dark appearance; changes follow the editor without

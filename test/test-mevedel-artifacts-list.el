@@ -122,7 +122,22 @@
                            :path "/missing/mevedel-artifact.html"))
           (should-error (mevedel-artifacts-list-open-browser)
                         :type 'user-error))
-      (when (file-exists-p path) (delete-file path)))))
+      (when (file-exists-p path) (delete-file path))))
+
+  :doc "opens a shared item in the session's room"
+  (let ((data (generate-new-buffer " *artifacts-open-item*"))
+        opened)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-cockpit-surface-selected)
+                   (lambda (&optional _) (list :name "Whiteboard · Plan" :item "ab12")))
+                  ((symbol-function 'mevedel-cockpit-surface-context)
+                   (lambda (&optional _)
+                     (mevedel-artifacts-list-test--context nil nil data)))
+                  ((symbol-function 'mevedel-collaboration-open-shared-item)
+                   (lambda (buffer id) (setq opened (list buffer id)))))
+          (mevedel-artifacts-list-open-browser)
+          (should (equal (list data "ab12") opened)))
+      (kill-buffer data))))
 
 (mevedel-deftest mevedel-artifacts-list-delete (:quiet t)
   ,test

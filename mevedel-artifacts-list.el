@@ -19,6 +19,7 @@
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-data-buffer "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-format-header
                   "mevedel-cockpit" (name scope state))
@@ -47,6 +48,10 @@
 (declare-function mevedel-collaboration-delete-artifact
                   "mevedel-collaboration-artifact" (session name))
 (autoload 'mevedel-collaboration-delete-artifact "mevedel-collaboration-artifact")
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-open-shared-item
+                  "mevedel-collaboration" (data-buffer id))
+(autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
 
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
@@ -183,7 +188,7 @@
   (let* ((item (mevedel-cockpit-surface-selected))
          (path (plist-get item :path)))
     (when (plist-get item :item)
-      (user-error "Open whiteboards and documents from the room's Shared work"))
+      (user-error "Whiteboards and documents have no file; open them with o"))
     (unless (and path (file-exists-p path))
       (mevedel-cockpit-surface-refresh)
       (user-error "Artifact file no longer exists"))
@@ -191,13 +196,19 @@
 
 (defun mevedel-artifacts-list-open-browser ()
   "Open the selected artifact in a web browser.
-A remote artifact file is visited in Emacs instead: the local browser
-cannot read the target's filesystem."
+A whiteboard or document opens in the session's room, which is started
+after confirmation when the session is not shared.  A remote artifact
+file is visited in Emacs instead: the local browser cannot read the
+target's filesystem."
   (interactive)
-  (let ((path (mevedel-artifacts-list--selected-path)))
-    (if (file-remote-p path)
-        (find-file path)
-      (browse-url-of-file path))))
+  (if-let* ((id (plist-get (mevedel-cockpit-surface-selected) :item)))
+      (mevedel-collaboration-open-shared-item
+       (mevedel-cockpit-context-data-buffer (mevedel-cockpit-surface-context))
+       id)
+    (let ((path (mevedel-artifacts-list--selected-path)))
+      (if (file-remote-p path)
+          (find-file path)
+        (browse-url-of-file path)))))
 
 (defun mevedel-artifacts-list-visit ()
   "Visit the selected artifact file in Emacs."
@@ -252,7 +263,7 @@ progress, together with its comments and history."
     :header mevedel-artifacts-list--header
     :details mevedel-artifacts-list--details
     :details-buffer "*mevedel artifact details*"
-    :keys (("o" "Open the selected artifact in a browser"
+    :keys (("o" "Open the selected artifact or shared item in a browser"
             mevedel-artifacts-list-open-browser)
            ("e" "Visit the selected artifact file in Emacs"
             mevedel-artifacts-list-visit)
