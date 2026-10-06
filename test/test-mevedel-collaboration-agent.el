@@ -159,11 +159,85 @@
           (should-not (mevedel-collaboration--agent-conversation room 5))
           (should-not (mevedel-collaboration--agent-conversation
                        (list :session nil) "/root/worker-1"))
-          ;; A cold agent is refused rather than hydrated.
+          ;; A cold agent has no resident conversation.
           (kill-buffer buffer)
           (should-not (mevedel-collaboration--agent-conversation
                        room "/root/worker-1")))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel-collaboration--load-agent
+  (:doc "loads a cold agent once off the frame handler and refuses a failed load")
+  (let* ((data (generate-new-buffer " *agent-load-root*"))
+         (cold (mevedel-agent-record--create :path "/root/cold"))
+         (broken (mevedel-agent-record--create :path "/root/broken"))
+         (session (mevedel-session--create
+                   :name "s"
+                   :agent-registry (list (cons "/root/cold" cold)
+                                         (cons "/root/broken" broken))))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :guests guests :transport 'transport
+                     :data-buffer data))
+         (now 1000.0)
+         loaded timers sent)
+    (puthash 1 (list :name "viewer" :writable nil :ready t) guests)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport _peer frame) (push frame sent) t))
+                  ((symbol-function 'float-time) (lambda (&optional _) now))
+                  ((symbol-function 'run-at-time)
+                   (lambda (_time _repeat fn &rest args)
+                     (push (cons fn args) timers)))
+                  ((symbol-function 'mevedel-collaboration--room-for-buffer)
+                   (lambda (buffer) (and (eq buffer data) room)))
+                  ((symbol-function 'mevedel-collaboration--canonical-records)
+                   (lambda (_buffer) nil))
+                  ((symbol-function 'mevedel-agent-persistence-ensure-conversation)
+                   (lambda (seen-session record root _readonly)
+                     (should (eq session seen-session))
+                     (should (eq data root))
+                     (when (eq record broken) (error "Corrupt transcript"))
+                     (setq loaded (generate-new-buffer " *agent-loaded*"))
+                     (setf (mevedel-agent-record-conversation-buffer record) loaded))))
+          ;; A cold agent queues one load and sends nothing yet.
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 1 :path "/root/cold"))
+          (should-not sent)
+          (should (= 1 (length timers)))
+          ;; A poll while the load is pending queues no second load.
+          (setq now 1002.0)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 2 :path "/root/cold"))
+          (should-not sent)
+          (should (= 1 (length timers)))
+          ;; Once loaded, the next poll gets the transcript.
+          (apply (caar timers) (cdar timers))
+          (should (buffer-live-p loaded))
+          (setq now 1004.0)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 3 :path "/root/cold"))
+          (should (eq t (plist-get (car sent) :final)))
+          (should-not (plist-get (car sent) :error))
+          ;; A failed load is refused on the next poll and never retried.
+          (setq timers nil sent nil now 1006.0)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 4 :path "/root/broken"))
+          (apply (caar timers) (cdar timers))
+          (setq now 1008.0)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 5 :path "/root/broken"))
+          (should (stringp (plist-get (car sent) :error)))
+          (should (= 1 (length timers)))
+          ;; A load queued for a room that has since stopped does nothing.
+          (setf (mevedel-agent-record-conversation-buffer cold) nil)
+          (setq timers nil now 1010.0)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 6 :path "/root/cold"))
+          (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
+                     #'ignore))
+            (apply (caar timers) (cdar timers)))
+          (should-not (mevedel-agent-record-conversation-buffer cold)))
+      (when (buffer-live-p loaded) (kill-buffer loaded))
+      (kill-buffer data))))
 
 (mevedel-deftest mevedel-collaboration--handle-fetch-agent
   (:doc "answers chunked projected records with an unchanged latch and a throttle")
