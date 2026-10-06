@@ -165,6 +165,13 @@ body.editor #properties .menu-body { border-radius:4px; max-height:calc(100dvh -
 .library-insert span { font-size:11px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-menu .library-remove { position:absolute; top:2px; right:2px; padding:0 6px; line-height:18px; }
 .library-body input[type=search] { width:100%; box-sizing:border-box; }
+.library-sections { display:flex; flex-direction:column; gap:4px; }
+.library-section > summary { display:flex; align-items:baseline; gap:6px; padding:4px 2px; cursor:pointer; }
+.library-section > summary::before { content:"▸"; color:var(--muted); }
+.library-section[open] > summary::before { content:"▾"; }
+.library-section > :not(summary) { margin-top:6px; }
+.library-section > summary h4 { margin:0; flex:1; }
+.library-section > summary small { color:var(--muted); }
 .library-catalog { display:flex; flex-direction:column; gap:2px; max-height:50dvh; overflow-y:auto; }
 .editor-menu .library-entry { display:flex; flex-direction:column; align-items:flex-start; gap:1px; }
 .library-entry small { color:var(--muted); }
