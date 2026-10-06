@@ -119,3 +119,13 @@ All revisions below refine ADR 0104's closed resolver decision.
   at concrete root/agent addresses; saved-history search remains the route to
   archived segments. This extends an existing resource rather than adding a
   conversation-specific lookup interface.
+- **Lenient address spelling.** The resolver accepted only the canonical
+  spelling. Across 17 sessions from 2026-09-14 to 2026-10-06, models were
+  rejected 27 times for a directory's trailing slash, almost always
+  `work://shared/`, the spelling mevedel's own prompts used, and twice for a
+  library name written as the listing printed it, with spaces. Each rejection cost a
+  round trip and taught nothing, because both spellings have exactly one
+  meaning. The resolver now normalizes literal characters, either hex case, and
+  one trailing slash to the canonical locator. Identity, containment and the
+  rejection of traversal, decoded separators and malformed escapes are
+  unchanged.

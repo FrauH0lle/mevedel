@@ -853,25 +853,7 @@ An error result is signalled, as a Read that failed before waiting does."
         (should (equal (plist-get (car (plist-get result :media)) :mime)
                        "image/png"))
         (should (plist-get (car (plist-get result :media)) :data)))))
-  :doc "treats default offset and limit values as absent for media reads"
-  (test-mevedel-tool-fs-read--with-file ".png" nil
-    (test-mevedel-tool-fs-read--write-bytes
-     tmp test-mevedel-tool-fs-read--png-bytes)
-    (cl-letf (((symbol-function 'gptel--model-capable-p)
-               (lambda (cap &optional _model) (eq cap 'media)))
-              ((symbol-function 'gptel--model-mime-capable-p)
-               (lambda (mime &optional _model)
-                 (equal mime "image/png")))
-              )
-      (let ((result (test-mevedel-tool-fs-read--settle
-                     (lambda (k)
-                       (mevedel-tool-fs-read--file
-                        (list :file_path tmp :offset 0 :limit 2000
-                              :pages "") k)))))
-        (should (listp result))
-        (should (equal (plist-get (car (plist-get result :media)) :mime)
-                       "image/png")))))
-  :doc "rejects nonzero text ranges for media reads"
+  :doc "ignores text ranges for media reads"
   (test-mevedel-tool-fs-read--with-file ".png" nil
     (test-mevedel-tool-fs-read--write-bytes
      tmp test-mevedel-tool-fs-read--png-bytes)
@@ -880,14 +862,14 @@ An error result is signalled, as a Read that failed before waiting does."
               ((symbol-function 'gptel--model-mime-capable-p)
                (lambda (mime &optional _model)
                  (equal mime "image/png"))))
-      (let ((err (should-error
-                  (test-mevedel-tool-fs-read--settle
-                   (lambda (k)
-                     (mevedel-tool-fs-read--file
-                      (list :file_path tmp :offset 1) k)))
-                   :type 'error)))
-        (should (string-match-p "offset and limit"
-                                (cadr err))))))
+      (dolist (range '((:offset 0 :limit 2000) (:offset 1 :limit 1)
+                       (:offset 50 :limit 5)))
+        (let ((result (test-mevedel-tool-fs-read--settle
+                       (lambda (k)
+                         (mevedel-tool-fs-read--file
+                          (append (list :file_path tmp :pages "") range) k)))))
+          (should (equal (plist-get (car (plist-get result :media)) :mime)
+                         "image/png"))))))
   :doc "rejects media reads when current model cannot accept media"
   (test-mevedel-tool-fs-read--with-file ".jpg" "jpg-bytes"
     (cl-letf (((symbol-function 'gptel--model-capable-p)

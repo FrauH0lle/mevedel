@@ -148,9 +148,14 @@
     (should (string-search "ApplyPatch" (cadr failure)))
     (should (string-search "artifact://report.txt" (cadr failure)))
     (should-not (string-search "Invalid resource address" (cadr failure))))
-  :doc "trailing slash rejection explains the canonical spelling"
-  (let ((failure (should-error (mevedel-resource-prepare 'read "work://shared/" nil))))
-    (should (string-search "trailing slash" (cadr failure)))))
+  :doc "a trailing slash names the directory and diagnostics use its canonical spelling"
+  (let* ((session (mevedel-session--create))
+         (failure (should-error
+                   (mevedel-resource-execute
+                    (mevedel-resource-prepare 'read "work://shared/" (list :session session))
+                    #'ignore))))
+    (should (string-search "work://shared" (error-message-string failure)))
+    (should-not (string-search "work://shared/" (error-message-string failure)))))
 
 (mevedel-deftest mevedel-resource-execute/family-diagnostics ()
   ,test
