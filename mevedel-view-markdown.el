@@ -9,6 +9,16 @@
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
+(declare-function mevedel-collaboration-open-shared-item
+                  "mevedel-collaboration" (data-buffer id))
+(autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
+(declare-function mevedel-resource-visit-path "mevedel-resource"
+                  (address &optional context))
+(autoload 'mevedel-resource-visit-path "mevedel-resource")
+(declare-function mevedel-view-open-agent-transcript "mevedel-view-agent"
+                  (agent-path))
+(autoload 'mevedel-view-open-agent-transcript "mevedel-view-agent")
+(defvar mevedel--data-buffer)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
@@ -230,10 +240,41 @@ Both sources consulted here are already in memory."
     pointer nil)
   "Text properties that make rendered text act like a link.")
 
+(defconst mevedel-view--resource-address-regexp
+  (concat "\\(?:work\\|artifact\\|skill\\|memory\\|mevedel\\|agent\\|history\\|shared\\)"
+          "://[^][ \t\n`'\"()<>{}]*[^][ \t\n`'\"()<>{}.,;:!?]")
+  "Regexp matching a resource address the view can open.
+Trailing sentence punctuation is not part of the address.")
+
+(defun mevedel-view--visit-resource (address)
+  "Open resource ADDRESS from the transcript.
+A shared item opens in the room, an agent address its transcript, and
+a file-backed address the file.  Resolution runs here, on click, never
+during a redraw."
+  (cond
+   ((string-match "\\`shared://\\([0-9a-f]+\\)\\(?:/\\|\\'\\)" address)
+    (mevedel-collaboration-open-shared-item
+     (bound-and-true-p mevedel--data-buffer) (match-string 1 address)))
+   ((string-match "\\`\\(?:agent\\|history\\)://\\(root/[^#]+\\)" address)
+    (mevedel-view-open-agent-transcript (concat "/" (match-string 1 address))))
+   (t
+    (let ((path (condition-case err
+                    (mevedel-resource-visit-path
+                     address (list :session (bound-and-true-p mevedel--session)))
+                  (error (user-error "%s" (error-message-string err))))))
+      (unless (and path (file-exists-p path))
+        (user-error "Nothing to open for %s" address))
+      ;; Only working files and memory are editable through their address.
+      (if (string-match-p "\\`\\(?:work\\|memory\\)://" address)
+          (find-file-other-window path)
+        (find-file-read-only-other-window path))))))
+
 (defun mevedel-view--open-url-action (button)
-  "Open BUTTON's URL with `browse-url'."
+  "Open BUTTON's URL with `browse-url', or its resource address."
   (when-let* ((url (button-get button 'mevedel-view-url)))
-    (browse-url url)))
+    (if (string-match-p (concat "\\`" mevedel-view--resource-address-regexp) url)
+        (mevedel-view--visit-resource url)
+      (browse-url url))))
 
 (defconst mevedel-view--line-ref-atom-regexp
   "\\(?:#L\\|L\\)?[1-9][0-9]*"
@@ -603,12 +644,15 @@ discipline."
     (nreverse ranges)))
 
 (defun mevedel-view--render-markdown-url-links-in-range (start end)
-  "Render Markdown URL links between START and END as clickable labels."
+  "Render Markdown URL links between START and END as clickable labels.
+Besides web URLs, a link may target a resource address."
   (let ((src-ranges (mevedel-view--src-block-body-ranges start end)))
     (save-excursion
       (goto-char start)
-      (while (re-search-forward "\\[\\([^]\n]+\\)\\](\\(https?://[^)\n]+\\))"
-                                end t)
+      (while (re-search-forward
+              (concat "\\[\\([^]\n]+\\)\\](\\(https?://[^)\n]+\\|"
+                      mevedel-view--resource-address-regexp "\\))")
+              end t)
         (let* ((whole-start (match-beginning 0))
                (whole-end (match-end 0))
                (source (buffer-substring-no-properties
@@ -725,6 +769,26 @@ file.el#L12."
             (mevedel-view--linkify-path-reference
              mb me suffix-start suffix-end resolved)))))))
 
+(defun mevedel-view--linkify-resource-addresses-in-range (start end)
+  "Make bare resource addresses between START and END open their resource.
+Inline code counts; fenced code and verbatim text do not.  Resolution
+waits for the click, so a redraw does no target I/O."
+  (let ((src-ranges (mevedel-view--src-block-body-ranges start end)))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward mevedel-view--resource-address-regexp end t)
+        (let ((mb (match-beginning 0))
+              (me (match-end 0)))
+          (unless (or (button-at mb)
+                      (memq (char-syntax (or (char-before mb) ?\s)) '(?w ?_))
+                      (mevedel-view--decoration-blocked-p mb src-ranges))
+            (make-text-button
+             mb me
+             'action #'mevedel-view--open-url-action
+             'mevedel-view-url (match-string-no-properties 0)
+             'follow-link t
+             'help-echo (format "Open %s" (match-string-no-properties 0)))))))))
+
 (defun mevedel-view--decorate-markdown-in-range (start end)
   "Apply Markdown view affordances between START and END."
   (let ((end-marker (copy-marker end t)))
@@ -734,6 +798,7 @@ file.el#L12."
           (mevedel-view--decorate-local-images-in-range start end-marker)
           (mevedel-view--render-markdown-url-links-in-range start end-marker)
           (mevedel-view--linkify-paths-in-range start end-marker)
+          (mevedel-view--linkify-resource-addresses-in-range start end-marker)
           ;; Run after links and paths so their buttons and faces carry into
           ;; rendered cells.
           (mevedel-view-table-decorate

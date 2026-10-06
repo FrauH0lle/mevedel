@@ -316,6 +316,25 @@
       (delete-directory save-path t)
       (delete-directory outside t))))
 
+(mevedel-deftest mevedel-resource-visit-path ()
+  ,test
+  (test)
+  :doc "returns a file-backed address's file, nothing for a listing, and leaves no attempt"
+  (let* ((save-path (make-temp-file "mevedel-resource-visit-" t))
+         (local (file-name-concat save-path "local"))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
+         (before (hash-table-count mevedel-resource--attempt-table)))
+    (unwind-protect
+        (progn
+          (make-directory local t)
+          (with-temp-file (file-name-concat local "notes.md") (insert "note"))
+          (should (equal (file-name-concat local "notes.md")
+                         (mevedel-resource-visit-path "work://notes.md" (list :session session))))
+          (should-not (mevedel-resource-visit-path "work://" (list :session session)))
+          (should-not (mevedel-resource-visit-path "agent://" (list :session session)))
+          (should (= before (hash-table-count mevedel-resource--attempt-table))))
+      (delete-directory save-path t))))
+
 (mevedel-deftest mevedel-resource--shared-shape-p ()
   ,test
   (test)

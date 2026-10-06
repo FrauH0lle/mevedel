@@ -29,6 +29,10 @@
 (defvar gptel-post-tool-call-functions)
 (defvar gptel-pre-tool-call-functions)
 
+;; `browse-url', `url-util'
+(declare-function browse-url "browse-url" (url &rest args))
+(declare-function url-hexify-string "url-util" (string &optional allowed-chars))
+
 ;; `mevedel-chat'
 (defvar mevedel-session-end-hook)
 (defvar mevedel-session-end-reason)
@@ -912,23 +916,19 @@ returning the live room."
            (error nil))
          (signal (car error-data) (cdr error-data)))))))
 
-(defun mevedel-collaboration-view ()
-  "Start live collaboration, or report the active room's links."
-  (interactive)
+(defun mevedel-collaboration--room-or-start (data-buffer)
+  "Return (ROOM . STARTED) for DATA-BUFFER's room.
+Without a room, start one after the user consents; STARTED is then t."
   (require 'mevedel-collaboration-projection)
   (require 'mevedel-collaboration-share)
   (require 'mevedel-collaboration-transport)
-  (let* ((data-buffer (mevedel-collaboration--current-data-buffer))
-         (session (and data-buffer
-                       (with-current-buffer data-buffer
-                         (and (boundp 'mevedel--session)
-                              mevedel--session))))
-         (room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (unless (and data-buffer session)
+  (let ((session (and (buffer-live-p data-buffer)
+                      (buffer-local-value 'mevedel--session data-buffer)))
+        (room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (unless session
       (user-error "No active mevedel session in this buffer"))
     (cond
-     (room
-      (mevedel-collaboration-share-present room))
+     (room (cons room nil))
      ((not
        (yes-or-no-p
         (concat
@@ -936,9 +936,31 @@ returning the live room."
          "may contain credentials or secrets, through the relay? Frames are "
          "sealed end to end; the links are bearer credentials. ")))
       (user-error "Collaboration not started"))
-     (t
-      (mevedel-collaboration-share-present
-       (mevedel-collaboration--start session data-buffer))))))
+     (t (cons (mevedel-collaboration--start session data-buffer) t)))))
+
+(defun mevedel-collaboration-view ()
+  "Start live collaboration, or report the active room's links."
+  (interactive)
+  (mevedel-collaboration-share-present
+   (car (mevedel-collaboration--room-or-start
+         (mevedel-collaboration--current-data-buffer)))))
+
+(defun mevedel-collaboration-open-shared-item (data-buffer id)
+  "Open shared item ID of DATA-BUFFER's session in a web browser.
+The editor exists only in a room, so without one this asks to start
+sharing the session first.  The browser joins with the full-control
+link, as the host itself."
+  (pcase-let* ((`(,room . ,started)
+                (mevedel-collaboration--room-or-start data-buffer))
+               (link (plist-get room :link-full))
+               (hash (string-search "#" link)))
+    ;; The viewer opens `?shared=ID' directly as that item's editor tab.
+    (browse-url (concat (substring link 0 hash)
+                        "?shared=" (url-hexify-string id)
+                        (substring link hash)))
+    (when started
+      (message "mevedel: sharing %s; /collab stop ends the room"
+               (plist-get room :session-label)))))
 
 (defun mevedel-collaboration-stop ()
   "Stop the current session's share, or every share outside a session.

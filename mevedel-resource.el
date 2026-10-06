@@ -2040,6 +2040,19 @@ executor."
     (remhash attempt mevedel-resource--attempt-table))
   nil)
 
+(defun mevedel-resource-visit-path (address &optional context)
+  "Return the file or directory ADDRESS names in CONTEXT, or nil.
+Logical resources -- listings, agents, history, MCP and shared items --
+have no backing file and return nil, as does an unavailable owner."
+  (let ((attempt (mevedel-resource-prepare 'read address context)))
+    (unwind-protect
+        (let ((data (gethash attempt mevedel-resource--attempt-table)))
+          (and data
+               (not (plist-get data :unavailable-p))
+               (not (plist-get data :logical-p))
+               (plist-get data :physical-path)))
+      (when attempt (mevedel-resource-discard-attempts (list attempt))))))
+
 (defun mevedel-resource-current-attempt (address)
   "Return the dynamically active attempt for authored ADDRESS."
   (cdr (assoc address mevedel-resource-current-attempts)))
