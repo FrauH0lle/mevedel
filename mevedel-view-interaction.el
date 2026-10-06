@@ -4,6 +4,8 @@
 
 ;; Owns interaction descriptor registration, ordering, anchoring, and redraw.
 ;; Domain prompt modules retain callback settlement and outcome semantics.
+;; Closing the last pending interaction of a root view re-offers its queued
+;; idle work, since follow-up delivery and Goal continuation wait on it.
 
 ;;; Code:
 
@@ -23,8 +25,11 @@
 (defvar mevedel--prompt-overlays)
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-offer-idle-work
+                  "mevedel-pending-inputs" (data-buffer))
 (declare-function mevedel-view--pending-inputs-render
                   "mevedel-pending-inputs" (&optional session))
+(autoload 'mevedel-pending-inputs-offer-idle-work "mevedel-pending-inputs")
 (autoload 'mevedel-view--pending-inputs-render "mevedel-pending-inputs")
 
 ;; `mevedel-permission-queue'
@@ -660,31 +665,52 @@ snapshot taken at registration."
               (funcall after)))
           (mevedel-view--interaction-sync-focus pairs))))))
 
+;; Rebuilds, prompt settlement, and queue settlement all close interactions
+;; here, so this is the one place that sees the last blocker go.  The offered
+;; work rechecks every gate when its timer runs, so a permission sibling
+;; rendered by the same settlement still holds it.
+(defun mevedel-view--interaction-offer-idle-work ()
+  "Offer this root view's queued idle work when no interaction is pending.
+Queued follow-ups and an active Goal wait while an interaction is pending,
+and nothing else resumes them once the user settles it while the root
+session is idle -- for example a child agent's permission card or a Plan
+approval."
+  (when (and (not mevedel-view--agent-transcript-p)
+             (boundp 'mevedel--data-buffer)
+             (buffer-live-p mevedel--data-buffer)
+             (eq (current-buffer)
+                 (buffer-local-value 'mevedel--view-buffer
+                                     mevedel--data-buffer))
+             (not (mevedel-view-interaction-pending-p)))
+    (mevedel-pending-inputs-offer-idle-work mevedel--data-buffer)))
+
 (defun mevedel-view--interaction-rebuild ()
   "Rebuild interaction-zone descriptors from live preview and queue state.
 Descriptors are dropped and re-registered without rendering the
 intermediate states; the single final render reconciles the zone once.
 A descriptor that comes back under the same id reuses its overlay
 object, so an unchanged rebuild leaves the zone text, point, and held
-overlay references untouched.  Callbacks are never settled here."
+overlay references untouched.  Callbacks are never settled here.  A
+rebuild that drops a descriptor closes that interaction, which can leave
+queued idle work free to proceed."
   (unless mevedel-view--agent-transcript-p
-    (unwind-protect
-        (let ((mevedel-view--interaction-render-suppressed t))
-          (mevedel-view--interaction-clear-for-rebuild)
-          (when-let* ((session (mevedel-view--session)))
-            (when-let* ((descriptor
-                        (mevedel-view-control-transfer-current-descriptor)))
-              (mevedel-view--interaction-register descriptor))
-            (when (mevedel-session-pending-plan-approval session)
-              (mevedel-plan-approval-render session))
-            (when (mevedel-session-permission-queue session)
-              (mevedel-permission-queue--render-head session))
-            (when (or (mevedel-session-pending-steering session)
-                      (mevedel-session-pending-follow-ups session)
-                      (mevedel-session-pending-input-failure-paused session))
-              (mevedel-view--pending-inputs-render session)))
-          (when (hash-table-p mevedel-view--interaction-telemetry-opened)
-            (let (closed)
+    (let (closed)
+      (unwind-protect
+          (let ((mevedel-view--interaction-render-suppressed t))
+            (mevedel-view--interaction-clear-for-rebuild)
+            (when-let* ((session (mevedel-view--session)))
+              (when-let* ((descriptor
+                           (mevedel-view-control-transfer-current-descriptor)))
+                (mevedel-view--interaction-register descriptor))
+              (when (mevedel-session-pending-plan-approval session)
+                (mevedel-plan-approval-render session))
+              (when (mevedel-session-permission-queue session)
+                (mevedel-permission-queue--render-head session))
+              (when (or (mevedel-session-pending-steering session)
+                        (mevedel-session-pending-follow-ups session)
+                        (mevedel-session-pending-input-failure-paused session))
+                (mevedel-view--pending-inputs-render session)))
+            (when (hash-table-p mevedel-view--interaction-telemetry-opened)
               (maphash
                (lambda (id _metadata)
                  (unless
@@ -694,10 +720,12 @@ overlay references untouched.  Callbacks are never settled here."
                    (push id closed)))
                mevedel-view--interaction-telemetry-opened)
               (dolist (id closed)
-                (mevedel-view--interaction-telemetry-close id)))))
-      (unwind-protect
-          (mevedel-view--interaction-render)
-        (mevedel-view--interaction-sync-active-work-pause)))))
+                (mevedel-view--interaction-telemetry-close id))))
+        (unwind-protect
+            (mevedel-view--interaction-render)
+          (mevedel-view--interaction-sync-active-work-pause)))
+      (when closed
+        (mevedel-view--interaction-offer-idle-work)))))
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
@@ -770,7 +798,9 @@ overlay references untouched.  Callbacks are never settled here."
     overlay))
 
 (defun mevedel-view--interaction-unregister (id)
-  "Remove interaction-zone descriptor ID and its overlay."
+  "Remove interaction-zone descriptor ID and its overlay.
+Removal settles or hides an interaction, so queued idle work is offered
+again once no other interaction remains pending."
   (mevedel-view--interaction-telemetry-close id)
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (remhash id mevedel-view--interaction-descriptors))
@@ -783,7 +813,8 @@ overlay references untouched.  Callbacks are never settled here."
         (setq mevedel--prompt-overlays
               (delq overlay mevedel--prompt-overlays)))
       (remhash id mevedel-view--interaction-overlays))
-    (mevedel-view--interaction-render)))
+    (mevedel-view--interaction-render))
+  (mevedel-view--interaction-offer-idle-work))
 
 (defun mevedel-view--interaction-clear-for-rebuild ()
   "Drop rebuild-owned interaction descriptors, preserving direct prompt UI.

@@ -1310,5 +1310,106 @@
             (:input "revise" :scope (:directive-id "d1" :action plan))))
     (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
+(mevedel-deftest mevedel-pending-inputs--idle-work ()
+  ,test
+  (test)
+  :doc "names queued follow-ups before an active Goal and requires an idle root"
+  (mevedel-pending-inputs-test--with-session
+    (should-not (mevedel-pending-inputs--idle-work data-buf))
+    (let ((goal (mevedel-goal--create :id "g" :status 'active)))
+      (setf (mevedel-session-goal session) goal)
+      (should (eq 'goal (mevedel-pending-inputs--idle-work data-buf)))
+      (mevedel-session-set-pending-inputs
+       session 'follow-up (list (list :input "queued")))
+      (should (eq 'follow-up (mevedel-pending-inputs--idle-work data-buf)))
+      (mevedel-session-set-pending-inputs session 'follow-up nil)
+      (setf (mevedel-goal-status goal) 'paused)
+      (should-not (mevedel-pending-inputs--idle-work data-buf))
+      (setf (mevedel-goal-status goal) 'active)
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (should-not (mevedel-pending-inputs--idle-work data-buf))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request nil
+                    mevedel--view-buffer nil))
+      (should-not (mevedel-pending-inputs--idle-work data-buf)))))
+
+(mevedel-deftest mevedel-pending-inputs-offer-idle-work ()
+  ,test
+  (test)
+  :doc "defers the decision and starts the follow-up drain before the Goal"
+  (mevedel-pending-inputs-test--with-session
+    (let ((goal (mevedel-goal--create :id "g" :status 'active))
+          timers drained continued)
+      (setf (mevedel-session-goal session) goal)
+      (mevedel-session-set-pending-inputs
+       session 'follow-up (list (list :input "queued")))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) timers)))
+                ((symbol-function 'mevedel-view--run-follow-up-drain)
+                 (lambda (buffer) (push buffer drained)))
+                ((symbol-function 'mevedel-goal-schedule-continuation)
+                 (lambda (&rest args) (push args continued))))
+        (mevedel-pending-inputs-offer-idle-work data-buf)
+        (should-not drained)
+        (should (equal `((mevedel-pending-inputs--offer-idle-work-now
+                          ,data-buf))
+                       timers))
+        (apply (caar timers) (cdar timers))
+        (should (equal (list data-buf) drained))
+        (should-not continued)
+        (mevedel-session-set-pending-inputs session 'follow-up nil)
+        (mevedel-pending-inputs--offer-idle-work-now data-buf)
+        (should (equal `((,session ,data-buf)) continued)))))
+
+  :doc "schedules nothing when the session holds no idle work"
+  (mevedel-pending-inputs-test--with-session
+    (let (timers)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (&rest args) (push args timers))))
+        (mevedel-pending-inputs-offer-idle-work data-buf))
+      (should-not timers))))
+
+(mevedel-deftest mevedel-view--offer-follow-up-after-draft-change ()
+  ,test
+  (test)
+  :doc "a follow-up held by a draft is delivered once the draft is deleted"
+  (mevedel-pending-inputs-test--with-session
+    (let ((entry (list :input "queued follow-up"))
+          timers delivered)
+      (mevedel-session-set-pending-inputs session 'follow-up (list entry))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) timers)))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path thunk &rest _) (funcall thunk) t))
+                ((symbol-function 'mevedel-view--dispatch-follow-up-entry)
+                 (lambda (_kind entry &rest _) (push entry delivered))))
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "unsent draft")
+          (should-not timers)
+          (mevedel-view--drain-follow-up data-buf)
+          (should-not delivered)
+          ;; A partial deletion leaves a draft to protect.
+          (delete-region (- (point-max) 6) (point-max))
+          (should-not timers)
+          (delete-region (mevedel-view--input-start) (point-max))
+          (should (equal `((mevedel-view--run-follow-up-drain ,data-buf))
+                         timers))
+          (apply (caar timers) (cdar timers))
+          (should (equal (list entry) delivered))))))
+
+  :doc "clearing the composer schedules nothing without queued follow-ups"
+  (mevedel-pending-inputs-test--with-session
+    (let (timers)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (&rest args) (push args timers))))
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "draft")
+          (delete-region (mevedel-view--input-start) (point-max))))
+      (should-not timers))))
+
 (provide 'test-mevedel-pending-inputs)
 ;;; test-mevedel-pending-inputs.el ends here

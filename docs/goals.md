@@ -176,9 +176,18 @@ after canonical request teardown. Dispatch requires all of the following:
 
 - the Goal is active;
 - no root request is running;
-- no permission or Plan interaction is pending;
+- no permission, Ask, Plan approval, or other interaction is pending in the
+  root view, and no prompt hook is running;
 - no queued follow-up remains to be delivered; and
 - the token budget is not exhausted.
+
+Continuation is also offered again when a gate clears without a settling
+turn. Closing the last pending interaction in the root view, such as a child
+agent's permission card or Ask, or a Plan approval decided while the root
+session is idle, re-offers it, so the Goal resumes as soon as the user settles
+what held it. Queued follow-ups go first there too. While a queued follow-up
+waits for the user's composer draft, the Goal waits with it; sending or
+clearing the draft delivers the follow-up, whose settlement continues the Goal.
 
 Same-turn steering stays with its owning active request. After that request
 settles, queued follow-ups run before generic Goal continuation, one normal

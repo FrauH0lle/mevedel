@@ -1308,6 +1308,8 @@ and other input properties remain untouched."
     (add-hook 'after-change-functions
               #'mevedel-view--refresh-skill-argument-hint-after-change
               nil t)
+    (add-hook 'after-change-functions
+              #'mevedel-view--offer-follow-up-after-draft-change nil t)
     (unless mevedel-view--side-conversation-p
       (mevedel-view-history-load mevedel--session)
       (add-hook 'completion-at-point-functions

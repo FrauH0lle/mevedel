@@ -49,7 +49,7 @@ and `verify-callback' delivers the verifier outcome."
                    '((("mevedel" "CreateGoal") . "Create goal")
                      (("mevedel" "GetGoal") . "Inspect goal")
                      (("mevedel" "UpdateGoal") . "Complete goal")))
-             (cl-letf (((symbol-function 'mevedel-goal--schedule-continuation)
+             (cl-letf (((symbol-function 'mevedel-goal-schedule-continuation)
                         (lambda (&rest args) (push args scheduled)))
                        ((symbol-function 'mevedel-review-verify)
                         (lambda (prompt callback &optional workload)

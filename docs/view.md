@@ -646,6 +646,12 @@ queue-backed descriptors without rendering the intermediate states: one
 final render reconciles the zone, and a descriptor re-registered under the
 same id reuses its overlay object, so an unchanged rebuild is a no-op that
 leaves zone text, point, and held overlay references untouched.
+Unregistering a descriptor, or a rebuild that drops one, closes that
+interaction. When a root view's last pending interaction closes while its
+session is idle, the zone offers the session's held idle work again: queued
+follow-ups first, otherwise an active Goal's continuation. The choice is made
+after the closing command, so a permission sibling rendered by the same
+settlement still holds the work, and each offered path rechecks its own gates.
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 
@@ -1784,7 +1790,21 @@ foreign, and quiescing surfaces fail closed.
 
 Permission, Ask, Plan, and other user-input overlays do not disable either
 queue. An unresolved interaction merely postpones steering injection and
-follow-up dispatch. If a turn fails with undelivered steering, those entries
+follow-up dispatch; closing the last one, including a child agent's card
+answered while the root session is idle, offers queued follow-ups again.
+
+Automatic follow-up delivery also waits while the composer holds a draft, so
+a queued turn never replaces or clears text the user is still writing. The
+draft is the gate rather than a pause: the edit that leaves the composer empty
+or whitespace-only, whether by sending, killing, or deleting the draft,
+schedules delivery again. Delivery is likewise held by a running root request,
+a running prompt hook or skill preparation, the Pending Inputs cockpit or
+failed steering awaiting review, a pending Plan approval, directive planning
+(which admits only its own Plan input), an accepted-plan implementation retry
+or Goal handoff, and a paused, blocked, or budget-limited Goal that owns the
+next entry.
+
+If a turn fails with undelivered steering, those entries
 remain steering, become `Needs review`, and pause all automatic pending-input
 delivery. The user must edit, delete, or recategorize the failed entries, then
 resume delivery from the cockpit. Later follow-ups remain intact.

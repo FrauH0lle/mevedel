@@ -1603,6 +1603,115 @@
                      (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker)))))))
 
+(defun test-mevedel-view-interaction--run-deferred (timers)
+  "Run idle-work callbacks captured in TIMERS, oldest first, until none remain.
+TIMERS is a cons cell whose car holds captured `(FUNCTION . ARGS)' entries."
+  (let ((idle-work '(mevedel-pending-inputs--offer-idle-work-now
+                     mevedel-goal--scheduled-continuation
+                     mevedel-view--run-follow-up-drain)))
+    (while (car timers)
+      (let ((pending (reverse (car timers))))
+        (setcar timers nil)
+        (dolist (timer pending)
+          (when (memq (car timer) idle-work)
+            (apply (car timer) (cdr timer))))))))
+
+(mevedel-deftest mevedel-view--interaction-offer-idle-work ()
+  ,test
+  (test)
+  :doc "a Goal held by a child agent's permission card continues once it is decided"
+  (mevedel-view-test--with-buffers
+    (let* ((goal (mevedel-goal--create
+                  :id "held" :objective "Ship" :status 'active
+                  :tokens-used 0 :time-used-seconds 0 :turns-run 0))
+           (session (mevedel-session--create :name "held-goal" :goal goal))
+           (mevedel-permission-reviewer 'user)
+           (timers (list nil))
+           outcome dispatched)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (switch-to-buffer view-buf)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) (car timers))
+                   nil))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path thunk &rest _) (funcall thunk) t))
+                ((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (&rest _) (setq dispatched t))))
+        (with-current-buffer data-buf
+          (mevedel-permission--enqueue
+           (list :kind 'generic :tool-name "Read" :origin "/root/worker"
+                 :data-buffer data-buf
+                 :callback (lambda (value) (setq outcome value)))
+           session))
+        (should (mevedel-session-permission-queue session))
+        (should (eq 'interaction
+                    (mevedel-goal-continue-if-idle session data-buf)))
+        (test-mevedel-view-interaction--run-deferred timers)
+        (should-not dispatched)
+        (with-current-buffer view-buf
+          (should (get-text-property (point) 'mevedel-prompt-focus))
+          (call-interactively (key-binding (kbd "RET"))))
+        (should (eq 'allow-once outcome))
+        (should-not (mevedel-session-permission-queue session))
+        (test-mevedel-view-interaction--run-deferred timers)
+        (should dispatched))))
+
+  :doc "offers only once the last pending interaction closes"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "offer"))
+          offers)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                   (lambda (buffer) (push buffer offers))))
+          (mevedel-view--interaction-register
+           '(:kind ask :id first :origin "/root" :body "first"))
+          (mevedel-view--interaction-register
+           '(:kind ask :id second :origin "/root" :body "second"))
+          (mevedel-view--interaction-unregister 'first)
+          (should-not offers)
+          (mevedel-view--interaction-unregister 'second)
+          (should (equal (list data-buf) offers))))))
+
+  :doc "a rebuild offers only when it drops an interaction"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "rebuild-offer"))
+          (descriptor '(:kind permission :id transfer :origin "/root"
+                        :body "Grant control?"))
+          offers)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                   (lambda (buffer) (push buffer offers)))
+                  ((symbol-function
+                    'mevedel-view-control-transfer-current-descriptor)
+                   (lambda () descriptor)))
+          (mevedel-view--interaction-rebuild)
+          (mevedel-view--interaction-rebuild)
+          (should-not offers)
+          (setq descriptor nil)
+          (mevedel-view--interaction-rebuild)
+          (should (equal (list data-buf) offers))))))
+
+  :doc "an agent transcript view never offers its parent's idle work"
+  (mevedel-view-test--with-buffers
+    (let (offers)
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--agent-transcript-p t)
+        (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                   (lambda (buffer) (push buffer offers))))
+          (mevedel-view--interaction-offer-idle-work))
+        (setq-local mevedel-view--agent-transcript-p nil))
+      (should-not offers))))
+
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here
 
