@@ -212,7 +212,11 @@ fading curved trails make it distinguishable from ordinary cursor presence.
 Remote cursors transition from their displayed position to received samples.
 Laser packets carry a bounded recent input trail, played with a short delay,
 so the observer retains the curve between packets. The sender still emits at
-most 20 packets per second; this adds samples rather than more packets. Presence remains transient and bounded, and
+most 20 packets per second; this adds samples rather than more packets.
+A half-second trail was too short to sketch a shape for others, so samples
+drawn while the button is held carry an ink index and observers keep them for
+three seconds. Indexing, rather than lengthening every packet's window, keeps
+packets bounded at 64 samples while the held line grows. Presence remains transient and bounded, and
 reduced-motion preferences disable the extra movement and trails.
 
 

@@ -54,19 +54,22 @@ export function positionAt(samples, time) {
 
 // Quadratic midpoints keep sparse circular gestures rounded. Each piece can fade
 // with its own age instead of the whole trail flashing back on with each packet.
-export function trailSegments(samples, time) {
+export function trailSegments(samples, time, fade = age => Math.max(0, 1 - age / 550) ** 2) {
   let start = samples[0]?.point;
   return samples.slice(1).map((sample, i, rest) => {
     const next = rest[i + 1],
       end = next ? sample.point.map((v, axis) => (v + next.point[axis]) / 2) : sample.point;
     const segment = {
       path: `M${start.join(' ')} Q${sample.point.join(' ')} ${end.join(' ')}`,
-      opacity: Math.max(0, 1 - (time - sample.time) / 550) ** 2,
+      opacity: fade(time - sample.time),
     };
     start = end;
     return segment;
   });
 }
+
+// Held laser ink stays for two seconds, then fades over one.
+const inkFade = age => Math.max(0, Math.min(1, (3000 - age) / 1000));
 
 export class BoardPresence {
   constructor(canvas, layer) {
@@ -95,6 +98,7 @@ export class BoardPresence {
     const now = performance.now();
     let person = this.people.get(peer);
     if (!person || person.mode !== mode || now - person.last > 250) {
+      const ink = person?.mode === mode ? person.ink : new Map();
       this.clear(peer);
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.dataset.peer = peer;
@@ -106,7 +110,7 @@ export class BoardPresence {
         ? '<circle r="8" fill="#f43f5e" opacity=".13"/><circle r="4" fill="#ef3555"/><circle r="1.8" fill="#fff6ed"/>'
         : '<path d="M0 0 4 17 8 11 15 10Z" fill="#a22458" stroke="white" stroke-width="1.5"/>';
       this.layer.append(group);
-      person = { group, mode, samples: [{point, time:now}], trail: [], local: peer === 'self' };
+      person = { group, mode, samples: [{point, time:now}], trail: [], ink, local: peer === 'self' };
       this.people.set(peer, person);
     }
     const from = positionAt(person.samples, now);
@@ -117,6 +121,8 @@ export class BoardPresence {
       ? [{ point, time: now }]
       : [{ point: from, time: now }, { point, time: now + 55 }];
     if (laser) person.trail = person.samples;
+    if (laser) for (const [x,y,age,id] of trail)
+      if (Number.isSafeInteger(id) && id > 0) person.ink.set(id, {point:[x,y], time:now + (person.local ? 0 : 55) - age});
     person.sampledTrail = Boolean(laser);
     person.last = now;
     const label = person.group.querySelector('text');
@@ -147,8 +153,20 @@ export class BoardPresence {
       const visible = person.trail.filter(s => s.time <= now);
       if (visible.length && point.some((v, i) => v !== visible.at(-1).point[i]))
         visible.push({point, time:now});
-      const paths = this.motion.matches || !laser ? '' : trailSegments(visible, now)
-        .map(s => `<path d="${s.path}" opacity="${s.opacity.toFixed(3)}"/>`).join('');
+      // Ink runs break where indices skip: a new press or a lost stretch of samples.
+      const strokes = [];
+      let previousInk;
+      for (const [id, sample] of person.ink) {
+        if (now - sample.time > 3000) { person.ink.delete(id); continue; }
+        if (sample.time > now) continue;
+        if (id !== previousInk + 1) strokes.push([]);
+        strokes.at(-1).push(sample);
+        previousInk = id;
+      }
+      const paths = this.motion.matches || !laser ? '' : [
+        ...strokes.flatMap(stroke => trailSegments(stroke, now, inkFade)),
+        ...trailSegments(visible, now),
+      ].map(s => `<path d="${s.path}" opacity="${s.opacity.toFixed(3)}"/>`).join('');
       group.querySelector('.pointer-trail').innerHTML = paths
         ? `<g stroke="#ef3555" stroke-width="${7 * scale}" opacity=".16">${paths}</g><g stroke="#e93250" stroke-width="${3 * scale}">${paths}</g><g stroke="#fff0e9" stroke-width="${scale}" opacity=".85">${paths}</g>` : '';
       const tip = group.querySelector('.pointer-tip');
@@ -159,7 +177,7 @@ export class BoardPresence {
       group.querySelector('.pointer-label').setAttribute('transform',
         `translate(${point[0] + labelX * scale} ${point[1] + labelY * scale}) scale(${scale})`);
       group.style.visibility = '';
-      moving ||= now - person.last < (laser && !this.motion.matches ? 650 : 70);
+      moving ||= now - person.last < (laser && !this.motion.matches ? 650 : 70) || person.ink.size > 0;
     }
     if (moving) this.animate();
   }

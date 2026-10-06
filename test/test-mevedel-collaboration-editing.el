@@ -143,8 +143,8 @@
                                         :point (unless (equal mode "clear") '(20 30))))))
         (mevedel-collaboration-editing--presence
          room 1 guest '(:id "board" :mode "laser" :point (20 30)
-                        :trail ((10 20 40) (20 30 0))))
-        (should (equal (plist-get (cdar frames) :trail) [[10 20 40] [20 30 0]]))
+                        :trail ((10 20 40 0) (20 30 0 7))))
+        (should (equal (plist-get (cdar frames) :trail) [[10 20 40 0] [20 30 0 7]]))
         (point "laser")
         (should (= (length frames) 1))
         (point "clear" "other")
@@ -156,8 +156,9 @@
         (point "clear")
         (should (= (length frames) 2))
         (setq now 100.06)
-        (dolist (trail (list '((20 30 -1)) '((20 30 551)) '((20 30 "bad"))
-                             (make-list 65 '(20 30 0))))
+        (dolist (trail (list '((20 30 -1 0)) '((20 30 551 0)) '((20 30 "bad" 0))
+                             '((20 30 0)) '((20 30 0 -1)) '((20 30 0 1.5))
+                             (make-list 65 '(20 30 0 0))))
           (mevedel-collaboration-editing--presence
            room 1 guest (list :id "board" :mode "laser" :point '(20 30) :trail trail)))
         (should (= (length frames) 2))
