@@ -68,7 +68,7 @@
       (setq-local mevedel--session session
                   mevedel--current-request (mevedel-request--create :session session :fsm fsm))
       (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
-                ((symbol-function 'mevedel-goal--schedule-continuation) #'ignore))
+                ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore))
         (mevedel-goal-start "Ship"))
       (let ((goal (mevedel-session-goal session)))
         (should (equal (mevedel-goal-id goal) (plist-get (gptel-fsm-info fsm) :mevedel-goal-id)))
@@ -619,7 +619,7 @@
         (should (eq status (mevedel-goal-status goal))))
       (setf (mevedel-goal-token-budget goal) 20)
       (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
-                ((symbol-function 'mevedel-goal--schedule-continuation) #'ignore))
+                ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore))
         (mevedel-goal-resume))
       (should (= 0 mevedel-goal--transient-retries))
       (should (eq 'active (mevedel-goal-status goal)))))
@@ -1028,7 +1028,7 @@
           (attributed (gptel-make-fsm :info (list :buffer (current-buffer)
                                                   :mevedel-goal-id "g"))))
       (setq-local mevedel--session (mevedel-session--create :name "main"))
-      (cl-letf (((symbol-function 'mevedel-goal--schedule-continuation)
+      (cl-letf (((symbol-function 'mevedel-goal-schedule-continuation)
                  (lambda (&rest args)
                    (cl-incf scheduled)
                    (setq delay (nth 3 args)))))
@@ -1046,6 +1046,24 @@
         (should (eql 30 delay))
         (mevedel-goal-dispatch-after-turn attributed t)
         (should-not delay)))))
+
+(mevedel-deftest mevedel-goal-schedule-continuation
+  (:doc "defers the continuation check for a live buffer by the given delay")
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "main"))
+          scheduled)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (&rest args) (push args scheduled))))
+        (mevedel-goal-schedule-continuation)
+        (mevedel-goal-schedule-continuation session (current-buffer) nil 15)
+        (setq-local mevedel--session nil)
+        (mevedel-goal-schedule-continuation))
+      (should (equal `((15 nil mevedel-goal--scheduled-continuation
+                           ,session ,(current-buffer) nil)
+                       (0 nil mevedel-goal--scheduled-continuation
+                          ,session ,(current-buffer) nil))
+                     scheduled)))))
 
 (mevedel-deftest mevedel-goal--known-token-count
   (:doc "distinguishes zero normalized usage from unavailable usage and applies the baseline")

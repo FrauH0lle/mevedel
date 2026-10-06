@@ -1,9 +1,10 @@
 # Drive Goals with idle continuation
 
 A Goal is a durable objective whose active session automatically starts another
-ordinary root turn whenever settlement leaves the session idle. The model
-can create a Goal through `CreateGoal` on an explicit user or trusted instruction
-request and inspect any current status through `GetGoal`. It declares only
+ordinary root turn whenever the session becomes idle: when a root turn settles,
+and when the last interaction or queued follow-up holding an idle session
+clears. The model can create a Goal through `CreateGoal` on an explicit user or
+trusted instruction request and inspect any current status through `GetGoal`. It declares only
 `complete` or genuinely `blocked` through `UpdateGoal`;
 user/system controls handle pause and budget limits, while runtime failures
 pause rather than making claims about task feasibility. Planning, approval,
@@ -24,7 +25,23 @@ settlement supply policy and subsequent continuation. Native and discoverable
 tool paths share availability checks; execution also requires the owning root
 request. Inspection never resumes stopped work or changes permission mode.
 
+Continuation and follow-up delivery are re-offered at the closing seam, not by
+each interaction kind: the interaction zone offers the root session's held
+idle work when its last pending interaction closes, and the composer offers
+queued follow-ups when an edit empties the draft that held them. Every offered
+path rechecks its own gates, so a spurious offer is harmless.
+
 ## Decision history
+
+Continuation was first scheduled only at Goal start, resume, budget and
+objective changes, and root-turn settlement. Its gate, however, also waits for
+interactions and queued follow-ups that can clear while no turn runs: a child
+agent's permission card or Ask answered while the root is idle, a Plan approval
+decided, or a composer draft holding the follow-up queue cleared. Each left an
+active Goal stalled, despite the README promising automatic continuation while
+idle, until the user typed something or ran `/goal resume`. Offering the work
+again where interactions close and where the draft empties fixes every
+interaction kind at once without per-kind scheduling calls.
 
 Initially creation was a user command or accepted-plan handoff, and the model
 could only complete or block an existing Goal. The requested natural-language

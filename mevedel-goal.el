@@ -3,7 +3,9 @@
 ;;; Commentary:
 
 ;; Owns the phase-free Goal record, request-local context, root-turn
-;; attribution, and deterministic idle continuation.  Planning and review are
+;; attribution, and deterministic idle continuation.  Turn settlement and Goal
+;; controls schedule continuation; the pending-input owner re-offers it when an
+;; interaction holding an idle session closes.  Planning and review are
 ;; ordinary conversation work; only UpdateGoal may mark an active Goal
 ;; blocked, or complete once an independent verifier accepts the claim.
 
@@ -389,7 +391,7 @@ transport rather than nesting inside a remote operation already in flight."
                buffer (format "Goal continuation failed: %s" (error-message-string err)))
               (message "mevedel: Goal continuation failed: %s" (error-message-string err))))))))))
 
-(defun mevedel-goal--schedule-continuation
+(defun mevedel-goal-schedule-continuation
     (&optional session buffer prompt-submission delay)
   "Schedule SESSION's Goal continuation check after the current command.
 DELAY is the number of seconds to wait first; nil means none."
@@ -456,7 +458,7 @@ Reads the current buffer's request for request-scoped Plan mode."
             (setq info (plist-put info :mevedel-goal-token-baseline baseline)))
           (setf (gptel-fsm-info fsm) info)
           (mevedel-goal-capture-request fsm))
-        (mevedel-goal--schedule-continuation
+        (mevedel-goal-schedule-continuation
          mevedel--session (current-buffer) prompt-submission)
         goal))))
 
@@ -520,7 +522,7 @@ Running tools finish and the turn settles; it is not aborted."
        (list :input (string-trim steering)))
       (mevedel-pending-inputs-follow-up-changed mevedel--session))
     (mevedel-goal--persist mevedel--session (current-buffer))
-    (mevedel-goal--schedule-continuation mevedel--session (current-buffer))
+    (mevedel-goal-schedule-continuation mevedel--session (current-buffer))
     goal))
 
 (defun mevedel-goal-set-budget (value)
@@ -570,7 +572,7 @@ The string `none' removes the limit."
     (mevedel-goal--persist mevedel--session (current-buffer))
     (when reactivated
       (setq mevedel-goal--transient-retries 0)
-      (mevedel-goal--schedule-continuation mevedel--session (current-buffer)))
+      (mevedel-goal-schedule-continuation mevedel--session (current-buffer)))
     goal))
 
 (defun mevedel-goal-clear ()
@@ -615,7 +617,7 @@ The string `none' removes the limit."
       (mevedel-goal--end-running-turn
        goal 'goal-edited (mevedel-goal-active-context session)))
     (when (eq (mevedel-goal-status goal) 'active)
-      (mevedel-goal--schedule-continuation session (current-buffer)))
+      (mevedel-goal-schedule-continuation session (current-buffer)))
     goal))
 
 (defun mevedel-goal-pause-runtime-failure (buffer reason)
@@ -979,7 +981,7 @@ backoff delay of a retried transient failure."
               ((or succeeded (plist-get info :mevedel-goal-id)))
               (buffer (plist-get info :buffer)))
     (with-current-buffer buffer
-      (mevedel-goal--schedule-continuation
+      (mevedel-goal-schedule-continuation
        mevedel--session buffer nil
        (unless succeeded
          (nth mevedel-goal--transient-retries

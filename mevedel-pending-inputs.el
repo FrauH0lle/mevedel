@@ -6,7 +6,10 @@
 ;; and composer editing.  Opening the cockpit pauses automatic delivery, and
 ;; closing or killing it resumes delivery and releases a turn parked at the
 ;; pending-input boundary; queue edits retain the selected entry until a
-;; validated replacement is ready.
+;; validated replacement is ready.  Delivery leaves a composer draft alone and
+;; resumes once an edit empties it.  When something else that held an idle
+;; session clears, such as its last interaction, the held work is offered
+;; again: queued follow-ups first, otherwise an active Goal's continuation.
 
 ;;; Code:
 
@@ -71,6 +74,12 @@
 
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-in-flight)
+
+;; `mevedel-goal'
+(declare-function mevedel-goal-schedule-continuation
+                  "mevedel-goal"
+                  (&optional session buffer prompt-submission delay))
+(autoload 'mevedel-goal-schedule-continuation "mevedel-goal")
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
@@ -195,6 +204,7 @@
                   "mevedel-view-composer" (submission data-buffer &rest keys))
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
 (declare-function mevedel-view--occupied-root-workflow
                   "mevedel-view-composer" (session))
@@ -217,6 +227,7 @@
                   "mevedel-view-composer" (name args &rest keys))
 (declare-function mevedel-view-send "mevedel-view-composer" ())
 (defvar mevedel-view--composer-scope)
+(defvar mevedel-view--input-marker)
 (defvar mevedel-view--pending-skill-submission)
 (defvar mevedel-view--prompt-hook-pending)
 
@@ -922,6 +933,62 @@ an unrelated remote operation started by redisplay or another package included
     (run-at-time 0 nil
                  #'mevedel-view--run-follow-up-drain
                  data-buffer)))
+
+(defun mevedel-pending-inputs--idle-work (data-buffer)
+  "Return the kind of idle work DATA-BUFFER's session holds, or nil.
+The result is `follow-up' while follow-ups are queued, else `goal' for an
+active Goal.  Only an idle data buffer with a live root view qualifies."
+  (when-let* (((buffer-live-p data-buffer))
+              (session (buffer-local-value 'mevedel--session data-buffer))
+              ((buffer-live-p
+                (buffer-local-value 'mevedel--view-buffer data-buffer)))
+              ((not (buffer-local-value 'mevedel--current-request
+                                        data-buffer))))
+    (cond
+     ((mevedel-session-pending-follow-ups session) 'follow-up)
+     ((when-let* ((goal (mevedel-session-goal session)))
+        (eq (mevedel-goal-status goal) 'active))
+      'goal))))
+
+(defun mevedel-pending-inputs-offer-idle-work (data-buffer)
+  "Offer DATA-BUFFER's queued idle work again after a hold on it cleared.
+Queued follow-ups go first; the turn each one starts continues an active
+Goal when it settles.  With none queued, an active Goal continues directly.
+The decision waits for the current command to finish, and the offered work
+re-checks its own gates when it runs, so an offer made while the session is
+still occupied does nothing."
+  (when (mevedel-pending-inputs--idle-work data-buffer)
+    (run-at-time 0 nil #'mevedel-pending-inputs--offer-idle-work-now
+                 data-buffer)))
+
+(defun mevedel-pending-inputs--offer-idle-work-now (data-buffer)
+  "Start the idle work `mevedel-pending-inputs-offer-idle-work' offered.
+DATA-BUFFER is checked again, because the offering command may have
+started a turn or settled the work itself."
+  (pcase (mevedel-pending-inputs--idle-work data-buffer)
+    ('follow-up (mevedel-view--run-follow-up-drain data-buffer))
+    ('goal (mevedel-goal-schedule-continuation
+            (buffer-local-value 'mevedel--session data-buffer)
+            data-buffer))))
+
+(defun mevedel-view--offer-follow-up-after-draft-change
+    (start _end old-length)
+  "Offer queued follow-ups once an edit from START empties the composer.
+OLD-LENGTH is the length of the replaced text.  Automatic delivery leaves
+a composer draft alone, so a follow-up -- and an active Goal waiting for
+it -- holds until the user sends, clears, or deletes that draft.  Only a
+deletion can empty the composer, and the whitespace scan stops at the
+first character of a real draft."
+  (when (and (> old-length 0)
+             (markerp mevedel-view--input-marker)
+             (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
+             (>= start (mevedel-view--input-start))
+             (mevedel-view--pending-follow-ups)
+             (save-excursion
+               (goto-char (mevedel-view--input-start))
+               (skip-chars-forward " \t\n\r")
+               (= (point) (point-max))))
+    (mevedel-view--schedule-late-follow-up-drain)))
 
 (defun mevedel-view--schedule-follow-up-drain (fsm)
   "Schedule the next follow-up after FSM completes successfully."
