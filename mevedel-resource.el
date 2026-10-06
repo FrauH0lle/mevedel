@@ -270,7 +270,10 @@ literal and are expanded in that same base directory."
     (apply #'concat (nreverse result))))
 
 (defun mevedel-resource--decode-component (raw &optional allow-separator)
-  "Decode one RAW component and reject malformed or noncanonical escapes.
+  "Decode one RAW component and reject malformed escapes or unsafe names.
+
+Characters outside the unreserved set may appear literally or escaped;
+the caller derives the canonical spelling from the decoded value.
 
 When ALLOW-SEPARATOR is non-nil, a decoded slash is data within the
 component.  This is used only for the encoded native URI component of an
@@ -294,23 +297,20 @@ MCP address."
                                       16)
                     bytes)
               (setq index (+ index 3)))
-          (when (>= char 128)
-            (signal 'mevedel-resource-error
-                    (list "Non-ASCII bytes must be percent-encoded")))
-          (push char bytes)
+          (dolist (byte (append (encode-coding-string (string char) 'utf-8 t)
+                                nil))
+            (push byte bytes))
           (setq index (1+ index)))))
-    (let* ((decoded
-            (decode-coding-string
-             (apply #'unibyte-string (nreverse bytes)) 'utf-8 t))
-           (canonical (mevedel-resource-encode-component decoded)))
+    (let ((decoded
+           (decode-coding-string
+            (apply #'unibyte-string (nreverse bytes)) 'utf-8 t)))
       (when (or (string-empty-p decoded)
                 (mevedel-resource--has-control-character-p decoded)
                 (and (not allow-separator)
                      (member decoded '("." "..")))
-                (and (not allow-separator) (string-match-p "/" decoded))
-                (not (equal raw canonical)))
+                (and (not allow-separator) (string-match-p "/" decoded)))
         (signal 'mevedel-resource-error
-                (list "Noncanonical or unsafe resource path component")))
+                (list "Unsafe resource path component")))
       decoded)))
 
 (defun mevedel-resource--parse-components (tail)
@@ -318,9 +318,6 @@ MCP address."
   (if (string-empty-p tail)
       nil
     (let ((raw-components (split-string tail "/" nil)))
-      (when (string-suffix-p "/" tail)
-        (signal 'mevedel-resource-error
-                '("Remove the trailing slash from the resource address; directories use their canonical name")))
       (when (member "" raw-components)
         (signal 'mevedel-resource-error
                 (list "Empty resource path component")))
@@ -457,12 +454,10 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
 
 (defun mevedel-resource--parse-memory-tail (tail)
   "Parse the memory-specific TAIL and return its locator fields."
-  (let ((components (if (equal tail "journal/")
-                        '("journal")
-                      (mevedel-resource--parse-components tail))))
+  (let ((components (mevedel-resource--parse-components tail)))
     (cond
      ((equal (car components) "journal")
-      (unless (or (equal tail "journal/")
+      (unless (or (null (cdr components))
                   (and (= (length components) 2)
                        (mevedel-journal-store-file-name-p (cadr components))))
         (signal 'mevedel-resource-error
@@ -845,9 +840,11 @@ listing includes only Markdown files."
       (format "No files found under %s://" (symbol-name scheme)))))
 
 (defun mevedel-resource-parse-address (address)
-  "Parse canonical ADDRESS and return a locator plist.
+  "Parse ADDRESS and return a locator plist.
 
-The plist contains decoded `:components', canonical `:canonical', and
+ADDRESS may spell components with literal characters or escapes and may end
+a directory with one slash; `:canonical' is the single spelling of its
+identity.  The plist contains decoded `:components', canonical `:canonical', and
 `:locator-class' (`exact', `alias', `session-relative', `workspace-relative',
 or `dynamic').
 Physical resolution is intentionally not performed here."
@@ -873,6 +870,10 @@ Physical resolution is intentionally not performed here."
         (setq fragment-data
               (mevedel-resource--decode-fragment (substring tail (1+ fragment-p))))
         (setq tail (substring tail 0 fragment-p)))
+      ;; Directories are commonly written with a trailing slash; it names
+      ;; nothing beyond the directory itself.
+      (when (and (> (length tail) 1) (string-suffix-p "/" tail))
+        (setq tail (substring tail 0 -1)))
       (when (and (not (eq scheme 'agent)) (string-match "#" tail))
         (signal 'mevedel-resource-error
                 (list "Fragments are not supported by this resource scheme")))
@@ -938,9 +939,6 @@ Physical resolution is intentionally not performed here."
                    (null components))
           (signal 'mevedel-resource-error
                   (list "Agent JSON Pointer requires a canonical agent path")))
-        (unless (equal address canonical)
-          (signal 'mevedel-resource-error
-                  (list "Noncanonical resource address")))
         (list :scheme scheme
               :components components
               :name (plist-get specific :name)
@@ -1710,7 +1708,7 @@ errors before any content or handler is reached."
            (workspace (mevedel-resource--workspace context session))
            (data (list :resource-p t
                        :operation operation
-                       :address address
+                       :address (plist-get parsed :canonical)
                        :canonical (plist-get parsed :canonical)
                        :scheme scheme
                        :components components

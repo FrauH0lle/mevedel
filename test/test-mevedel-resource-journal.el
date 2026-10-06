@@ -136,7 +136,7 @@
         (should-error (mevedel-resource-prepare 'apply-patch address nil)
                       :type 'mevedel-resource-error)))
     (dolist (address (list "journal://" (concat "journal://" file)
-                           "memory://journal" "memory://journal/root/topic.md"
+                           "memory://journal/root/topic.md"
                            "memory://journal//" "memory://journal/state"))
       (should-error (mevedel-resource-parse-address address)
                     :type 'mevedel-resource-error))))

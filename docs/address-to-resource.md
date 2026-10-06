@@ -71,7 +71,8 @@ unknown `scheme://` prefix, malformed known address, traversal, or containment
 failure is a validation error and is not treated as a filesystem path. Other
 strings containing a colon remain ordinary tool input.
 
-Diagnostics identify the authored address and the actual reason. Unsupported
+Validation diagnostics identify the authored address and the actual reason;
+results and diagnostics after preparation use the canonical address. Unsupported
 operations are described as unsupported operations, rather than malformed
 addresses. Missing explicit files remain failures; missing resource owners,
 unknown selections, unreadable storage, and results that are not ready have
@@ -82,9 +83,11 @@ failures. Internal execution-contract failures are identified as internal errors
 Canonical serialization uses UTF-8 RFC 3986 percent encoding: leave only
 unreserved bytes literal and use uppercase hexadecimal escapes. For
 path-oriented families, split on literal `/` before decoding each component
-once. Reject malformed or noncanonical escapes, empty interior components,
-decoded separators, NUL, `.`, `..`, and absolute components. A display name
-never replaces the authoritative identity.
+once. Input may spell any component byte literally or escaped, with either hex
+case, and may end with one slash; preparation normalizes it to the canonical
+spelling. Reject malformed escapes, empty interior components, decoded
+separators, control characters, `.`, `..`, and absolute components. A display
+name never replaces the authoritative identity.
 
 The address forms have these identity rules:
 
@@ -165,9 +168,9 @@ broadens roots, authorizes another tool, or bypasses permission mode.
 ### `work://`
 
 `work://` exposes working files through Read, Glob, Grep, and ApplyPatch.
-Bare Read lists both scopes and bare Glob/Grep searches both. Directory operands
-use canonical names without a trailing slash, such as `work://shared`; the
-`work://shared/` spelling denotes the prefix for its file descendants.
+Bare Read lists both scopes and bare Glob/Grep searches both. A directory
+operand may end with a slash: `work://shared/` and `work://shared` name the same
+directory, whose canonical spelling has no trailing slash.
 
 An unused shared root is a successful empty discovery result for Read, Glob,
 and Grep. The result explains that an authorized ApplyPatch can create a file

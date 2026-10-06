@@ -44,12 +44,27 @@
     (should (equal "work://" (plist-get parsed :canonical)))
     (should (eq 'dynamic (plist-get parsed :locator-class)))
     (should (plist-get parsed :dynamic-p)))
-  :doc "rejects malformed and noncanonical path components"
+  :doc "rejects malformed and unsafe path components"
   (dolist (address '("work://a//b" "work://a/../b" "work://a/./b"
-                     "work://a%2fb" "work://a%2Fb" "work://a%2eb"
-                     "work://a%2Eb" "work://a%ZZ" "work:///a"
-                     "work://a#fragment" "work://a/" "work:///"))
+                     "work://a%2fb" "work://a%2Fb" "work://a/%2e%2E/b"
+                     "work://a%ZZ" "work:///a" "work://a#fragment"
+                     "work://a//" "work:///" "work://a%0Ab"))
     (should-error (mevedel-resource-parse-address address)))
+  :doc "normalizes literal characters, escape case, and one trailing slash"
+  (dolist (entry '(("work://shared/" . "work://shared")
+                   ("work://notes one/" . "work://notes%20one")
+                   ("work://a%2eb" . "work://a.b")
+                   ("work://a%c3%a4" . "work://a%C3%A4")
+                   ("work://\u00e4 b.md" . "work://%C3%A4%20b.md")
+                   ("memory://journal" . "memory://journal/")
+                   ("memory://journal/" . "memory://journal/")
+                   ("history://root/" . "history://root")
+                   ("mcp://server/" . "mcp://server")
+                   ("shared://library/System Design/sheet.png"
+                    . "shared://library/System%20Design/sheet.png")))
+    (should (equal (cdr entry)
+                   (plist-get (mevedel-resource-parse-address (car entry))
+                              :canonical))))
   :doc "rejects unknown scheme URLs instead of treating them as paths"
   (should-error (mevedel-resource-parse-address "https://example.test/a"))
   :doc "rejects an unknown scheme without interning its name"
@@ -129,7 +144,6 @@
                    "agent://reviewer"
                    "agent://root"
                    "history://reviewer"
-                   "history://root/"
                    "history://root#"
                    "history://root/../other"
                    "agent://root/Reviewer"
@@ -137,7 +151,6 @@
                    "skill://name@ABC"
                    (concat "skill://name@" (upcase digest))
                    "mcp://server/uri/extra"
-                   "mcp://server/"
                    "agent://root/reviewer?query=1"
                    "work://notes?query=1"
                    "agent://root/reviewer#not-a-pointer"

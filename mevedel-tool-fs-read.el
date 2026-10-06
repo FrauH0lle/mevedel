@@ -691,15 +691,6 @@ DISPLAY-PATH replaces the physical PATH in model-visible text."
       "image/jpeg")
      (t mime))))
 
-(defun mevedel-tool-fs-read--text-range-requested-p (offset limit)
-  "Return non-nil when OFFSET or LIMIT asks for a text line range.
-Treat zero as absent because some model tool calls supply optional
-integer defaults even when the user did not request a text range.
-Treat LIMIT 2000 as absent because it is Read's documented default
-text limit and may be sent by models as a defaulted optional value."
-  (or (and offset (not (equal offset 0)))
-      (and limit (not (member limit '(0 2000))))))
-
 (defun mevedel-tool-fs-read--normalize-read-args (args)
   "Return ARGS normalized for Read handling."
   (let ((normalized (copy-sequence args)))
@@ -1274,8 +1265,9 @@ returning; media reads may continue from helper callbacks."
              (mevedel-tool-fs-read--visible-path filename)))
     (if (mevedel-tool-fs-read-media-mime-type filename)
         (progn
-          (when (mevedel-tool-fs-read--text-range-requested-p offset limit)
-            (error "Offset and limit are only supported for text files"))
+          ;; Strict tool schemas make models fill every field, so a media
+          ;; read arrives with whatever offset and limit they chose.  A line
+          ;; range means nothing for media; ignore it rather than fail.
           (unless (or (mevedel-tool-fs-read-pdf-media-p filename)
                       (null (plist-get args :pages)))
             (error "Parameter pages is only supported for PDF files"))

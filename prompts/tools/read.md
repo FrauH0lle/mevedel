@@ -27,7 +27,6 @@ permissions and the current model's media capabilities.
   not mean the media was delivered; do not infer visual content from it.
 - For PDF page rendering/resizing, media fallback, resource aliases, or JSON
   selection, read `mevedel://tools/files.md` before using those features.
-  `offset` and `limit` apply only to text, never to images or PDFs.
 - Missing, unreadable, or unsupported targets return an error. If a manual
   cannot be read, use the known ordinary contract or report missing guidance.
 
