@@ -126,6 +126,10 @@ test('board tools', async (t) => {
   await t.test('the library inserts built-in and personal items and installs public libraries', async () => {
     const {page, frame} = await open({content:[{id:'box', type:'rectangle', x:0, y:0, width:100, height:60}]});
     await frame.locator('#library-menu > summary').click();
+    const section = name => frame.locator('.library-section > summary').filter({hasText:name});
+    assert.equal(await frame.getByRole('button', {name:'Insert Database', exact:true}).isVisible(), false,
+      'libraries other than My library start collapsed');
+    await section('Built-in').click();
     await frame.getByRole('button', {name:'Insert Database', exact:true}).click();
     await saved(frame);
     let content = await read(page);
@@ -159,7 +163,14 @@ test('board tools', async (t) => {
       [['ann/clouds.excalidrawlib', 'Clouds']]);
     await frame.getByRole('button', {name:'← Libraries', exact:true}).click();
     await frame.getByRole('button', {name:'← My library', exact:true}).click();
-    await frame.getByRole('heading', {name:'Clouds', exact:true}).waitFor();
+    // Search reaches items inside collapsed libraries; clearing it restores the sections.
+    await frame.getByRole('searchbox', {name:'Search library items'}).fill('cloud');
+    assert.equal(await frame.getByRole('button', {name:'Insert Cloud', exact:true}).count(), 2, 'personal and installed matches');
+    assert.equal(await frame.getByRole('button', {name:'Insert Database', exact:true}).count(), 0);
+    await frame.getByRole('searchbox', {name:'Search library items'}).fill('');
+    assert.equal(await frame.getByRole('button', {name:'Remove library Clouds', exact:true}).isVisible(), false,
+      'a library can only be removed from inside its opened section');
+    await section('Clouds').last().click();
     await frame.getByRole('button', {name:'Insert Cloud', exact:true}).last().click();
     await saved(frame);
     content = await read(page);

@@ -238,7 +238,11 @@ geometry; a binding to a deleted element is drawn unbound.
 ## Element library
 
 **Library** offers the libraries kept on the session host: **My library**,
-installed libraries, and mevedel's **Built-in** library. Clicking an item
+installed libraries, and mevedel's **Built-in** library. Each library is a
+collapsible section; My library starts open, the others closed, and the
+editor remembers which sections a participant opened while it stays loaded.
+The search field matches item names and library names across every library,
+opening the sections with matches. Clicking an item
 inserts copies with fresh identities at the centre of the view, selected for
 moving; groups, labels and bindings within the item are kept.
 
@@ -257,7 +261,10 @@ Excalidraw scene does. View links have no library.
 [libraries.excalidraw.com](https://libraries.excalidraw.com) with a search
 field, sorted by downloads, recent updates, age or name. Opening one previews
 its items; **Install library** saves it in the directory, where it stays
-available in every whiteboard until its **Remove**. The editor has no network
+available in every whiteboard until the **Remove** button inside its opened
+section, which names the library, removes it. Installed libraries are removed
+whole: they mirror a published file, so useful items are kept by inserting
+them and adding them to My library. The editor has no network
 access, so Emacs fetches the index, download counts and library files from
 `mevedel-shared-library-catalog-url`, and only library files listed there.
 The built-in **Database** item replaces the former cylinder shape: a group of

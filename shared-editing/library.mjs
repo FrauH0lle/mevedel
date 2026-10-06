@@ -29,7 +29,9 @@ export function libraryPanel({ parent, request, report, selection, insert, downl
   const body = node('div', { className: 'editor-menu library-body' });
   menu.append(node('summary', { textContent: 'Library' }), body);
   parent.append(menu);
-  let libraries = [], catalog = null, loaded = false;
+  let libraries = [], catalog = null, loaded = false, query = '';
+  /* Which library sections the participant opened or closed; My library starts open. */
+  const expanded = new Map();
   const run = async (task) => {
     try { await task(); } catch (error) { report(error.message); }
   };
@@ -77,27 +79,50 @@ export function libraryPanel({ parent, request, report, selection, insert, downl
     const personal = libraries.find((library) => library.kind === 'personal');
     const save = node('button', { type: 'button', textContent: 'Download', disabled: !personal?.items.length });
     save.onclick = () => download(serializeLibrary(personal.items));
-    body.append(node('div', { className: 'library-actions' }, add, upload, browse, save, file));
-    if (!personal?.items.length)
-      body.append(node('h4', { textContent: 'My library' }),
+    const search = node('input', { type: 'search', placeholder: 'Search items', value: query });
+    search.setAttribute('aria-label', 'Search library items');
+    const sections = node('div', { className: 'library-sections' });
+    search.oninput = () => { query = search.value; renderSections(sections); };
+    body.append(node('div', { className: 'library-actions' }, add, upload, browse, save, file), search, sections);
+    renderSections(sections);
+  }
+  /* One collapsible section per library. A search opens every library with a
+     matching item, or whose name matches, without changing what stays open. */
+  function renderSections(sections) {
+    const needle = query.trim().toLowerCase();
+    sections.replaceChildren();
+    const personal = libraries.find((library) => library.kind === 'personal');
+    if (!needle && !personal?.items.length)
+      sections.append(node('h4', { textContent: 'My library' }),
         node('p', { className: 'hint', textContent: 'Select objects and choose Add selection, or import an .excalidrawlib file.' }));
     for (const library of libraries) {
       if (!library.items.length && library.kind === 'personal') continue;
-      const heading = node('div', { className: 'library-heading' }, node('h4', { textContent: library.name }));
-      if (library.kind === 'installed') {
-        const uninstall = node('button', { type: 'button', className: 'library-remove', textContent: 'Remove' });
-        uninstall.setAttribute('aria-label', `Remove library ${library.name}`);
-        uninstall.onclick = () => run(() => listing({ action: 'library-uninstall', name: library.name }));
-        heading.append(uninstall);
-      }
-      body.append(heading, library.error ? node('p', { className: 'hint', textContent: library.error })
-        : grid(library.items, library.kind === 'personal' ? (item) => {
+      const items = !needle || library.name.toLowerCase().includes(needle) ? library.items
+        : library.items.filter((item) => (item.name || '').toLowerCase().includes(needle));
+      if (needle && !items.length) continue;
+      const section = node('details', { className: 'library-section',
+        open: Boolean(needle) || (expanded.get(library.name) ?? library.kind === 'personal') });
+      section.ontoggle = () => { if (!needle) expanded.set(library.name, section.open); };
+      section.append(node('summary', {}, node('h4', { textContent: library.name }),
+        node('small', { textContent: String(library.items.length) })));
+      section.append(library.error ? node('p', { className: 'hint', textContent: library.error })
+        : grid(items, library.kind === 'personal' ? (item) => {
           const remove = node('button', { type: 'button', className: 'library-remove', textContent: '×' });
           remove.setAttribute('aria-label', `Remove ${item.name || 'item'} from the library`);
           remove.onclick = () => run(() => listing({ action: 'library-remove', ids: [item.id] }));
           return [remove];
         } : undefined));
+      // Removal sits inside the opened library, so it always names what it removes.
+      if (library.kind === 'installed') {
+        const uninstall = node('button', { type: 'button', textContent: `Remove ${library.name}` });
+        uninstall.setAttribute('aria-label', `Remove library ${library.name}`);
+        uninstall.onclick = () => run(() => listing({ action: 'library-uninstall', name: library.name }));
+        section.append(node('div', { className: 'library-actions' }, uninstall));
+      }
+      sections.append(section);
     }
+    if (needle && !sections.children.length)
+      sections.append(node('p', { className: 'hint', textContent: 'No library items match.' }));
   }
   const install = (entry) => run(async () => {
     await listing({ action: 'library-install', source: entry.source, name: entry.name.replace(/[/\\:*?"<>|]/g, ' ').trim().slice(0, 100) });
