@@ -129,7 +129,7 @@ Chat / view
   mevedel-collaboration.el    live browser room and lifecycle facade
   mevedel-collaboration-guest.el  untrusted guest protocol and input handling
   mevedel-collaboration-owner.el owner-link permission and session authorities
-  mevedel-collaboration-lobby.el  per-workspace lobby: persistent link, session list, open
+  mevedel-collaboration-lobby.el  per-workspace lobby: persistent link and restart, session list, open
   mevedel-collaboration-agent.el  browser agent roster and transcript fetch
   mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
   mevedel-collaboration-artifact.el browser artifact fetch and notifications

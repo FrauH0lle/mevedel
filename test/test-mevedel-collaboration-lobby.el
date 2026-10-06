@@ -4,7 +4,7 @@
 
 ;; Tests the per-workspace lobby: persisted credentials, the session
 ;; listing, opening, creating and deleting sessions from guest frames,
-;; and the lobby lifecycle.
+;; the lobby lifecycle, and restarting lobbies with Emacs.
 
 ;;; Code:
 
@@ -27,13 +27,24 @@
                 :table (make-hash-table :test #'equal)
                 :order nil :total-bytes 0)))
 
-(defmacro mevedel-collaboration-lobby-test--with-root (root &rest body)
-  "Bind ROOT to a fresh temporary directory around BODY."
-  (declare (indent 1))
-  `(let ((,root (file-name-as-directory
-                 (make-temp-file "mevedel-lobby-" t))))
+(defmacro mevedel-collaboration-lobby-test--with-user-dir (&rest body)
+  "Run BODY with `mevedel-user-dir' in a fresh temporary directory."
+  (declare (indent 0))
+  `(let ((mevedel-user-dir (file-name-as-directory
+                            (make-temp-file "mevedel-lobby-user-" t))))
      (unwind-protect (progn ,@body)
-       (delete-directory ,root t))))
+       (delete-directory mevedel-user-dir t))))
+
+(defmacro mevedel-collaboration-lobby-test--with-root (root &rest body)
+  "Bind ROOT to a fresh temporary directory around BODY.
+`mevedel-user-dir' is a fresh temporary directory too, so recording a
+running lobby touches no real state."
+  (declare (indent 1))
+  `(mevedel-collaboration-lobby-test--with-user-dir
+     (let ((,root (file-name-as-directory
+                   (make-temp-file "mevedel-lobby-" t))))
+       (unwind-protect (progn ,@body)
+         (delete-directory ,root t)))))
 
 (defun mevedel-collaboration-lobby-test--lobby (workspace &rest keys)
   "Return a lobby plist for WORKSPACE with KEYS added."
@@ -520,11 +531,15 @@
                          opened))
           (should (memq #'mevedel-collaboration-lobby--stop-all
                         kill-emacs-hook))
+          ;; It runs until stopped, so the next Emacs restarts it.
+          (should (equal (list root)
+                         (mevedel-collaboration-lobby--intended)))
           ;; A second start is the same lobby, not a second room.
           (should (eq lobby (mevedel-collaboration-lobby-start root)))
           (should (= 1 (length opened)))
           (mevedel-collaboration-lobby--stop lobby 'user-stop)
           (should-not (mevedel-collaboration-lobby--find workspace))
+          (should-not (mevedel-collaboration-lobby--intended))
           (should-not kill-emacs-hook)
           ;; Restarting revives the very same links.
           (let ((again (mevedel-collaboration-lobby-start root)))
@@ -535,46 +550,70 @@
           (should (= 2 (length stopped))))))))
 
 (mevedel-deftest mevedel-collaboration-lobby--stop
-  (:doc "says goodbye to connected guests except when Emacs exits")
-  (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
-        (kill-emacs-hook (list #'mevedel-collaboration-lobby--stop-all))
-        (workspace (mevedel-collaboration-lobby-test--workspace "/root/"))
-        sent stopped)
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-               (lambda (_transport peer frame) (push (cons peer frame) sent) t))
-              ((symbol-function 'mevedel-collaboration--transport-stop)
-               (lambda (transport) (push transport stopped))))
-      (let ((lobby (mevedel-collaboration-lobby-test--lobby workspace)))
-        (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
-        (mevedel-collaboration-lobby--stop lobby 'user-stop)
-        ;; Nobody connected, nobody told.
-        (should-not sent)
-        (should (equal '(transport) stopped))
-        (should-not kill-emacs-hook))
-      (let ((lobby (mevedel-collaboration-lobby-test--lobby workspace)))
-        (puthash 1 '(:name "a") (plist-get lobby :guests))
-        (mevedel-collaboration-lobby--stop lobby 'rotated)
-        (should (equal '((0 :t "bye" :reason "rotated")) sent))
-        (setq sent nil)
-        (mevedel-collaboration-lobby--stop lobby 'emacs-exit)
-        (should-not sent)))))
+  ()
+  ,test
+  (test)
+  :doc "says goodbye to connected guests except when Emacs exits"
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+          (kill-emacs-hook (list #'mevedel-collaboration-lobby--stop-all))
+          (workspace (mevedel-collaboration-lobby-test--workspace "/root/"))
+          sent stopped)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame)
+                   (push (cons peer frame) sent) t))
+                ((symbol-function 'mevedel-collaboration--transport-stop)
+                 (lambda (transport) (push transport stopped))))
+        (let ((lobby (mevedel-collaboration-lobby-test--lobby workspace)))
+          (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
+          (mevedel-collaboration-lobby--stop lobby 'user-stop)
+          ;; Nobody connected, nobody told.
+          (should-not sent)
+          (should (equal '(transport) stopped))
+          (should-not kill-emacs-hook))
+        (let ((lobby (mevedel-collaboration-lobby-test--lobby workspace)))
+          (puthash 1 '(:name "a") (plist-get lobby :guests))
+          (mevedel-collaboration-lobby--stop lobby 'rotated)
+          (should (equal '((0 :t "bye" :reason "rotated")) sent))
+          (setq sent nil)
+          (mevedel-collaboration-lobby--stop lobby 'emacs-exit)
+          (should-not sent)))))
+
+  :doc "only an Emacs exit leaves the lobby recorded to restart"
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+          (kill-emacs-hook nil)
+          (workspace (mevedel-collaboration-lobby-test--workspace "/root/")))
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-stop)
+                 #'ignore))
+        (mevedel-collaboration-lobby--set-intended "/root/" t)
+        (mevedel-collaboration-lobby--stop
+         (mevedel-collaboration-lobby-test--lobby workspace) 'emacs-exit)
+        (should (equal '("/root/") (mevedel-collaboration-lobby--intended)))
+        (mevedel-collaboration-lobby--stop
+         (mevedel-collaboration-lobby-test--lobby workspace) 'user-stop)
+        (should-not (mevedel-collaboration-lobby--intended))))))
 
 (mevedel-deftest mevedel-collaboration-lobby--stop-all
-  (:doc "stops every live lobby")
-  (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
-        (kill-emacs-hook nil)
-        stopped)
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-stop)
-               (lambda (transport) (push transport stopped))))
-      (dolist (root '("/a/" "/b/"))
-        (puthash root
-                 (mevedel-collaboration-lobby-test--lobby
-                  (mevedel-collaboration-lobby-test--workspace root)
-                  :transport root)
-                 mevedel-collaboration-lobby--lobbies))
-      (mevedel-collaboration-lobby--stop-all)
-      (should (= 0 (hash-table-count mevedel-collaboration-lobby--lobbies)))
-      (should (equal '("/a/" "/b/") (sort stopped #'string<))))))
+  (:doc "stops every live lobby and keeps them recorded to restart")
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+          (kill-emacs-hook nil)
+          stopped)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-stop)
+                 (lambda (transport) (push transport stopped))))
+        (dolist (root '("/a/" "/b/"))
+          (mevedel-collaboration-lobby--set-intended root t)
+          (puthash root
+                   (mevedel-collaboration-lobby-test--lobby
+                    (mevedel-collaboration-lobby-test--workspace root)
+                    :transport root)
+                   mevedel-collaboration-lobby--lobbies))
+        (mevedel-collaboration-lobby--stop-all)
+        (should (= 0 (hash-table-count mevedel-collaboration-lobby--lobbies)))
+        (should (equal '("/a/" "/b/") (sort stopped #'string<)))
+        (should (equal '("/a/" "/b/")
+                       (mevedel-collaboration-lobby--intended)))))))
 
 (mevedel-deftest mevedel-collaboration-lobby--status
   (:doc "reports each lobby without its secrets")
@@ -589,6 +628,131 @@
                  (lambda (_transport) t)))
         (should (equal "Lobby: proj: relay connected; 1 guest"
                        (mevedel-collaboration-lobby--status)))))))
+
+(mevedel-deftest mevedel-collaboration-lobby--intent-path
+  (:doc "keeps the running lobbies in the user directory")
+  (let ((mevedel-user-dir "/home/user/.mevedel/"))
+    (should (equal "/home/user/.mevedel/lobbies.el"
+                   (mevedel-collaboration-lobby--intent-path)))))
+
+(mevedel-deftest mevedel-collaboration-lobby--intended
+  (:doc "reads the recorded roots and ignores a damaged record")
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let ((path (mevedel-collaboration-lobby--intent-path)))
+      (should-not (mevedel-collaboration-lobby--intended))
+      (with-temp-file path (insert "(\"/a/\" 7 \"/b/\")"))
+      (should (equal '("/a/" "/b/") (mevedel-collaboration-lobby--intended)))
+      (with-temp-file path (insert "(\"/a/\""))
+      (should-not (mevedel-collaboration-lobby--intended))
+      (with-temp-file path (insert "(\"/a/\" . \"/b/\")"))
+      (should-not (mevedel-collaboration-lobby--intended)))))
+
+(mevedel-deftest mevedel-collaboration-lobby--set-intended
+  ()
+  ,test
+  (test)
+  :doc "adds each root once and removes the record with the last one"
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let ((path (mevedel-collaboration-lobby--intent-path)))
+      (mevedel-collaboration-lobby--set-intended "/a/" t)
+      (mevedel-collaboration-lobby--set-intended "/b/" t)
+      (mevedel-collaboration-lobby--set-intended "/a/" t)
+      (should (equal '("/a/" "/b/") (mevedel-collaboration-lobby--intended)))
+      (mevedel-collaboration-lobby--set-intended "/a/" nil)
+      (should (equal '("/b/") (mevedel-collaboration-lobby--intended)))
+      (mevedel-collaboration-lobby--set-intended "/b/" nil)
+      (should-not (file-exists-p path))
+      ;; Forgetting what was never recorded writes nothing.
+      (mevedel-collaboration-lobby--set-intended "/c/" nil)
+      (should-not (file-exists-p path))))
+
+  :doc "reports a record it cannot write instead of failing the lobby"
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let ((mevedel-user-dir (file-name-concat mevedel-user-dir "blocked/"))
+          captured)
+      ;; A file where the directory should be makes the write fail.
+      (with-temp-file (directory-file-name mevedel-user-dir))
+      (mevedel-test--with-captured-diagnostics captured
+        (mevedel-collaboration-lobby--set-intended "/a/" t))
+      (should (string-match-p "Could not record the lobby of /a/" captured))
+      (should-not (mevedel-collaboration-lobby--intended)))))
+
+(mevedel-deftest mevedel-collaboration-lobby-restore
+  ()
+  ,test
+  (test)
+  :doc "restarts each recorded lobby and reports one that fails"
+  (mevedel-collaboration-lobby-test--with-root root
+    (let ((broken (file-name-as-directory
+                   (file-name-concat root "broken")))
+          started captured)
+      (make-directory broken)
+      (mevedel-collaboration-lobby--set-intended broken t)
+      (mevedel-collaboration-lobby--set-intended root t)
+      (cl-letf (((symbol-function 'mevedel-collaboration-lobby-start)
+                 (lambda (directory)
+                   (push directory started)
+                   (when (equal directory broken)
+                     (user-error "No mevedel workspace at %s" directory)))))
+        (mevedel-test--with-captured-diagnostics captured
+          (mevedel-collaboration-lobby-restore)))
+      (should (equal (list root broken) started))
+      (should (string-match-p
+               (regexp-quote (format "Lobby of %s not restarted" broken))
+               captured))
+      ;; A failed restart is retried with the next Emacs.
+      (should (equal (list broken root)
+                     (mevedel-collaboration-lobby--intended)))))
+
+  :doc "forgets a lobby whose directory is gone"
+  (mevedel-collaboration-lobby-test--with-root root
+    (let ((gone (file-name-as-directory (file-name-concat root "gone")))
+          started captured)
+      (mevedel-collaboration-lobby--set-intended gone t)
+      (cl-letf (((symbol-function 'mevedel-collaboration-lobby-start)
+                 (lambda (directory) (push directory started))))
+        (mevedel-test--with-captured-diagnostics captured
+          (mevedel-collaboration-lobby-restore)))
+      (should-not started)
+      (should (string-match-p "forgotten" captured))
+      (should-not (mevedel-collaboration-lobby--intended)))))
+
+(mevedel-deftest mevedel-collaboration-lobby-stop
+  ()
+  ,test
+  (test)
+  :doc "stops the running lobby so it does not restart with Emacs"
+  (mevedel-collaboration-lobby-test--with-root root
+    (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+          (mevedel-collaboration-relay-url "wss://relay.example")
+          (kill-emacs-hook nil)
+          (workspace (mevedel-collaboration-lobby-test--workspace root)))
+      (cl-letf (((symbol-function 'mevedel-workspace)
+                 (lambda (&optional _buffer) workspace))
+                ((symbol-function 'mevedel-collaboration-lobby--workspace)
+                 (lambda (_directory) workspace))
+                ((symbol-function 'mevedel-collaboration--transport-open)
+                 (lambda (url &rest _) (list :url url)))
+                ((symbol-function 'mevedel-collaboration--transport-stop)
+                 #'ignore))
+        (mevedel-collaboration-lobby-start root)
+        (mevedel-test--with-captured-messages nil
+          (mevedel-collaboration-lobby-stop))
+        (should-not (mevedel-collaboration-lobby--find workspace))
+        (should-not (mevedel-collaboration-lobby--intended)))))
+
+  :doc "ends the retries of a lobby that failed to restart"
+  (mevedel-collaboration-lobby-test--with-root root
+    (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+          (workspace (mevedel-collaboration-lobby-test--workspace root))
+          captured)
+      (mevedel-collaboration-lobby--set-intended root t)
+      (cl-letf (((symbol-function 'mevedel-workspace)
+                 (lambda (&optional _buffer) workspace)))
+        (mevedel-test--with-captured-messages captured
+          (mevedel-collaboration-lobby-stop)))
+      (should (string-match-p "no lobby is running" captured))
+      (should-not (mevedel-collaboration-lobby--intended)))))
 
 (mevedel-deftest mevedel-collaboration-lobby-rotate
   (:doc "replaces stored credentials and restarts a running lobby")

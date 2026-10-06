@@ -447,8 +447,10 @@ relay's room plist."
                      (lambda ()
                        (mevedel-collaboration--transport-open-p transport))))
             (should (equal '(open) states))
-            ;; An answered dial has no deadline left.
+            ;; An answered dial has no deadline left, and its handshake
+            ;; already counts as inbound traffic.
             (should-not (plist-get transport :connect-timer))
+            (should-not (mevedel-collaboration--transport-silent-p transport))
             ;; A guest joins: the host sees the relay control message.
             (let* ((guest-frames nil)
                    (guest (websocket-open
@@ -606,7 +608,7 @@ relay's room plist."
   ,test
   (test)
   :doc "a keepalive ping carries a payload so websocket.el masks it"
-  (let ((transport (list :state 'open :ws 'ws))
+  (let ((transport (list :state 'open :ws 'ws :inbound-at (float-time)))
         sent)
     (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
               ((symbol-function 'websocket-send)
@@ -649,7 +651,107 @@ relay's room plist."
                 (should (eq replacement (plist-get transport :ws)))
                 (should (mevedel-collaboration--transport-open-p transport)))))
         (mevedel-collaboration--transport-stop transport)
-        (should-not (plist-get transport :keepalive-timer))))))
+        (should-not (plist-get transport :keepalive-timer)))))
+
+  :doc "a connection silent past the liveness window is dropped and redialed"
+  (mevedel-test--with-stub-relay (state port server)
+    (let* ((states nil)
+           (transport
+            (mevedel-collaboration--transport-open
+             (format "ws://127.0.0.1:%d/r/roomroomroomroom?role=host" port)
+             (make-string 32 5)
+             :on-state (lambda (new) (push new states)))))
+      (unwind-protect
+          (progn
+            (should (mevedel-test--pump
+                     (lambda ()
+                       (mevedel-collaboration--transport-open-p transport))))
+            (let ((old (plist-get transport :ws))
+                  (pinged nil))
+              ;; A network change leaves exactly this: the relay's side has
+              ;; gone quiet, and no write ever fails.
+              (set-process-filter
+               (websocket-conn (plist-get (car state) :host)) #'ignore)
+              (plist-put transport :inbound-at
+                         (- (float-time)
+                            mevedel-collaboration--liveness-seconds 1))
+              (cl-letf (((symbol-function 'websocket-send)
+                         (lambda (&rest _) (setq pinged t))))
+                (mevedel-collaboration--transport-keepalive transport))
+              (should-not pinged)
+              (should-not (websocket-openp old))
+              (should (equal '(down open) states))
+              (should (timerp (plist-get transport :reconnect-timer)))
+              (should (mevedel-test--pump
+                       (lambda ()
+                         (mevedel-collaboration--transport-open-p transport))))
+              (should-not (eq old (plist-get transport :ws)))
+              (should-not (mevedel-collaboration--transport-silent-p
+                           transport))))
+        (mevedel-collaboration--transport-stop transport))))
+
+  :doc "input queued while Emacs was busy counts before silence is judged"
+  (mevedel-test--with-stub-relay (state port server)
+    (let* ((states nil)
+           (transport
+            (mevedel-collaboration--transport-open
+             (format "ws://127.0.0.1:%d/r/roomroomroomroom?role=host" port)
+             (make-string 32 5)
+             :on-state (lambda (new) (push new states)))))
+      (unwind-protect
+          (progn
+            (should (mevedel-test--pump
+                     (lambda ()
+                       (mevedel-collaboration--transport-open-p transport))))
+            (let ((ws (plist-get transport :ws))
+                  (pinged nil))
+              (plist-put transport :inbound-at
+                         (- (float-time)
+                            mevedel-collaboration--liveness-seconds 1))
+              ;; The relay's traffic is waiting in the socket, unread.
+              (websocket-send-text (plist-get (car state) :host)
+                                   "{\"t\":\"peer-joined\",\"peer\":7}")
+              (cl-letf* ((send (symbol-function 'websocket-send))
+                         ((symbol-function 'websocket-send)
+                          (lambda (target frame)
+                            (when (eq target ws) (setq pinged t))
+                            (funcall send target frame))))
+                (mevedel-collaboration--transport-keepalive transport))
+              (should pinged)
+              (should (eq ws (plist-get transport :ws)))
+              (should (equal '(open) states))
+              (should-not (mevedel-collaboration--transport-silent-p
+                           transport))))
+        (mevedel-collaboration--transport-stop transport)))))
+
+(mevedel-deftest mevedel-collaboration--transport-silent-p
+  (:doc "measures the time since the connection last received anything")
+  (let ((transport (list :inbound-at (float-time))))
+    (should-not (mevedel-collaboration--transport-silent-p transport))
+    (plist-put transport :inbound-at
+               (- (float-time) mevedel-collaboration--liveness-seconds 1))
+    (should (mevedel-collaboration--transport-silent-p transport))
+    ;; A connection that never received anything is silent.
+    (should (mevedel-collaboration--transport-silent-p (list :ws 'ws)))))
+
+(mevedel-deftest mevedel-collaboration--transport-watch-inbound
+  (:doc "stamps inbound bytes on the current connection only")
+  (let* ((process (make-pipe-process :name "mevedel-test-inbound"
+                                     :noquery t :filter #'ignore))
+         (ws (websocket-inner-create :conn process :url "ws://fixture"
+                                     :accept-string ""))
+         (transport (list :ws ws :inbound-at nil)))
+    (unwind-protect
+        (progn
+          (mevedel-collaboration--transport-watch-inbound transport ws)
+          (funcall (process-filter process) process "bytes")
+          (should (numberp (plist-get transport :inbound-at)))
+          ;; A replaced connection no longer speaks for the transport.
+          (plist-put transport :inbound-at nil)
+          (plist-put transport :ws 'replacement)
+          (funcall (process-filter process) process "bytes")
+          (should-not (plist-get transport :inbound-at)))
+      (delete-process process))))
 
 
 ;;; test-mevedel-collaboration-transport.el ends here

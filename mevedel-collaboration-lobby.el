@@ -9,10 +9,15 @@
 ;; A lobby is a room bound to a workspace rather than to a session.  Its
 ;; credentials persist in the workspace state directory, so its links
 ;; survive Emacs restarts; every session room it hands out keeps the
-;; ordinary share lifetime.  Link tiers keep their meaning: a view link
-;; lists sessions, a full link also opens them and works with the project
-;; files (`mevedel-collaboration-files'), and an owner link also creates
-;; and deletes sessions.  A guest is always handed a session room at its
+;; ordinary share lifetime.  A lobby also runs until it is stopped: the
+;; roots of running lobbies are recorded in `mevedel-user-dir', and
+;; `mevedel-collaboration-lobby-restore', which `mevedel-install' runs
+;; once startup is done, restarts them in the next Emacs.
+;;
+;; Link tiers keep their meaning: a view link lists sessions, a full link
+;; also opens them and works with the project files
+;; (`mevedel-collaboration-files'), and an owner link also creates and
+;; deletes sessions.  A guest is always handed a session room at its
 ;; own tier.
 ;;
 ;; Guest frames arrive while nobody may be at the keyboard, so lobby work
@@ -62,6 +67,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+(defvar mevedel-user-dir)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -141,6 +147,71 @@ link made from them."
                                          (plist-get credentials :owner-token)))
                      (current-buffer))))
           credentials))))
+
+
+;;
+;;; Running across restarts
+
+(defun mevedel-collaboration-lobby--intent-path ()
+  "Return the file listing the roots whose lobbies run until stopped."
+  (file-name-concat mevedel-user-dir "lobbies.el"))
+
+(defun mevedel-collaboration-lobby--intended ()
+  "Return the workspace roots whose lobbies should be running.
+An unreadable or malformed record yields nil."
+  (let ((path (mevedel-collaboration-lobby--intent-path)))
+    (when-let* (((file-readable-p path))
+                (stored (condition-case nil
+                            (with-temp-buffer
+                              (insert-file-contents path)
+                              (read (current-buffer)))
+                          (error nil)))
+                ((proper-list-p stored)))
+      (seq-filter #'stringp stored))))
+
+(defun mevedel-collaboration-lobby--set-intended (root running)
+  "Record whether the lobby of workspace ROOT is RUNNING.
+A recorded lobby is restarted when Emacs next starts.  A record that
+cannot be written is reported, since the lobby itself is unaffected."
+  (let* ((roots (mevedel-collaboration-lobby--intended))
+         (updated (if running
+                      (if (member root roots) roots (append roots (list root)))
+                    (remove root roots)))
+         (path (mevedel-collaboration-lobby--intent-path)))
+    (unless (equal updated roots)
+      (condition-case err
+          (if (null updated)
+              (delete-file path)
+            (make-directory (file-name-directory path) t)
+            (with-temp-file path
+              (prin1 updated (current-buffer))))
+        (error
+         (display-warning
+          'mevedel
+          (format "Could not record the lobby of %s for the next start: %s"
+                  root (error-message-string err))))))))
+
+(defun mevedel-collaboration-lobby-restore ()
+  "Restart the lobbies that were running when Emacs last exited.
+Stopping a lobby is what ends it, so a lobby still running at exit
+comes back with its links.  A lobby that cannot start is reported as a
+warning and stays recorded for the next start, unless its directory is
+gone, in which case it is forgotten."
+  (dolist (root (mevedel-collaboration-lobby--intended))
+    (if (not (file-directory-p root))
+        (progn
+          (mevedel-collaboration-lobby--set-intended root nil)
+          (display-warning
+           'mevedel (format "Lobby of %s forgotten: the directory is gone"
+                            root)))
+      (condition-case err
+          (mevedel-collaboration-lobby-start root)
+        (error
+         (display-warning
+          'mevedel
+          (format (concat "Lobby of %s not restarted: %s "
+                          "(/collab lobby stop there ends the retries)")
+                  root (error-message-string err))))))))
 
 
 ;;
@@ -411,7 +482,9 @@ rejoins with a fresh hello after a drop."
 Return the live lobby when one is already running.  The returned plist
 carries the bearer links under `:link-view', `:link-full' and
 `:link-owner'; they stay valid across restarts until the lobby is
-rotated."
+rotated.  The lobby is recorded as running, so
+`mevedel-collaboration-lobby-restore' restarts it in the next Emacs
+until it is stopped."
   (require 'mevedel-collaboration-transport)
   (unless (require 'websocket nil t)
     (user-error "Collaboration requires the 'websocket' package; install it first"))
@@ -462,13 +535,17 @@ rotated."
             (error
              (remhash root mevedel-collaboration-lobby--lobbies)
              (signal (car error-data) (cdr error-data))))
+          (mevedel-collaboration-lobby--set-intended root t)
           lobby))))
 
 (defun mevedel-collaboration-lobby--stop (lobby reason)
   "Stop LOBBY for REASON, telling its guests unless Emacs is exiting.
-Its credentials stay stored, so starting it again revives its links."
-  (remhash (mevedel-workspace-root (plist-get lobby :workspace))
-           mevedel-collaboration-lobby--lobbies)
+Its credentials stay stored, so starting it again revives its links.
+Only an exit leaves it recorded as running, to restart with Emacs."
+  (let ((root (mevedel-workspace-root (plist-get lobby :workspace))))
+    (remhash root mevedel-collaboration-lobby--lobbies)
+    (unless (eq reason 'emacs-exit)
+      (mevedel-collaboration-lobby--set-intended root nil)))
   (when (zerop (hash-table-count mevedel-collaboration-lobby--lobbies))
     (remove-hook 'kill-emacs-hook #'mevedel-collaboration-lobby--stop-all))
   (ignore-errors (mevedel-collaboration-share-dismiss lobby))
@@ -528,14 +605,20 @@ Its credentials stay stored, so starting it again revives its links."
      (mevedel-collaboration-lobby-start root))))
 
 (defun mevedel-collaboration-lobby-stop ()
-  "Stop the current workspace's lobby; its links work again on restart."
+  "Stop the current workspace's lobby until it is started again.
+Its links work again once it is."
   (interactive)
-  (if-let* ((workspace (mevedel-workspace))
-            (lobby (mevedel-collaboration-lobby--find workspace)))
-      (progn
-        (mevedel-collaboration-lobby--stop lobby 'user-stop)
-        (message "mevedel: lobby stopped for %s" (plist-get lobby :project)))
-    (message "mevedel: no lobby is running for this workspace")))
+  (let ((workspace (mevedel-workspace)))
+    (if-let* ((lobby (and workspace
+                          (mevedel-collaboration-lobby--find workspace))))
+        (progn
+          (mevedel-collaboration-lobby--stop lobby 'user-stop)
+          (message "mevedel: lobby stopped for %s" (plist-get lobby :project)))
+      ;; A lobby that failed to restart is still recorded to run.
+      (when workspace
+        (mevedel-collaboration-lobby--set-intended
+         (mevedel-workspace-root workspace) nil))
+      (message "mevedel: no lobby is running for this workspace"))))
 
 (defun mevedel-collaboration-lobby-rotate ()
   "Replace the current workspace's lobby credentials.
