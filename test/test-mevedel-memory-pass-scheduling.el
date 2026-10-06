@@ -211,7 +211,7 @@
                                                          (accept-process-output nil 0.02))
                    (should (= 1 calls))
                    (should (= 4 (length (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root))))))
-                 :doc "auto applies memory proposals sequentially, counts shared files once, and holds instructions"
+                 :doc "auto applies memory and instruction proposals sequentially and counts shared files once"
                  (let ((memory (proposals))
                        (mevedel-memory-consolidation-mode 'auto))
                    (start :memory-only t)
@@ -219,13 +219,15 @@
                    ;; when its asynchronous callback arrives.
                    (let ((mevedel-memory-consolidation-mode 'manual)) (finish))
                    (should (eq 'success (plist-get result :outcome)))
-                   (should (= 3 (plist-get result :updated-files)))
-                   (should (= 2 (plist-get result :applied-count)))
-                   (should (= 1 (plist-get result :held-count)))
+                   (should (= 4 (plist-get result :updated-files)))
+                   (should (= 3 (plist-get result :applied-count)))
+                   (should (= 0 (plist-get result :held-count)))
                    (should (file-exists-p (file-name-concat memory "one.md")))
                    (should (file-exists-p (file-name-concat memory "two.md")))
-                   (should (equal "Existing guidance.\n" (mevedel-session-control-fs-read-file (file-name-concat root "AGENTS.md"))))
-                   (should (= 2 (length (seq-filter (lambda (entry) (eq 'decision (plist-get entry :kind)))
+                   (let ((guidance (mevedel-session-control-fs-read-file (file-name-concat root "AGENTS.md"))))
+                     (should (string-prefix-p "Existing guidance.\n" guidance))
+                     (should (string-search "Use the checked workflow." guidance)))
+                   (should (= 3 (length (seq-filter (lambda (entry) (eq 'decision (plist-get entry :kind)))
                                                     (mevedel-journal-store-entries root))))))
                  :doc "exit cancels queued and running work and fences late queue callbacks"
                  (progn
@@ -248,8 +250,10 @@
                    (start :memory-only t)
                    (write-region "User's new lesson.\n" nil (file-name-concat memory "one.md") nil 'silent)
                    (finish)
-                   (should (= 2 (plist-get result :updated-files)))
+                   (should (= 3 (plist-get result :updated-files)))
                    (should (= 1 (plist-get result :unapplied-count)))
+                   (should (string-search "Use the checked workflow."
+                                          (mevedel-session-control-fs-read-file (file-name-concat root "AGENTS.md"))))
                    (should (equal "User's new lesson.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "one.md"))))
                    (should (file-exists-p (file-name-concat memory "two.md"))))
                  :doc "cancellation during auto application holds the remaining proposals"

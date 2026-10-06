@@ -5,7 +5,9 @@
 ;; Checkpoints completed root work after authoritative save.  Each capture
 ;; has immutable evidence, notes, model selection, and source identities.
 ;; Evidence pins are installed before the capture becomes ready.  No model
-;; request runs while saving a checkpoint.
+;; request runs while saving a checkpoint.  Lifecycle events seal ready
+;; checkpoints with a trigger from `mevedel-journal-store-triggers'; only
+;; sealed captures are eligible for digest generation.
 
 ;;; Code:
 
@@ -124,7 +126,7 @@ evidence bundle; accepted output is never deleted here."
   "Return RECORD's public metadata with the closed trigger symbol restored."
   (let* ((metadata (copy-tree (plist-get record :metadata)))
          (trigger (intern-soft (plist-get metadata :trigger))))
-    (unless (memq trigger '(session-end compaction clear)) (error "Invalid journal capture trigger"))
+    (unless (memq trigger mevedel-journal-store-triggers) (error "Invalid journal capture trigger"))
     (plist-put metadata :trigger trigger)))
 
 (defun mevedel-journal-capture--read-operation (workspace id)
@@ -287,19 +289,19 @@ another checkpoint."
         (let ((trigger (intern-soft (plist-get seal :trigger))))
           (unless (and (= (length seal) 4)
                        (equal id (plist-get seal :capture-id))
-                       (memq trigger '(compaction session-end clear)))
+                       (memq trigger mevedel-journal-store-triggers))
             (error "Invalid journal capture seal"))
           trigger))
     (mevedel-session-control-fs-absent nil)))
 
 (defun mevedel-journal-capture-seal (session buffer trigger &optional captures)
   "Seal completed SESSION checkpoints with TRIGGER while BUFFER owns it.
-TRIGGER is `compaction', `session-end', or `clear'.  Optional CAPTURES selects
-a frozen list from before compaction or clear; otherwise select the current
-ready checkpoints.
+TRIGGER is a member of `mevedel-journal-store-triggers'.  Optional CAPTURES
+selects a frozen list from before compaction or clear; otherwise select the
+current ready checkpoints.
 Repeated triggers preserve the first seal.  This reads no mutable transcript,
 starts no inference, and returns the sealed capture descriptors."
-  (unless (memq trigger '(compaction session-end clear))
+  (unless (memq trigger mevedel-journal-store-triggers)
     (error "Invalid journal capture trigger"))
   ;; One transaction: the ownership test, the authority assertion and the
   ;; reservation share one target clock reading.

@@ -115,7 +115,7 @@ Each case runs once in manual mode and once in auto mode. Manual mode simulates
 acceptance inside the temporary fixture to exercise application; it does not
 claim human semantic approval. Reports include admitted input, complete reply,
 resulting topic/index files, decision statuses, usage, elapsed time, and prompt
-hash. Instruction proposals stay pending. Technical success is separate from
+hash. Both modes apply instruction proposals. Technical success is separate from
 semantic review; unsupported or superseded guidance fails the quality review
 even when the request and file writes succeed. The network-free harness check is:
 

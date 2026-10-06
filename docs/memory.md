@@ -195,7 +195,8 @@ lifecycle. Capture reads each turn from its committed segment; a turn whose
 indexed bounds lie outside those bytes appears in the evidence as unavailable
 and is covered with the rest, instead of failing the checkpoint. A session
 damaged by an earlier rotation bug otherwise failed every later capture. Background generation and accepted-result recovery run from
-lifecycle opportunities; completed, saved root turns recover abandoned checkpoints.
+lifecycle opportunities; completed, saved root turns, session opening and idle
+maintenance recover abandoned checkpoints.
 Public entries live in `.mevedel/journal/`; private bookkeeping and recovery
 evidence live in `.mevedel/state/journal/`.
 Public-entry discovery batches fresh expiry-marker checks and bounded reads in
@@ -464,10 +465,12 @@ coverage counts, and remaining backlog without private content.
 
 `mevedel-memory-consolidation-mode` supports `manual`, `propose` (the default),
 and `auto`. Manual runs only on request. Propose schedules a read-only review at
-eligible completed, durably saved root turns and digest
-publication, and leaves its proposals for approval. Auto uses the same review and applies fresh memory proposals through
-the ordinary checked decision path. Instruction proposals always wait for
-approval, including changes to `AGENTS.md`. The mode is frozen at pass admission.
+eligible completed, durably saved root turns, digest publication, session
+opening and idle maintenance (see [Digest generation](#digest-generation)), and
+leaves its proposals for approval. Auto uses the same review and applies fresh
+memory and instruction proposals, including changes to `AGENTS.md`, through the
+ordinary checked decision path without prior review. The mode is frozen at pass
+admission.
 
 The automatic gate checks mode, then elapsed time since the last successful
 general review, then the eligible unreviewed digest count. The settings
@@ -622,8 +625,9 @@ not race that recovery claim. A queued offer refused by a busy claim does not
 consume the scheduling cooldown; a fresh admission observation still does.
 Consolidation still recovers under its own claim
 before selecting evidence; the intervening live-write phase releases ownership.
-A live workspace owner leaves recovery for a later opportunity. Session selection
-and conversation setup do not start workspace maintenance. Exit cancels queued
+A live workspace owner leaves recovery for a later opportunity. The session
+chooser and conversation setup do not start this recovery or cleanup; opening a
+session only queues journal processing and a consolidation offer. Exit cancels queued
 recovery, fences this client's active claims and stops its children. A 180-second
 deadline bounds scheduled recovery, and late replies cannot continue it. Remote
 workspaces and explicit synchronous recovery retain the target-native path.
@@ -796,15 +800,41 @@ compactions create no journal work. Closing the root data buffer or exiting Emac
 checkpoints as session-end work. View-pair close seals before removing the
 root registration. Read-only buffers do not seal, and a portable session must
 still own its lease; closing does not reacquire authority. Neither path
-snapshots incomplete streaming output. Exit starts no model request. Sealing is immutable and preserves the
-first trigger. Disabling journaling stops new capture and sealing while keeping
-existing snapshots and pins.
+snapshots incomplete streaming output. Exit starts no model request.
+
+A session that stays open is sealed after it goes quiet. Each completed, saved
+root turn restarts a per-session period of `mevedel-journal-seal-idle-minutes`
+(default 20; nil disables). When it ends with no newer completed root turn and
+no running request, the ready checkpoints are sealed with the `idle` trigger
+once the workspace transport is idle, and a processing opportunity is queued. A
+request still running at that moment restarts the period instead. Later turns
+form a new checkpoint, so a long-running session produces digests without
+compaction, clear, or close. The same ownership rules apply: the buffer must
+still be the session's root, read-only buffers do not seal, and a portable
+session must still own its lease. Closing the buffer or exiting cancels the
+period.
+
+The closed trigger vocabulary is `compaction`, `clear`, `session-end`, and
+`idle`; capture descriptors, seal records, and public digest metadata reject
+anything else. Sealing is immutable and preserves the first trigger. Disabling
+journaling stops new capture and sealing while keeping existing snapshots and
+pins.
 
 ### Digest generation
 
 Completed turns, successful root compaction, successful `/clear` with captured
-work, and session close schedule one
-background processing opportunity. Scheduling waits until the caller returns
+work, idle sealing, session close, and session opening schedule one background
+processing opportunity. Opening or resuming a root session also queues
+abandoned-capture recovery and a consolidation offer, so work sealed at exit is
+processed without waiting for a turn; it only queues work. While any root
+session is open, a maintenance timer runs every
+`mevedel-journal-idle-maintenance-minutes` (default 10; nil disables) once Emacs
+has had no input for 30 seconds. For each local Linux workspace with a live root
+session it queues a processing opportunity with recovery, a consolidation
+offer, and the hourly-throttled journal and artifact cleanup, so the backlog
+drains one digest per opportunity while Emacs is idle. Remote workspaces rely
+on turn, lifecycle, and session-opening opportunities. The timer stops when no
+root session remains and at exit. Scheduling waits until the caller returns
 and the target transport is idle. Already-due journal and memory opportunities
 leave an event-loop interval between jobs rather than executing back-to-back.
 On local Linux workspaces, scheduled abandoned-capture recovery, digest discovery
@@ -831,6 +861,9 @@ does not recursively drain the backlog. Only sealed captures run. A dedicated
 workspace admission claim permits one digest request at a time; the capture's
 own claim accepts its result. Both share a 120-second target-clock deadline.
 Failed jobs get at most three automatic attempts on separate opportunities.
+When a capture exhausts them, the next opportunity shows one warning per capture
+and Emacs session naming it and pointing to `M-x mevedel-journal-jobs`, where it
+can be retried or discarded.
 
 Generation records dated evidence supporting qualifying user, feedback, project,
 or reference knowledge under the save policy above, rather than conversation
@@ -885,7 +918,8 @@ inference, and does not wait for a model.
 
 ### Abandoned checkpoint recovery
 
-Completed, durably saved root turns schedule recovery before processing. Recovery inspects inactive captures as well as ready jobs,
+Completed, durably saved root turns, session opening, and idle maintenance
+schedule recovery before processing. Recovery inspects inactive captures as well as ready jobs,
 repairs interrupted pin/ready publication, and seals abandoned completed work.
 It verifies the original source session and frozen evidence under temporary
 source authority. PID locks use the existing dead-holder check and a checked
@@ -973,7 +1007,8 @@ review with no proposals. Reversal restarts that window. Expired history is
 removed as a complete public/private dependency group. Curated memories remain.
 Expiry runs independently of session expiry and new capture, for local and TRAMP
 workspaces, after completed, saved root turns and existing cleanup opportunities.
-These turn opportunities are throttled to once an hour. Review/decision publication
+On local Linux workspaces with an open root session, the idle maintenance timer
+also offers cleanup. These opportunities are throttled to once an hour. Review/decision publication
 also schedules idle cleanup. Each batch selects at most 50 content groups and
 prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
 no progress stops the drain. Scheduled cleanup returns to Emacs between ownership

@@ -20,6 +20,7 @@
 (autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
 (autoload 'mevedel-journal-process-stop-all "mevedel-journal-process")
 (defvar mevedel-journal-process--pending)
+(defvar mevedel-journal-process--exhausted-warned)
 
 (defconst mevedel-test-journal-process--digest
   "## Done\n- Local runner passed (turn 1, observed result).\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")
@@ -134,13 +135,14 @@
          (should-not (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
          (should-not (mevedel-journal-store-entries root))))))
 
-  :doc "failed generation retries only on later opportunities and stops after three"
+  :doc "failed generation retries only on later opportunities, stops after three, and warns once"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
      (mevedel-test-journal-capture--turn session buffer "Request" "Result")
-     (mevedel-journal-capture-seal session buffer 'session-end)
-     (let ((workspace (mevedel-session-workspace session))
-           (calls 0))
+     (let* ((capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
+            (workspace (mevedel-session-workspace session))
+            (mevedel-journal-process--exhausted-warned (make-hash-table :test #'equal))
+            (calls 0) first-warning second-warning)
        (cl-letf (((symbol-function 'gptel-request)
                   (lambda (_prompt &rest args)
                     (cl-incf calls)
@@ -148,7 +150,15 @@
          (dotimes (attempt 3)
            (mevedel-journal-process-next workspace)
            (should (= (1+ attempt) calls)))
-         (should-not (mevedel-journal-process-next workspace))
+         (mevedel-test--with-captured-diagnostics first-warning
+           (should-not (mevedel-journal-process-next workspace)))
+         (should (string-match-p
+                  (concat "failed 3 times for " (substring (plist-get capture :id) 0 12)
+                          " (capture); retry or discard it from M-x mevedel-journal-jobs")
+                  first-warning))
+         (mevedel-test--with-captured-diagnostics second-warning
+           (should-not (mevedel-journal-process-next workspace)))
+         (should (string-empty-p second-warning))
          (should (= 3 calls))
          (with-temp-buffer
            (insert-file-contents
@@ -390,6 +400,7 @@
      (mevedel-test-journal-capture--turn session buffer "Request" "Result")
      (let* ((workspace (mevedel-session-workspace session))
             (capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
+            (mevedel-journal-process--exhausted-warned (make-hash-table :test #'equal))
             (calls 0))
        (cl-letf (((symbol-function 'gptel-request)
                   (lambda (_prompt &rest args)
@@ -399,7 +410,9 @@
          (should (= 3 calls))
          (should (mevedel-journal-process-retry workspace (plist-get capture :id)))
          (should (= 4 calls))
-         (should-not (mevedel-journal-process-next workspace))
+         (mevedel-test--with-captured-diagnostics nil
+           (should-not (mevedel-journal-process-next workspace)))
+         (should (gethash (plist-get capture :id) mevedel-journal-process--exhausted-warned))
          (should (= 4 calls))
          (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))))))
 

@@ -36,7 +36,7 @@
 
 (defun mevedel-quality--consolidate (case mode)
   "Run CASE through real review in MODE and return synthetic evidence only.
-Manual mode simulates accepting memory proposals to exercise the application
+Manual mode simulates accepting every proposal to exercise the application
 path; this is fixture execution, not a claim of human semantic approval."
   (let* ((root (make-temp-file "mevedel-consolidation-quality-" t))
          (memory (file-name-concat root "memory"))
@@ -92,10 +92,9 @@ path; this is fixture execution, not a claim of human semantic approval."
                 (let* ((pass (plist-get result :id))
                        (accepted (mevedel-memory-store-accepted workspace pass)))
                   (dolist (proposal (plist-get accepted :proposals))
-                    (unless (eq (plist-get proposal :action) 'instructions)
-                      (condition-case err
-                          (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))
-                        (error (push (list :error (error-message-string err)) decisions)))))))))
+                    (condition-case err
+                        (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))
+                      (error (push (list :error (error-message-string err)) decisions))))))))
           (dolist (entry (mevedel-journal-store-entries root))
             (when (eq (plist-get entry :kind) 'decision)
               (push (list :proposal (plist-get entry :proposal-id) :status (plist-get entry :status)) decisions)))
@@ -145,7 +144,7 @@ path; this is fixture execution, not a claim of human semantic approval."
                                     (plist-get evidence :outcome) (plist-get evidence :elapsed)
                                     (plist-get evidence :input-tokens) (plist-get evidence :cached-tokens) (plist-get evidence :output-tokens)
                                     (get model :input-cost) (get model :output-cost) (plist-get case :review)))
-                    (insert "Manual application is simulated acceptance in a temporary fixture. Auto runs the production mode. Instruction proposals stay pending in both variants.\n\n"
+                    (insert "Manual application is simulated acceptance in a temporary fixture. Auto runs the production mode. Both variants apply instruction proposals.\n\n"
                             "## Prior memory\n\n" (or (plist-get evidence :before) "No existing topic.")
                             "\n\n## Admitted request input\n\n" (or (plist-get evidence :input) "Unavailable")
                             "\n\n## Model reply\n\n" (or (plist-get evidence :reply) (plist-get evidence :error) "Unavailable")

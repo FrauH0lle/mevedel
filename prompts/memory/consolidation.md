@@ -107,7 +107,6 @@ Action rules:
 - Remove names an admitted existing topic and has an empty body after `---`.
 - Instructions names an exact applicable file in a captured instruction root.
   Its body contains only the new guidance to append, not the existing file.
-  Instruction proposals always require approval, including in automatic mode.
 
 Do not propose direct changes to MEMORY.md. Application constructs topic
 frontmatter from title, hook, and type, and updates the corresponding index

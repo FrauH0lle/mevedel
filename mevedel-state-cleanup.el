@@ -4,9 +4,12 @@
 
 ;; Collect old generated media and review packages only after a complete search
 ;; of retained workspace state and this client's buffers.  Historical snapshots
-;; count as references too.  Foreign session owners postpone collection because
-;; their unsaved input is invisible here.  Plugin data belongs to its plugin;
+;; count as references too.  Live foreign session owners postpone collection
+;; because their unsaved input is invisible here; this Emacs's own locks and
+;; stale locks of dead holders do not.  Plugin data belongs to its plugin;
 ;; journal recovery and rotating diagnostics have their own retention owners.
+;; The hourly cleanup opportunity, driven by turns and the idle maintenance
+;; timer in `mevedel-journal-idle', runs this collection.
 
 ;;; Code:
 
@@ -14,6 +17,7 @@
 (require 'ring)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 
 ;; `gptel'
@@ -39,12 +43,25 @@ NOW is target time.  Keep symlinks, unknown names, and files over 32 MiB."
             (push (cons path attrs) candidates)))))
     (nreverse candidates)))
 
+(defun mevedel-state-cleanup--foreign-lock-p (directory)
+  "Return non-nil when DIRECTORY's PID lock may belong to another live process.
+A lock written by this Emacs process does not count: its buffers are searched
+directly.  A same-host lock whose holder is dead, or whose PID was reused, is
+stale.  Unreadable and cross-host locks count, since their holder is unknown."
+  (let ((path (mevedel-session-persistence--lock-path directory)))
+    (when (file-exists-p path)
+      (let ((lock (mevedel-session-persistence--read-lock path)))
+        (not (and (consp lock)
+                  (equal (plist-get lock :hostname) (system-name))
+                  (or (eql (plist-get lock :pid) (emacs-pid))
+                      (not (mevedel-session-persistence--same-host-lock-active-p lock)))))))))
+
 (defun mevedel-state-cleanup--check-owners (root)
   "Refuse cleanup when a foreign session under ROOT can hold unsaved input."
   (dolist (directory (mevedel-session-control-fs-list-directory
                       (file-name-concat root "sessions") "\\`[^.]"))
     (when (file-directory-p directory)
-      (when (file-exists-p (file-name-concat directory ".lock"))
+      (when (mevedel-state-cleanup--foreign-lock-p directory)
         (error "Session PID lock prevents artifact cleanup: %s" directory))
       (when (file-directory-p (file-name-concat directory ".lease"))
         (let ((records (mevedel-session-durability--read-records
@@ -111,7 +128,8 @@ Files must be at least seven days old.  Saved workspace state, historical
 snapshots, input history, live buffers and gptel context retain referenced
 files.  Foreign session ownership or an incomplete scan retains the batch.
 Return a deletion count, or nil on failure with a diagnostic message.
-Called by the existing hourly idle cleanup opportunity."
+Called by the hourly-throttled cleanup opportunity, which completed root
+turns and the idle maintenance timer schedule."
   (condition-case err
       (let* ((root (file-name-concat (mevedel-workspace-root workspace) ".mevedel"))
              (candidates

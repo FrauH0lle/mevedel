@@ -91,6 +91,69 @@
           (should (file-exists-p path)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-state-cleanup--foreign-lock-p
+  (:vars* ((root (make-temp-file "mevedel-state-cleanup-lock-" t))
+           (lock (file-name-concat root ".lock")))
+   :after-each ((delete-directory root t)))
+  (cl-labels ((write-lock (pid &optional host)
+                (with-temp-file lock
+                  (prin1 (list :pid pid :hostname (or host (system-name))
+                               :emacs-invocation-time (format-time-string "%FT%H-%M-%S")
+                               :buffer "session")
+                         (current-buffer)))))
+    ,test)
+  (test)
+  :doc "an absent lock does not block"
+  (should-not (mevedel-state-cleanup--foreign-lock-p root))
+  :doc "this Emacs process's own lock does not block"
+  (progn (write-lock (emacs-pid))
+         (should-not (mevedel-state-cleanup--foreign-lock-p root)))
+  :doc "a same-host lock whose holder is dead is stale and does not block"
+  (progn (write-lock 2147483646)
+         (should-not (mevedel-state-cleanup--foreign-lock-p root)))
+  :doc "a live foreign holder on this host blocks"
+  (progn (write-lock 1)
+         (should (mevedel-state-cleanup--foreign-lock-p root)))
+  :doc "a lock from another host blocks because its holder cannot be probed"
+  (progn (write-lock (emacs-pid) "mevedel-other-host.invalid")
+         (should (mevedel-state-cleanup--foreign-lock-p root)))
+  :doc "an unreadable lock blocks"
+  (progn (write-region "(:pid" nil lock nil 'silent)
+         (should (mevedel-state-cleanup--foreign-lock-p root))))
+
+(mevedel-deftest mevedel-state-cleanup-session-locks (:quiet t)
+  (let* ((root (make-temp-file "mevedel-state-cleanup-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (data (file-name-concat root ".mevedel"))
+         (path (file-name-concat data "state/review-packages/review-orphan.md"))
+         (session (file-name-concat data "sessions/test"))
+         (lock (file-name-concat session ".lock")))
+    (cl-labels ((orphan ()
+                  (make-directory (file-name-directory path) t)
+                  (write-region "payload" nil path nil 'silent)
+                  (set-file-times path (seconds-to-time (- (float-time) (* 8 86400)))))
+                (write-lock (pid)
+                  (with-temp-file lock
+                    (prin1 (list :pid pid :hostname (system-name)
+                                 :emacs-invocation-time (format-time-string "%FT%H-%M-%S")
+                                 :buffer "session")
+                           (current-buffer)))))
+      (unwind-protect
+          (progn
+            (make-directory session t)
+            (orphan)
+            (write-lock 1)
+            (should-not (mevedel-state-cleanup workspace))
+            (should (file-exists-p path))
+            (write-lock (emacs-pid))
+            (should (= 1 (mevedel-state-cleanup workspace)))
+            (should-not (file-exists-p path))
+            (orphan)
+            (write-lock 2147483646)
+            (should (= 1 (mevedel-state-cleanup workspace)))
+            (should-not (file-exists-p path)))
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-state-cleanup-keeps-changed-and-linked-files (:quiet t)
   (let* ((root (make-temp-file "mevedel-state-cleanup-" t))
          (workspace (mevedel-workspace--create :root root))

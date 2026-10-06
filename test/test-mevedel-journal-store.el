@@ -149,6 +149,16 @@
            :type 'mevedel-journal-store-invalid))
       (delete-directory root t)))
 
+  :doc "idle trigger round trips through public metadata"
+  (let* ((root (make-temp-file "mevedel-journal-idle-" t))
+         (metadata (plist-put (copy-tree mevedel-test-journal--metadata) :trigger 'idle)))
+    (unwind-protect
+        (let ((entry (mevedel-journal-store-publish-digest root metadata mevedel-test-journal--body)))
+          (should (eq 'idle (plist-get entry :trigger)))
+          (should (string-match-p "\ntrigger: idle\n" (plist-get entry :text)))
+          (should (equal entry (mevedel-journal-store-read root (plist-get entry :file)))))
+      (delete-directory root t)))
+
   :doc "publishes once, round trips metadata, and preserves the first result"
   (let ((root (make-temp-file "mevedel-journal-" t)))
     (unwind-protect

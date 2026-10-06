@@ -7,6 +7,8 @@
 ;; immutable result.  Both expire at the same target-clock deadline.  Model
 ;; requests use frozen policy and evidence without a live conversation.
 ;; Accepted results are recovered before replacement inference is admitted.
+;; A capture whose three automatic attempts failed is reported once per Emacs
+;; session and waits for an explicit retry or discard.
 
 ;;; Code:
 
@@ -47,6 +49,12 @@
 
 (defconst mevedel-journal-process--timeout-seconds 120
   "Fixed request deadline, including policy resolution and input admission.")
+
+(defconst mevedel-journal-process--automatic-attempts 3
+  "Attempts a sealed capture gets before only an explicit retry runs it.")
+
+(defvar mevedel-journal-process--exhausted-warned (make-hash-table :test #'equal)
+  "Capture IDs whose exhausted automatic attempts this Emacs session reported.")
 
 (defvar mevedel-journal-process--running (make-hash-table :test #'equal)
   "Live digest request states, keyed by physical workspace journal directory.")
@@ -359,14 +367,16 @@ This never resets the durable automatic-attempt count or changes model policy."
 (defun mevedel-journal-process--prepare (workspace &optional retry-id)
   "Recover and select one fenced capture in WORKSPACE without model access.
 Return compact claims and a capture ID, an :entry for recovered RETRY-ID,
-or nil.  The selected capture and admission share their original deadline."
+or nil.  The selected capture and admission share their original deadline.
+Sealed captures whose automatic attempts have all settled or expired are
+listed under :exhausted, at most eight, as (:id ID :session-name NAME)."
   (when mevedel-journal-enabled
     (let* ((key (mevedel-journal-process--key workspace))
            (admission (and (not (gethash key mevedel-journal-process--running))
                            (mevedel-journal-claim-acquire
                             (mevedel-journal-store-claim-directory key 'digest-run)
                             mevedel-journal-process--timeout-seconds)))
-           state recovered)
+           state recovered exhausted)
       (when admission
         (unwind-protect
             (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace))))
@@ -380,11 +390,25 @@ or nil.  The selected capture and admission share their original deadline."
                           (when (and (not (plist-get capture :unreadable))
                                      (mevedel-journal-capture-trigger workspace capture))
                             (let* ((directory (mevedel-journal-process--attempts workspace capture))
-                                   (previous (mevedel-journal-claim-current directory))
-                                   (claim (and (or retry-id (< (or (plist-get previous :generation) 0) 3))
+                                   (settlement (mevedel-journal-claim-current-settlement directory))
+                                   (previous (car settlement))
+                                   (spent (and (not retry-id)
+                                               (>= (or (plist-get previous :generation) 0)
+                                                   mevedel-journal-process--automatic-attempts)))
+                                   (claim (and (not spent)
                                                (mevedel-journal-claim-acquire
                                                 directory mevedel-journal-process--timeout-seconds
                                                 (plist-get admission :expires-at)))))
+                              (when (and spent
+                                         (or (cdr settlement)
+                                             (>= (mevedel-session-control-fs-target-time directory)
+                                                 (plist-get previous :expires-at))))
+                                (push (list :id (plist-get capture :id)
+                                            :session-name
+                                            (truncate-string-to-width
+                                             (or (plist-get (plist-get capture :metadata) :session-name) "")
+                                             60))
+                                      exhausted))
                               (when claim
                                 (setq state (list :capture-id (plist-get capture :id)
                                                   :claim claim :admission admission)))))))
@@ -395,15 +419,42 @@ or nil.  The selected capture and admission share their original deadline."
                         workspace 'journal-digest-failed :capture-id (plist-get capture :id)
                         :outcome 'retained :error-class 'recovery)))))))
           (unless state (mevedel-journal-claim-settle admission 'completed ""))))
-      (or state (and recovered (list :entry recovered))))))
+      (let ((result (or state (and recovered (list :entry recovered)))))
+        ;; The worker reply is bounded; the job browser lists every capture.
+        (if exhausted
+            (append result (list :exhausted (seq-take (nreverse exhausted) 8)))
+          result)))))
+
+(defun mevedel-journal-process--warn-exhausted (exhausted)
+  "Warn once per Emacs session about each newly EXHAUSTED capture.
+EXHAUSTED holds (:id ID :session-name NAME) descriptions from preparation."
+  (when-let* ((fresh (seq-remove (lambda (capture)
+                                   (gethash (plist-get capture :id)
+                                            mevedel-journal-process--exhausted-warned))
+                                 exhausted)))
+    (dolist (capture fresh)
+      (puthash (plist-get capture :id) t mevedel-journal-process--exhausted-warned))
+    (display-warning
+     'mevedel
+     (format "Journal digest generation failed %d times for %s; retry or discard %s from M-x mevedel-journal-jobs"
+             mevedel-journal-process--automatic-attempts
+             (mapconcat (lambda (capture)
+                          (let ((name (plist-get capture :session-name)))
+                            (format "%s%s" (substring (plist-get capture :id) 0 12)
+                                    (if (string-empty-p name) "" (format " (%s)" name)))))
+                        fresh ", ")
+             (if (cdr fresh) "them" "it"))
+     :warning)))
 
 (defun mevedel-journal-process--prepared (workspace prepared)
   "Start WORKSPACE's request from compact PREPARED claims in the editor.
 Freshly read the selected capture and recheck both claims before inference.
-A failed handoff releases admission while retaining the capture for retry."
+A failed handoff releases admission while retaining the capture for retry.
+Newly exhausted captures listed in PREPARED are reported first."
+  (mevedel-journal-process--warn-exhausted (plist-get prepared :exhausted))
   (if (plist-get prepared :entry)
       (plist-get prepared :entry)
-    (when prepared
+    (when (plist-get prepared :claim)
       (let* ((key (mevedel-journal-process--key workspace))
              (claim (plist-get prepared :claim))
              (admission (plist-get prepared :admission))
@@ -426,7 +477,8 @@ A failed handoff releases admission while retaining the capture for retry."
 
 (defun mevedel-journal-process-next (workspace &optional retry-id)
   "Recover accepted results and start at most one digest in WORKSPACE.
-Only sealed jobs run; three automatic attempts exhaust a job.  Return the new
+Only sealed jobs run; three automatic attempts exhaust a job, which is
+reported once as a warning.  Return the new
 request state or nil when disabled, busy, or no eligible work remains.
 RETRY-ID selects an explicit additional attempt; a recovered accepted result
 returns its public entry.  Explicit retry reports recovery errors."

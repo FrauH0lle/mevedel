@@ -26,6 +26,8 @@
 (setq mevedel-journal-process--inhibit-scheduling t)
 (defvar mevedel-journal-cleanup--inhibit-scheduling)
 (setq mevedel-journal-cleanup--inhibit-scheduling t)
+(defvar mevedel-journal-idle--inhibit-scheduling)
+(setq mevedel-journal-idle--inhibit-scheduling t)
 (defvar mevedel-memory-decision--inhibit-recovery)
 (setq mevedel-memory-decision--inhibit-recovery t)
 (defvar mevedel-memory-pass--inhibit-scheduling)
