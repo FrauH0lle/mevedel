@@ -244,7 +244,10 @@ the usual `:model-workloads` key:
 ```
 
 The selected provider receives the captured source evidence when Buddy runs.
-Automatic requests follow the idle and minimum-interval settings below.
+Automatic requests follow the idle and minimum-interval settings below. A
+pause that comes too soon after the scope's last automatic review is not
+dropped: the review waits until the interval has passed, unless a further edit
+restarts the idle delay first.
 
 ## Request boundary
 
@@ -261,7 +264,7 @@ and permission workflow. The port's rationale is recorded in
 | --- | --- | --- |
 | `mevedel-buddy-tracked-modes` | `(prog-mode text-mode conf-mode)` | Modes the global mode watches |
 | `mevedel-buddy-idle-delay` | `10` | Seconds idle before an automatic review |
-| `mevedel-buddy-min-interval` | `60` | Least seconds between automatic reviews of one scope |
+| `mevedel-buddy-min-interval` | `60` | Least seconds between automatic reviews of one scope; edits settling sooner are reviewed once it passes |
 | `mevedel-buddy-coalesce-window` | `180.0` | Seconds within which nearby edits merge into one record |
 | `mevedel-buddy-severity-floor` | `"significant"` | Lowest severity the model is asked to report |
 | `mevedel-buddy-max-iterations` | `8` | Tool rounds before a review is abandoned |

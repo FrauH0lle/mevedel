@@ -28,6 +28,10 @@ sidecar while retaining other committed artifacts. A session without a committed
 sidecar waits for its next critical commit. Synchronous commit absorbs a pending
 save; active publication defers it; Emacs exit flushes retained transcripts
 through their agent writer before pending registry saves and lease release.
+
+Mid-turn checkpoints use the native auto-save path. Because Emacs auto-saves
+only after input, a repeating timer drives that same path while any root or
+agent request is in flight, and stops once none is.
 [Sessions](../sessions.md) owns the persistence and recovery contract.
 
 ## Rationale and consequences
@@ -86,3 +90,10 @@ All revisions belong to ADR 0112:
   a sidecar commit remained invisible to resume. These checkpoints commit the
   sidecar too, and root auto-save includes retained publication batches even
   when no transcript buffer remains modified.
+- **In-flight checkpoints:** the sessions and agents manuals promised that
+  native auto-save checkpoints modified conversations mid-turn, but Emacs runs
+  `auto-save-hook` only after keyboard input. An unattended Goal or agent run
+  receives none, so its conversations reached disk only at settlement. A timer
+  started at request admission now runs the same coalesced, input-yielding
+  checkpoint every `mevedel-session-checkpoint-interval` seconds until no
+  request is in flight.

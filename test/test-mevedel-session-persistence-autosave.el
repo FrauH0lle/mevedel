@@ -259,5 +259,103 @@
            (set-buffer-modified-p nil) (setq-local kill-buffer-hook nil))
          (kill-buffer child))))))
 
+;;
+;;; In-flight checkpoints
+
+(mevedel-deftest mevedel-session-persistence-start-checkpoints
+  (:after-each (mevedel-session-persistence-stop-checkpoints))
+  ,test
+  (test)
+  :doc "starts one repeating timer however often requests begin"
+  (let ((mevedel-session-checkpoint-interval 30))
+    (mevedel-session-persistence-start-checkpoints)
+    (let ((timer mevedel-session-persistence--checkpoint-timer))
+      (should (memq timer timer-list))
+      (should (= 30 (timer--repeat-delay timer)))
+      (mevedel-session-persistence-start-checkpoints)
+      (should (eq timer mevedel-session-persistence--checkpoint-timer))))
+  :doc "a nil interval leaves mid-turn checkpoints to Emacs auto-save"
+  (let ((mevedel-session-checkpoint-interval nil))
+    (mevedel-session-persistence-start-checkpoints)
+    (should-not mevedel-session-persistence--checkpoint-timer)))
+
+(mevedel-deftest mevedel-session-persistence-stop-checkpoints
+  (:doc "cancels the in-flight checkpoint timer")
+  (let ((mevedel-session-checkpoint-interval 30))
+    (mevedel-session-persistence-start-checkpoints)
+    (let ((timer mevedel-session-persistence--checkpoint-timer))
+      (mevedel-session-persistence-stop-checkpoints)
+      (should-not (memq timer timer-list))
+      (should-not mevedel-session-persistence--checkpoint-timer))))
+
+(mevedel-deftest mevedel-session-persistence--request-in-flight-p
+  (:doc "reports a request owned by any buffer")
+  (let ((buffer (generate-new-buffer " *in-flight*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'buffer-list)
+                   (lambda (&optional _frame) (list buffer))))
+          (should-not (mevedel-session-persistence--request-in-flight-p))
+          (with-current-buffer buffer
+            (setq-local mevedel--current-request (mevedel-request--create)))
+          (should (mevedel-session-persistence--request-in-flight-p)))
+      (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-session-persistence--checkpoint-tick (:quiet t)
+  ,test
+  (test)
+  :doc "checkpoints an unattended turn's partial response without input"
+  (let* ((root (make-temp-file "mevedel-checkpoint-tick-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *checkpoint-tick*"))
+         (mevedel-session-checkpoint-interval 30))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (mevedel-chat-prepare-transcript-buffer)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (insert "Prompt\n")
+            (mevedel-session-artifacts-save session buffer)
+            (goto-char (point-max))
+            (insert (propertize "Streaming text\n" 'gptel 'response))
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (mevedel-session-persistence-start-checkpoints)
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _frame) (list buffer))))
+            (mevedel-session-persistence--checkpoint-tick)
+            (with-timeout (2 (ert-fail "Checkpoint remained queued"))
+              (while (> (hash-table-count
+                         mevedel-session-persistence--autosaves)
+                        0)
+                (sleep-for .002))))
+          (should (string-search
+                   "Streaming text"
+                   (mevedel-session-artifacts-read-artifact
+                    session "segment-0001.chat.org" t)))
+          ;; The request is still in flight, so checkpoints continue.
+          (should (memq mevedel-session-persistence--checkpoint-timer
+                        timer-list)))
+      (mevedel-session-persistence-stop-checkpoints)
+      (mevedel-transport-cancel-idle
+       mevedel-session-persistence--autosaves 'conversation-autosave)
+      (with-current-buffer buffer
+        (setq-local mevedel--current-request nil))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (delete-directory root t)))
+  :doc "stops once no request is in flight"
+  (let ((mevedel-session-checkpoint-interval 30)
+        (saved nil))
+    (mevedel-session-persistence-start-checkpoints)
+    (cl-letf (((symbol-function 'buffer-list)
+               (lambda (&optional _frame) nil))
+              ((symbol-function 'mevedel-session-persistence-autosave)
+               (lambda () (setq saved t))))
+      (mevedel-session-persistence--checkpoint-tick))
+    (should-not saved)
+    (should-not mevedel-session-persistence--checkpoint-timer)))
+
 (provide 'test-mevedel-session-persistence-autosave)
 ;;; test-mevedel-session-persistence-autosave.el ends here

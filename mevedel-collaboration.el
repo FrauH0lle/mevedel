@@ -31,6 +31,7 @@
 
 ;; `mevedel-chat'
 (defvar mevedel-session-end-hook)
+(defvar mevedel-session-end-reason)
 
 ;; `mevedel-collaboration-agent'
 (declare-function mevedel-collaboration--publish-agents
@@ -803,8 +804,13 @@ request or prompt transaction."
     (mevedel-collaboration--stop-internal room 'data-buffer-killed)))
 
 (defun mevedel-collaboration--stop-for-session ()
-  "Stop sharing from a data buffer's SessionEnd hook."
-  (mevedel-collaboration--stop-for-buffer))
+  "Stop sharing from a data buffer's SessionEnd hook.
+A session ending because Emacs exits stops the way Emacs exit does."
+  (if (equal mevedel-session-end-reason "exit")
+      (when-let* ((room (mevedel-collaboration--room-for-buffer
+                         (current-buffer))))
+        (mevedel-collaboration--stop-internal room 'emacs-exit))
+    (mevedel-collaboration--stop-for-buffer)))
 
 (defun mevedel-collaboration--stop-for-emacs ()
   "Stop every share before Emacs exits."

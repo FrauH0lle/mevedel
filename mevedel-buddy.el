@@ -119,7 +119,8 @@ changes as reviewed, so the same edits are offered again next time."
   "Least seconds between two automatic reviews of one scope.
 
 Without it a long editing session would fire a request every time the
-user paused to think."
+user paused to think.  Edits that settle sooner are not dropped: their
+review waits until the interval has passed."
   :type 'number
   :group 'mevedel-buddy)
 
@@ -864,12 +865,14 @@ to happen."
 (defvar mevedel-buddy--last-review (make-hash-table :test #'equal)
   "Hash table mapping scope keys to when they were last reviewed.")
 
-(defun mevedel-buddy--due-p (scope-key)
-  "Return non-nil when SCOPE-KEY may be reviewed automatically again."
+(defun mevedel-buddy--interval-remaining (scope-key)
+  "Return seconds before SCOPE-KEY may be reviewed automatically again.
+Zero means the minimum interval has elapsed and a review is due."
   (let ((last (gethash scope-key mevedel-buddy--last-review)))
-    (or (null last)
-        (>= (float-time (time-subtract (current-time) last))
-            mevedel-buddy-min-interval))))
+    (if last
+        (max 0 (- mevedel-buddy-min-interval
+                  (float-time (time-subtract (current-time) last))))
+      0)))
 
 (defun mevedel-buddy--cancel-timer ()
   "Cancel this buffer's pending automatic review."
@@ -888,16 +891,22 @@ to happen."
          ;; timer: re-arming an idle timer from inside one fires it
          ;; immediately, because Emacs is already idle past the delay.
          (mevedel-buddy--running (mevedel-buddy--retry))
-         ((not (mevedel-buddy--due-p scope-key)) nil)
          (t
-          (puthash scope-key (current-time) mevedel-buddy--last-review)
-          (mevedel-buddy-review t)))))))
+          (let ((wait (mevedel-buddy--interval-remaining scope-key)))
+            (cond
+             ;; Reviewed too recently.  The pending edits still deserve a
+             ;; review, so look again once the interval has run out; a
+             ;; further edit replaces this with a fresh idle timer.
+             ((> wait 0) (mevedel-buddy--retry wait))
+             ((mevedel-buddy-review t)
+              (puthash scope-key (current-time)
+                       mevedel-buddy--last-review))))))))))
 
-(defun mevedel-buddy--retry ()
-  "Look again once the review in flight has had time to finish."
+(defun mevedel-buddy--retry (&optional delay)
+  "Look again after DELAY seconds, `mevedel-buddy-idle-delay' by default."
   (mevedel-buddy--cancel-timer)
   (setq mevedel-buddy--idle-timer
-        (run-at-time mevedel-buddy-idle-delay nil
+        (run-at-time (or delay mevedel-buddy-idle-delay) nil
                      #'mevedel-buddy--run-scheduled (current-buffer))))
 
 (defun mevedel-buddy--schedule ()

@@ -158,6 +158,14 @@
 (autoload 'mevedel-session-collection-schedule "mevedel-session-collection")
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-schedule-cleanup
+                  "mevedel-session-persistence" (workspace))
+(declare-function mevedel-session-persistence-start-checkpoints
+                  "mevedel-session-persistence" nil)
+(autoload 'mevedel-session-persistence-schedule-cleanup
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-start-checkpoints
+  "mevedel-session-persistence")
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
@@ -397,6 +405,9 @@ directive being processed.  Return the new request struct."
                    :started-at (current-time)
                    :origin origin)))
     (setq mevedel--current-request request)
+    ;; Emacs auto-saves only after input; an unattended turn needs its own
+    ;; mid-turn checkpoints.
+    (mevedel-session-persistence-start-checkpoints)
     (let ((buffer (current-buffer)))
       (mevedel--gc-hold
        request (lambda ()
@@ -467,7 +478,10 @@ is returned here."
         (when (equal (mevedel-request-origin request) "/root")
           (setf (mevedel-session-agent-root-activity
                  (mevedel-request-session request))
-                'idle))
+                'idle)
+          ;; A long-running Emacs must keep expiring old sessions.
+          (mevedel-session-persistence-schedule-cleanup
+           (mevedel-session-workspace (mevedel-request-session request))))
         (setq mevedel--current-request nil)
         ;; Settlement leaves journal publication and collection behind it,
         ;; which allocate as much as the turn did; keep the threshold a

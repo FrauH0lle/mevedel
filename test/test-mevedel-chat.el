@@ -1029,6 +1029,142 @@
 		     (delete-directory root t))))
 
 
+(mevedel-deftest mevedel--run-session-end-hooks
+  ()
+  ,test
+  (test)
+
+  :doc "ends the epoch once: kill-buffer no longer reports it afterwards"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-chat-end-once-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "end"))
+         (session (mevedel-session-create "main" workspace root))
+         (buffer (generate-new-buffer " *mevedel-end-once*"))
+         (mevedel-session-end-hook nil)
+         reasons)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event payload callback &rest _)
+                     (push (plist-get payload :reason) reasons)
+                     (funcall callback nil))))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (add-hook 'kill-buffer-hook #'mevedel--run-session-end-hooks nil t)
+            (mevedel--run-session-end-hooks "exit")
+            (should-not (memq #'mevedel--run-session-end-hooks
+                              kill-buffer-hook)))
+          (kill-buffer buffer)
+          (should (equal '("exit") reasons)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t)))
+
+  :doc "reports kill-buffer by default and settles CALLBACK without a session"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-chat-end-default-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "end"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-session-end-hook nil)
+         reason settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event payload callback &rest _)
+                     (setq reason (plist-get payload :reason))
+                     (funcall callback nil))))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel--run-session-end-hooks))
+          (should (equal "kill-buffer" reason))
+          (with-temp-buffer
+            (mevedel--run-session-end-hooks
+             "exit" (lambda (_decision) (setq settled t))))
+          (should settled))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel--end-sessions-on-exit
+  ()
+  ,test
+  (test)
+
+  :doc "ends open epochs with reason exit and waits for asynchronous handlers"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-chat-exit-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "exit"))
+         (live (generate-new-buffer " *mevedel-exit-live*"))
+         (inspection (generate-new-buffer " *mevedel-exit-inspection*"))
+         (mevedel-session-end-hook nil)
+         ended settled)
+    (unwind-protect
+        (progn
+          (dolist (buffer (list live inspection))
+            (with-current-buffer buffer
+              (setq-local mevedel--session
+                          (mevedel-session-create "main" workspace root))
+              (setq-local mevedel--workspace workspace)))
+          ;; Only a buffer that owns its session epoch reports its end.
+          (with-current-buffer live
+            (add-hook 'kill-buffer-hook #'mevedel--run-session-end-hooks
+                      nil t))
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _frame) (list live inspection)))
+                    ((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (_event payload callback &rest _)
+                       (push (cons (current-buffer)
+                                   (plist-get payload :reason))
+                             ended)
+                       (run-at-time 0.02 nil
+                                    (lambda ()
+                                      (setq settled t)
+                                      (funcall callback nil))))))
+            (mevedel--end-sessions-on-exit)
+            (should settled)
+            (should (equal (list (cons live "exit")) ended))
+            (kill-buffer live)
+            (should (= 1 (length ended)))))
+      (dolist (buffer (list live inspection))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory root t)))
+
+  :doc "a failing session does not keep the others from ending"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-chat-exit-fail-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "exit"))
+         (bad (generate-new-buffer " *mevedel-exit-bad*"))
+         (good (generate-new-buffer " *mevedel-exit-good*"))
+         ended messages)
+    (unwind-protect
+        (progn
+          (dolist (buffer (list bad good))
+            (with-current-buffer buffer
+              (setq-local mevedel--session
+                          (mevedel-session-create "main" workspace root))
+              (setq-local mevedel--workspace workspace)
+              (add-hook 'kill-buffer-hook #'mevedel--run-session-end-hooks
+                        nil t)))
+          (with-current-buffer bad
+            (setq-local mevedel-session-end-hook
+                        (list (lambda () (error "Injected SessionEnd failure")))))
+          (mevedel-test--with-captured-diagnostics messages
+            (cl-letf (((symbol-function 'buffer-list)
+                       (lambda (&optional _frame) (list bad good)))
+                      ((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _payload callback &rest _)
+                         (push (current-buffer) ended)
+                         (funcall callback nil))))
+              (mevedel--end-sessions-on-exit)))
+          (should (equal (list good) ended))
+          (should (string-match-p "Injected SessionEnd failure" messages)))
+      (dolist (buffer (list bad good))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (remove-hook 'kill-buffer-hook #'mevedel--run-session-end-hooks t))
+          (kill-buffer buffer)))
+      (delete-directory root t))))
+
 ;;
 ;;; Local user turns
 

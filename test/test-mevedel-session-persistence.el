@@ -619,7 +619,7 @@
                   (puthash
                    (cons (mevedel-workspace-type workspace)
                          (mevedel-workspace-id workspace))
-                   t mevedel-session-persistence--cleanup-throttle)
+                   (float-time) mevedel-session-persistence--cleanup-throttle)
                   (cl-letf (((symbol-function 'buffer-list)
                              (lambda (&optional _frame) nil)))
                     (let ((noninteractive nil)) (mevedel-session-persistence--kill-emacs-hook)))
@@ -4523,7 +4523,7 @@
                          workspace t))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "throttled to at most one run per workspace per Emacs"
+  :doc "throttled to one run per workspace within the sweep interval"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4536,7 +4536,102 @@
           (should (null (mevedel-session-persistence-cleanup-expired
                          workspace))))
       (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "a long-running Emacs sweeps again once the interval has passed"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-interval 60)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (key (cons (mevedel-workspace-type workspace)
+                          (mevedel-workspace-id workspace))))
+          (puthash key (- (float-time) 61)
+                   mevedel-session-persistence--cleanup-throttle)
+          (should (= 0 (mevedel-session-persistence-cleanup-expired
+                        workspace)))
+          (should (< (- (float-time)
+                        (gethash key
+                                 mevedel-session-persistence--cleanup-throttle))
+                     5)))
+      (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--cleanup-due-p ()
+  ,test
+  (test)
+  :doc "a workspace never swept in this Emacs is due"
+  (let ((mevedel-session-persistence--cleanup-throttle
+         (make-hash-table :test #'equal))
+        (workspace (mevedel-workspace--create :type 'file :id "due")))
+    (should (mevedel-session-persistence--cleanup-due-p workspace)))
+  :doc "a recent sweep is not due until the interval has passed"
+  (let ((mevedel-session-persistence--cleanup-throttle
+         (make-hash-table :test #'equal))
+        (mevedel-session-persistence--cleanup-interval 60)
+        (workspace (mevedel-workspace--create :type 'file :id "due")))
+    (puthash '(file . "due") (- (float-time) 30)
+             mevedel-session-persistence--cleanup-throttle)
+    (should-not (mevedel-session-persistence--cleanup-due-p workspace))
+    (puthash '(file . "due") (- (float-time) 90)
+             mevedel-session-persistence--cleanup-throttle)
+    (should (mevedel-session-persistence--cleanup-due-p workspace))))
+
+(mevedel-deftest mevedel-session-persistence-schedule-cleanup (:quiet t)
+  ,test
+  (test)
+  :doc "sweeps a due workspace once Emacs is idle, then stops offering"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
+               (noninteractive nil)
+               (mevedel-transport--background-resume-at 0)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (session (mevedel-session-create "expired" workspace))
+               (buf (generate-new-buffer " *test-expired*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Old session\n")
+                  (mevedel-session-artifacts-save session buf))
+                (let ((save-path (mevedel-session-save-path session)))
+                  (test-mevedel-session-persistence--expire-session session)
+                  (mevedel-session-persistence-lock-release save-path session)
+                  (should (timerp (mevedel-session-persistence-schedule-cleanup
+                                   workspace)))
+                  ;; Nothing runs inside the command that offered it.
+                  (should (file-directory-p save-path))
+                  (with-timeout (2 (ert-fail "Cleanup remained queued"))
+                    (while (> (hash-table-count
+                               mevedel-session-persistence--cleanups)
+                              0)
+                      (sleep-for .002)))
+                  (should-not (file-directory-p save-path))
+                  (should-not (mevedel-session-persistence-schedule-cleanup
+                               workspace))))
+            (mevedel-transport-cancel-idle
+             mevedel-session-persistence--cleanups 'session-cleanup)
+            (test-mevedel-session-persistence--release-and-kill buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "a batch Emacs never sweeps from session activity"
+  (let ((mevedel-session-max-age-days 7)
+        (noninteractive t)
+        (mevedel-session-persistence--cleanup-throttle
+         (make-hash-table :test #'equal)))
+    (should-not (mevedel-session-persistence-schedule-cleanup
+                 (mevedel-workspace--create :type 'file :id "batch")))
+    (should (zerop (hash-table-count mevedel-session-persistence--cleanups))))
+  :doc "disabled expiry queues nothing"
+  (let ((mevedel-session-max-age-days nil)
+        (noninteractive nil))
+    (should-not (mevedel-session-persistence-schedule-cleanup
+                 (mevedel-workspace--create :type 'file :id "off")))))
 
 (mevedel-deftest mevedel-session-persistence-delete (:quiet t)
   ,test

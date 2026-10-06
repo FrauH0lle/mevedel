@@ -191,7 +191,13 @@ Runs in the chat data buffer.")
 
 (defvar mevedel-session-end-hook nil
   "Normal hook run when a mevedel session ends.
-Runs in the chat data buffer.")
+Runs in the chat data buffer, with `mevedel-session-end-reason' saying
+why.")
+
+(defvar mevedel-session-end-reason nil
+  "Why the session is ending, while `mevedel-session-end-hook' runs.
+\"kill-buffer\" when its data buffer is killed, \"exit\" when Emacs
+exits.  The same value is the `SessionEnd' event's `:reason'.")
 
 (defvar mevedel-user-prompt-submit-functions nil
   "Abnormal hook functions run before a user prompt is sent.

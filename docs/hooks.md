@@ -42,7 +42,7 @@ Supported events and their control effects:
 | `SubagentStop` | after each retained-agent turn reaches terminal status | agent role | notification/logging |
 | `Stop` | after a successful top-level assistant turn | none | notification/logging |
 | `StopFailure` | after an errored or aborted top-level assistant turn | none | notification/logging |
-| `SessionEnd` | buffer kill/session teardown | reason | notification only |
+| `SessionEnd` | once per live root session epoch: data buffer killed or Emacs exits | reason (`kill-buffer`, `exit`) | notification only |
 
 ## Config shape
 
@@ -464,6 +464,14 @@ root compaction uses `compact`. Restoring an already-live buffer does not
 reinitialize it. Clear and compaction begin context epochs inside the same
 live session epoch and therefore do not emit `SessionEnd`.
 
+`SessionEnd` closes a live session epoch exactly once. Killing the root data
+buffer reports reason `kill-buffer`. Emacs exit kills no buffers, so an exit
+hook reports every epoch still open with reason `exit` before session
+persistence saves state and releases ownership. Exit starts the handlers of all
+open sessions together and waits for them to settle, so it is bounded by the
+slowest handler's own timeout; quitting stops the wait. Read-only inspection
+buffers have no epoch and report nothing.
+
 Context-changing audit surfaces represent an event once and list its
 contributing handlers in execution order.  Each handler retains its own
 source, identity, reason, and context bodies where that audit surface exposes
@@ -572,7 +580,8 @@ original `:permission-provenance`.
 Notification hooks:
 
 - `mevedel-session-start-hook`
-- `mevedel-session-end-hook`
+- `mevedel-session-end-hook`, with `mevedel-session-end-reason` bound to the
+  `SessionEnd` reason while it runs
 
 Control/argument hooks:
 

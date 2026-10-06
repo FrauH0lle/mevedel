@@ -148,6 +148,13 @@ project-store exemption had hidden this; file workspaces had the same hazard.
 Exit cleanup now runs only in an interactive Emacs, because a batch Emacs
 registers workspaces incidentally rather than through a user's session.
 
+Cleanup was throttled to once per workspace per Emacs invocation and triggered
+only by the chooser and exit, so an Emacs left running for weeks never expired
+anything despite the documented auto-cleanup. A daily per-workspace throttle
+replaced it, and opening a session or ending a root turn now offers an idle,
+transport-deferred sweep. Batch Emacs is excluded from these sweeps for the
+same reason as from exit cleanup.
+
 That run also kept 24 expired sessions whose August lease records predate
 `:transfer-generation`. Current code cannot interpret or resume them, so
 treating every invalid head as owned would have kept them forever. Liveness in

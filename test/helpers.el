@@ -329,7 +329,7 @@ instead would destroy the built-in agents later suites depend on."
           (copy-alist mevedel-agent--registry))))
 
 (defun mevedel-test--cancel-stray-lease-timers ()
-  "Cancel portable lease renewal and deferred transport timers a test left.
+  "Cancel lease renewal, checkpoint, and deferred transport timers a test left.
 
 A surviving timer performs target I/O from wherever the main loop is waiting
 during later tests, which floods their output and can wedge a shared TRAMP
@@ -337,6 +337,7 @@ connection."
   (dolist (timer (append timer-list timer-idle-list))
     (when (or (memq (timer--function timer)
                     '(mevedel-session-durability-lease-renew
+                      mevedel-session-persistence--checkpoint-tick
                       mevedel-transport-run-when-idle
                       mevedel-transport--retry))
               ;; A view poll timer whose buffer died through a hookless
@@ -346,6 +347,8 @@ connection."
                    (let ((view (car (timer--args timer))))
                      (and (bufferp view) (not (buffer-live-p view))))))
       (cancel-timer timer)))
+  (when (fboundp 'mevedel-session-persistence-stop-checkpoints)
+    (mevedel-session-persistence-stop-checkpoints))
   (when (fboundp 'mevedel-transport-cancel-pending)
     (mevedel-transport-cancel-pending)))
 

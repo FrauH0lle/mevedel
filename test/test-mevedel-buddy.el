@@ -567,6 +567,96 @@
 
 
 ;;
+;;; Scheduling
+
+(mevedel-deftest mevedel-buddy--interval-remaining
+  ()
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--interval-remaining' is zero for a scope never reviewed"
+  (let ((mevedel-buddy--last-review (make-hash-table :test #'equal)))
+    (should (= 0 (mevedel-buddy--interval-remaining "scope"))))
+
+  :doc "`mevedel-buddy--interval-remaining' counts down from the last review"
+  (let ((mevedel-buddy--last-review (make-hash-table :test #'equal))
+        (mevedel-buddy-min-interval 60))
+    (puthash "scope" (time-subtract nil 20) mevedel-buddy--last-review)
+    (should (< 39 (mevedel-buddy--interval-remaining "scope") 41)))
+
+  :doc "`mevedel-buddy--interval-remaining' is zero once the interval passed"
+  (let ((mevedel-buddy--last-review (make-hash-table :test #'equal))
+        (mevedel-buddy-min-interval 60))
+    (puthash "scope" (time-subtract nil 90) mevedel-buddy--last-review)
+    (should (= 0 (mevedel-buddy--interval-remaining "scope")))))
+
+(mevedel-deftest mevedel-buddy--run-scheduled
+  (:after-each (progn
+                 (dolist (buf mevedel-test--buddy-buffers)
+                   (when (buffer-live-p buf)
+                     (with-current-buffer buf (mevedel-buddy--cancel-timer))))
+                 (mevedel-test--buddy-cleanup)))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--run-scheduled' defers a review inside the minimum interval"
+  (let ((buf (mevedel-test--buddy-buffer "interval.el" "alpha\n"))
+        (mevedel-buddy--last-review (make-hash-table :test #'equal))
+        (mevedel-buddy-min-interval 60)
+        (reviews 0))
+    (with-current-buffer buf
+      (goto-char (point-max))
+      (insert "beta\n")
+      (puthash (mevedel-buddy--scope-key) (time-subtract nil 20)
+               mevedel-buddy--last-review)
+      (cl-letf (((symbol-function 'mevedel-buddy-review)
+                 (lambda (&rest _) (cl-incf reviews) t)))
+        (mevedel-buddy--run-scheduled buf))
+      (should (= 0 reviews))
+      (should (timerp mevedel-buddy--idle-timer))
+      ;; A plain timer for the rest of the interval, not an idle timer.
+      (should-not (timer--idle-delay mevedel-buddy--idle-timer))
+      (let ((due (float-time (time-subtract
+                              (timer--time mevedel-buddy--idle-timer) nil))))
+        (should (< 38 due 41)))))
+
+  :doc "`mevedel-buddy--run-scheduled' reviews a due scope and records it"
+  (let ((buf (mevedel-test--buddy-buffer "due.el" "alpha\n"))
+        (mevedel-buddy--last-review (make-hash-table :test #'equal))
+        (reviews nil))
+    (with-current-buffer buf
+      (cl-letf (((symbol-function 'mevedel-buddy-review)
+                 (lambda (&optional automatic) (push automatic reviews) t)))
+        (mevedel-buddy--run-scheduled buf))
+      (should (equal '(t) reviews))
+      (should-not mevedel-buddy--idle-timer)
+      (should (gethash (mevedel-buddy--scope-key)
+                       mevedel-buddy--last-review))))
+
+  :doc "`mevedel-buddy--run-scheduled' does not start the interval without a review"
+  (let ((buf (mevedel-test--buddy-buffer "nothing.el" "alpha\n"))
+        (mevedel-buddy--last-review (make-hash-table :test #'equal)))
+    (with-current-buffer buf
+      (cl-letf (((symbol-function 'mevedel-buddy-review) #'ignore))
+        (mevedel-buddy--run-scheduled buf))
+      (should-not (gethash (mevedel-buddy--scope-key)
+                           mevedel-buddy--last-review))))
+
+  :doc "`mevedel-buddy--run-scheduled' retries while another review runs"
+  (let ((buf (mevedel-test--buddy-buffer "busy.el" "alpha\n"))
+        (mevedel-buddy--last-review (make-hash-table :test #'equal))
+        (mevedel-buddy-idle-delay 10))
+    (with-current-buffer buf
+      (setq mevedel-buddy--running "other")
+      (cl-letf (((symbol-function 'mevedel-buddy-review)
+                 (lambda (&rest _) (error "Must not review"))))
+        (mevedel-buddy--run-scheduled buf))
+      (setq mevedel-buddy--running nil)
+      (should (timerp mevedel-buddy--idle-timer))
+      (should-not (timer--idle-delay mevedel-buddy--idle-timer)))))
+
+
+;;
 ;;; Guidance channel
 
 (mevedel-deftest mevedel-buddy--guide-payload
