@@ -6,7 +6,8 @@
 ;; workspace, tool list, presets, and agents on it, and attaches the
 ;; corresponding `mevedel-view' buffer for user-facing display.
 ;; Supports multiple concurrent sessions per workspace (switch via
-;; `mevedel-switch-session').
+;; `mevedel-switch-session').  Each live session epoch ends once with
+;; `SessionEnd': when its data buffer is killed or when Emacs exits.
 ;;
 ;; Also submits accepted Plan prompt transactions through the ordinary
 ;; request path after `mevedel-plan-handoff' has prepared their context.
@@ -187,6 +188,8 @@
                   "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-release-on-kill
                   "mevedel-session-persistence" nil)
+(declare-function mevedel-session-persistence-schedule-cleanup
+                  "mevedel-session-persistence" (workspace))
 (defvar mevedel-session--save-failed)
 (autoload 'mevedel-session-persistence-allocate-session-id "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-autosave-buffer "mevedel-session-persistence")
@@ -588,19 +591,58 @@ sessions keep their existing startup behavior and return nil."
       (while (not done)
         (accept-process-output nil 0.05)))))
 
-(defun mevedel--run-session-end-hooks ()
-  "Run native and declarative session-end hooks for the current buffer."
-  (run-hooks 'mevedel-session-end-hook)
-  (when (bound-and-true-p mevedel--session)
-    (let ((workspace (or (and (boundp 'mevedel--workspace)
-                              mevedel--workspace)
-                         (mevedel-session-workspace mevedel--session))))
-      (mevedel-hooks-run-event
-       'SessionEnd
-       (mevedel-hooks-event-plist
-        'SessionEnd mevedel--session workspace
-        :reason "kill-buffer")
-       #'ignore mevedel--session workspace nil nil))))
+(defun mevedel--run-session-end-hooks (&optional reason callback)
+  "Run native and declarative session-end hooks for the current buffer.
+
+REASON is the `SessionEnd' matcher value: \"kill-buffer\" by default,
+which is how `kill-buffer-hook' calls this, or \"exit\" when Emacs
+exits.  The live session epoch ends once: this function removes itself
+from the buffer's `kill-buffer-hook' before running anything.  CALLBACK,
+when non-nil, receives the merged decision once every handler has
+settled."
+  (remove-hook 'kill-buffer-hook #'mevedel--run-session-end-hooks t)
+  (let ((mevedel-session-end-reason (or reason "kill-buffer")))
+    (run-hooks 'mevedel-session-end-hook)
+    (if (bound-and-true-p mevedel--session)
+        (let ((workspace (or (and (boundp 'mevedel--workspace)
+                                  mevedel--workspace)
+                             (mevedel-session-workspace mevedel--session))))
+          (mevedel-hooks-run-event
+           'SessionEnd
+           (mevedel-hooks-event-plist
+            'SessionEnd mevedel--session workspace
+            :reason mevedel-session-end-reason)
+           (or callback #'ignore) mevedel--session workspace nil nil))
+      (when callback (funcall callback nil)))))
+
+(defun mevedel--end-sessions-on-exit ()
+  "End every live root session epoch with reason \"exit\".
+
+Emacs exit kills no buffers, so `kill-buffer-hook' never reports these
+sessions.  Each buffer whose epoch is still open fires `SessionEnd'
+here; all handlers start before any is awaited, so the wait is bounded
+by the slowest handler's own timeout rather than their sum.  Quitting
+stops waiting.  One failing buffer does not keep the others from
+ending."
+  (let (pending)
+    (dolist (buffer (buffer-list))
+      (when (and (buffer-live-p buffer)
+                 (memq #'mevedel--run-session-end-hooks
+                       (buffer-local-value 'kill-buffer-hook buffer)))
+        (let ((cell (list nil)))
+          (push cell pending)
+          (with-current-buffer buffer
+            (condition-case err
+                (mevedel--run-session-end-hooks
+                 "exit" (lambda (_decision) (setcar cell t)))
+              (error
+               (setcar cell t)
+               (message "mevedel: SessionEnd failed in %s: %s"
+                        (buffer-name buffer)
+                        (error-message-string err))))))))
+    (with-local-quit
+      (while (cl-some (lambda (cell) (not (car cell))) pending)
+        (accept-process-output nil 0.05)))))
 
 (defun mevedel--queue-reconciliation-reminder (session)
   "Queue one recovery-state reminder for SESSION."
@@ -696,7 +738,8 @@ M-x mevedel-retry-plan-implementation resumes it")))
               #'mevedel-session-persistence-release-on-kill nil t)
     (unless inspection-p
       (add-hook 'kill-buffer-hook
-                #'mevedel--run-session-end-hooks nil t))
+                #'mevedel--run-session-end-hooks nil t)
+      (mevedel-session-persistence-schedule-cleanup workspace))
     (mevedel-chat-install-request-hooks)
     (add-hook 'gptel-post-response-functions
               #'mevedel-plan-mode--post-response t t)
@@ -1274,6 +1317,10 @@ ACTION-PLIST is a plist with keys:
        (setq-local mevedel-skills--pending-request-context nil)
        (mevedel--implementation-permission-mode-restore)
        (signal (car err) (cdr err))))))
+
+;; Before session persistence's exit hook: handlers see their sessions
+;; while executions, transports, and ownership are still intact.
+(add-hook 'kill-emacs-hook #'mevedel--end-sessions-on-exit -50)
 
 (provide 'mevedel-chat)
 

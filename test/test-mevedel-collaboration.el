@@ -1219,15 +1219,31 @@
         (should (eq 'data-buffer-killed stopped))))))
 
 (mevedel-deftest mevedel-collaboration--stop-for-session
-  (:doc "stops the room when its owning data buffer ends the session")
+  ()
+  ,test
+  (test)
+
+  :doc "stops the room when its owning data buffer ends the session"
   (with-temp-buffer
     (let* ((stopped nil)
            (room (list :data-buffer (current-buffer)))
-           (mevedel-collaboration--rooms (mevedel-test-room-registry room)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (mevedel-session-end-reason "kill-buffer"))
       (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
                  (lambda (_room reason) (setq stopped reason))))
         (mevedel-collaboration--stop-for-session)
-        (should (eq 'data-buffer-killed stopped))))))
+        (should (eq 'data-buffer-killed stopped)))))
+
+  :doc "a session ending at Emacs exit stops its room as Emacs exit does"
+  (with-temp-buffer
+    (let* ((stopped nil)
+           (room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (mevedel-session-end-reason "exit"))
+      (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (_room reason) (setq stopped reason))))
+        (mevedel-collaboration--stop-for-session)
+        (should (eq 'emacs-exit stopped))))))
 
 (mevedel-deftest mevedel-collaboration--stop-for-emacs
   (:doc "stops every room when Emacs exits")

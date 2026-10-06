@@ -52,8 +52,9 @@ Conversation compaction has its own doc in
 persistence contract that compaction relies on.
 
 A root data buffer owns one live session epoch. Fresh initialization emits
-`SessionStart(startup)`, restoration emits `SessionStart(resume)`, and killing
-the data buffer emits one `SessionEnd`. Successful `/clear` and root compaction
+`SessionStart(startup)`, restoration emits `SessionStart(resume)`, and the
+epoch ends with one `SessionEnd`: `kill-buffer` when the data buffer is killed,
+or `exit` when Emacs exits with the buffer still live. Successful `/clear` and root compaction
 start `clear` and `compact` context epochs inside that same live epoch; they do
 not emit `SessionEnd`. Their hook context is appended as a new snapshot and is
 consumed by the next accepted root input, except automatic compaction attaches
@@ -185,7 +186,12 @@ the old request, not the new request's active presentation.
 Emacs's native `auto-save-hook` checkpoints modified root and retained-agent data
 buffers through their respective persistence writers. It follows Emacs's normal
 auto-save scheduling, queues one coalesced opportunity per buffer, and allows
-input between saves. Each opportunity waits for transport availability and
+input between saves. Emacs auto-saves only after keyboard input, so while any
+root or agent request is in flight a repeating timer runs the same checkpoint
+every `mevedel-session-checkpoint-interval` seconds (default 30); request
+admission starts it, and it stops on the first tick that finds no request in
+flight. Unattended Goal and agent turns therefore checkpoint mid-turn too; `nil`
+leaves mid-turn checkpoints to Emacs auto-save alone. Each opportunity waits for transport availability and
 pending input; settlement or an explicit save can absorb a queued checkpoint.
 Exit cancels queued opportunities and flushes synchronously. Failed
 writes remain eligible for retry even when the transcript write succeeded and
@@ -1713,19 +1719,25 @@ recovery. Expired ordinary portable owners are fenced through generation electio
 the committed session head is preserved. Recovery completes interrupted superseded
 pin release only after checking the successor's retained turn coverage.
 
-`mevedel-session-max-age-days` (default 30) deletes expired sessions from the
-`mevedel` session chooser and from `kill-emacs-hook`, including sessions whose sidecars
-are obsolete, unreadable, or missing. Exit cleanup scans every workspace
-registered during an interactive Emacs invocation before releasing live-session
-locks. A batch Emacs never sweeps at exit: scripts and test subprocesses
-register workspaces incidentally, typically their working directory.
+`mevedel-session-max-age-days` (default 30) deletes expired sessions,
+including sessions whose sidecars are obsolete, unreadable, or missing. The
+`mevedel` session chooser sweeps synchronously before listing. Opening a session
+and ending a root turn offer the workspace a sweep that runs after the current
+command, once its transport is idle and no input is pending, so a long-running
+Emacs keeps expiring sessions. Exit cleanup scans every workspace registered
+during an interactive Emacs invocation before releasing live-session locks. A
+batch Emacs never sweeps at exit or from session activity: scripts and test
+subprocesses register workspaces incidentally, typically their working
+directory.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
 directory modification time. The `mevedel-session-keep-recent-count`
 (default 3) most-recently-updated sessions are exempt regardless of age:
 the chooser sweeps before any lock is taken, so without this floor a
 long absence would delete the very session the user came back to resume.
-Cleanup skips sessions with journal pins and is throttled to once per
-workspace per Emacs invocation. Expired session cleanup removes its `local/`
+Cleanup skips sessions with journal pins. Each workspace is swept at most once
+a day per Emacs invocation: ages count in days, so a more frequent sweep finds
+nothing new, while the daily repeat keeps a long-running Emacs from retaining
+sessions indefinitely. Expired session cleanup removes its `local/`
 scratch directory with the rest of the session. `nil` disables cleanup.
 
 File-workspace cleanup skips active locks. Portable project cleanup skips a

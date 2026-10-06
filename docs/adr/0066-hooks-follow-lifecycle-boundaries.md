@@ -6,8 +6,10 @@ Expose mevedel event plists at domain boundaries rather than exposing provider
 request internals. `SubagentStart` runs once before a retained identity is
 published; prompt, tool, compaction, and terminal hooks run for their respective
 turn or attempt. `SessionStart` begins root context epochs, including startup,
-resume, clear, compact, rewind, restore, and fork. Agent compaction emits no start
-hook. Hook context does not recursively trigger earlier lifecycle events.
+resume, clear, compact, rewind, restore, and fork. `SessionEnd` closes the live
+session epoch once, when its data buffer is killed or Emacs exits. Agent
+compaction emits no start hook. Hook context does not recursively trigger
+earlier lifecycle events.
 
 `Stop` is observational: a returned decision cannot restart the completed turn.
 Goal continuation belongs to the Goal controller. Decision handlers run serially
@@ -58,6 +60,13 @@ plugin callbacks, and direct gptel extension points. Their retained tradeoff is
 stable mevedel events plus command/Elisp handlers; this record does not assert
 that those external products still expose the APIs described in that research.
 The notes did not record a separate date or measurement for that choice.
+
+`SessionEnd` was first emitted only from the data buffer's `kill-buffer-hook`,
+always with reason `kill-buffer`. Emacs exit kills no buffers, so the event the
+manual advertised for session teardown never fired when the user quit Emacs,
+and the reason matcher had a single value. An exit hook now ends every open
+epoch with reason `exit`, and ending removes the buffer's kill hook so an epoch
+cannot end twice.
 
 Removing sandbox readiness from the session identity fence exposed a local hook
 sentinel advancing into remote hooks during diagnostic-flush TRAMP I/O. Captured

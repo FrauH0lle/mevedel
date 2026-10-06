@@ -129,6 +129,18 @@
       (should (hash-table-p (mevedel-request-file-snapshots req)))
       (should (null (mevedel-request-directive-uuid req)))))
 
+  :doc "starts in-flight conversation checkpoints"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (started 0))
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-start-checkpoints)
+                 (lambda () (cl-incf started))))
+        (mevedel-request-begin session))
+      (should (= 1 started))))
+
   :doc "rejects admission while a lost turn is still settling"
   (with-temp-buffer
     (let ((session (mevedel-session--create :name "settling")))
@@ -689,6 +701,37 @@
       (should (eq 'idle
                   (mevedel-session-agent-root-activity session)))))
 
+  :doc "offers the workspace an expiry sweep when a root turn ends"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           offered)
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-schedule-cleanup)
+                 (lambda (workspace) (push workspace offered))))
+        (mevedel-request-begin session)
+        (mevedel-request-end))
+      (should (equal (list ws) offered))))
+
+  :doc "an agent turn end offers no expiry sweep"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (agent (mevedel-agent--create :name "verifier"))
+           (inv (mevedel-agent-invocation-create agent))
+           offered)
+      (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+      (setf (mevedel-agent-invocation-path inv) "/root/verifier")
+      (setq-local mevedel--agent-invocation inv)
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-schedule-cleanup)
+                 (lambda (workspace) (push workspace offered))))
+        (mevedel-request-begin session)
+        (mevedel-request-end))
+      (should-not offered)))
+
   :doc "holds the busy collection threshold through the settlement tail"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
@@ -698,6 +741,8 @@
            (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
            (mevedel-gc-cons-threshold-while-typing nil)
            (noninteractive nil)
+           ;; An interactive root turn end would queue an expiry sweep.
+           (mevedel-session-max-age-days nil)
            (mevedel--gc-holds (make-hash-table :test #'eq))
            (mevedel--gc-restore nil)
            (mevedel--gc-timer nil))

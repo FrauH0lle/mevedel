@@ -304,7 +304,7 @@ that contains one:
 
 Each chat lives in its own session under
 `<workspace>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`. Sessions auto-save at
-turn boundaries, keep tracked-file backups, and can be reopened or renamed.
+turn boundaries and checkpoint periodically while a request runs, keep tracked-file backups, and can be reopened or renamed.
 Rewind is an in-place undo that truncates later conversation and restores
 captured files. Conversation Fork creates a child session that shares the
 current files; Worktree Fork creates a child in a linked Git worktree and
@@ -326,7 +326,8 @@ it read-only instead of corrupting the writer's transcript.
 | Custom Variable                          | Variable Description                                  |
 |------------------------------------------|-------------------------------------------------------|
 | `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`). |
-| `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.             |
+| `mevedel-session-max-age-days`           | Auto-cleanup age, in days; swept at most daily. `nil` disables. |
+| `mevedel-session-checkpoint-interval`    | Seconds between checkpoints while a request runs.      |
 | `mevedel-file-history-max-snapshot-bytes` | Maximum size for an individual file snapshot.         |
 | `mevedel-view-input-history-size`        | Size of the workspace input history ring.              |
 
@@ -946,7 +947,7 @@ Available events:
 | `SubagentStop`        | after an agent reaches terminal status        | role              | log or notify                         |
 | `Stop`                | after a successful top-level assistant turn   | none              | log, cleanup, or notify               |
 | `StopFailure`         | after an errored or aborted top-level turn    | none              | log, cleanup, or notify               |
-| `SessionEnd`          | buffer kill or session teardown               | reason            | cleanup or notify                     |
+| `SessionEnd`          | session buffer killed or Emacs exits          | `kill-buffer` / `exit` | cleanup or notify                |
 
 In skill or agent-local hook declarations, `Stop` is scoped to the child
 invocation and normalized to `SubagentStop`. Top-level `Stop` only belongs to

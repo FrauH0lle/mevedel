@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Session persistence facade for lifecycle, resume, listing, locking, and
-;; stale-session cleanup.  Sidecar coding belongs to `mevedel-session-codec';
+;; Session persistence facade for lifecycle, mid-turn checkpoints, resume,
+;; listing, locking, and stale-session cleanup.  Sidecar coding belongs to `mevedel-session-codec';
 ;; paths, artifacts, snapshots, and segment writes belong to
 ;; `mevedel-session-artifacts'; restore plans and the Rewind transaction belong
 ;; to `mevedel-session-rewind'; and Fork projection, publication, Worktree
@@ -368,14 +368,16 @@ Defaults to 1 MB."
 (defcustom mevedel-session-max-age-days 30
   "Auto-cleanup threshold for old sessions, in days.
 
-Sessions older than this are eligible for deletion when the `mevedel'
-session chooser runs or Emacs exits (throttled per workspace per Emacs
-invocation).  Age comes from `:updated-at', or the sidecar or session
-directory modification time when metadata cannot provide it; a portable
-session's last lease renewal must also be older.  Sessions with an owner are
-always skipped: any cross-host lock, a same-host lock whose PID is live and
-not known to have been reused, or a portable lease that is live, publishing,
-mutating, or reserved for transfer.  So are the
+Sessions older than this are deleted by a sweep that runs when the
+`mevedel' session chooser lists sessions, after a session opens, after
+a root turn ends, and when Emacs exits.  Each workspace is swept at
+most once a day per Emacs, and only an interactive Emacs sweeps from
+session activity or exit.  Age comes from `:updated-at', or the sidecar
+or session directory modification time when metadata cannot provide it;
+a portable session's last lease renewal must also be older.  Sessions
+with an owner are always skipped: any cross-host lock, a same-host lock
+whose PID is live and not known to have been reused, or a portable lease
+that is live, publishing, mutating, or reserved for transfer.  So are the
 `mevedel-session-keep-recent-count' most-recently-updated sessions.  A nil
 value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
@@ -394,6 +396,19 @@ session is not yet locked.  A nil value applies the age cap to every
 session."
   :type '(choice (integer :tag "Sessions")
           (const :tag "No floor" nil))
+  :group 'mevedel)
+
+(defcustom mevedel-session-checkpoint-interval 30
+  "Seconds between conversation checkpoints while a request is in flight.
+
+Emacs auto-saves only after keyboard input, so a turn that runs
+unattended, such as a Goal or a retained agent, would otherwise reach
+disk only when it settles.  While any root or agent request is in
+flight, modified conversations are checkpointed this often through the
+same path as `auto-save-hook'.  A nil value leaves mid-turn checkpoints
+to Emacs auto-save alone."
+  :type '(choice (number :tag "Seconds")
+          (const :tag "Only on Emacs auto-save" nil))
   :group 'mevedel)
 
 
@@ -1191,7 +1206,9 @@ publication.  Views and read-only inspection buffers never write."
   "Checkpoint modified data buffers during Emacs auto-save.
 Queue one transport-safe opportunity per buffer, yielding between saves.
 A failed write does not prevent other conversations from being saved.
-Settlement and exit still persist synchronously."
+Settlement and exit still persist synchronously.  The in-flight
+checkpoint timer calls this too, because Emacs auto-saves only after
+input and an unattended turn receives none."
   (dolist (buffer (buffer-list))
     (when (and (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -1218,6 +1235,43 @@ Settlement and exit still persist synchronously."
                                (mevedel-session-publication-uncommitted-batches
                                 mevedel--session)))))
            (mevedel-session-persistence-autosave-buffer buffer)))))))
+
+
+;;;; In-flight checkpoints
+
+(defvar mevedel-session-persistence--checkpoint-timer nil
+  "Repeating timer that checkpoints conversations during requests, or nil.")
+
+(defun mevedel-session-persistence--request-in-flight-p ()
+  "Return non-nil when some mevedel buffer has a request in flight."
+  (and (boundp 'mevedel--current-request)
+       (cl-some (lambda (buffer)
+                  (buffer-local-value 'mevedel--current-request buffer))
+                (buffer-list))))
+
+(defun mevedel-session-persistence--checkpoint-tick ()
+  "Checkpoint modified conversations, or stop once no request is in flight."
+  (if (mevedel-session-persistence--request-in-flight-p)
+      (mevedel-session-persistence-autosave)
+    (mevedel-session-persistence-stop-checkpoints)))
+
+(defun mevedel-session-persistence-start-checkpoints ()
+  "Checkpoint conversations periodically until no request is in flight.
+Request admission calls this; repeated calls share one timer, which
+stops itself on the first tick that finds every request settled."
+  (when (and mevedel-session-checkpoint-interval
+             (not (memq mevedel-session-persistence--checkpoint-timer
+                        timer-list)))
+    (setq mevedel-session-persistence--checkpoint-timer
+          (run-at-time mevedel-session-checkpoint-interval
+                       mevedel-session-checkpoint-interval
+                       #'mevedel-session-persistence--checkpoint-tick))))
+
+(defun mevedel-session-persistence-stop-checkpoints ()
+  "Stop the in-flight checkpoint timer."
+  (when (timerp mevedel-session-persistence--checkpoint-timer)
+    (cancel-timer mevedel-session-persistence--checkpoint-timer))
+  (setq mevedel-session-persistence--checkpoint-timer nil))
 
 (defun mevedel-session-persistence-header-segment ()
   "Return a header-line fragment summarising persistence state.
@@ -2630,10 +2684,56 @@ their directory.  Repoint DATA-BUF at the child after it commits."
 
 (defvar mevedel-session-persistence--cleanup-throttle
   (make-hash-table :test #'equal)
-  "Workspace-key set of cleanup runs already done in this Emacs invocation.
+  "Workspace keys mapped to the `float-time' of their last expiry sweep.
 
-Keyed on `(WORKSPACE-TYPE . WORKSPACE-ID)'.  Reset implicitly on Emacs
-restart (defvar starts fresh)."  )
+Keyed on `(WORKSPACE-TYPE . WORKSPACE-ID)'.  In memory only, so a new
+Emacs sweeps at its first opportunity.")
+
+(defvar mevedel-session-persistence--cleanup-interval (* 24 60 60)
+  "Least seconds between two expiry sweeps of one workspace.
+Ages are counted in days, so sweeping more often finds nothing new,
+while a long-running Emacs must still sweep again.")
+
+(defvar mevedel-session-persistence--cleanups (make-hash-table :test #'equal)
+  "Workspace keys with a queued expiry sweep.")
+
+(defun mevedel-session-persistence--cleanup-key (workspace)
+  "Return WORKSPACE's expiry-sweep throttle key."
+  (cons (mevedel-workspace-type workspace)
+        (mevedel-workspace-id workspace)))
+
+(defun mevedel-session-persistence--cleanup-due-p (workspace)
+  "Return non-nil when WORKSPACE has not been swept within the interval."
+  (let ((last (gethash (mevedel-session-persistence--cleanup-key workspace)
+                       mevedel-session-persistence--cleanup-throttle)))
+    (or (null last)
+        (>= (- (float-time) last)
+            mevedel-session-persistence--cleanup-interval))))
+
+(defun mevedel-session-persistence-schedule-cleanup (workspace)
+  "Offer WORKSPACE an expiry sweep once Emacs is idle, when one is due.
+
+Session activity calls this so a long-running Emacs keeps expiring old
+sessions without waiting for the chooser or for exit.  The sweep runs
+after the current command, when the workspace's transport is idle and
+no input is pending.  A batch Emacs never sweeps from activity, for the
+same reason it does not sweep at exit.  Return the queued timer, or
+nil when nothing was queued."
+  (when (and workspace
+             mevedel-session-max-age-days
+             (not noninteractive)
+             (mevedel-session-persistence--cleanup-due-p workspace))
+    (mevedel-transport-schedule-idle
+     mevedel-session-persistence--cleanups
+     (mevedel-session-persistence--cleanup-key workspace)
+     'session-cleanup
+     (mevedel-session-artifacts-sessions-dir workspace)
+     (lambda ()
+       (condition-case err
+           (mevedel-session-persistence-cleanup-expired workspace)
+         (error
+          (message "mevedel: session cleanup failed: %s"
+                   (error-message-string err))))))))
 
 (defun mevedel-session-persistence-parse-iso-time (str)
   "Parse `YYYY-MM-DDTHH-MM-SS' STR to a time value, or nil on failure."
@@ -2700,22 +2800,21 @@ locks are active, and same-host locks are stale when their PID is dead or
 when the live process start time proves PID reuse.  Portable sessions open
 in this Emacs are skipped; the others are deleted only through
 `mevedel-session-durability-delete-abandoned', which also requires the last
-lease renewal to be older than the cap.  Throttled to at most once per
-`(workspace-type . workspace-id)' per Emacs invocation; when FORCE is
-non-nil the throttle is bypassed.
+lease renewal to be older than the cap.  Throttled to at most one sweep
+per `(workspace-type . workspace-id)' within
+`mevedel-session-persistence--cleanup-interval'; when FORCE is non-nil
+the throttle is bypassed.
 
 Returns the number of sessions deleted, or nil when the cap is nil or the
-throttle has already fired."
+workspace was swept too recently."
   (let ((sessions-dir
          (mevedel-session-artifacts-sessions-dir workspace))
         (portable (eq 'portable (mevedel-session-authority-mode-for-workspace workspace))))
     (when mevedel-session-max-age-days
-      (let* ((ws-key (cons (mevedel-workspace-type workspace)
-                           (mevedel-workspace-id workspace)))
-             (already-ran
-              (gethash ws-key mevedel-session-persistence--cleanup-throttle)))
-      (when (or force (not already-ran))
-        (puthash ws-key t mevedel-session-persistence--cleanup-throttle)
+      (let ((ws-key (mevedel-session-persistence--cleanup-key workspace)))
+      (when (or force (mevedel-session-persistence--cleanup-due-p workspace))
+        (puthash ws-key (float-time)
+                 mevedel-session-persistence--cleanup-throttle)
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
               (deleted        0)

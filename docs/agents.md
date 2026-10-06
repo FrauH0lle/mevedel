@@ -428,7 +428,8 @@ path, so immutable publication filenames never reach tools, prompts, or views.
 `mevedel-agent-conversation.el` owns conversation creation and hydration,
 frozen request-local installation, activity snapshots, response extraction,
 and transcript saves. Native Emacs auto-save also checkpoints modified retained
-conversations, and Emacs exit flushes their text and pending transcript timers
+conversations, as does the in-flight checkpoint timer while any request runs,
+so an unattended agent turn reaches disk before it settles. Emacs exit flushes their text and pending transcript timers
 before root session ownership is released. `mevedel-agent-exec.el` is the provider
 adapter: it owns
 the gptel request FSM, prompt dispatch, and streaming callback contract. It
