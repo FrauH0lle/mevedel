@@ -77,6 +77,8 @@ let tool = 'select',
   pointing = null,
   presenceTimer = null,
   laserSamples = [],
+  /* Index of the newest held laser sample; each press skips one to separate strokes. */
+  laserInk = 0,
   boardPresence,
   boardPreviews,
   outgoingPreview = null,
@@ -633,13 +635,15 @@ function world(event) {
 function presence(point, mode = 'cursor') {
   if (readOnly || !online) return;
   const now = performance.now();
+  // Samples drawn while the button is held carry an ink index, so observers keep them longer.
+  const held = mode === 'laser' && drag?.mode === 'laser', last = laserSamples.at(-1);
   laserSamples = mode === 'laser' ? laserSamples.filter(s => now - s[2] < 550).slice(-63) : [];
   if (mode === 'laser' && (!laserSamples.length || Math.floor(now / 8) !== Math.floor(laserSamples.at(-1)[2] / 8)))
-    laserSamples.push([...point, now]);
-  else if (mode === 'laser') laserSamples[laserSamples.length - 1] = [...point, now];
+    laserSamples.push([...point, now, held ? ++laserInk : 0]);
+  else if (mode === 'laser') laserSamples[laserSamples.length - 1] = [...point, now, held ? last[3] || ++laserInk : last[3]];
   pointing = { point, mode };
   if (mode === 'laser') showPresence({ peer: 'self', name: participant, point, mode,
-    trail: laserSamples.map(([x,y,time]) => [x,y,now-time]) });
+    trail: laserSamples.map(([x,y,time,ink]) => [x,y,now-time,ink]) });
   // Coalesce a burst, but always deliver its final position even if motion stops.
   if (presenceTimer) return;
   presenceTimer = setTimeout(() => {
@@ -648,7 +652,7 @@ function presence(point, mode = 'cursor') {
     if (pointing && online) port.postMessage({ type: 'presence', ...pointing,
       preview: pointing.mode === 'cursor' && !failed ? outgoingPreview : null,
       trail: pointing.mode === 'laser' ? laserSamples.filter(s => lastPresence - s[2] < 550)
-        .map(([x,y,time]) => [x,y,lastPresence-time]) : undefined });
+        .map(([x,y,time,ink]) => [x,y,lastPresence-time,ink]) : undefined });
   }, Math.max(0, 50 - (performance.now() - lastPresence)));
 }
 function stopPointing() {
@@ -1436,7 +1440,7 @@ function board() {
     arrow: 'Drag between objects to connect them. Connections follow the objects.',
     autoshape: 'Draw a rectangle, diamond, ellipse, arrow or line by hand; it becomes a clean shape.',
     erase: 'Click an object to erase it. Undo restores it.',
-    laser: 'Drag to point. The trail fades without changing the board.',
+    laser: 'Move to point; hold to draw a line for a few seconds. Nothing changes the board.',
     comment: 'Click an object or drag across an area to comment on it.',
   };
   const refreshStyle = refresh;
@@ -1574,6 +1578,7 @@ function board() {
       pointHandle = event.target.dataset.point ?? event.target.dataset.mid;
     if (tool === 'laser' && !readOnly) {
       drag = { mode: 'laser' };
+      laserInk++;
       presence(point, 'laser');
       return;
     }

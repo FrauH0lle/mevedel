@@ -268,14 +268,19 @@ pointer** makes mouse or pen hover visible locally and to collaborators; on a
 touchscreen, press and drag to point, then lift to stop. A bright tip, a compact
 name tag, and a short curved trail distinguish deliberate pointing from an
 ordinary cursor. Older trail segments fade independently within about half a
-second; a stationary tip stays visible while the participant points.
+second; a stationary tip stays visible while the participant points. Holding
+the mouse button, pen, or touch while pointing draws laser ink instead: the
+line stays for two seconds and fades over the next, so a participant can
+sketch a circle or arrow on top of the board without editing it.
 
 Coordinates travel in board space and render through each receiver's viewport.
 Remote cursors use a short transition from the displayed position to each
 received sample, without predicting past it. Laser packets retain up to 64
 input samples from the last 550 ms, rather than only each packet's last position.
 The observer plays those samples with a short 55 ms delay, preserving curves
-between network updates. A stale gap starts a new pointer
+between network updates. Each sample is `[x, y, age, ink]`; held samples carry
+an increasing ink index, which lets observers accumulate a line longer than one
+packet's window. Each press skips an index, so separate strokes do not join. A stale gap starts a new pointer
 instead of drawing a bridge across the board. Reduced-motion preferences remove
 trails and interpolation. Leaving the canvas, switching tools, cancellation,
 hiding the page, and disconnect clear the local pointing state; item changes

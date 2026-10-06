@@ -722,8 +722,19 @@ test('editor interaction regressions', async (t) => {
       await page.waitForTimeout(700);
       assert.equal(await frame.locator('.pointer-trail path').count(), 0);
       assert.equal(await frame.locator('#presence text').textContent(), 'Alice', 'stationary pointing remains visible');
+      await page.mouse.down();
+      for (let i = 0; i < 10; i++) {
+        await page.mouse.move(box.x + 200 + 15 * i, box.y + 200);
+        await page.waitForTimeout(16);
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(1200);
+      assert.ok(await frame.locator('.pointer-trail path').count() > 3, 'held ink outlasts the hover trail');
+      await page.waitForTimeout(2200);
+      assert.equal(await frame.locator('.pointer-trail path').count(), 0, 'held ink expires');
       const messages = await page.evaluate(() => window.messages);
       assert.ok(messages.some(m => m.type === 'presence' && m.mode === 'laser'));
+      assert.ok(messages.some(m => m.trail?.some(s => s[3] > 0)), 'held samples carry ink indices');
       assert.equal(messages.filter(m => m.type === 'request').length, 0);
       await page.mouse.move(box.x + 10, 5);
       await frame.locator('#presence > g').waitFor({ state: 'detached' });

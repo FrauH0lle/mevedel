@@ -137,10 +137,13 @@ deleted it; a guest viewing it is no longer in it."
                    (and (equal (plist-get args :mode) "laser")
                         (listp trail) (<= (length trail) 64)
                         (cl-every
+                         ;; (X Y AGE INK): INK indexes samples drawn while held, or is 0.
                          (lambda (sample)
-                           (and (listp sample) (= (length sample) 3)
-                                (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) sample)
-                                (<= 0 (nth 2 sample) 550)))
+                           (and (listp sample) (= (length sample) 4)
+                                (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000)))
+                                          (butlast sample))
+                                (<= 0 (nth 2 sample) 550)
+                                (natnump (nth 3 sample))))
                          trail)))
                (or (null point)
                    (and (listp point) (= (length point) 2)
