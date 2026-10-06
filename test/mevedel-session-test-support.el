@@ -166,7 +166,8 @@ publication."
              :updated-at "2026-04-23T18:21:00+0200")))
     (setf (mevedel-session-workspace-instruction-hashes session)
           (list (cons (list "/root" (file-name-concat root "AGENTS.md"))
-                      (make-string 64 ?a))))
+                      (make-string 64 ?a))
+                (cons (list "/root" (file-name-concat root "nested" "AGENTS.md")) nil)))
     (setf (mevedel-session-session-id session) "main-2026-04-23T14-30-a9f2")
     (setf (mevedel-session-save-path session)
           (file-name-as-directory
@@ -346,6 +347,7 @@ publication."
                :resource-grants nil
                :preset-name nil
                :model-provider nil
+               :external-conversations nil
                :reasoning-effort nil
                :last-observed-date "2026-01-01"
                :agent-types-snapshot :uninitialized

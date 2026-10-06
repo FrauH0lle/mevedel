@@ -963,7 +963,7 @@ cover, so the permission step's warning about it is captured here."
                                    :body "Wrap up now."
                                    :commit #'ignore)))))
             (mevedel-pipeline--step-goal-budget-warning
-             (list :result "tool output" :session 'session :fsm 'fsm
+             (list :result "tool output" :session 'session :engine 'fsm
                    :buffer chat-buf)
              (lambda (context) (setq out context)) #'ignore))
           (should (equal "tool output" (plist-get out :result)))
@@ -1461,7 +1461,7 @@ cover, so the permission step's warning about it is captured here."
            (session (mevedel-session--create :name "main" :goal goal))
            (fsm (gptel-make-fsm :info (list :buffer (current-buffer))))
            (context (list :tool (mevedel-tool--create :name "Read")
-                          :args nil :result "ok" :fsm fsm
+                          :args nil :result "ok" :engine fsm
                           :buffer (current-buffer)
                           :default-directory default-directory))
            messages result)
@@ -1494,7 +1494,7 @@ cover, so the permission step's warning about it is captured here."
                   (mevedel-session--create :name "main" :goal goal))
       (cl-letf (((symbol-function 'message) #'ignore))
         (mevedel-pipeline--stop-turn-for-hook
-         (list :fsm fsm :buffer (current-buffer)
+         (list :engine fsm :buffer (current-buffer)
                :invocation (mevedel-agent-invocation--create))
          'PreToolUse '(:continue nil :stop-reason "no")))
       (should (eq 'hook-stop (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
@@ -4739,7 +4739,7 @@ cover, so the permission step's warning about it is captured here."
 				      :args tool-call-args))
 			(info (list :tool-use (list call-1 call-2)))
 			(fsm (gptel-make-fsm :info info)))
-		   (let ((mevedel-tools--current-fsm fsm))
+		   (let ((mevedel-tools--current-engine fsm))
 		     (should (equal "toolu_1"
 				    (mevedel-pipeline--current-tool-use-id
 				     tool pipeline-args)))

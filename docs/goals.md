@@ -108,6 +108,30 @@ that root request is accounted to: after each tool batch and when the agent
 request ends, whether it completes, fails, or is aborted. The budget therefore
 bounds the whole run, not only the root conversation.
 
+Claude subscription turns use the same accounting and continuation lifecycle.
+Top-level SDK message identities distinguish model samples; streamed deltas and
+consolidated snapshots update one sample rather than charging it repeatedly.
+Cache creation contributes to normalized input, while cache reads remain
+separate. Only reported nonnegative counters establish known usage. Final
+prompt totals replace the corresponding streamed totals; absent final fields
+retain known progress. The adapter's context-occupancy updates and cumulative
+model quota rows are not additional charges. These metrics do not measure
+subscription allowance or establish an exact monetary cost.
+
+Automatic full-context continuation can use several native prompts within one
+admitted Goal turn. Each completed prompt contributes its usage once; later
+samples add to that frozen base. Delayed snapshots of completed sample
+identities cannot charge again. The whole admitted turn settles once. A user
+pause or cancellation at the context boundary prevents the next prompt.
+
+Native child progress charges its owning root Goal while the child runs, and
+settlement charges only the remaining delta. Each retained follow-up has its
+own request accounting. Root and child budget reminders reach Claude through
+the existing post-tool hook and acknowledged context delivery. Usage observed
+after a tool result is checked again at that boundary, before the next sample.
+The normal budget remains a continuation limit with wrap-up instructions,
+not a hard server-side token ceiling.
+
 Starting a Goal through `CreateGoal` or the user command also attributes an
 already-running root turn, including its known token usage; elapsed time starts
 at Goal activation. The next provider

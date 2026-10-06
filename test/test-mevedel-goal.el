@@ -797,7 +797,7 @@
     (should-not (plist-get (gptel-fsm-info fsm)
                            :mevedel-goal-budget-warnings))))
 
-(mevedel-deftest mevedel-goal-accounting-fsm ()
+(mevedel-deftest mevedel-goal-accounting-owner ()
   ,test
   (test)
   :doc "finds the Goal-charged root request, inherited by agent buffers"
@@ -805,13 +805,13 @@
         (plain (gptel-make-fsm :info (list :buffer nil))))
     (with-temp-buffer
       (setq-local mevedel--current-request (mevedel-request--create :fsm root))
-      (should (eq root (mevedel-goal-accounting-fsm)))
+      (should (eq root (mevedel-goal-accounting-owner)))
       (setq-local mevedel--current-request (mevedel-request--create :fsm plain))
-      (should-not (mevedel-goal-accounting-fsm)))
+      (should-not (mevedel-goal-accounting-owner)))
     (with-temp-buffer
       (setq-local mevedel--agent-invocation
-                  (mevedel-agent-invocation--create :goal-fsm root))
-      (should (eq root (mevedel-goal-accounting-fsm))))))
+                  (mevedel-agent-invocation--create :goal-owner root))
+      (should (eq root (mevedel-goal-accounting-owner))))))
 
 (mevedel-deftest mevedel-goal-charge-agent-progress ()
   ,test
@@ -824,7 +824,7 @@
          (root (gptel-make-fsm
                 :info (list :buffer root-buffer :mevedel-goal-accounting-id "g")))
          (agent-info (list :mevedel-agent-invocation
-                           (mevedel-agent-invocation--create :goal-fsm root)
+                           (mevedel-agent-invocation--create :goal-owner root)
                            :tokens-full (list :input 8 :output 2)))
          (agent (gptel-make-fsm :info agent-info)))
     (unwind-protect
@@ -874,7 +874,7 @@
                               :tokens-full (list :input 10 :output 5))))
            (agent (gptel-make-fsm
                    :info (list :mevedel-agent-invocation
-                               (mevedel-agent-invocation--create :goal-fsm root)))))
+                               (mevedel-agent-invocation--create :goal-owner root)))))
       (setq-local mevedel--session
                   (mevedel-session--create :name "main" :goal goal))
       (let ((notice (mevedel-goal-agent-budget-notice agent)))

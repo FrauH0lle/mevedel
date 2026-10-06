@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'mevedel-report)
 
 (eval-when-compile
@@ -88,7 +90,7 @@
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-expand-user-input
-                  "mevedel-mentions" (text session))
+                  "mevedel-mentions" (text session &optional fresh-p))
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
@@ -992,8 +994,8 @@ first character of a real draft."
 
 (defun mevedel-view--schedule-follow-up-drain (fsm)
   "Schedule the next follow-up after FSM completes successfully."
-  (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
-                         (gptel-fsm-info fsm)))
+  (when-let* ((info (and fsm (fboundp 'mevedel-engine-info)
+                         (mevedel-engine-info fsm)))
               (data-buffer (plist-get info :buffer))
               ((buffer-live-p data-buffer)))
     (run-at-time 0 nil

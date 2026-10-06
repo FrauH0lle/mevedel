@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'mevedel-context-delivery)
 
 (eval-when-compile
@@ -262,6 +264,7 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
     (unless (and chat-buffer (buffer-live-p chat-buffer))
       (user-error "No mevedel chat buffer found"))
     (with-current-buffer chat-buffer
+      (mevedel-engine-assert-local-history mevedel--session "Manual compaction" gptel-backend)
       (mevedel-compact-run-start
        :aggressive aggressive
        :instructions instructions))))

@@ -14,7 +14,7 @@ filesystem checks or unusually large transcripts can still add local latency.
 
 ## Trust boundary
 
-The isolated gptel request has no tools, ambient conversation, skills, memory,
+The isolated engine request has no tools, ambient conversation, skills, memory,
 or workspace instructions in its trusted system policy. Its sole system role is
 `prompts/permissions/approval-review-system.md`, assembled by the
 `permission-review` profile. Actual root user turns, the active Goal objective,
@@ -29,6 +29,12 @@ uses the actual tool's execution boundary, including when a hook requests a
 generic permission card. Child evidence includes resolved direct capability
 profiles; live Eval names the host Emacs separately from the session target and
 its incarnation, even with a remote working directory.
+
+When the guardian workload resolves to Claude Code, the engine uses a fresh,
+tool-free ACP conversation with that same explicit system policy and quoted
+evidence. It has no root conversation ID or MCP endpoint. Cancelling or
+disposing of the reviewer buffer closes its process; malformed replies still
+defer to the ordinary human approval path.
 
 User-turn extraction uses the canonical transcript parser, excluding assistant
 text, tool output, compaction summaries and harness scaffolding. It takes whole

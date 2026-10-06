@@ -481,6 +481,20 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
       #'mevedel-tool-name
       (cl-remove-if #'mevedel-tool-read-only-p (mevedel-tool-all)))))))
 
+(defun mevedel-preset-prepare-request (request)
+  "Capture effective model, pending skills and authority on admitted REQUEST."
+  (let ((info (mevedel-engine-info (mevedel-engine-owner request))))
+    (when (and (plist-get info :backend) (plist-get info :model))
+      (setf (mevedel-request-model-policy request)
+            (list :backend (plist-get info :backend) :model (plist-get info :model)
+                  :effort (plist-get info :reasoning-effort)))))
+  (mevedel-skills--drain-pending-context request)
+  (when mevedel--directive-read-only-request-p
+    (setf (mevedel-request-skill-permission-rules request)
+          (append (mevedel-request-skill-permission-rules request)
+                  (mevedel-preset--read-only-rules)))))
+
+
 ;;
 ;;; Request-time preset setup
 
@@ -580,7 +594,7 @@ steering still take precedence, so queued steering is delivered first."
               (setq continued t)
               (funcall continuation machine)))))
     (condition-case err
-        (if-let* ((info (gptel-fsm-info fsm))
+        (if-let* ((info (mevedel-engine-info fsm))
                   (chat-buffer (plist-get info :buffer))
                   ((buffer-live-p chat-buffer))
                   (workspace (with-current-buffer chat-buffer
@@ -602,7 +616,7 @@ steering still take precedence, so queued steering is delivered first."
               (setq info
                     (plist-put info :mevedel-directive-untracked-effects
                                (plist-get capture :untracked-effects)))
-              (setf (gptel-fsm-info fsm) info)
+              (setf (mevedel-engine-info fsm) info)
               (mevedel-preset--apply-final-patch
                fsm chat-buffer workspace request finish))
           (funcall finish fsm))
@@ -645,8 +659,8 @@ the buffer-local would find nil and signal."
                         (when error (signal (car error) (cdr error)))
                         ;; Captured evidence belongs to the old request;
                         ;; presentation belongs only to the current one.
-                        (setf (gptel-fsm-info fsm)
-                              (plist-put (gptel-fsm-info fsm)
+                        (setf (mevedel-engine-info fsm)
+                              (plist-put (mevedel-engine-info fsm)
                                          :mevedel-directive-patch patch))
                         (when (and (buffer-live-p chat-buffer)
                                    (mevedel--turn-current-p fsm)
@@ -682,7 +696,12 @@ the buffer-local would find nil and signal."
           (lambda ()
             (unless finished
               (setq finished t)
-              (unwind-protect (mevedel-preset--settle-terminal fsm t)
+              (unwind-protect
+                  (if (mevedel-request-p fsm)
+                      (progn
+                        (setf (mevedel-request-cancelled-p fsm) t)
+                        (funcall continuation fsm))
+                    (mevedel-preset--settle-terminal fsm t))
                 (mevedel--turn-release fsm))))))
     (condition-case err
         (if (and root (file-remote-p root) (mevedel-transport-busy-p root))
@@ -694,32 +713,32 @@ the buffer-local would find nil and signal."
        (funcall cancel)
        (signal (car err) (cdr err))))))
 
-(defun mevedel-preset--settle-terminal (fsm &optional cancelled-p)
-  "Invoke FSM's request callback, then settle its terminal state.
-When CANCELLED-P is non-nil, report an abort regardless of FSM's old state."
-  (when-let* ((info (gptel-fsm-info fsm))
+(defun mevedel-preset--settle-terminal (owner &optional cancelled-p status)
+  "Invoke OWNER's request callback, then settle its terminal state.
+STATUS is success, aborted or error for an external request; native gptel
+owners derive it from their FSM. CANCELLED-P overrides either with aborted."
+  (setq status (if cancelled-p 'aborted
+                 (or status (pcase (gptel-fsm-state owner)
+                              ('DONE 'success) ('ABRT 'aborted) (_ 'error)))))
+  (let ((info (mevedel-engine-info owner)))
+    (setf (mevedel-engine-info owner)
+          (plist-put info :mevedel-terminal-status status)))
+  (when-let* ((info (mevedel-engine-info owner))
               ((not (plist-get info :mevedel-terminal-callback-called)))
-              (request-callback
-               (plist-get info :mevedel-request-callback))
+              (request-callback (plist-get info :mevedel-request-callback))
               ((functionp request-callback)))
-    (setf (gptel-fsm-info fsm)
+    (setf (mevedel-engine-info owner)
           (plist-put info :mevedel-terminal-callback-called t))
     (funcall
      (mevedel--safe-fsm-handler
-      (lambda (machine)
-        (funcall request-callback
-                 (and (or cancelled-p
-                          (eq (gptel-fsm-state machine) 'ABRT))
-                      'abort)
-                 machine)))
-     fsm))
+      (lambda (request-owner)
+        (funcall request-callback (and (eq status 'aborted) 'abort) request-owner)))
+     owner))
   (funcall
    (mevedel--safe-fsm-handler
-    (pcase (if cancelled-p 'ABRT (gptel-fsm-state fsm))
-      ('DONE #'mevedel--complete-turn)
-      ('ABRT (lambda (machine) (mevedel--fail-turn machine 'aborted)))
-      (_ (lambda (machine) (mevedel--fail-turn machine 'error)))))
-   fsm))
+    (if (eq status 'success) #'mevedel--complete-turn
+      (lambda (request-owner) (mevedel--fail-turn request-owner status))))
+   owner))
 
 (defun mevedel-preset--terminal-handler (fsm)
   "Generate FSM's patch before callback invocation and settlement."
@@ -796,21 +815,7 @@ alist with mevedel-specific handlers added:
                                 (plist-put info :mevedel-request
                                            mevedel--current-request))
                               (mevedel-goal-capture-request fsm)
-                              ;; Drain pending stash from user skill
-                              ;; invocation.
-                              (when (and (boundp 'mevedel--current-request)
-                                         mevedel--current-request)
-                                (mevedel-skills--drain-pending-context
-                                 mevedel--current-request))
-                              (when (and mevedel--current-request
-                                         mevedel--directive-read-only-request-p)
-                                (setf
-                                 (mevedel-request-skill-permission-rules
-                                  mevedel--current-request)
-                                 (append
-                                  (mevedel-request-skill-permission-rules
-                                   mevedel--current-request)
-                                  (mevedel-preset--read-only-rules))))
+                              (mevedel-preset-prepare-request mevedel--current-request)
                               (when (fboundp
                                      'mevedel-view-stream-ensure-progress-for-fsm)
                                 (mevedel-view-stream-ensure-progress-for-fsm

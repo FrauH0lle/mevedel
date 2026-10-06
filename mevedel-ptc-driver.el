@@ -18,6 +18,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'cl-lib)
 (require 'mevedel-ptc-checkpoint)
 (require 'mevedel-ptc-interpreter)
@@ -59,7 +61,7 @@
 (autoload 'mevedel-tool-name "mevedel-tool-registry")
 
 ;; `mevedel-tools'
-(defvar mevedel-tools--current-fsm)
+(defvar mevedel-tools--current-engine)
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-run-at-time
@@ -321,7 +323,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
   "Run SCRIPT with ROSTER and STANDALONE-TOOLS, delivering to CALLBACK."
   (let* ((data-buffer (current-buffer))
          ;; Nested calls start from timers; keep the owning request's FSM.
-         (fsm (bound-and-true-p mevedel-tools--current-fsm))
+         (fsm (bound-and-true-p mevedel-tools--current-engine))
          (started-at (float-time))
          (envelope-id
           (or (mevedel-pipeline-active-tool-use-id)
@@ -619,7 +621,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                      (funcall complete task status result
                                               guest-value outcome)))))
                               plist
-                              (list :tool-use-id child-id :fsm fsm
+                              (list :tool-use-id child-id :engine fsm
                                     :parent-tool-use-id envelope-id
                                     :source 'ptc
                                     :progress

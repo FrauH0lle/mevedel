@@ -125,8 +125,29 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.6`, including required naming-state metadata.
-Other schemas are rejected; there is no migration.
+The closed sidecar schema is `v0.5.9`, including required naming-state and external-conversation metadata.
+Other schemas are rejected by the runtime loader. An explicitly invoked,
+one-off converter is available for `v0.5.6` sessions from before the Claude
+integration. It adds empty external-conversation metadata; it does not change
+transcripts, permissions, session identity or artifacts.
+
+Close the source session first, then run from the repository with Eask
+dependencies installed (the destination's parent must exist):
+
+```bash
+npx @emacs-eask/cli emacs --batch -L . \
+  -l scripts/migrate-session-v0.5.6.el \
+  -f mevedel-migrate-session-main -- /absolute/source/session /absolute/new/copy
+```
+
+The script leaves the source unchanged. It converts all retained publication
+sidecars, updates their manifest checksums, and checks the output schema.
+It refuses active ownership, unresolved recovery, corrupt artifacts, symlinks,
+remote paths and older unsupported schemas. Keep the source closed while
+converting. After checking the copy, move the original outside `.mevedel/sessions`
+as a backup and put the converted directory at the original path. Keep its
+original directory name and session ID, and do not open both copies as writable
+sessions. This targeted script does not relax the loader's single-format rule.
 
 ## Persistence flow
 
@@ -289,6 +310,203 @@ in the child transcript as a labelled `<task-background>` block before the
 authoritative Agent Task. The parent sidecar and tool result retain only
 provider/model/effort metadata, not the generated summary text.
 
+## External conversation references
+
+`M-x mevedel-claude-code-setup` checks the same local prerequisites and supported
+subscription login as normal dispatch, without starting a model request. Its
+explicit installation action runs npm asynchronously after confirmation, pins
+the adapter release and retains output in a compilation buffer. It refuses a
+second concurrent installation and a managed install while a custom adapter
+override is selected. Ordinary sends never download dependencies. Setup and
+dispatch both reject an outdated ACP client, Node/Python runtime, unsupported
+CLI/adapter version, missing packaged bridge, or non-subscription authentication.
+See the [setup route](../README.md#claude-promax-subscriptions).
+
+The Claude Code provider routes root and directive submissions through ACP. The
+session's `:external-conversations` metadata maps conversation scopes to the
+engine, native conversation ID, local installation directory, machine name and
+last known state and admitted native tool identities. The installed Claude agent retains model history; mevedel
+retains the canonical transcript and tool effects. No credentials or process
+handles are stored in the sidecar.
+
+Sonnet, Opus, Fable and Haiku aliases remain available and resolve through Claude's
+current catalog. Each ACP session initialization refreshes an in-memory model
+list from the adapter's `configOptions`, before any prompt is sent. Additional
+reported models appear in the normal picker. The selected model's effort menu
+uses the reported levels. Before connection, Sonnet, Opus and Fable offer
+`low`, `medium`, `high`, `xhigh` and `max` from Claude's documented alias
+capabilities; Haiku has no effort control. Other configured model IDs accept
+staged effort symbols until discovery. Startup applies the selected level
+through `session/set_config_option` and waits for acknowledgement before
+prompt dispatch. Unsupported effort falls back to Claude's native `default`,
+with a visible notice and a reset of the still-matching session selection.
+Missing models, an adapter selecting a different model, or failure to apply
+the selected effort fail visibly before the prompt.
+Model capabilities belong to the Claude backend and do not overwrite gptel API
+model metadata. A compatible model change resumes the same native history with
+the newly selected model.
+
+Claude submissions expand mentions through the shared permission and resource
+resolver. PNG, JPEG, GIF and WebP attachments become native ACP image blocks;
+selected gptel media contexts use the same path. Repeated references to the same
+image in one submission send its bytes once. PDF and audio input are not
+advertised by this provider. An ACP peer without image capability rejects image
+submission before dispatch.
+
+Selected text files and buffer regions use gptel's context collector and
+`gptel-context-string-function`, including its asynchronous callback form.
+`gptel-use-context` keeps its system/user placement meaning. System placement
+joins the native system baseline; user placement requires the exact SDK prompt
+echo and is restored through the acknowledged compaction hook. Restoration over
+the hook's size limit stops the native prompt and automatically sends the full
+update in a continuation prompt on the same conversation. Receipt is still
+required before further tool effects. The admitted turn, transcript, MCP
+endpoint and native call ledger remain the same; only final settlement advances
+the session turn count. Pause, boundary stop and cancellation prevent another
+prompt. A missing receipt or failed prompt ends the turn with its concrete error.
+The authored system prompt is evaluated before asynchronous formatting so later
+editor configuration changes cannot alter that submitted prompt.
+
+The admitted ACP turn owns the preparation wait. Interruption during this wait
+settles it before any native process starts. Late or repeated callbacks cannot start
+another process or change the next composer draft. A formatter returning a value
+other than text or nil fails the turn before launch.
+
+An admitted first root turn records native ownership as `unstarted` until the
+agent returns a real conversation ID. This state has no installed history or
+tool ledger. Aborted preparation or failed startup can therefore be retried,
+including after save/reopen, by starting a fresh native conversation.
+
+Attachment deduplication is committed only after the SDK echoes the complete
+submitted text and image bytes with matching MIME types. Missing or altered
+echoes block further tools and successful settlement. Canonical transcripts keep
+the submitted references and delivery reminders, without base64 blobs. Directive
+and child inputs expand independently of root mention history; a child follow-up
+can attach the image again without marking it as delivered to the root.
+
+Before dispatch, the native ID and `in-flight` state are published while the
+session transport is idle. A successful terminal response records `ready`;
+failure or interruption records `uncertain`. Restore also converts a saved
+`in-flight` record to `uncertain`. Opening a session does not start its external
+process. The next root submission creates a process and resumes the stored root
+ID. Each directive request instead starts an isolated native conversation from
+its existing selected prompt: complete local discussion, selected attempt,
+planning feedback, or the implementation handoff. Resuming a previous hidden
+native history would reintroduce evidence that these prompts deliberately
+exclude. The latest directive identity is retained under that directive's scope
+for correlation, separately from root history.
+
+An uncertain conversation receives the same current-state reconciliation guidance
+as an interrupted native request, plus an explicit no-replay instruction. Its
+complete uniquely marked notice must appear in the SDK's user-message echo
+before further tools or successful settlement. Receipt records it once in the
+recipient transcript. It establishes delivery of recovery guidance, not proof
+that every prior effect has been inspected or undone.
+
+Editing earlier response or prompt text in the raw root transcript marks its
+native history as `diverged`. This state survives saving and reopening; sending
+another Claude turn refuses before prompt dispatch and names
+`mevedel-claude-code-recover-history` as the next action. Explicit recovery
+detaches the native history and continues from the edited, labelled excerpt.
+A persisted submitted-input boundary also protects prompts interrupted before
+any model output. Editing the unsent draft after that boundary and any later
+response does not mark divergence.
+
+Each tool's native ID and name are committed to the owning conversation's
+sidecar before the pipeline starts. Publication failure prevents execution;
+a previously admitted ID cannot execute again after a later turn or reopen.
+Admissions prove only that a call may have run, not completion or result receipt.
+The ledger persists for that native conversation's lifetime. New calls remain
+subject to ordinary permissions and current-state reconciliation; matching tool
+arguments or text alone is not evidence that two calls are the same event.
+No pending approval or operating-system process is resurrected by these records.
+
+Public abort retains the existing settlement reservation until ACP acknowledges
+cancellation or its timeout ends the connection. This preserves the partial
+transcript, terminal accounting and uncertain history marker before admission is
+released for another request.
+
+Before a directive transcript boundary opens, its complete prior transcript is
+published. The native identity then uses a strict sidecar-only commit; terminal
+settlement publishes the closed directive frame and durable activity together.
+This works for both portable and PID-lock sessions. Root history guards consult
+root references and completed ordinary prompt entries, not the count of shared
+directive turns. A directive provider override does not switch the root engine.
+An installation/machine mismatch or missing native history prevents
+continuation while leaving the transcript readable.
+
+`M-x mevedel-claude-code-recover-history` explicitly detaches an unavailable
+root or retained-child native reference. It requires mutation authority, a
+writable session, no active root or child turns, and no active Goal. It
+persists the detachment before returning; a failed publication restores the
+previous reference and context acknowledgements in memory. Uncertain target
+publication still requires the ordinary publication recovery before new work.
+Transcripts, tool effects and
+chronology remain intact. No native process or Goal continuation starts from
+this command. The next normal root send or child follow-up starts a new native
+conversation from labelled current-transcript evidence, never an exact resume.
+Child recovery uses only that child's private conversation; directive prompts
+already reconstruct their selected context on every turn and need no recovery
+selection. Failed native startup retains the original diagnosis and names this
+command as an option when history is unavailable.
+
+Same-machine editor restart preserves the root provider and each retained
+child's native identity, frozen configuration, transcript and call-admission
+ledger. Opening the restored session starts no native process; root submission
+and explicit child follow-up resume their respective histories. The ordinary
+Goal restore rule still applies: a saved active Goal becomes paused.
+Learned path-instruction scopes survive reopening for native conversations.
+Each resumed root or child prompt refreshes their complete current contents,
+including explicit withdrawals of removed files, before further tool work.
+Exact SDK acknowledgment records that refresh; opening the session itself does
+not acknowledge delivery.
+
+The ordinary model picker can change root engines. Selection alone keeps the
+native reference intact. Sending through gptel detaches and persists that
+reference before dispatch; gptel reconstructs the current segment through its
+normal transcript serializer. Native reasoning remains readable in the
+transcript but is not replayed as signed API thinking. Archived segments are
+not flattened back into the request.
+
+Sending through Claude after local history starts a new native conversation
+with a labelled excerpt continuation. The excerpt uses current-segment evidence,
+excludes independent directive and shared-item turns, and marks shortened tool
+output. Historical calls are evidence, not a replay queue. Subsequent Claude
+turns resume the new native ID. This also applies when a request-only workload
+policy changes engines while the saved selection remains different.
+
+Engine transitions invalidate root mention deduplication and path-instruction
+acknowledgements. Known paths remain persisted with a nil hash until their
+complete current content reaches the new engine's receipt boundary. This keeps
+nested instructions available across startup failure and reopen. Child
+acknowledgements remain independent. Current guidance and memory use the normal
+gptel payload rule or Claude system/prompt receipt, not the previous engine's
+acknowledgements.
+
+External histories currently reject cooperative control transfer, Save As,
+Fork, Rewind, Redo and manual
+transcript compaction. The side-conversation
+command is also unavailable with the external provider. These commands cannot
+treat a copied transcript as an equivalent native model history. The adapter's
+native fork extension alone does not map mevedel's chronological checkpoints
+and independent conversation scopes to native message boundaries.
+Direct commands and menu actions report the external-history restriction before
+arming a fork or changing state. Save As refuses before asking for a name or
+saving the parent, and Redo refuses before reading the published-head choices.
+Control requests and takeover commands refuse before creating a request or
+acquiring the lease; an owner rejects requests from a client with stale native
+history information instead of automatically granting them. Read-only following
+remains available.
+
+The gptel HTTP request-controls menu is unavailable for a selected external
+provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu.
+It refuses before opening the transient or changing bridge return state, and
+points to mevedel's model and tools menus. Model and reported effort choices
+remain supported there. Temperature and output-limit controls in gptel's HTTP
+menu do not configure Claude's native loop. Mid-turn steering is unavailable;
+sending from a busy Claude composer visibly queues a separate turn in FIFO
+order. Explicit queued follow-ups and interruption remain available.
+
 ## Session-owned local state
 
 `local/` is created lazily when the first durable write to a session-owned `work://` descendant succeeds.
@@ -331,10 +549,11 @@ A missing identity is an error.  An identity mismatch requires explicit
 confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
-identity.  Superseded sidecar shapes are not migrated.
+identity. Superseded sidecar shapes are not migrated during resume; the explicit
+`v0.5.6` conversion described above runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.6`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.9`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions

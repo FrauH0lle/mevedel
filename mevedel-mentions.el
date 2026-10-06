@@ -21,6 +21,7 @@
 (declare-function gptel--model-mime-capable-p "ext:gptel-request" (mime &optional model))
 (declare-function gptel-fsm-info "gptel" (fsm))
 (defvar gptel-context)
+(defvar gptel-model)
 (defvar gptel-use-context)
 
 ;; `mcp' / `mcp-hub' (optional dependency)
@@ -942,11 +943,11 @@ A mention is considered live when both of the following hold:
              (memq (char-syntax (char-before match-beg))
                    '(?\s ?>))))))
 
-(defun mevedel-mentions--expand-buffer (session chat-buffer)
+(defun mevedel-mentions--expand-buffer (session chat-buffer &optional fresh-p)
   "Expand mentions in the current buffer with explicit request context.
 SESSION owns deduplication state.  CHAT-BUFFER provides permission
-context.  Return reminder, media, and deduplication effects for the
-caller to apply explicitly.
+context.  FRESH-P excludes historical deduplication.  Return reminder,
+media, and deduplication effects for the caller to apply explicitly.
 
 Walks the whole prompt buffer, replacing each raw mention with a
 compact placeholder.  For each novel mention (first occurrence in the
@@ -961,7 +962,7 @@ Dispatches per `mevedel-mention-handlers'."
           (and session
                (when-let* ((ws (mevedel-session-workspace session)))
                  (mevedel-workspace-root ws))))
-         (mentions-shown (and session
+         (mentions-shown (and (not fresh-p) session
                               (mevedel-session-mentions-shown session)))
          (seen-this-pass (make-hash-table :test #'equal))
          (reminder-items nil)
@@ -1050,16 +1051,20 @@ Dispatches per `mevedel-mention-handlers'."
       (dolist (update (plist-get expansion :dedup-updates))
         (puthash (car update) (cons turn (cdr update)) mentions-shown)))))
 
-(defun mevedel-mentions-expand-user-input (text session)
+(defun mevedel-mentions-expand-user-input (text session &optional fresh-p)
   "Expand bound mentions in TEXT for SESSION into a structured result.
 Return text, reminder items, media contexts, and deferred deduplication
 updates.  The caller must explicitly stage the reminder items and
-commit the result after accepting every media context."
-  (let ((chat-buffer (current-buffer)))
+commit the result after accepting every media context.
+FRESH-P excludes historical deduplication for a separately selected
+conversation."
+  (let ((chat-buffer (current-buffer))
+        (model gptel-model))
     (with-temp-buffer
+      (setq-local gptel-model model)
       (insert text)
       (let ((expansion
-             (mevedel-mentions--expand-buffer session chat-buffer)))
+             (mevedel-mentions--expand-buffer session chat-buffer fresh-p)))
         (plist-put expansion :text (buffer-string))))))
 
 (defun mevedel--transform-expand-mentions (fsm)

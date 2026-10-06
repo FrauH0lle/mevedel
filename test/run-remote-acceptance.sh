@@ -146,9 +146,11 @@ elif [ -n "${MEVEDEL_TEST_REMOTE_TEST:-}" ]; then
     npx @emacs-eask/cli emacs --batch \
         -l test/test-mevedel-execution-remote.el \
         -l test/test-mevedel-history-search-remote.el \
+        -l test/test-mevedel-claude-code-remote.el \
         --eval '(progn (message "mevedel: running selected remote journey")
                        (test-mevedel-execution-remote-run-selector))'
 else
     npx @emacs-eask/cli test ert test/test-mevedel-execution-remote.el \
-        test/test-mevedel-history-search-remote.el
+        test/test-mevedel-history-search-remote.el \
+        test/test-mevedel-claude-code-remote.el
 fi

@@ -6,7 +6,7 @@
 ;; Author: FrauH0lle
 ;; Version: 0.5.0
 ;; Keywords: convenience, tools, llm, gptel
-;; Package-Requires: ((emacs "31.1") (gptel "0.9.9.6") (yaml "1.2.0") (orderless "1.1") (websocket "1.15") (qrencode "1.4"))
+;; Package-Requires: ((emacs "31.1") (gptel "0.9.9.6") (acp "0.15.2") (yaml "1.2.0") (orderless "1.1") (websocket "1.15") (qrencode "1.4"))
 ;; URL: https://github.com/FrauH0lle/mevedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -55,6 +55,8 @@
 (require 'mevedel-persistence)
 (require 'mevedel-file-state)
 (require 'mevedel-models)
+(require 'mevedel-claude-code)
+(mevedel-claude-code-register)
 (require 'mevedel-telemetry)
 (require 'mevedel-context-summary)
 (autoload 'mevedel-journal-discard "mevedel-journal-jobs" nil t)

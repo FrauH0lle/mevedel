@@ -47,6 +47,11 @@
 (declare-function mevedel--chat-buffer-init-common "mevedel-chat" (buf workspace source &optional inspection-p))
 (declare-function mevedel--normalize-session-directory "mevedel-chat" (directory workspace))
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-assert-local-history
+                  "mevedel-engine" (session operation &optional backend))
+(autoload 'mevedel-engine-assert-local-history "mevedel-engine")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-teardown-all "mevedel-execution" nil)
 (declare-function mevedel-execution-unsettled-mutation-p "mevedel-execution" (session))
@@ -2591,6 +2596,8 @@ To rename the current session in place, use `mevedel-rename-session'."
          (session (buffer-local-value 'mevedel--session data-buf)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
+    (when arg
+      (mevedel-engine-assert-local-history session "Save As"))
     (mevedel-session-artifacts-assert-mutation-authority session data-buf)
     (when arg
       (when (mevedel-agent-control-active-turn-p session)

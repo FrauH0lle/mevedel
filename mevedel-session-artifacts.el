@@ -1980,9 +1980,9 @@ file back before the next full save.  Return the removed paths."
     (session root-buffer)
   "Return SESSION's freshly built sidecar marker artifact.
 
-SESSION must use portable authority and be materialized.  ROOT-BUFFER must be
-its live root data buffer, and the current immutable publication must contain
-the sidecar.  Mutation authority is checked before the artifact is built."
+SESSION must be materialized. ROOT-BUFFER must be its live root data buffer,
+and its current committed state must contain the sidecar. Mutation authority
+is checked before the artifact is built."
   ;; An explicit root argument is the registration seam for callers that
   ;; materialize a session without going through view initialization.
   (when (and (buffer-live-p root-buffer)
@@ -1998,12 +1998,11 @@ the sidecar.  Mutation authority is checked before the artifact is built."
                    (buffer-local-value 'mevedel--session root-buffer)))
     (error "Session state publication requires the live root session buffer"))
   (unless (and (mevedel-session-save-path session)
-               (mevedel-session-execution-target session)
-               (mevedel-session-codec-portable-authority-p session))
-    (error "Session state publication requires a portable materialized session"))
+               (mevedel-session-execution-target session))
+    (error "Session state publication requires a materialized session"))
   (unless (mevedel-session-artifacts-artifact-present-p
            session "session.meta.el" t)
-    (error "Portable session sidecar is not published"))
+    (error "Session sidecar is not published"))
   (mevedel-session-artifacts-assert-mutation-authority
    session root-buffer)
   (mevedel-session-artifacts--sidecar-artifact session root-buffer))
@@ -2012,15 +2011,17 @@ the sidecar.  Mutation authority is checked before the artifact is built."
     (session root-buffer)
   "Publish SESSION's freshly built sidecar as one strict commit.
 
-ROOT-BUFFER must be SESSION's live root data buffer.  Reentrant calls are
-rejected before staging.  Pre-commit failures propagate; post-commit cleanup
-failures remain diagnostic under the publisher's strict commit contract."
-  (mevedel-session-publication-publish
-   session
-   (list
-    (mevedel-session-artifacts--sidecar-publication-artifact
-     session root-buffer))
-   t))
+ROOT-BUFFER must be SESSION's live root data buffer. Reentrant calls are
+rejected before staging. Pre-commit failures propagate; post-commit cleanup
+failures remain diagnostic under the publisher's strict commit contract.
+PID-lock sessions write their fixed sidecar after the same authority check."
+  (let ((artifact (mevedel-session-artifacts--sidecar-publication-artifact
+                   session root-buffer)))
+    (if (mevedel-session-codec-portable-authority-p session)
+        (mevedel-session-publication-publish session (list artifact) t)
+      (mevedel-session-codec-write
+       (plist-get artifact :path)
+       (mevedel-session-artifacts-build-sidecar session root-buffer)))))
 
 (defun mevedel-session-artifacts-publish-transcript-state
     (session root-buffer transcript-path content &optional coding)

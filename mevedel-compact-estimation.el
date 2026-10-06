@@ -8,13 +8,14 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'cl-lib)
 (require 'mevedel-models)
 (require 'mevedel-telemetry-usage)
 (require 'mevedel-transcript-audit)
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-params)
 (defvar gptel-backend)
 (defvar gptel-max-tokens)
@@ -139,7 +140,8 @@ block."
 
 Context-summary requests are ignored so their token
 count never becomes the baseline for the chat buffer."
-  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+  (when-let* ((info (and fsm (mevedel-engine-info fsm)))
+              ((not (plist-get info :external-history)))
               ((not (mevedel-compact-estimation-summary-request-p info)))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))

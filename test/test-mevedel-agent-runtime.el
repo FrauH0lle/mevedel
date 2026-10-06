@@ -293,7 +293,7 @@
               (should (eq invocation seen-invocation))
               ;; The Goal-charged root request pays for the agent.
               (should (eq root-fsm
-                          (mevedel-agent-invocation-goal-fsm invocation)))
+                          (mevedel-agent-invocation-goal-owner invocation)))
               (should
                (mevedel-agent-invocation-plan-read-only invocation))
               (should (eq 'provider-fsm

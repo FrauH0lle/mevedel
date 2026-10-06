@@ -41,7 +41,7 @@ and `verify-callback' delivers the verifier outcome."
                                     :backend (gptel-make-openai "goal-test" :key "test" :models '(test))
                                     :data (list :messages [])
                                     :tokens-full '(:input 20 :output 5))))
-                  (mevedel-tools--current-fsm fsm))
+                  (mevedel-tools--current-engine fsm))
              (setq-local mevedel--current-request
                          (mevedel-request--create :session session :fsm fsm))
              (mevedel-tool-goal--register)
@@ -70,7 +70,7 @@ and `verify-callback' delivers the verifier outcome."
        '(:expression "(CreateGoal :objective \"Fix integration tests\" :token_budget 100)"))
       ;; Nested calls run from timers after the dispatch binding unwinds.
       (let ((deadline (+ (float-time) 5))
-            (mevedel-tools--current-fsm nil))
+            (mevedel-tools--current-engine nil))
         (while (and (not outcome) (< (float-time) deadline))
           (accept-process-output nil 0.01)))
       (should (eq 'success (plist-get outcome :status)))
@@ -310,7 +310,7 @@ and `verify-callback' delivers the verifier outcome."
        (lambda (value) (setq outcome value))
        '(:expression "(UpdateGoal :status \"complete\")"))
       (let ((deadline (+ (float-time) 5))
-            (mevedel-tools--current-fsm nil))
+            (mevedel-tools--current-engine nil))
         (while (and (not verify-callback) (< (float-time) deadline))
           (accept-process-output nil 0.01))
         (funcall verify-callback '(:status ok :kind fork :verdict pass :result "ok"))
@@ -436,7 +436,7 @@ and `verify-callback' delivers the verifier outcome."
         (mevedel-pipeline-run-tool-outcome
          (mevedel-tool-get "GetGoal") (lambda (value) (setq outcome value)) nil))
       (should-not outcome)
-      (let ((mevedel-tools--current-fsm nil)) (funcall resume))
+      (let ((mevedel-tools--current-engine nil)) (funcall resume))
       (should (eq 'success (plist-get outcome :status)))
       (should (equal "{\"goal\":null}" (plist-get outcome :result))))))
 

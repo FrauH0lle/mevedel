@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-engine)
 (require 'mevedel-compact-estimation)
 (require 'mevedel-structs)
 (require 'mevedel-transport)
@@ -22,7 +23,6 @@
 (defvar gptel-backend)
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -293,9 +293,9 @@ completed turn: accounting, journal capture, the checkpoint, queued input,
 and any Goal continuation all run.  Pending steering is delivered first, so
 the turn then ends at the following boundary.  REASON is a symbol naming the
 caller for telemetry.  Return non-nil when this call made the request."
-  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+  (when-let* ((info (and fsm (mevedel-engine-info fsm)))
               ((not (plist-get info :mevedel-end-turn))))
-    (setf (gptel-fsm-info fsm) (plist-put info :mevedel-end-turn reason))
+    (setf (mevedel-engine-info fsm) (plist-put info :mevedel-end-turn reason))
     (when-let* ((buffer (plist-get info :buffer))
                 ((buffer-live-p buffer))
                 (session (buffer-local-value 'mevedel--session buffer))
@@ -404,6 +404,9 @@ directive being processed.  Return the new request struct."
                              mevedel--agent-invocation)))
                    :started-at (current-time)
                    :origin origin)))
+    (setf (mevedel-request-context request)
+          (list :buffer (current-buffer) :mevedel-request-id id
+                :mevedel-request request))
     (setq mevedel--current-request request)
     ;; Emacs auto-saves only after input; an unattended turn needs its own
     ;; mid-turn checkpoints.
@@ -497,7 +500,7 @@ is returned here."
 
 (defun mevedel--turn-record-settlement (fsm outcome)
   "Record terminal OUTCOME for FSM's active request."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -543,7 +546,7 @@ is returned here."
 
 (defun mevedel--fsm-error-message (fsm)
   "Return a compact error message for FSM, or nil."
-  (let* ((info (and fsm (gptel-fsm-info fsm)))
+  (let* ((info (and fsm (mevedel-engine-info fsm)))
          (error (plist-get info :error))
          (status (plist-get info :status))
          (error-type (and (listp error) (plist-get error :type)))
@@ -556,7 +559,7 @@ is returned here."
 
 (defun mevedel--turn-record-request-failure (fsm)
   "Add FSM's provider failure to its ignored request summary."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -583,7 +586,7 @@ is returned here."
 
 (defun mevedel--run-turn-terminal-hook (fsm event status)
   "Run top-level turn terminal hook EVENT for FSM with STATUS."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -606,7 +609,7 @@ is returned here."
 (defun mevedel--turn-commit (fsm)
   "Commit FSM's request-reserved turn to its live session.
 Signal when the request is missing or its reservation is not the next turn."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -622,8 +625,8 @@ Signal when the request is missing or its reservation is not the next turn."
 
 (defun mevedel--turn-save (fsm)
   "Publish FSM's completed turn and record whether checkpointing may proceed."
-  (setf (gptel-fsm-info fsm) (plist-put (gptel-fsm-info fsm) :mevedel-turn-saved nil))
-  (when-let* ((chat-buffer (plist-get (gptel-fsm-info fsm) :buffer))
+  (setf (mevedel-engine-info fsm) (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved nil))
+  (when-let* ((chat-buffer (plist-get (mevedel-engine-info fsm) :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when (and mevedel--session
@@ -637,8 +640,8 @@ Signal when the request is missing or its reservation is not the next turn."
                 (when (bound-and-true-p mevedel-session--save-failed)
                   (setq mevedel-session--save-failed nil)
                   (force-mode-line-update))
-                (setf (gptel-fsm-info fsm)
-                      (plist-put (gptel-fsm-info fsm) :mevedel-turn-saved t)))
+                (setf (mevedel-engine-info fsm)
+                      (plist-put (mevedel-engine-info fsm) :mevedel-turn-saved t)))
             (error
              (setf (mevedel-session-ptc-checkpoints mevedel--session) ptc-checkpoints)
              (mevedel--warn-once 'turn-auto-save "Session auto-save failed: %s" err)
@@ -652,7 +655,7 @@ Signal when the request is missing or its reservation is not the next turn."
   "Checkpoint FSM's saved turn, offer maintenance and refresh its view.
 The terminal admission hold stays live between publication and this phase."
   (catch 'waiting
-    (when-let* ((info (gptel-fsm-info fsm))
+    (when-let* ((info (mevedel-engine-info fsm))
                 ((plist-get info :mevedel-turn-saved))
                 (chat-buffer (plist-get info :buffer))
                 ((buffer-live-p chat-buffer)))
@@ -669,22 +672,22 @@ The terminal admission hold stays live between publication and this phase."
                          (mevedel-session-codec-portable-authority-p mevedel--session))
                     (let ((resume mevedel--turn-resume))
                       (unless (plist-get info :mevedel-checkpoint-state)
-                        (setf (gptel-fsm-info fsm)
-                              (plist-put (gptel-fsm-info fsm) :mevedel-checkpoint-state 'waiting))
+                        (setf (mevedel-engine-info fsm)
+                              (plist-put (mevedel-engine-info fsm) :mevedel-checkpoint-state 'waiting))
                         (let ((cancel
                                (mevedel-journal-capture-checkpoint-start
                                 mevedel--session chat-buffer
                                 (lambda (result)
-                                  (let ((current (gptel-fsm-info fsm)))
+                                  (let ((current (mevedel-engine-info fsm)))
                                     (setq current (plist-put current :mevedel-checkpoint-error (plist-get result :error))
                                           current (plist-put current :mevedel-checkpoint-state 'done))
-                                    (setf (gptel-fsm-info fsm) current))
+                                    (setf (mevedel-engine-info fsm) current))
                                   (funcall resume)))))
-                          (setf (gptel-fsm-info fsm)
-                                (plist-put (gptel-fsm-info fsm) :mevedel-checkpoint-cancel cancel))))
-                      (when (eq (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-state) 'waiting)
+                          (setf (mevedel-engine-info fsm)
+                                (plist-put (mevedel-engine-info fsm) :mevedel-checkpoint-cancel cancel))))
+                      (when (eq (plist-get (mevedel-engine-info fsm) :mevedel-checkpoint-state) 'waiting)
                         (throw 'waiting 'mevedel-turn-pending))
-                      (when-let* ((failure (plist-get (gptel-fsm-info fsm)
+                      (when-let* ((failure (plist-get (mevedel-engine-info fsm)
                                                       :mevedel-checkpoint-error)))
                         (error "%s" failure)))
                   (mevedel-journal-capture-checkpoint mevedel--session chat-buffer))
@@ -703,7 +706,7 @@ The terminal admission hold stays live between publication and this phase."
 
 (defun mevedel--turn-restore-permission-mode (fsm)
   "Restore any temporary permission mode for FSM's request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -711,7 +714,7 @@ The terminal admission hold stays live between publication and this phase."
 
 (defun mevedel--turn-end-request (fsm)
   "End the active mevedel request for FSM's request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -719,7 +722,7 @@ The terminal admission hold stays live between publication and this phase."
 
 (defun mevedel--turn-fail-pending-input (fsm)
   "Mark undelivered steering for FSM's dead turn as requiring review."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -756,7 +759,7 @@ Recheck between steps: publication and hooks can dispatch other callbacks."
 
 (defun mevedel--turn-buffer (fsm)
   "Return FSM's live chat buffer, or nil."
-  (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+  (when-let* ((info (condition-case nil (mevedel-engine-info fsm) (error nil)))
               (buffer (plist-get info :buffer))
               ((buffer-live-p buffer)))
     buffer))
@@ -765,7 +768,7 @@ Recheck between steps: publication and hooks can dispatch other callbacks."
   "Return non-nil unless FSM's buffer or request has been replaced.
 An empty request slot permits lost-turn settlement and post-teardown steps.
 Sessionless machines have no buffer ownership to check."
-  (let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+  (let* ((info (condition-case nil (mevedel-engine-info fsm) (error nil)))
          (buffer (plist-get info :buffer)))
     (or (null buffer)
         (and (buffer-live-p buffer)
@@ -782,23 +785,23 @@ Sessionless machines have no buffer ownership to check."
 Holds nest across final-patch generation and deferred durable settlement."
   (when-let* ((buffer (mevedel--turn-buffer fsm)))
     (with-current-buffer buffer
-      (let ((info (gptel-fsm-info fsm)))
+      (let ((info (mevedel-engine-info fsm)))
         (unless (plist-member info :mevedel-settlement-session)
           (setq info (plist-put info :mevedel-settlement-session mevedel--session)))
         (when (and mevedel--current-request
                    (equal (plist-get info :mevedel-request-id)
                           (mevedel-request-id mevedel--current-request)))
           (setq info (plist-put info :mevedel-request mevedel--current-request)))
-        (setf (gptel-fsm-info fsm)
+        (setf (mevedel-engine-info fsm)
               (plist-put info :mevedel-settlement-holds
                          (1+ (or (plist-get info :mevedel-settlement-holds) 0)))))
       (cl-pushnew fsm mevedel--turn-settlements-pending :test #'eq))))
 
 (defun mevedel--turn-release (fsm)
   "Release one of FSM's terminal continuation holds."
-  (let* ((info (gptel-fsm-info fsm))
+  (let* ((info (mevedel-engine-info fsm))
          (remaining (max 0 (1- (or (plist-get info :mevedel-settlement-holds) 0)))))
-    (setf (gptel-fsm-info fsm)
+    (setf (mevedel-engine-info fsm)
           (plist-put info :mevedel-settlement-holds remaining))
     (when (zerop remaining)
       (when-let* ((buffer (mevedel--turn-buffer fsm)))
@@ -813,7 +816,7 @@ ON-CANCEL runs on transport cancellation; otherwise perform local teardown.
 Cheap steps share five milliseconds; an expensive step ends that callback.
 A step returning `mevedel-turn-pending' stays at the front and calls
 `mevedel--turn-resume' when ready.  No timer polls while its child is working."
-  (let* ((info (gptel-fsm-info fsm))
+  (let* ((info (mevedel-engine-info fsm))
          (request-id (plist-get info :mevedel-request-id))
          (buffer (mevedel--turn-buffer fsm))
          finished)
@@ -821,9 +824,9 @@ A step returning `mevedel-turn-pending' stays at the front and calls
     (mevedel--turn-hold fsm)
     (cl-labels
      ((cancel-checkpoint ()
-        (when-let* ((cancel-checkpoint (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-cancel)))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm) :mevedel-checkpoint-cancel nil))
+        (when-let* ((cancel-checkpoint (plist-get (mevedel-engine-info fsm) :mevedel-checkpoint-cancel)))
+          (setf (mevedel-engine-info fsm)
+                (plist-put (mevedel-engine-info fsm) :mevedel-checkpoint-cancel nil))
           (funcall cancel-checkpoint)))
       (release ()
         (cancel-checkpoint)
@@ -842,8 +845,8 @@ A step returning `mevedel-turn-pending' stays at the front and calls
                 (if on-cancel (funcall on-cancel)
                   (mevedel--run-turn-steps fsm '(mevedel--turn-restore-permission-mode
                                                  mevedel--turn-end-request))))
-            (setf (gptel-fsm-info fsm)
-                  (plist-put (gptel-fsm-info fsm) :mevedel-turn-settled nil))
+            (setf (mevedel-engine-info fsm)
+                  (plist-put (mevedel-engine-info fsm) :mevedel-turn-settled nil))
             (release))))
       (advance ()
         (unless finished
@@ -877,7 +880,7 @@ A step returning `mevedel-turn-pending' stays at the front and calls
 (defun mevedel--turn-publication-pending-p (fsm)
   "Return non-nil when FSM's session has failed critical publication."
   (when-let* ((info (condition-case nil
-                        (gptel-fsm-info fsm)
+                        (mevedel-engine-info fsm)
                       (error nil)))
               (buffer (plist-get info :buffer))
               ((buffer-live-p buffer)))
@@ -896,7 +899,7 @@ The stamp remains set after settlement, so a repeated terminal transition
 on the same machine is recognized even after the request slot has been
 emptied.  Transport cancellation clears it before releasing the admission
 fence so a later terminal transition can retry the lost settlement."
-  (if-let* ((info (gptel-fsm-info fsm)))
+  (if-let* ((info (mevedel-engine-info fsm)))
       (if-let* ((stamp (memq :mevedel-turn-settled info)))
           (setcar (cdr stamp) t)
         (nconc info (list :mevedel-turn-settled t)))
@@ -915,7 +918,7 @@ is what marks the repeat: an empty slot with no stamp is a lost turn
 buffer already runs a newer request also settles nothing; that turn was
 cancelled with its own teardown when the newer request replaced it.  A
 machine without a mevedel request identity never began a turn to settle."
-  (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+  (when-let* ((info (condition-case nil (mevedel-engine-info fsm) (error nil)))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (or (plist-get info :mevedel-turn-settled)
@@ -931,7 +934,7 @@ FSM carries a request identity and no settled stamp, but its request
 slot is empty: something cleared the request without running its
 settlement, which is the state a terminal transition lost with its
 process leaves behind."
-  (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+  (when-let* ((info (condition-case nil (mevedel-engine-info fsm) (error nil)))
               ((plist-get info :mevedel-request-id))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
@@ -944,7 +947,7 @@ process leaves behind."
 The request is gone, so unlike `mevedel--turn-record-settlement' the
 identity comes from the info plist and no duration or token facts are
 available."
-  (when-let* ((info (gptel-fsm-info fsm))
+  (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer

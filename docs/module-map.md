@@ -8,6 +8,18 @@ Data model
   mevedel-structs.el          passive workspace/session/request/task data shapes and invariants
   mevedel-directive.el        directive mutation, lifecycle, plan invalidation, rewind
   mevedel-turn.el             request admission/cancellation and terminal settlement
+  mevedel-engine.el           shared turn-context access for requests and native gptel FSMs
+  mevedel-acp.el              ACP conversation startup, prompt, cancellation and process lifecycle
+  mevedel-acp-text.el         isolated streamed background requests with buffer-owned teardown
+  mevedel-acp-workload.el     scoped background MCP tools and native batch-boundary guards
+  mevedel-acp-turn.el         admitted ACP turns, MCP tool scope, streaming and shared settlement
+  mevedel-acp-compaction.el   native summary lifecycle, transcript rotation and retained tails
+  mevedel-claude-code.el      guided setup, managed adapter installation, subscription login and isolated ACP launch
+  mevedel-claude-code-session.el normal root send and persisted external conversation references
+  mevedel-claude-code-agent.el retained-child subscription dispatch, sample limits and native history references
+  mevedel-claude-code-history.el durable native call admission, replay rejection and excerpt recovery
+  mevedel-claude-code-context.el acknowledged mail, observation updates, turn events and full-context continuation after native compaction
+  mevedel-claude-code-usage.el per-sample native usage, duplicate snapshots and cumulative accounting across prompt continuations
   mevedel-workspace.el        workspace detection, registry, and state lookup
   mevedel-workspace-identity.el project-owned durable workspace identity
   mevedel-journal-worker.el   isolated maintenance, consolidation storage and cold publication observations
@@ -62,6 +74,8 @@ Data model
   mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
   mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
+  mevedel-mcp.el              private asynchronous MCP transport and stdio bridge configuration
+  mevedel-mcp-tools.el        turn-owned MCP schema export and pipeline result projection
   mevedel-ptc-checkpoint.el  durable ToolCall audit settlement across restart
   mevedel-ptc-driver.el      ToolCall orchestration, nested calls, progress
   mevedel-ptc-interpreter.el closed programmatic-tool-call evaluator and machine
@@ -77,7 +91,7 @@ Data model
   mevedel-queue.el            session lookup and interaction entry metadata
   mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
   mevedel-permission-review.el optional invocation approval before human queue admission
-  mevedel-reminders.el        system-reminder staging, delivery and firing policy
+  mevedel-reminders.el        shared reminder collection, staged delivery and firing policy
   mevedel-history.el          retained reminders and provider response reconstruction
   mevedel-history-search.el   cooperative saved-transcript discovery, filtering and search
   mevedel-edit-diagnostics.el post-edit Flymake/Flycheck report state machine

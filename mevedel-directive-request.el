@@ -4,7 +4,7 @@
 
 ;; Owns the directive request lifecycle: prompt construction for
 ;; implement/discuss/retry/request-changes, request admission against the
-;; live session, the gptel dispatch, and the terminal settlement that
+;; live session, engine dispatch, and the terminal settlement that
 ;; records attempts, discussion turns, and planning turns on the durable
 ;; directive record.  Chat owns the session buffers these requests run in;
 ;; the directive family owns the records they settle into.
@@ -16,6 +16,7 @@
 ;; accessor but not the setter, and without the expander the form
 ;; compiles to a call to a function that does not exist.
 (eval-when-compile (require 'mevedel-structs))
+(require 'mevedel-engine)
 
 (eval-when-compile
   (require 'cl-lib)
@@ -52,6 +53,10 @@
                   (session-name &optional create workspace working-directory))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (defvar mevedel-show-chat-buffer)
+
+;; `mevedel-claude-code-session'
+(declare-function mevedel-claude-code-send "mevedel-claude-code-session" (&optional model-input))
+(autoload 'mevedel-claude-code-send "mevedel-claude-code-session")
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
@@ -729,53 +734,53 @@ settling."
       (pulse-momentary-highlight-region
        (overlay-start live-directive) (overlay-end live-directive)))))
 
-(defun mevedel--directive-request-error (exit-code fsm)
-  "Return the terminal error for EXIT-CODE and FSM, or nil on success."
-  (cond
-   (exit-code)
-   ((eq (gptel-fsm-state fsm) 'ERRS)
-    (let* ((info (gptel-fsm-info fsm))
-           (error (plist-get info :error))
-           (message (plist-get error :message)))
-      (or message
-          (format "%s: %s"
-                  (plist-get error :type)
-                  (plist-get info :status)))))))
+(defun mevedel--directive-request-error (exit-code owner)
+  "Return the terminal error for EXIT-CODE and engine OWNER, or nil."
+  (let ((info (mevedel-engine-info owner)))
+    (cond
+     (exit-code)
+     ((or (eq (plist-get info :mevedel-terminal-status) 'error)
+          (and (gptel-fsm-p owner) (eq (gptel-fsm-state owner) 'ERRS)))
+      (let ((error (plist-get info :error)))
+        (if (stringp error) error
+          (or (plist-get error :message)
+              (format "%s: %s" (plist-get error :type) (plist-get info :status)))))))))
 
 (defun mevedel--send-directive-request
     (prompt chat-buffer response-start preset model-policy callback)
-  "Send a directive PROMPT and invoke CALLBACK with its terminal error and FSM."
+  "Send directive PROMPT and invoke CALLBACK with terminal error and owner."
   (mevedel-with-preset preset
-		       (let* ((request-callback
-			       (lambda (exit-code fsm)
-				 (funcall callback
-					  (mevedel--directive-request-error exit-code fsm)
-					  fsm)))
-			      (fsm
-			       (gptel-request
-				prompt
-				:buffer chat-buffer
-				:position response-start
-				:stream gptel-stream
-				:transforms
-				(append
-				 gptel-prompt-transform-functions
-				 (and model-policy
-				      (list
-				       (lambda (_fsm)
-					 (setq-local
-					  gptel-backend (plist-get model-policy :backend)
-					  gptel-model (plist-get model-policy :model)
-					  gptel-reasoning-effort
-					  (plist-get model-policy :effort))))))
-				:fsm (gptel-make-fsm
-				      :table (mevedel-preset--build-transitions
-					      (copy-tree gptel-request--transitions))
-				      :handlers gptel-send--handlers))))
-			 (setf (gptel-fsm-info fsm)
-			       (plist-put (gptel-fsm-info fsm)
-					  :mevedel-request-callback request-callback))
-			 fsm)))
+    (let ((request-callback
+           (lambda (exit-code owner)
+             (funcall callback (mevedel--directive-request-error exit-code owner) owner)))
+          (backend (or (plist-get model-policy :backend) gptel-backend)))
+      (if (mevedel-engine-external-p backend)
+          (let ((gptel-backend backend)
+                (gptel-model (or (plist-get model-policy :model) gptel-model))
+                (gptel-reasoning-effort (if model-policy (plist-get model-policy :effort)
+                                         gptel-reasoning-effort)))
+            (setf (mevedel-engine-info mevedel--current-request)
+                  (plist-put (mevedel-engine-info mevedel--current-request)
+                             :mevedel-request-callback request-callback))
+            (mevedel-claude-code-send prompt))
+        (let ((fsm
+               (gptel-request
+                prompt :buffer chat-buffer :position response-start :stream gptel-stream
+                :transforms
+                (append gptel-prompt-transform-functions
+                        (and model-policy
+                             (list (lambda (_fsm)
+                                     (setq-local
+                                      gptel-backend (plist-get model-policy :backend)
+                                      gptel-model (plist-get model-policy :model)
+                                      gptel-reasoning-effort (plist-get model-policy :effort))))))
+                :fsm (gptel-make-fsm
+                      :table (mevedel-preset--build-transitions
+                              (copy-tree gptel-request--transitions))
+                      :handlers gptel-send--handlers))))
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm) :mevedel-request-callback request-callback))
+          fsm)))))
 
 (defun mevedel--process-directive
     (directive preset prompt-fn callback &optional options)
@@ -786,7 +791,8 @@ PRESET is the gptel preset to use (mevedel-implement or
 mevedel-discuss).
 PROMPT-FN is a function that generates the prompt from the directive
 content.
-CALLBACK is called with (err fsm) when processing completes.
+CALLBACK is called with (err owner) when processing completes. OWNER is the
+admitted external request or native gptel state machine.
 
 Updates directive status and overlay, handles success/failure states.
 OPTIONS carries local discussion metadata for read-only discussion turns."
@@ -844,7 +850,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		(lambda (err fsm)
 		  (unless settled-p
 		    (setq settled-p t)
-		    (let* ((info (gptel-fsm-info fsm))
+		    (let* ((info (mevedel-engine-info fsm))
 			           (current-p
 			            (lambda ()
 			              (and (buffer-live-p chat-buffer)
@@ -937,6 +943,11 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                   mevedel--directive-read-only-request-p
                   (or discussion-p planning-p))
             (mevedel-session-artifacts-ensure-files mevedel--session chat-buffer)
+            (when (mevedel-engine-external-p
+                   (or (plist-get model-policy :backend) gptel-backend))
+              ;; Commit a complete transcript before its next directive frame
+              ;; opens; native identity publication can then update only metadata.
+              (mevedel-session-artifacts-save mevedel--session chat-buffer))
 	    (setq execution-session-id
 		  (mevedel-session-session-id mevedel--session)))
 

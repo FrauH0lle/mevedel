@@ -253,7 +253,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
   '(name naming-state workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
-    directive-planning preset-name model-provider
+    directive-planning preset-name model-provider external-conversations
     reasoning-effort turn-count reminders last-observed-date
     agent-types-snapshot pending-reminders
     tool-catalog
@@ -299,6 +299,7 @@ because they are immutable authority identities owned outside the session.
 Every other slot is decided here: durable logical containers are copied,
 fork-only projections are reduced, and runtime/control state starts empty.
 The identity and timestamp keywords describe the new materialized child."
+  (mevedel-engine-assert-local-history session "Session cloning")
   (mevedel-session-fork--assert-clone-slot-completeness)
   (unless (memq policy '(fork save-as))
     (error "Unknown session clone policy: %S" policy))
@@ -334,6 +335,7 @@ The identity and timestamp keywords describe the new materialized child."
            :directive-planning nil
            :preset-name (mevedel-session-preset-name session)
            :model-provider (mevedel-session-model-provider session)
+           :external-conversations nil
            :reasoning-effort (mevedel-session-reasoning-effort session)
            :turn-count turn
            :reminders

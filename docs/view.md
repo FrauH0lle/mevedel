@@ -1900,8 +1900,11 @@ or edited audit-looking text.
 
 User and assistant turns share the same visibility filter: provider-history
 boundaries and fork-point bookkeeping stay hidden, while system-reminder
-disclosures retain their exact source spans. For
-context injection, it reads ordered `<hook-event name="..." ...>` entries,
+disclosures retain their exact source spans. Consecutive generated reminder
+blocks share one collapsed row, such as `2 system reminders`; expanding it
+shows their bodies in order. Responses and other intervening content keep
+reminder groups separate. For context injection, it reads ordered
+`<hook-event name="..." ...>` entries,
 including optional `source`, `file`, and `plugin` attributes,
 inside a `<hook-context>` block.
 

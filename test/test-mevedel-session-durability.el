@@ -156,7 +156,18 @@
           ;; While a transfer is in flight every poll reads the target.
           (setq programs 0)
           (mevedel-session-transfer-poll owner)
-          (should (> programs 0)))
+          (should (> programs 0))
+          ;; A requester with stale local history cannot cause a native
+          ;; conversation to be handed off by the automatic grant timer.
+          (let ((lease (copy-tree (mevedel-session-lease owner))))
+            (setf (mevedel-session-external-conversations owner)
+                  (list (list "root" :engine 'claude-code :id "native"
+                              :host (system-name) :directory root :state 'ready)))
+            (should (eq 'rejected
+                        (plist-get (mevedel-session-transfer-poll owner) :state)))
+            (should-error (mevedel-session-transfer-decide owner 'grant) :type 'user-error)
+            (should-error (mevedel-session-transfer-release owner) :type 'user-error)
+            (should (equal lease (mevedel-session-lease owner)))))
       (advice-remove 'mevedel-session-control-fs-run-program count)
       (mevedel-session-durability--cancel-renewal owner)
       (when (file-directory-p root)

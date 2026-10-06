@@ -47,6 +47,12 @@ Guidance cancels its source buffer's queued automatic review and preempts one
 already in flight, abandoning it without recording its changes as reviewed.
 The request you made outranks the one a timer made.
 
+When the `buddy` workload resolves to Claude Code, Buddy starts an isolated ACP
+conversation and exposes only its captured note tools over a private MCP
+connection. The same note handlers enforce buffer scope and review ownership.
+The native post-tool-batch hook checks the iteration limit before further model
+work. Abandonment preserves unreviewed changes and closes the tool scope.
+
 ## Scope
 
 Buddy is workspace-scoped, not buffer-scoped. Changes are keyed by the project

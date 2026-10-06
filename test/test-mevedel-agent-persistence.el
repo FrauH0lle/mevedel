@@ -208,7 +208,10 @@
   (should-error
    (mevedel-agent-persistence--decode-local
     'gptel-backend "Missing Backend")
-   :type 'mevedel-agent-persistence-invalid-data))
+   :type 'mevedel-agent-persistence-invalid-data)
+  (dolist (path '(("unknown-category" "Read") ("mevedel" "MissingBuiltinTool")))
+    (should-error (mevedel-agent-persistence--decode-local 'gptel-tools (list path))
+                  :type 'mevedel-agent-persistence-invalid-data)))
 
 (mevedel-deftest mevedel-agent-persistence--decode-configuration ()
   ,test

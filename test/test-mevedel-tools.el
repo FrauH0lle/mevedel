@@ -287,9 +287,9 @@
         (with-current-buffer buf
           (setq-local mevedel--session session)
           (setq-local mevedel--agent-invocation inv)
-          (let ((mevedel-tools--current-fsm nil))
+          (let ((mevedel-tools--current-engine nil))
             (should (eq inv (mevedel-tools--current-context))))
-          (let ((mevedel-tools--current-fsm (gptel-make-fsm :info nil)))
+          (let ((mevedel-tools--current-engine (gptel-make-fsm :info nil)))
             (should-not (mevedel-tools--current-context))))
       (kill-buffer buf))))
 

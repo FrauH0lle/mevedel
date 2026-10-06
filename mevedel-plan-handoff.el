@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'cl-lib)
 (eval-when-compile
   (require 'gptel-request)
@@ -728,12 +730,12 @@ CHAT-BUFFER under the ordinary compaction retry policy."
 
 STATUS is `success', `error', or `aborted'.  Optional REASON supplies the
 provider or abort detail retained for a retryable failure."
-  (let* ((info (copy-sequence (or (gptel-fsm-info fsm) nil)))
+  (let* ((info (copy-sequence (or (mevedel-engine-info fsm) nil)))
          (chat-buffer
           (plist-get info :mevedel-plan-handoff-source-buffer)))
     (when (plist-member info :mevedel-plan-handoff-source-buffer)
       (cl-remf info :mevedel-plan-handoff-source-buffer)
-      (setf (gptel-fsm-info fsm) info)
+      (setf (mevedel-engine-info fsm) info)
       (if (not (buffer-live-p chat-buffer))
           (display-warning
            'mevedel

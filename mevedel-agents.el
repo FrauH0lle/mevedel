@@ -19,6 +19,7 @@
   (require 'subr-x))
 
 (require 'mevedel-tool-registry)
+(require 'mevedel-engine)
 (require 'mevedel-models)
 (require 'mevedel-system)
 
@@ -365,8 +366,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (parent-session nil)
   (parent-data-buffer nil)
   (parent-turn nil :type (or null integer))
-  ;; Root request FSM whose Goal pays for this invocation's usage, or nil.
-  (goal-fsm nil)
+  ;; Root engine owner whose Goal pays for this invocation's usage, or nil.
+  (goal-owner nil)
   (buffer nil)
   (transcript-relative-path nil :type (or null string))
   (transcript-status nil :type (or null symbol))
@@ -403,11 +404,24 @@ and render-data markers are runtime-only caches for cheap live updates."
   ;; Runtime-only provider-turn state.  Durable identity and unread mail live
   ;; on the root session's `mevedel-agent-record'.
   runtime-fsm
+  runtime-cancel
+  (runtime-context nil :type list)
   runtime-settle-callback
   runtime-pending-response
   runtime-budget-timer
   (runtime-execution-results nil :type list)
   (runtime-settled-p nil :type boolean))
+
+(cl-defmethod mevedel-engine-info ((owner mevedel-agent-invocation))
+  (if-let* ((fsm (mevedel-agent-invocation-runtime-fsm owner)))
+      (mevedel-engine-info fsm)
+    (mevedel-agent-invocation-runtime-context owner)))
+
+(cl-defmethod (setf mevedel-engine-info)
+    (value (owner mevedel-agent-invocation))
+  (if-let* ((fsm (mevedel-agent-invocation-runtime-fsm owner)))
+      (setf (mevedel-engine-info fsm) value)
+    (setf (mevedel-agent-invocation-runtime-context owner) value)))
 
 (defun mevedel-plan-read-only-request-p ()
   "Return non-nil when the ambient request or invocation is Plan read-only."

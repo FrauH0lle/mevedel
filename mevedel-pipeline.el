@@ -20,6 +20,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (require 'cl-lib)
 
 (require 'mevedel-structs)
@@ -29,7 +31,6 @@
 
 ;; `gptel-request'
 (declare-function gptel--to-string "ext:gptel-request" (s))
-(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
 
 ;; `mevedel-execution-telemetry'
@@ -185,7 +186,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--current-context "mevedel-tools" ())
-(defvar mevedel-tools--current-fsm)
+(defvar mevedel-tools--current-engine)
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-cancel-pending
@@ -508,9 +509,9 @@ that bypass `mevedel-pipeline-run-tool'."
 
 (defun mevedel-pipeline--current-tool-use-id (tool args)
   "Return the active gptel tool-use id for TOOL and ARGS, when known."
-  (let* ((fsm (and (boundp 'mevedel-tools--current-fsm)
-                   (symbol-value 'mevedel-tools--current-fsm)))
-         (info (and fsm (ignore-errors (gptel-fsm-info fsm))))
+  (let* ((fsm (and (boundp 'mevedel-tools--current-engine)
+                   (symbol-value 'mevedel-tools--current-engine)))
+         (info (and fsm (ignore-errors (mevedel-engine-info fsm))))
          (tool-use (and info (plist-get info :tool-use)))
          (name (mevedel-tool-name tool))
          (call (and
@@ -1002,7 +1003,7 @@ permission or handler work begins."
   "End CONTEXT's turn at its tool boundary for EVENT's stopping DECISION.
 A root turn also pauses its active Goal, whose continuation would otherwise
 restart the stopped work."
-  (when-let* ((fsm (plist-get context :fsm))
+  (when-let* ((fsm (plist-get context :engine))
               ((mevedel-turn-end-at-boundary fsm 'hook-stop)))
     (let ((reason (format "%s hook stopped the turn: %s"
                           event
@@ -1282,7 +1283,7 @@ buffer."
                             (when cancelled (funcall active)))))))
                   (mevedel-pipeline--active-tool-use-id
                    (plist-get context :tool-use-id))
-                  (mevedel-tools--current-fsm (plist-get context :fsm))
+                  (mevedel-tools--current-engine (plist-get context :engine))
                   (mevedel-pipeline--active-call-source
                    (plist-get context :call-source))
                   (mevedel-pipeline--auto-apply-edit-p
@@ -1637,7 +1638,7 @@ turn-event channel, so the in-flight turn can adjust without an extra request,
 without the warning becoming permanent transcript history."
   (let ((result (plist-get context :result))
         (session (plist-get context :session))
-        (fsm (plist-get context :fsm)))
+        (fsm (plist-get context :engine)))
     (when (and (stringp result) session fsm)
       (dolist (warning (mevedel-goal-tool-result-budget-warnings session fsm))
         (mevedel-reminders-queue-turn-event
@@ -1738,21 +1739,23 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                    (or session-dir workspace-root default-directory)))
          (request (mevedel-pipeline--current-request))
          (invocation (mevedel-pipeline--current-invocation))
-         (fsm (or (plist-get metadata :fsm)
-                  (and (boundp 'mevedel-tools--current-fsm)
-                       mevedel-tools--current-fsm)))
+         (fsm (or (plist-get metadata :engine)
+                  (and (boundp 'mevedel-tools--current-engine)
+                       mevedel-tools--current-engine)))
          (tool-use-id (or (plist-get metadata :tool-use-id)
                           (mevedel-pipeline--current-tool-use-id tool args)))
          (repair-entry
           (mevedel-tool-repair-consume-ledger-entry tool args))
          (resource-attempts-cell (list nil))
-         (steps (mevedel-pipeline--build-steps tool outcome-only-p))
+         (provider-p (or (not outcome-only-p)
+                         (eq (plist-get metadata :projection) 'provider)))
+         (steps (mevedel-pipeline--build-steps tool (not provider-p)))
          (cancel-cell (list nil))
          (sandbox-summary-cell (list nil))
          (context (list :tool tool :args args
                         :session session
                         :workspace workspace
-                        :request request :invocation invocation :fsm fsm
+                        :request request :invocation invocation :engine fsm
                         :tool-use-id tool-use-id
                         :repair-entry repair-entry
                         :input-repairs (plist-get repair-entry :repairs)
@@ -1791,9 +1794,14 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
               (setq called t)
               (let* ((classification (plist-get outcome :status))
                      (result (plist-get outcome :result))
-                     (delivery (if outcome-only-p
-                                   outcome
-                                 (mevedel-pipeline--provider-result outcome))))
+                     (delivery
+                      (if outcome-only-p
+                          (if provider-p
+                              (plist-put outcome :result
+                                         (mevedel-pipeline--provider-result
+                                          outcome))
+                            outcome)
+                        (mevedel-pipeline--provider-result outcome))))
                 (mevedel-telemetry-record-audit
                  session 'tool-finished
                  :tool-name (mevedel-tool-name tool)
@@ -1917,11 +1925,13 @@ the tool call as a canonical error result rather than escape."
   "Execute TOOL and deliver its canonical structured outcome to CALLBACK.
 
 METADATA may supply `:tool-use-id', `:parent-tool-use-id', `:source',
-`:origin', the owning `:fsm', and a `:progress' callback for a nested
+`:origin', the owning `:engine', and a `:progress' callback for a nested
 caller.  The progress callback receives `permission-wait' when the call
 enters the permission queue.  Provider-only reminders, persistence,
-nudges, and transcript side channels are not applied.  Return a
-zero-argument cancellation thunk for the call."
+nudges, and transcript side channels are not applied unless METADATA
+selects `:projection provider'.  That projection retains structured status
+and media while applying the same persistence and presentation as a direct
+provider call.  Return a zero-argument cancellation thunk for the call."
   (mevedel-pipeline--run-tool tool callback args t metadata))
 
 

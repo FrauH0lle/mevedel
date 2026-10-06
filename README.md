@@ -64,6 +64,7 @@ Key features:
   `bash`, and refuses to run anywhere else; CI covers Linux only.
 - Emacs version 31.1 or higher
 - [gptel](https://github.com/karthink/gptel) 0.9.9.6 or higher
+- [acp.el](https://github.com/xenodium/acp.el) 0.15.2 or higher for external agent connections
 - [yaml](https://github.com/zkry/yaml.el) 1.2.0 or higher for skill frontmatter
 - [orderless](https://github.com/oantolin/orderless) 1.1 or higher for Emacs symbol completion
 - [websocket](https://elpa.gnu.org/packages/websocket.html) 1.15 for
@@ -103,6 +104,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
  '(mevedel :host github
            :repo "FrauH0lle/mevedel"
            :files ("*.el"
+                   ("scripts" "scripts/mevedel-mcp-stdio.py")
                    "agents"
                    "prompts"
                    "skills"
@@ -135,6 +137,60 @@ a request.
 
 Run `mevedel-uninstall` to deactivate `mevedel`.
 
+### Claude Pro/Max subscriptions
+
+Run `M-x mevedel-claude-code-setup` to check the local installation and open the
+guided setup screen. It requires Claude Code 2.1.290+, Node.js 22+, Python 3.8+,
+and acp.el 0.15.2+. Install the unmodified Claude CLI using its
+[official instructions](https://code.claude.com/docs/en/setup), then run
+`claude auth login` in a terminal with your Claude Pro or Max account.
+
+Choose **Install/update adapter** in the setup screen to install the pinned
+connection adapter and its dependencies. Mevedel asks before running npm, shows
+installation output in Emacs, and keeps the editor responsive. Refresh the
+setup check afterward. Installing dependencies requires npm and network access;
+ordinary chat turns never install packages.
+
+Start a mevedel session and select `Claude Code:sonnet`, `Claude Code:opus`,
+`Claude Code:fable`, or `Claude Code:haiku` in the ordinary model menu. The
+installed CLI owns login and model history; mevedel supplies its tools automatically over MCP. No API
+key or manual MCP configuration is needed. Subscription selection rejects API
+authentication and does not enable paid overflow. Existing Team and Enterprise
+logins are accepted too.
+
+Session startup adds Claude's reported models to the picker and refreshes the
+selected model's effort choices. Sonnet, Opus and Fable offer documented effort
+choices before connection; Haiku has no effort control. Startup applies the
+selected level before the first prompt, falling back to Claude's default if
+unsupported. The four aliases stay available; unavailable configured models
+fail before prompt dispatch instead of silently falling back.
+
+Use mevedel's model menu for model and effort, and its tools menu for tool
+selection. The gptel HTTP request-controls menu is unavailable in Claude Code
+sessions; settings such as its temperature and output limit do not control the
+external agent.
+
+You can switch an existing root conversation between Claude Code and an API
+provider. API continuation uses the current transcript segment, including a
+retained Claude compaction summary when present. Returning to Claude starts a
+new native conversation from a labelled excerpt, then resumes that conversation
+on later turns.
+
+If Claude's native history is missing or belongs to another installation, run
+`M-x mevedel-claude-code-recover-history` in the session and choose `root` or
+a retained child's path. After running turns have settled and any active Goal
+is paused, this detaches that native reference. The next send starts a new
+conversation from a labelled transcript excerpt. The command preserves the
+transcript and applied effects, starts no request, and does not resume a Goal.
+
+Keep `mevedel-claude-code-directory` stable: it holds the managed adapter and
+neutral conversation directory used for resume. Set
+`mevedel-claude-code-adapter-executable` only to use an independently installed
+adapter; setup then directs you to that setting instead of installing an unused
+managed copy. Claude runs on the Emacs host, including for remote project tools.
+See [session lifecycle and current restrictions](docs/sessions.md) before using
+history operations such as Fork or Rewind with this provider.
+
 ## Usage
 
 mevedel’s function revolves around the creation and manipulation of references
@@ -159,7 +215,7 @@ inspection.
 
 ### Quick start
 
-1. Configure a gptel backend.
+1. Configure a gptel backend or follow [Claude subscription setup](#claude-promax-subscriptions).
 2. Install the package and run `M-x mevedel-install`.
 3. Open a project and run `M-x mevedel` to create or resume a chat session.
    For remote work: visit remote/container directory → `M-x mevedel`.

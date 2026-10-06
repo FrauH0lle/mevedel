@@ -27,6 +27,8 @@
   (require 'mevedel-presets))
 
 (require 'mevedel-hooks)
+(require 'mevedel-reminders)
+(require 'mevedel-claude-code)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -45,6 +47,7 @@
 (defvar gptel-display-buffer-action)
 (defvar gptel-mode)
 (defvar gptel-pre-tool-call-functions)
+(defvar gptel-reasoning-effort)
 (defvar gptel-send--handlers)
 (defvar gptel-send--transitions)
 
@@ -156,6 +159,7 @@
 (autoload 'mevedel-prompt-submission-input "mevedel-prompt-submission")
 
 ;; `mevedel-reminders'
+(defvar mevedel-reminders-reconciliation-body)
 (declare-function mevedel-reminders-install-defaults
 		  "mevedel-reminders" (session))
 
@@ -200,6 +204,10 @@
 (declare-function mevedel-skills-install "mevedel-skills-core"
 		  (session &optional buffer))
 (defvar mevedel-skills--pending-request-context)
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
+(autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
@@ -392,7 +400,8 @@ wiped unless permanent-local."
   (setq-local gptel-org-branching-context nil)
   (require 'gptel)
   (require 'mevedel-transcript-restore)
-  (mevedel-transcript-enable-gptel-mode))
+  (mevedel-transcript-enable-gptel-mode)
+  (add-hook 'before-change-functions #'mevedel-engine-record-history-edit nil t))
 
 (defun mevedel-chat-install-request-hooks ()
   "Install buffer-local tool-repair and view-stream request hooks.
@@ -405,6 +414,7 @@ is producing text; tool-boundary hooks cancel the pending timer and
 render immediately, so this never delays tool-call feedback."
   (require 'mevedel-view-stream)
   (require 'mevedel-tool-repair)
+  (add-hook 'before-change-functions #'mevedel-engine-record-history-edit nil t)
   (add-hook 'gptel-post-response-functions
             #'mevedel-view-stream-render-response nil t)
   (add-hook 'gptel-pre-tool-call-functions
@@ -562,11 +572,15 @@ sessions keep their existing startup behavior and return nil."
   "Run session-start hooks for the current buffer with SOURCE."
   (when (bound-and-true-p mevedel--session)
     (setf (mevedel-session-workspace-instruction-hashes mevedel--session)
-          (unless (equal source "resume")
-            (cl-delete
-             "/root"
-             (mevedel-session-workspace-instruction-hashes mevedel--session)
-             :key #'caar :test #'equal))))
+          (cl-delete-if
+           (lambda (entry)
+             (let ((owner (caar entry)))
+               (and (or (equal source "resume") (equal owner "/root"))
+                    ;; Native history survives this local context epoch.
+                    ;; Keep its learned scopes for refresh before continuation.
+                    (not (assoc (if (equal owner "/root") "root" owner)
+                                (mevedel-session-external-conversations mevedel--session))))))
+           (mevedel-session-workspace-instruction-hashes mevedel--session))))
   (run-hooks 'mevedel-session-start-hook)
   (when (bound-and-true-p mevedel--session)
     (let ((buffer (current-buffer))
@@ -646,14 +660,7 @@ ending."
 
 (defun mevedel--queue-reconciliation-reminder (session)
   "Queue one recovery-state reminder for SESSION."
-  (let ((body
-         (concat
-          "A previous session or request ended without proving that all "
-          "effects settled. Processes may still be running, and aborted "
-          "tools or commands may have partially changed files, tasks, or "
-          "external state. Reconcile current state before continuing, "
-          "prioritize the newest user request over any older ghost request, "
-          "and verify effects before making final success claims.")))
+  (let ((body mevedel-reminders-reconciliation-body))
     (unless (member body (mevedel-session-pending-reminders session))
       (mevedel-session-enqueue-pending-reminder session body))))
 
@@ -1270,21 +1277,38 @@ skill-expanded model input and transcript render data."
       (mevedel-session-naming-consider
        mevedel--session
        (or (mevedel-prompt-submission-display-text prompt-submission) display-text prompt)))
-    (mevedel--gptel-send-request
+    (mevedel--send-request
      (or model-input (and hook-context stored-prompt)))))
 
-(defun mevedel--gptel-send-request (&optional model-input)
-  "Send the current gptel prompt and return its standard send FSM.
+(defun mevedel--dispatch-request (model-input local-send)
+  "Dispatch MODEL-INPUT using the resolved root request policy.
+LOCAL-SEND starts the caller's native gptel send when that engine is selected.
+The effective model and effort apply only to this request, not saved selection."
+  (let* ((policy (mevedel-skills-request-model-policy))
+         (gptel-backend (plist-get policy :backend))
+         (gptel-model (plist-get policy :model))
+         (gptel-reasoning-effort (plist-get policy :effort)))
+    (if (mevedel-claude-code-backend-p gptel-backend)
+        (mevedel-claude-code-send model-input)
+      (when (and mevedel--session (not mevedel--current-directive-uuid)
+                 (assoc "root" (mevedel-session-external-conversations mevedel--session)))
+        (mevedel-claude-code-release-history mevedel--session))
+      (setq-local mevedel--pending-model-input model-input)
+      (unwind-protect (funcall local-send)
+        (setq-local mevedel--pending-model-input nil)))))
+
+(defun mevedel--send-request (&optional model-input)
+  "Send the current prompt through the selected conversation engine.
 MODEL-INPUT replaces the stored prompt for this request only."
-  (setq-local mevedel--pending-model-input model-input)
-  (unwind-protect
-      (gptel-request nil
-        :stream gptel-stream
-        :transforms gptel-prompt-transform-functions
-        :fsm (gptel-make-fsm
-              :table gptel-send--transitions
-              :handlers gptel-send--handlers))
-    (setq-local mevedel--pending-model-input nil)))
+  (mevedel--dispatch-request
+   model-input
+   (lambda ()
+     (gptel-request nil
+		    :stream gptel-stream
+		    :transforms gptel-prompt-transform-functions
+		    :fsm (gptel-make-fsm
+			  :table gptel-send--transitions
+			  :handlers gptel-send--handlers)))))
 
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.

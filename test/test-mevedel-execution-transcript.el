@@ -422,12 +422,13 @@
 (mevedel-deftest mevedel-execution-transcript-prepare-archive ()
   ,test
   (test)
-  :doc "separates live and already-completed execution rows"
+  :doc "separates active public states from completed rows without a view"
+  (dolist (state '(queued running stopping))
   (with-temp-buffer
     (insert
      (propertize
       (mevedel-tool-render-data-format
-       '(:execution-id "exec-live" :state running :live-execution-p t)
+       `(:execution-id "exec-live" :state ,state)
        "live-call")
       'gptel '(tool . "live-call")))
     (insert
@@ -441,10 +442,10 @@
            (mevedel-execution-transcript-prepare-archive
             (current-buffer) '("live-call" "done-call" "missing-call"))))
       (should (equal "live-call" (caar (plist-get plan :live))))
-      (should (eq 'running
+      (should (eq state
                   (plist-get (cdar (plist-get plan :live)) :state)))
       (should (equal "done-call"
-                     (caar (plist-get plan :completed))))))
+                     (caar (plist-get plan :completed)))))))
 
   :doc "resolves multiple archive misses with one transcript inspection"
   (with-temp-buffer

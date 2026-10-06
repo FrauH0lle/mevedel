@@ -19,6 +19,11 @@
 ;; so this is a load-time dependency rather than a lazy one.
 (require 'mevedel-session-durability)
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-assert-local-history "mevedel-engine"
+                  (session operation &optional backend))
+(autoload 'mevedel-engine-assert-local-history "mevedel-engine")
+
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-directory-p
                   "mevedel-session-control-fs" (path))
@@ -76,6 +81,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-external-conversations "mevedel-structs" (cl-x))
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
@@ -393,6 +399,7 @@ simply starts its notice window again."
 Return the immutable request record, or nil when another requester won the
 current-generation race.  The owner remains the sole mutator until it
 explicitly decides and releases its lease."
+  (mevedel-engine-assert-local-history session "Session control transfer")
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
   (let ((session-dir (or (mevedel-session-save-path session)
@@ -619,7 +626,8 @@ poll, detects a lost lease."
         ;; requests the owner had never displayed -- silently, from the
         ;; user's point of view.
         (when (and request (not decision)
-                   (progn
+                   (or (mevedel-session-external-conversations session)
+                       (progn
                      (unless
                          (mevedel-session-transfer--valid-timeout-p
                           mevedel-session-transfer-prompt-timeout)
@@ -627,7 +635,7 @@ poll, detects a lost lease."
                               mevedel-session-transfer-prompt-timeout))
                      (<= (+ (max (plist-get request :created-at) observed-at)
                             mevedel-session-transfer-prompt-timeout)
-                         now)))
+                         now))))
           (let ((candidate
                  (list :protocol-version 1
                        :request-id (plist-get request :request-id)
@@ -636,7 +644,8 @@ poll, detects a lost lease."
                        :owner-client-id (plist-get request :owner-client-id)
                        :requester-client-id
                        (plist-get request :requester-client-id)
-                       :decision 'grant
+                       :decision (if (mevedel-session-external-conversations session)
+                                     'reject 'grant)
                        :decided-at now)))
             (mevedel-session-transfer--directory directory "requests")
             (unless (mevedel-session-durability--create-plist
@@ -670,6 +679,8 @@ poll, detects a lost lease."
 
 DECISION is `grant' or `reject'.  Repeating the same decision is idempotent;
 attempting to rewrite an existing decision fails."
+  (when (eq decision 'grant)
+    (mevedel-engine-assert-local-history session "Session control transfer"))
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
   (unless (memq decision '(grant reject))
@@ -760,6 +771,7 @@ attempting to rewrite an existing decision fails."
 The requester's named release fence is created before the old lease is marked
 released.  Creating the fence or releasing the lease is idempotent, while
 acceptance alone never changes the lease owner."
+  (mevedel-engine-assert-local-history session "Session control transfer")
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
   (let* ((transfer (mevedel-session-control-transfer session))

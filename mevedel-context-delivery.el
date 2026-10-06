@@ -28,7 +28,12 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace-instruction-hashes "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+
+;; `mevedel-tool-fs-read'
+(declare-function mevedel-tool-fs-read-workspace-context "mevedel-tool-fs-read" (scope owner))
+(autoload 'mevedel-tool-fs-read-workspace-context "mevedel-tool-fs-read")
 
 ;; `mevedel-utilities'
 (defvar mevedel--hook-audit-close)
@@ -168,7 +173,18 @@ Use the recipient's selected components; never give a worker the root Goal."
           (dolist (observation observations)
             (unless (equal (cdr observation) (alist-get (car observation) previous))
               (mevedel-reminders-stage-entry
-               fsm (car observation) (cdr observation)))))))))
+               fsm (car observation) (cdr observation))))
+          ;; Engine transfer invalidates delivery, but keeps known paths so
+          ;; startup failure/reopen cannot silently discard nested guidance.
+          (when (and (not invocation)
+                     (cl-some (lambda (entry)
+                                (and (equal "/root" (caar entry)) (null (cdr entry))))
+                              (mevedel-session-workspace-instruction-hashes mevedel--session)))
+            (let ((instructions (mevedel-tool-fs-read-workspace-context mevedel--session "/root")))
+              (cl-mapc (lambda (entry commit)
+                         (mevedel-reminders-stage-entry
+                          fsm (plist-get entry :type) (plist-get entry :body) commit))
+                       (plist-get instructions :entries) (plist-get instructions :commits)))))))))
 
 (provide 'mevedel-context-delivery)
 ;;; mevedel-context-delivery.el ends here

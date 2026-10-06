@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-engine)
+
 (eval-when-compile (require 'mevedel-utilities))
 (require 'mevedel-report)
 
@@ -782,6 +784,7 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
 (defun mevedel-session-rewind-assert-stable-source
     (session buffer operation)
   "Refuse OPERATION when SESSION or BUFFER owns live work."
+  (mevedel-engine-assert-local-history session operation)
   (when (mevedel-session-pending-input-p session)
     (user-error
      "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before %s"
@@ -2236,6 +2239,7 @@ pruned do not come back."
          (session (buffer-local-value 'mevedel--session buffer)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
+    (mevedel-engine-assert-local-history session "Redo")
     (unless (mevedel-session-codec-portable-authority-p session)
       (user-error
        "Only a portable project session publishes restorable heads"))

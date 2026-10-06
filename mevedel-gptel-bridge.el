@@ -12,6 +12,7 @@
 ;; `gptel'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
+(defvar gptel-backend)
 
 ;; `gptel-transient'
 (declare-function gptel--edit-directive "ext:gptel-transient"
@@ -36,8 +37,13 @@
 (autoload 'mevedel-cockpit-context-view-buffer "mevedel-cockpit")
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-external-p "mevedel-engine" (backend))
+(autoload 'mevedel-engine-external-p "mevedel-engine")
+
 ;; `mevedel-structs'
 (defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
@@ -108,6 +114,7 @@ OVERLAY and INFO identify the original gptel confirmation UI."
 
 (defun mevedel-gptel-bridge-install ()
   "Route native gptel steering through mevedel's accepted-input path."
+  (advice-add 'gptel-menu :before #'mevedel-gptel-bridge--assert-menu-backend)
   (dolist (command '(gptel-send--steer gptel--suffix-steer))
     (advice-add command :around #'mevedel-gptel-bridge--steer-advice))
   (advice-add 'gptel--steer-tool-calls
@@ -115,10 +122,20 @@ OVERLAY and INFO identify the original gptel confirmation UI."
 
 (defun mevedel-gptel-bridge-uninstall ()
   "Remove mevedel's native gptel steering routing."
+  (advice-remove 'gptel-menu #'mevedel-gptel-bridge--assert-menu-backend)
   (dolist (command '(gptel-send--steer gptel--suffix-steer))
     (advice-remove command #'mevedel-gptel-bridge--steer-advice))
   (advice-remove 'gptel--steer-tool-calls
                  #'mevedel-gptel-bridge--tool-steer-advice))
+
+(defun mevedel-gptel-bridge--assert-menu-backend (&rest _args)
+  "Reject gptel request controls for an external session engine."
+  (with-current-buffer (if (and (boundp 'mevedel--data-buffer)
+                               (buffer-live-p mevedel--data-buffer))
+                          mevedel--data-buffer (current-buffer))
+    (when (and (bound-and-true-p mevedel--session)
+               (mevedel-engine-external-p gptel-backend))
+      (user-error "The gptel request controls are unavailable for this engine; use mevedel's model menu for model and effort, or its tools menu"))))
 
 (defun mevedel-gptel-bridge--active-p ()
   "Return non-nil while a view-launched gptel bridge is restoring."
@@ -292,6 +309,7 @@ run once this state replaces it."
     (unless (and view-buffer data-buffer)
       (user-error "No mevedel session cockpit here"))
     (with-current-buffer data-buffer
+      (mevedel-gptel-bridge--assert-menu-backend)
       (setq-local gptel--set-buffer-locally t))
     (if view-origin-p
         (let ((setup-ok nil))
