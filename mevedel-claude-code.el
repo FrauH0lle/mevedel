@@ -521,7 +521,7 @@ Return the generic ACP launch plist; no model request is made here."
                    (or (and (plist-get runtime :adapter) (file-executable-p (plist-get runtime :adapter))
                             (plist-get runtime :adapter))
                        (executable-find "claude-agent-acp")))
-              (user-error "Run M-x mevedel-claude-code-setup to install the Claude connection adapter")))
+              (user-error "Run M-x mevedel-claude-code-install-adapter to install the Claude connection adapter")))
          (process-environment (copy-sequence process-environment))
          (default-directory temporary-file-directory))
     (dolist (name mevedel-claude-code--api-environment) (setenv name nil))

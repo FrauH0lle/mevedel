@@ -15,7 +15,7 @@ time.sleep(float(os.getenv("MEVEDEL_TEST_STATUS_DELAY", "0")))
 
 if os.path.basename(sys.argv[0]) == "npm":
     if sys.argv[1] == "view":
-        print('"0.86.0"')
+        print("0.86.0")
         sys.exit(0)
     target = pathlib.Path(sys.argv[sys.argv.index("--prefix") + 1])
     target.mkdir(parents=True, exist_ok=True)
