@@ -136,13 +136,6 @@ delivery.  CONTEXT carries workload telemetry ownership.  Return a canceller.
 Callers configure model/effort on the request buffer and own output validation,
 timeouts and buffer cleanup.")
 
-(cl-defgeneric mevedel-engine-request-workload
-    (backend prompt system tools callback before-tool boundary)
-  "Run BACKEND's isolated tool workload; return a cancellation function.
-PROMPT, SYSTEM and TOOLS are explicit.  CALLBACK receives streamed response
-events and normalized terminal info.  BEFORE-TOOL checks each admitted call;
-BOUNDARY checks each completed tool batch and may return reminder text.")
-
 (cl-defmethod mevedel-engine-request-text
   ((_backend gptel-backend) prompt system callback &optional stream context)
   (when gptel-tools (error "Isolated text requests cannot use tools"))

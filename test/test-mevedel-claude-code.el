@@ -287,6 +287,8 @@
   (pcase-dolist (`(,effort ,levels ,behavior ,expected ,mode)
                 '((high ["default" "low" "high"] nil "high mode:default" "plan")
                   (high ["default" "low" "high"] nil "high")
+                  ;; An already current effort needs no configuration request.
+                  (low ["default" "low" "high"] nil "unset mode:default" "plan")
                   (high ["default" "low"] nil "default")
                   (nil ["default" "low" "high"] nil "default")
                   (high nil nil "unset")
@@ -349,7 +351,7 @@
                   (should (eq (mevedel-session-reasoning-effort mevedel--session)
                               gptel-reasoning-effort))
                   (should (eq gptel-reasoning-effort
-                              (and (string-prefix-p "high" expected) 'high))))))
+                              (unless (member expected '("default" "unset")) effort))))))
             (when cancel (funcall cancel))))))))
 
 (mevedel-deftest mevedel-claude-code--command-output-async ()

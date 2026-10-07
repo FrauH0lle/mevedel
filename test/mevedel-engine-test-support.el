@@ -76,8 +76,9 @@ Fail when BODY leaves a timer the fixture does not own."
            (setq done t))
        (let ((leaked (mevedel-engine-test--release session buffer timers)))
          (delete-directory root t)
+         ;; Cancel even after a failure so leaks cannot fire in later tests.
+         (mapc #'cancel-timer leaked)
          (when (and done leaked)
-           (mapc #'cancel-timer leaked)
            (error "Fixture left timers: %S"
                   (mapcar (lambda (timer)
                             (let ((function (timer--function timer)))

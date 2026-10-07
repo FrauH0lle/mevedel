@@ -1,7 +1,9 @@
 ;;; mevedel-claude-code-backend.el --- Claude provider identity -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Backend type, model metadata and dispatch without the Claude runtime.
+;; Backend type, model metadata, installation settings and dispatch without
+;; the Claude runtime.  Loaded with mevedel, so maintenance and readiness can
+;; read the settings for users who never start Claude.
 
 ;;; Code:
 
@@ -21,6 +23,33 @@
   "Documented alias effort choices before ACP reports live capabilities.
 See https://code.claude.com/docs/en/model-config.")
 
+(defcustom mevedel-claude-code-executable "claude"
+  "Installed, unmodified Claude Code executable."
+  :type 'string :group 'mevedel)
+
+(defcustom mevedel-claude-code-adapter-executable nil
+  "ACP adapter executable, or nil for the managed installation and PATH."
+  :type '(choice (const :tag "Find installed adapter" nil) file)
+  :group 'mevedel)
+
+(defcustom mevedel-claude-code-directory
+  (file-name-concat user-emacs-directory "mevedel" "claude-code")
+  "Local adapter installation and neutral conversation working directory.
+Keep this location stable to resume the installed CLI's retained histories."
+  :type 'directory :group 'mevedel)
+
+(defconst mevedel-claude-code--cli-version "2.1.290"
+  "Minimum supported Claude Code CLI release.")
+
+(defconst mevedel-claude-code--adapter-version "0.86.0"
+  "Minimum supported Claude ACP adapter release.")
+
+(defun mevedel-claude-code--version (output minimum)
+  "Return the version reported in OUTPUT when it is at least MINIMUM."
+  (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
+       (version<= minimum (match-string 0 output))
+       (match-string 0 output)))
+
 (cl-defstruct (mevedel-claude-code-backend
                (:include gptel-backend)
                (:constructor mevedel-claude-code--make-backend)))
@@ -34,10 +63,6 @@ See https://code.claude.com/docs/en/model-config.")
 (cl-defmethod mevedel-engine-request-text
   ((_backend mevedel-claude-code-backend) prompt system callback &optional stream _context)
   (mevedel-claude-code-request-text prompt system callback stream))
-
-(cl-defmethod mevedel-engine-request-workload
-  ((_backend mevedel-claude-code-backend) prompt system tools callback before-tool boundary)
-  (mevedel-claude-code-request-workload prompt system tools callback before-tool boundary))
 
 (defun mevedel-claude-code--model (name &optional existing)
   "Return a backend-owned model named NAME, reusing EXISTING when possible.

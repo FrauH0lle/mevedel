@@ -7,11 +7,6 @@
 
 ;;; Code:
 
-(autoload 'mevedel-claude-code-maintenance-check "mevedel-claude-code-maintenance")
-(autoload 'mevedel-claude-code-maintenance-state "mevedel-claude-code-maintenance")
-(declare-function mevedel-claude-code-maintenance-check "mevedel-claude-code-maintenance" (&optional force))
-(declare-function mevedel-claude-code-maintenance-state "mevedel-claude-code-maintenance" ())
-
 (require 'acp)
 (require 'cl-lib)
 (require 'button)
@@ -21,6 +16,7 @@
 (require 'mevedel-engine)
 (require 'mevedel-mcp)
 (require 'mevedel-claude-code-backend)
+(require 'mevedel-claude-code-maintenance)
 
 ;; `gptel'
 (defvar gptel-reasoning-effort)
@@ -75,10 +71,6 @@
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
-;; `mevedel-transport'
-(declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
-(autoload 'mevedel-transport-run-at-time "mevedel-transport")
-
 (defun mevedel-claude-code-request-text (prompt system callback &optional stream)
   "Request isolated text for PROMPT and SYSTEM via CALLBACK, optionally STREAM."
   (when gptel-tools (error "Isolated text requests cannot use tools"))
@@ -96,18 +88,21 @@
                   :control #'mevedel-claude-code--workload-control))
      prompt tools callback before-tool boundary)))
 
-(defun mevedel-claude-code--check-model (backend model session)
-  "Cache BACKEND's SESSION catalog, validate MODEL and return its effort option."
-  (let* ((config (alist-get 'configOptions session))
-         (models (cl-find "model" config :key (lambda (row) (alist-get 'category row)) :test #'equal))
-         (efforts (cl-find "thought_level" config :key (lambda (row) (alist-get 'category row)) :test #'equal))
+(defun mevedel-claude-code--option (session category)
+  "Return SESSION's reported configuration option for CATEGORY."
+  (cl-find category (alist-get 'configOptions session)
+           :key (lambda (row) (alist-get 'category row)) :test #'equal))
+
+(defun mevedel-claude-code--check-model (backend session)
+  "Cache BACKEND's SESSION catalog and return its effort option.
+The caller has already validated the selected model against SESSION."
+  (let* ((models (mevedel-claude-code--option session "model"))
+         (efforts (mevedel-claude-code--option session "thought_level"))
          (rows (alist-get 'options models))
          (current (alist-get 'currentValue models))
          (existing (gptel-backend-models backend))
          (catalog (mapcar (lambda (name) (mevedel-claude-code--model name existing))
                           (mapcar #'car mevedel-claude-code--aliases))))
-    (unless (and (sequencep rows) (> (length rows) 0) (stringp current))
-      (user-error "Claude did not report model capabilities; update the connection adapter and retry"))
     (mapc (lambda (row)
             (let ((name (alist-get 'value row)))
               (unless (and (stringp name) (not (string-empty-p name)))
@@ -124,10 +119,6 @@
                                       (alist-get 'options efforts)))))
         (put selected :reasoning-effort (and levels (cons 'member levels)))))
     (setf (gptel-backend-models backend) catalog)
-    (unless (cl-find model rows :key (lambda (row) (alist-get 'value row)) :test #'equal)
-      (user-error "Claude model %s is unavailable; select a listed model and retry" model))
-    (unless (equal model current)
-      (user-error "Claude selected %s instead of %s; select an available model and retry" current model))
     efforts))
 
 (cl-defun mevedel-claude-code--prepare-session (backend model effort buffer connection session ready)
@@ -136,8 +127,7 @@ SESSION contains the initial capabilities.  READY receives the acknowledged
 metadata.  An unavailable selection uses the configured fallback and updates
 BUFFER when it owns the root session.  A permission mode inherited from
 the user's Claude settings is reset to `default': mevedel owns permissions."
-  (let* ((row (cl-find "model" (alist-get 'configOptions session)
-                       :key (lambda (item) (alist-get 'category item)) :test #'equal))
+  (let* ((row (mevedel-claude-code--option session "model"))
          (available (mapcar (lambda (item) (alist-get 'value item)) (alist-get 'options row)))
          recovered)
     (unless (and available (cl-every #'stringp available)
@@ -148,13 +138,11 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
              (provider (mevedel-model-recover-provider
                         (format "%s:%s" (gptel-backend-name backend) model) owner t))
              (replacement (and provider (gptel--model-name (plist-get provider :model)))))
+        (when (and owner provider (eq buffer (mevedel-session-root-buffer owner)))
+          (mevedel-model-set-session-provider owner provider buffer))
         (unless (and provider (eq backend (plist-get provider :backend)) (member replacement available))
-          (when (and owner provider (eq buffer (mevedel-session-root-buffer owner)))
-            (mevedel-model-set-session-provider owner provider buffer))
           (user-error "Claude model is unavailable; select an available provider before continuing"))
-        (setq model replacement recovered t)
-        (when (and owner (eq buffer (mevedel-session-root-buffer owner)))
-          (mevedel-model-set-session-provider owner provider buffer))))
+        (setq model replacement recovered t)))
     (unless (equal model (alist-get 'currentValue row))
       (unless recovered
         (user-error "Claude selected %s instead of %s; select an available model and retry"
@@ -164,18 +152,14 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
        (acp-make-session-set-config-option-request
         :session-id (alist-get 'sessionId session) :config-id (alist-get 'id row) :value model)
        (lambda (response)
-         (if (equal model
-                    (alist-get 'currentValue
-                               (cl-find "model" (alist-get 'configOptions response)
-                                        :key (lambda (item) (alist-get 'category item)) :test #'equal)))
+         (if (equal model (alist-get 'currentValue (mevedel-claude-code--option response "model")))
              (progn
                (setf (alist-get 'configOptions session) (alist-get 'configOptions response))
                (mevedel-claude-code--prepare-session backend model effort buffer connection session ready))
            (mevedel-acp--fail connection "Claude did not acknowledge the fallback model"))))
       (cl-return-from mevedel-claude-code--prepare-session nil)))
-  (let* ((option (mevedel-claude-code--check-model backend model session))
-         (mode (cl-find "mode" (alist-get 'configOptions session)
-                        :key (lambda (row) (alist-get 'category row)) :test #'equal))
+  (let* ((option (mevedel-claude-code--check-model backend session))
+         (mode (mevedel-claude-code--option session "mode"))
          (values (mapcar (lambda (row) (alist-get 'value row)) (alist-get 'options option)))
          (value (if (and effort (member (symbol-name effort) values))
                     (symbol-name effort) "default"))
@@ -216,79 +200,21 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
                (finish)
              (unless (and (stringp (alist-get 'id option)) (member value values))
                (error "Claude did not report a usable default effort; update the adapter and retry"))
-             (configure option value "Claude did not acknowledge the selected effort" #'finish))))
+             ;; Re-read: resetting the permission mode replaced the options.
+             (if (equal value (alist-get 'currentValue
+                                         (mevedel-claude-code--option session "thought_level")))
+                 (finish)
+               (configure option value "Claude did not acknowledge the selected effort" #'finish)))))
       (if (and mode (not (equal "default" (alist-get 'currentValue mode))))
           (configure mode "default" "Claude did not acknowledge mevedel's permission mode"
                      #'apply-effort)
         (apply-effort)))))
-
-(defcustom mevedel-claude-code-executable "claude"
-  "Installed, unmodified Claude Code executable."
-  :type 'string :group 'mevedel)
-
-(defcustom mevedel-claude-code-adapter-executable nil
-  "ACP adapter executable, or nil for the managed installation and PATH."
-  :type '(choice (const :tag "Find installed adapter" nil) file)
-  :group 'mevedel)
-
-(defcustom mevedel-claude-code-directory
-  (file-name-concat user-emacs-directory "mevedel" "claude-code")
-  "Local adapter installation and neutral conversation working directory.
-Keep this location stable to resume the installed CLI's retained histories."
-  :type 'directory :group 'mevedel)
-
-(defconst mevedel-claude-code--adapter-version "0.86.0"
-  "Adapter release installed by the guided setup.")
 
 (defconst mevedel-claude-code--api-environment
   '("ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL"
     "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK"
     "CLAUDE_CODE_USE_VERTEX" "CLAUDE_CODE_USE_FOUNDRY")
   "Inherited authentication routes excluded by explicit subscription selection.")
-
-(defun mevedel-claude-code--command-output-async (command args ready failure &optional any-exit)
-  "Run status COMMAND with ARGS asynchronously; return its canceller.
-READY receives stdout on success, or on every exit with ANY-EXIT.  FAILURE
-receives a safe diagnostic.  Cancel and timeout release the child and both
-private output buffers."
-  (let ((check (mapconcat #'shell-quote-argument (cons (file-name-nondirectory command) args) " "))
-        (stdout (generate-new-buffer " *claude-status*"))
-        (stderr (generate-new-buffer " *claude-status-errors*"))
-        process timer finished)
-    (cl-labels
-        ((cleanup ()
-           (when timer (cancel-timer timer))
-           (when process
-             (set-process-sentinel process #'ignore)
-             (when (process-live-p process) (delete-process process)))
-           (when (buffer-live-p stdout) (kill-buffer stdout))
-           (when (buffer-live-p stderr) (kill-buffer stderr)))
-         (cancel () (setq finished t) (cleanup))
-         (fail (message)
-           (unless finished
-             (setq finished t)
-             (cleanup)
-             (funcall failure message)))
-         (exited (child _event)
-           (when (and (not finished) (memq (process-status child) '(exit signal)))
-             (if (not (or any-exit (zerop (process-exit-status child))))
-                 (fail (format "Setup check failed: %s; run it in a terminal" check))
-               (let ((output (with-current-buffer stdout (string-trim (buffer-string)))))
-                 (setq finished t)
-                 (cleanup)
-                 (funcall ready output))))))
-      (condition-case nil
-          (progn
-            (setq timer (mevedel-transport-run-at-time
-                         10 (lambda () (fail (format "Setup check timed out: %s; run it in a terminal" check)))))
-            (setq process (make-process :name "mevedel-claude-status"
-                                        :command (cons command args)
-                                        :buffer stdout :stderr stderr
-                                        :connection-type 'pipe :noquery t
-                                        :coding 'utf-8-unix :sentinel #'exited))
-            (when finished (cleanup)))
-        (error (fail (format "Setup check failed: %s; run it in a terminal" check))))
-      #'cancel)))
 
 (defvar mevedel-claude-code--version-cache (make-hash-table :test #'equal)
   "Successful executable versions indexed by their resolved file identity.")
@@ -363,12 +289,6 @@ FAILURE receives a safe diagnostic. Return a cancellation function."
       (next)
       #'cancel)))
 
-(defun mevedel-claude-code--version (output minimum)
-  "Return the version reported in OUTPUT when it is at least MINIMUM."
-  (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-       (version<= minimum (match-string 0 output))
-       (match-string 0 output)))
-
 (defun mevedel-claude-code--wait (start)
   "Synchronously wait for an explicit setup command's asynchronous check.
 START receives success and failure callbacks and returns a canceller.
@@ -404,7 +324,8 @@ Return the setup buffer."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert "Claude Code subscription setup\n\n" status "\n\n"
-                "1. Install Claude Code 2.1.290 or newer, Node.js 22 or newer,\n"
+                (format "1. Install Claude Code %s or newer, Node.js 22 or newer,\n"
+                        mevedel-claude-code--cli-version)
                 "   and Python 3.8 or newer on the Emacs host. Emacs must find\n"
                 "   their executables in exec-path.\n\n"
                 "2. Run `claude auth login' in a terminal and select your Claude\n"
@@ -434,7 +355,8 @@ Return the setup buffer."
 
 ;;;###autoload
 (defun mevedel-claude-code-install-adapter ()
-  "Check and install stable Claude runtime updates asynchronously."
+  "Check and install stable Claude CLI and adapter updates asynchronously.
+The echo area reports a check already running and the result."
   (interactive)
   (mevedel-claude-code-maintenance-check t))
 
@@ -587,7 +509,6 @@ Return the generic ACP launch plist; no model request is made here."
   (mevedel-claude-code-maintenance-check)
   (let* ((runtime (mevedel-claude-code-maintenance-state))
          (directory (expand-file-name mevedel-claude-code-directory))
-         (managed (file-name-concat directory "node_modules" ".bin" "claude-agent-acp"))
          (cli (or (and (plist-get runtime :cli) (file-executable-p (plist-get runtime :cli))
                        (plist-get runtime :cli))
                   (executable-find mevedel-claude-code-executable)
@@ -598,7 +519,6 @@ Return the generic ACP launch plist; no model request is made here."
               (and (not mevedel-claude-code-adapter-executable)
                    (or (and (plist-get runtime :adapter) (file-executable-p (plist-get runtime :adapter))
                             (plist-get runtime :adapter))
-                       (and (file-executable-p managed) managed)
                        (executable-find "claude-agent-acp")))
               (user-error "Run M-x mevedel-claude-code-setup to install the Claude connection adapter")))
          (process-environment (copy-sequence process-environment))
@@ -617,7 +537,7 @@ Return the generic ACP launch plist; no model request is made here."
                           "22.0.0" "Node.js")
                     (list (or (executable-find "python3") (user-error "Install Python 3.8 or newer on the Emacs host"))
                           "3.8.0" "Python")
-                    (list cli "2.1.290" "Claude Code")
+                    (list cli mevedel-claude-code--cli-version "Claude Code")
                     (list adapter mevedel-claude-code--adapter-version "Claude ACP adapter")))
            (environment process-environment)
            (backend (mevedel-claude-code-register))

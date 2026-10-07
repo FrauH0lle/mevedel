@@ -8,13 +8,11 @@
 
 ;;; Code:
 
+(require 'mevedel-claude-code-backend)
 (require 'mevedel-engine)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-transcript)
 (require 'mevedel-compact-evidence)
-
-;; `mevedel-claude-code'
-(defvar mevedel-claude-code-directory)
 
 (defun mevedel-claude-code-history-assert-current (record)
   "Reject native continuation of RECORD when it was edited or is foreign.
@@ -27,7 +25,7 @@ another machine or installation directory, cannot be resumed."
                        (equal (system-name) (plist-get record :host))
                        (equal (expand-file-name mevedel-claude-code-directory)
                               (plist-get record :directory)))))
-    (user-error "This Claude history belongs to another installation; its transcript remains readable")))
+    (user-error "This Claude history belongs to another installation; its transcript remains readable.  Use M-x mevedel-claude-code-recover-history to continue from it")))
 
 (defun mevedel-claude-code-history-open (owner id &optional boundary)
   "Return OWNER's in-flight native record for conversation ID.

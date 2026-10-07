@@ -52,10 +52,12 @@
 ;; `mevedel-chat'
 (defvar mevedel--session)
 
+;; `mevedel-claude-code'
+(declare-function mevedel-claude-code-request-workload "mevedel-claude-code"
+                  (prompt system tools callback before-tool boundary))
+
 ;; `mevedel-engine'
 (declare-function mevedel-engine-external-p "mevedel-engine" (backend))
-(declare-function mevedel-engine-request-workload "mevedel-engine"
-                  (backend prompt system tools callback before-tool boundary))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload "mevedel-models"
@@ -73,6 +75,9 @@
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+
+;; `mevedel-utilities'
+(declare-function mevedel--unified-diff "mevedel-utilities" (original current &optional context-lines))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -723,8 +728,8 @@ started by the idle timer, which an explicit request may preempt."
                              (mevedel-buddy--current-generation-p
                               generation))))
               (if (mevedel-engine-external-p gptel-backend)
-                  (mevedel-engine-request-workload
-                   gptel-backend (concat payload (mevedel-buddy-note-serialize))
+                  (mevedel-claude-code-request-workload
+                   (concat payload (mevedel-buddy-note-serialize))
                    system gptel-tools
                    (lambda (response _info)
                      (when (memq response '(t nil abort)) (finish (eq response t))))
