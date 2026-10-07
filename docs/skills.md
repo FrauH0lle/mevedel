@@ -247,7 +247,7 @@ remote stat per known skill at each pull check.
 ## Local Slash Commands
 
 Local slash commands are separate from `$skill` lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/remember`, `/btw`, `/init`, `/prompt`, `/review`, `/verify`,
+`/tokens`, `/usage`, `/model`, `/compact`, `/remember`, `/btw`, `/init`, `/prompt`, `/review`, `/verify`,
 `/worktree`, `/mode`, `/skills`, `/tools`, `/edits`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
@@ -256,6 +256,12 @@ and mevedel hooks. `/edits` toggles the current session between `ask` and
 canonical `ask`, `edits`, and `full-auto` values. Entering and leaving
 `full-auto` installs the corresponding boundary
 reminders.
+
+`/usage` calls `mevedel-subscription-usage-show`, also available as cockpit `U`.
+It inspects the selected backend's account-wide subscription quotas in a separate
+read-only report, including while a model request is active. It does not enter
+conversation admission, history, token accounting, or Goal continuation.
+`/tokens` continues to estimate the current conversation context.
 
 No-argument or list-style commands open the same session cockpit surfaces
 as their matching cockpit rows when a live view/data pair exists:

@@ -886,6 +886,36 @@ aligned labels, and visual wrapping. `RET` on a heading folds its body; `TAB`
 and `S-TAB` visit headings and links, `n`/`p` move between sections, and `q`
 returns to the owner. Long supporting records can start folded; their complete
 text remains available. `g` refreshes reports with a live refresh source.
+`U Subscription usage` in Cockpits and `/usage` share one disposable report per
+originating session. The report opens with a loading state and retrieves the
+current backend's account-wide quotas on opening or `g`, without polling. It
+shows the provider, available account/plan details and last successful retrieval
+time, and explains that activity outside mevedel counts toward these quotas.
+Missing fields are unavailable, never inferred as zero. A failed refresh retains
+previous successful data only with a STALE label and its original timestamp.
+Changing backends clears that data. Refresh supersedes any pending retrieval;
+`q` or killing the buffer cancels it, and late callbacks cannot change the report.
+The composer, transcript, Goal state, and model accounting stay untouched.
+
+Codex OAuth uses gptel's token restoration, account selection and authentication
+header, including its synchronous renewal preflight. The quota HTTP request to
+`https://chatgpt.com/backend-api/wham/usage` is asynchronous with a 30-second
+timeout. Primary, secondary and additional quota buckets use the HTTP schema's
+returned window durations, utilization and reset times; plan and credits appear
+when available. Errors omit credentials and raw response bodies.
+
+Claude Code uses a fresh isolated ACP inspection conversation with no retained
+coding history, tools, or MCP servers. Its launch enables native slash commands
+while retaining the launcher's environment and external-settings isolation.
+Startup retains session command advertisements even before session creation
+completes. Inspection sends exact `/usage` only after `usage` is advertised;
+missing support or the existing startup timeout fails without prompting.
+The inspection response has a separate 30-second timeout. Only recognized native
+subscription headers and quota sections are retained; temporary-session cost,
+token and behavioral summaries are omitted. Unrecognized output is an error.
+Native formatting is preserved; omitted fields, including extra-usage credits in
+the inspected adapter, are unavailable. There is no direct SDK/OAuth fallback.
+
 Dedicated inspectors retain their own action keys, including journal retry and
 discard, rewind file diffs, and sharing-tier cycling.
 

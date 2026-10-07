@@ -10,11 +10,12 @@
 
 (require 'acp)
 (require 'cl-lib)
+(require 'seq)
 (require 'mevedel-transport)
 
 (cl-defstruct (mevedel-acp (:constructor mevedel-acp--create))
   "Runtime state for one external model conversation."
-  client launch session-id capabilities
+  client launch session-id capabilities commands prepared
   (state 'starting) active timer prepare-cancel ready failure)
 
 (defconst mevedel-acp--control-timeout 30
@@ -97,6 +98,26 @@ so a dead process fails the connection instead."
       (process-put process 'mevedel-acp-filter t)))
   (apply #'acp--request-sender args))
 
+(defun mevedel-acp--ready (connection)
+  "Admit prepared CONNECTION once any required command is advertised."
+  (when (and (eq (mevedel-acp-state connection) 'starting)
+             (mevedel-acp-prepared connection))
+    (let* ((required (plist-get (mevedel-acp-launch connection) :required-command))
+           (advertisement (assoc (mevedel-acp-session-id connection)
+                                 (mevedel-acp-commands connection))))
+      (cond
+       ((and required (not advertisement)))
+       ((and required
+             (not (seq-some (lambda (command)
+                              (equal required (alist-get 'name command)))
+                            (cdr advertisement))))
+        (mevedel-acp--fail
+         connection (format "Agent does not advertise /%s; update the Claude CLI and ACP adapter" required)))
+       (t
+        (mevedel-acp--cancel-timer connection)
+        (setf (mevedel-acp-state connection) 'idle)
+        (funcall (mevedel-acp-ready connection) connection))))))
+
 (defun mevedel-acp--new-session (connection response)
   "Create or resume CONNECTION after initialization RESPONSE."
   (when (eq (mevedel-acp-state connection) 'starting)
@@ -134,9 +155,8 @@ so a dead process fails the connection instead."
                        (let ((ready
                               (lambda (&optional _metadata)
                                 (when (eq (mevedel-acp-state connection) 'starting)
-                                  (mevedel-acp--cancel-timer connection)
-                                  (setf (mevedel-acp-state connection) 'idle)
-                                  (funcall (mevedel-acp-ready connection) connection)))))
+                                  (setf (mevedel-acp-prepared connection) t)
+                                  (mevedel-acp--ready connection)))))
                          (if-let* ((prepare (plist-get launch :prepare-session)))
                              (funcall prepare connection session ready)
                            (funcall ready session)))
@@ -152,6 +172,8 @@ starts; cancellation and startup timeout retire it and any late callbacks.
 Optional :prepare-session receives the connection, session metadata and a
 continuation.  It must finish configuration before invoking the continuation;
 startup errors or timeout fail before any prompt is submitted.
+Optional :required-command waits for a session command advertisement before
+READY; missing support fails startup without sending a prompt.
 Optional :compaction advertises support for retained session summaries.
 Optional :normalize-outcome translates adapter-specific terminal metadata and
 usage into an outcome plist; generic ACP cannot infer its accounting scope.
@@ -170,6 +192,14 @@ string if startup fails.  Return the runtime connection immediately."
        :client client
        :on-notification
        (lambda (notification)
+         (when-let* ((params (alist-get 'params notification))
+                     (id (alist-get 'sessionId params))
+                     (update (alist-get 'update params))
+                     ((not (eq (mevedel-acp-state connection) 'closed)))
+                     ((equal "available_commands_update" (alist-get 'sessionUpdate update))))
+           (setf (alist-get id (mevedel-acp-commands connection) nil nil #'equal)
+                 (alist-get 'availableCommands update))
+           (mevedel-acp--ready connection))
          (when-let* ((turn (mevedel-acp-active connection))
                      (params (alist-get 'params notification))
                      ((equal (alist-get 'sessionId params)

@@ -15,16 +15,18 @@ CALLBACK receives RESPONSE and an info plist, using gptel's text callback
 convention: streamed strings followed by t, one collected string otherwise,
 nil on failure or `abort' on cancellation.  INFO contains :stream, available
 :tokens and :error.  The current buffer owns the request; killing it cancels.
+LAUNCH may specify :response-timeout in seconds after startup.
 LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned."
   (when (plist-get launch :session-id)
     (error "Isolated text requests cannot use retained history"))
   (unless (and (stringp prompt) (functionp callback))
     (error "Isolated text requests require text and a callback"))
-  (let ((buffer (current-buffer)) connection finished chunks)
+  (let ((buffer (current-buffer)) connection finished chunks timer)
     (cl-labels
         ((finish (outcome)
            (unless finished
              (setq finished t)
+             (when timer (cancel-timer timer) (setq timer nil))
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
                  (remove-hook 'kill-buffer-hook #'cancel t)))
@@ -67,6 +69,11 @@ LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned.
                 (mevedel-acp-open
                  launch
                  (lambda (active)
+                   (when-let* ((timeout (plist-get launch :response-timeout)))
+                     (setq timer
+                           (run-at-time timeout nil
+                                        (lambda ()
+                                          (finish '(:status error :message "ACP inspection response timed out"))))))
                    (mevedel-acp-prompt
                     active (vector `((type . "text") (text . ,prompt)))
                     #'event #'finish))

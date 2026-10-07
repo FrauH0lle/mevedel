@@ -272,6 +272,9 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-subscription-usage'
+(autoload 'mevedel-subscription-usage-show "mevedel-subscription-usage" nil t)
+
 ;; `mevedel-system'
 (declare-function mevedel-inspect-effective-prompt "mevedel-system" ())
 (autoload 'mevedel-inspect-effective-prompt "mevedel-system")
@@ -340,6 +343,7 @@
 
 (defconst mevedel-skills--slash-command-annotations
   '(("btw" . " [command] optional prompt; open an ephemeral side conversation")
+    ("usage" . " [command] no args; subscription usage")
     ("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
@@ -361,6 +365,10 @@
     ("verify" . " [command] picker; target args or custom instructions")
     ("worktree" . " [command] status | create"))
   "Root completion annotations for included slash commands.")
+
+(defun mevedel-cmd--usage (_args)
+  "Display the session backend's account-wide subscription quotas."
+  (mevedel-subscription-usage-show))
 
 (defun mevedel-cmd--tokens (_args)
   "Print the estimated token usage of the current chat buffer."
@@ -846,6 +854,7 @@ Routes through the lifecycle-aware permission transition path."
 (defvar mevedel-slash-commands
   '(("btw"     . mevedel-cmd--btw)
     ("collab"  . mevedel-cmd--collab)
+    ("usage"   . mevedel-cmd--usage)
     ("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
@@ -872,7 +881,7 @@ Handlers have access to the buffer-local `mevedel--session'.")
 
 (defun mevedel-skills-local-command-active-request-p (name args)
   "Return non-nil when local command NAME with ARGS may run mid-request."
-  (or (member name '("btw" "collab" "ps" "stop" "remember"))
+  (or (member name '("btw" "collab" "ps" "stop" "remember" "usage"))
       (and (string= name "goal")
            (member (car (split-string (or args "") "[ \t\n]+" t))
                    '("pause" "edit")))))
