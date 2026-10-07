@@ -43,13 +43,11 @@
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
 
-;; `mevedel-session-durability'
-(declare-function mevedel-session-publication-logical-path-p
-                  "mevedel-session-durability" (path))
-(autoload 'mevedel-session-publication-logical-path-p
-  "mevedel-session-durability")
-
 ;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-logical-path-p
+                  "mevedel-session-publication" (path))
+(autoload 'mevedel-session-publication-logical-path-p
+  "mevedel-session-publication")
 (declare-function mevedel-session-publication-uncommitted-artifact
                   "mevedel-session-publication" (session logical))
 (autoload 'mevedel-session-publication-uncommitted-artifact

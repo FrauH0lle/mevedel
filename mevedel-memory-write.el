@@ -12,7 +12,17 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-memory-apply)
 (require 'mevedel-memory-store)
-(require 'mevedel-tool-patch)
+
+;; `mevedel-tool-patch'
+(declare-function mevedel-tool-patch--assert-buffers-unmodified
+                  "mevedel-tool-patch" (changes))
+(declare-function mevedel-tool-patch--same-snapshot-p
+                  "mevedel-tool-patch" (left right))
+(declare-function mevedel-tool-patch-commit
+                  "mevedel-tool-patch" (changes &optional currentp mutate))
+(autoload 'mevedel-tool-patch--assert-buffers-unmodified "mevedel-tool-patch")
+(autoload 'mevedel-tool-patch--same-snapshot-p "mevedel-tool-patch")
+(autoload 'mevedel-tool-patch-commit "mevedel-tool-patch")
 
 (defconst mevedel-memory-write-intent-file-regexp
   (concat "\\`" mevedel-journal-store-hash-regexp "\\.el\\'")

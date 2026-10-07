@@ -64,6 +64,8 @@
                   "mevedel-directive-request" (record workspace))
 (declare-function mevedel--directive-session-buffer
                   "mevedel-directive-request" (directive workspace))
+(autoload 'mevedel--directive-bound-session-buffer "mevedel-directive-request")
+(autoload 'mevedel--directive-session-buffer "mevedel-directive-request")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
@@ -220,6 +222,7 @@
 (declare-function mevedel-view-enter-directive-scope
                   "mevedel-view-composer"
                   (directive action &optional attempt-index workspace))
+(autoload 'mevedel-view--input-marker-position "mevedel-view-composer")
 (autoload 'mevedel-view-enter-directive-scope "mevedel-view-composer")
 
 ;; `mevedel-view-disclosure'
@@ -227,6 +230,7 @@
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+(autoload 'mevedel-view--full-rerender "mevedel-view-render")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))

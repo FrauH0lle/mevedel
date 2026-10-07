@@ -21,6 +21,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-system)
+(require 'mevedel-tools)
 (require 'mevedel-utilities)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)

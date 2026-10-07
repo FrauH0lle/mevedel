@@ -46,12 +46,16 @@
 (defvar mevedel-view--status-marker)
 (declare-function mevedel-view--render-status "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
+(autoload 'mevedel-view--render-status "mevedel-view")
+(autoload 'mevedel-view--zone-separator "mevedel-view")
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-collapse-state
                   "mevedel-view-zone" (key &optional default))
 (declare-function mevedel-view-zone-set-collapse-state
                   "mevedel-view-zone" (key collapsed))
+(autoload 'mevedel-view-zone-collapse-state "mevedel-view-zone")
+(autoload 'mevedel-view-zone-set-collapse-state "mevedel-view-zone")
 
 
 ;;

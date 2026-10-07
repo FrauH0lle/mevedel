@@ -23,13 +23,16 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel)
-  (require 'gptel-request)
-  (require 'mevedel-presets))
+  (require 'gptel-request))
 
 (require 'mevedel-hooks)
 (require 'mevedel-journal-idle)
 (require 'mevedel-reminders)
 (require 'mevedel-claude-code-backend)
+(require 'mevedel-presets)
+(require 'mevedel-prompt-submission)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-persistence)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -66,6 +69,9 @@
 (defvar gptel-org-convert-response)
 (defvar gptel-prompt-transform-functions)
 (defvar gptel-stream)
+
+;; `mevedel'
+(defvar mevedel-default-chat-preset)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -147,31 +153,6 @@
 (declare-function mevedel-plugins-notify-pending-consent
                   "mevedel-plugin-ui" (&optional workspace))
 
-;; `mevedel-presets'
-(declare-function mevedel-preset--build-handlers "mevedel-presets"
-                  (handlers))
-(declare-function mevedel-preset--build-transitions "mevedel-presets"
-                  (transitions))
-(declare-function mevedel-preset-apply "mevedel-presets"
-		  (name &optional buffer))
-(declare-function mevedel-preset-restore-session "mevedel-presets"
-		  (session &optional buffer))
-(defvar mevedel-action-preset-alist)
-(defvar mevedel-default-chat-preset)
-
-;; `mevedel-prompt-submission'
-(declare-function mevedel-prompt-submission-commit
-		  "mevedel-prompt-submission" (submission))
-(declare-function mevedel-prompt-submission-context
-		  "mevedel-prompt-submission" (cl-x) t)
-(declare-function mevedel-prompt-submission-display-text
-                  "mevedel-prompt-submission" (cl-x) t)
-(declare-function mevedel-prompt-submission-input
-		  "mevedel-prompt-submission" (cl-x) t)
-(autoload 'mevedel-prompt-submission-commit "mevedel-prompt-submission")
-(autoload 'mevedel-prompt-submission-context "mevedel-prompt-submission")
-(autoload 'mevedel-prompt-submission-input "mevedel-prompt-submission")
-
 ;; `mevedel-reminders'
 (defvar mevedel-reminders-reconciliation-body)
 (declare-function mevedel-reminders-install-defaults
@@ -183,34 +164,9 @@
                   "mevedel-sandbox" (&optional session permission-mode))
 (autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
 
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-inhibit-so-long
-                  "mevedel-session-artifacts" ())
-(declare-function mevedel-session-artifacts-sessions-dir
-                  "mevedel-session-artifacts" (workspace))
-(declare-function
- mevedel-session-artifacts-install-gptel-save-state-advice
- "mevedel-session-artifacts" nil)
-(declare-function mevedel-session-artifacts-strip-gptel-config-properties
-                  "mevedel-session-artifacts" nil)
-(autoload 'mevedel-session-artifacts-inhibit-so-long
-  "mevedel-session-artifacts")
-
 ;; `mevedel-session-naming'
 (declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
 (autoload 'mevedel-session-naming-consider "mevedel-session-naming")
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
-(declare-function mevedel-session-persistence-autosave-buffer
-                  "mevedel-session-persistence" (buffer))
-(declare-function mevedel-session-persistence-release-on-kill
-                  "mevedel-session-persistence" nil)
-(declare-function mevedel-session-persistence-schedule-cleanup
-                  "mevedel-session-persistence" (workspace))
-(defvar mevedel-session--save-failed)
-(autoload 'mevedel-session-persistence-allocate-session-id "mevedel-session-persistence")
-(autoload 'mevedel-session-persistence-autosave-buffer "mevedel-session-persistence")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
@@ -697,9 +653,6 @@ Both `mevedel--chat-buffer-setup' (fresh path) and restore paths
 session struct. SOURCE is \"startup\", \"resume\", or \"fork\".  When
 INSPECTION-P is non-nil, skip lifecycle hooks because the client has no
 mutation lease."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
@@ -983,7 +936,7 @@ if none found."
    (cond
     ;; An orphaned agent must fall back to workspace roots, not mistake its
     ;; copied session for root ownership or follow a view-buffer branch.
-    ((bound-and-true-p mevedel--agent-invocation)
+    (mevedel--agent-invocation
      (let ((parent (mevedel-agent-invocation-parent-data-buffer
                     mevedel--agent-invocation)))
        (and (buffer-live-p parent) parent)))
@@ -1124,7 +1077,6 @@ with the \\='abort symbol as the error parameter.
 
 BUF defaults to the current buffer if not specified."
   (interactive)
-  (require 'mevedel-session-artifacts)
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
@@ -1322,7 +1274,7 @@ The effective model and effort apply only to this request, not saved selection."
          (gptel-reasoning-effort (plist-get policy :effort)))
     (if (mevedel-claude-code-backend-p gptel-backend)
         (mevedel-claude-code-send (or model-input native-input))
-      (when (and mevedel--session (not (bound-and-true-p mevedel--current-directive-uuid))
+      (when (and mevedel--session (not mevedel--current-directive-uuid)
                  (assoc "root" (mevedel-session-external-conversations mevedel--session)))
         (mevedel-claude-code-release-history mevedel--session))
       (setq-local mevedel--pending-model-input model-input)

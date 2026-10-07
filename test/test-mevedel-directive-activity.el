@@ -9,6 +9,7 @@
 (require 'mevedel)
 (require 'mevedel-directive-activity)
 (require 'mevedel-overlays)
+(require 'mevedel-session-rewind)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'helpers

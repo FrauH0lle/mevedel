@@ -11,6 +11,7 @@
 (require 'mevedel-journal-worker)
 (require 'mevedel-journal-recovery)
 (require 'mevedel-journal-cleanup)
+(require 'mevedel-memory-pass)
 
 (mevedel-deftest mevedel-journal-worker-supported-p ()
   ,test

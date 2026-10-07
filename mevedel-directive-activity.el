@@ -136,6 +136,7 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-activate-at-point
                   "mevedel-view" (&optional event))
+(autoload 'mevedel-view-activate-at-point "mevedel-view" nil t)
 (defvar mevedel-view--display-map)
 
 ;; `mevedel-view-composer'

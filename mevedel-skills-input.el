@@ -637,8 +637,7 @@ observe the completed response."
         (setq request
               (mevedel-request-begin
                mevedel--session
-               (and (boundp 'mevedel--current-directive-uuid)
-                    mevedel--current-directive-uuid)))))
+               mevedel--current-directive-uuid))))
     (goto-char (point-max))
     (when-let* ((synthetic (plist-get outcome :synthetic-user-message)))
       (let ((user-turn-start (point)))

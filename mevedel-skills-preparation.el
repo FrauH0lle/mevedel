@@ -45,18 +45,13 @@
 (autoload 'mevedel-session-execution-target "mevedel-structs")
 (autoload 'mevedel-session-session-id "mevedel-structs")
 
-;; `mevedel-tool-exec'
-(declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
-(autoload 'mevedel-tool-exec--register "mevedel-tool-exec")
-
 ;; `mevedel-tool-registry'
 (declare-function copy-mevedel-tool "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get
-                  "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))
 (autoload 'copy-mevedel-tool "mevedel-tool-registry")
 (autoload 'mevedel-tool-args "mevedel-tool-registry")
-(autoload 'mevedel-tool-get "mevedel-tool-registry")
+(autoload 'mevedel-tool-ensure "mevedel-tool-registry")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-extract
@@ -443,10 +438,7 @@ prompt, which only a tool result has stripped for it."
 CALLBACK receives either \\=(:status ok :output STRING) or
 \\=(:status error :reason SYMBOL :message STRING).  MARKER is the
 original shell-injection marker used in diagnostics."
-  (let ((tool (or (ignore-errors (mevedel-tool-get "Bash"))
-                  (progn
-                    (mevedel-tool-exec--register)
-                    (ignore-errors (mevedel-tool-get "Bash"))))))
+  (let ((tool (mevedel-tool-ensure "Bash")))
     (when tool
       (setq tool (copy-mevedel-tool tool))
       (setf (mevedel-tool-args tool)
@@ -491,10 +483,7 @@ original shell-injection marker used in diagnostics."
 CALLBACK receives either \\=(:status ok :output STRING) or
 \\=(:status error :reason SYMBOL :message STRING).  MARKER is the
 original elisp-injection marker used in diagnostics."
-  (let ((tool (or (ignore-errors (mevedel-tool-get "Eval"))
-                  (progn
-                    (mevedel-tool-exec--register)
-                    (ignore-errors (mevedel-tool-get "Eval"))))))
+  (let ((tool (mevedel-tool-ensure "Eval")))
     (when tool
       (setq tool (copy-mevedel-tool tool))
       (setf (mevedel-tool-args tool)

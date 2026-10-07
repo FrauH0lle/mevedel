@@ -15,6 +15,7 @@
 
 (require 'subr-x)
 (require 'mevedel-skills-ui)
+(require 'mevedel-prompt-submission)
 (require 'mevedel-structs)
 (require 'mevedel-transport)
 
@@ -92,14 +93,6 @@
                   (workload &optional explicit-selector explicit-effort))
 (autoload 'mevedel-model-resolve-workload "mevedel-models")
 
-;; `mevedel-prompt-submission'
-(declare-function mevedel-prompt-submission-commit
-                  "mevedel-prompt-submission" (submission))
-(declare-function mevedel-prompt-submission-context
-                  "mevedel-prompt-submission" (cl-x) t)
-(declare-function mevedel-prompt-submission-input
-                  "mevedel-prompt-submission" (cl-x) t)
-
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
@@ -160,6 +153,7 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+(autoload 'mevedel-view-rerender "mevedel-view")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
@@ -176,16 +170,23 @@
                          submitted-draft dispatch))
 (declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
 (autoload 'mevedel-view--assert-live-tip "mevedel-view-composer")
+(autoload 'mevedel-view--forward-input "mevedel-view-composer")
+(autoload 'mevedel-view--run-prompt-submit-hook "mevedel-view-composer")
+(autoload 'mevedel-view--start-fork-skill-turn "mevedel-view-composer")
+(autoload 'mevedel-view--visible-draft "mevedel-view-composer")
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add
                   "mevedel-view-history" (text))
+(autoload 'mevedel-view-history-add "mevedel-view-history")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
+(autoload 'mevedel-view--ensure-request-progress "mevedel-view-stream")
+(autoload 'mevedel-view--stop-request-progress "mevedel-view-stream")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace
@@ -1014,8 +1015,7 @@ Dispatch only while the admitted request still owns DATA-BUFFER."
         (setq request
               (mevedel-request-begin
                mevedel--session
-               (and (boundp 'mevedel--current-directive-uuid)
-                    mevedel--current-directive-uuid))))
+               mevedel--current-directive-uuid)))
       (goto-char (point-max))
       (mevedel--insert-user-turn display)
       (when dispatch

@@ -7,12 +7,16 @@
 ;;; Code:
 
 (require 'mevedel-chat)
+(require 'mevedel-directive-request)
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-agent-control)
 (require 'mevedel)
+(require 'mevedel-permission-persistence)
+(require 'mevedel-plugin-ui)
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-skills-core)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view)
 (require 'mevedel-view-zone)

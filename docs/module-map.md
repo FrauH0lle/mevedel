@@ -5,7 +5,7 @@ Entry point
   mevedel.el                  foundational data, command autoloads, install/uninstall, directives
 
 Data model
-  mevedel-structs.el          passive workspace/session/request/task data shapes and invariants
+  mevedel-structs.el          passive workspace/session/request/task data shapes, invariants and shared buffer-local state
   mevedel-directive.el        directive mutation, lifecycle, plan invalidation, rewind
   mevedel-turn.el             request admission/cancellation and terminal settlement
   mevedel-workspace.el        workspace detection, registry, and state lookup
@@ -198,20 +198,22 @@ Prompt / presets / agents
   mevedel-goal.el             phase-free Goal continuation controller
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
-Turn engines (Claude Code through ACP and MCP)
+Provider readiness and recovery (all providers)
   mevedel-recovery.el         durable operational issues and unsubmitted input DTOs
   mevedel-auth.el             asynchronous credential renewal and owner login challenges
   mevedel-readiness.el        pre-commit provider checks and recovery wakeups
+
+Turn engines (Claude Code through ACP and MCP)
   mevedel-collaboration-recovery.el owner-only browser recovery actions and state
-  mevedel-claude-code-maintenance.el staged stable updates, validation, retention and rollback
+  mevedel-claude-code-maintenance.el staged stable updates, validation, retention and rollback, and the bounded status-command runner shared with launch preflight
   mevedel-engine.el           shared turn-context access for requests and native gptel FSMs
   mevedel-acp.el              ACP conversation startup, prompt, cancellation and process lifecycle
   mevedel-acp-text.el         isolated streamed background requests with buffer-owned teardown
   mevedel-acp-workload.el     scoped background MCP tools and native batch-boundary guards
   mevedel-acp-turn.el         admitted ACP turns, MCP tool scope, streaming and shared settlement
   mevedel-acp-compaction.el   native summary lifecycle, transcript rotation and retained tails
-  mevedel-claude-code-backend.el provider type, model catalog and autoloaded engine dispatch
-  mevedel-claude-code.el      guided setup, managed adapter installation, subscription login and isolated ACP launch
+  mevedel-claude-code-backend.el provider type, model catalog, installation settings (executable/adapter/directory), minimum CLI/adapter versions and version parser, autoloaded engine dispatch
+  mevedel-claude-code.el      guided setup, launch preflight and isolated ACP launch
   mevedel-claude-code-session.el root, directive and shared-item sends and persisted external conversation references
   mevedel-claude-code-agent.el retained-child subscription dispatch, sample limits and native history references
   mevedel-claude-code-history.el native history state, divergence and excerpt recovery

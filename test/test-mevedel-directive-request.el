@@ -12,6 +12,7 @@
 (require 'mevedel-chat)
 (require 'mevedel)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-skills-core)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view-zone)
 (require 'helpers

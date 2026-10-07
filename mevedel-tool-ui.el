@@ -21,6 +21,7 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
+(autoload 'mevedel-pipeline-active-tool-use-id "mevedel-pipeline")
 
 ;; `mevedel-structs'
 (defvar mevedel--current-request)

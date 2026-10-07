@@ -17,6 +17,7 @@
 (require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)
+(require 'mevedel-turn)
 (require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat

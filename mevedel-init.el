@@ -39,9 +39,11 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--forward-input
                   "mevedel-view-composer" (input &rest args))
+(autoload 'mevedel-view--forward-input "mevedel-view-composer")
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
+(autoload 'mevedel-view-history-add "mevedel-view-history")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))

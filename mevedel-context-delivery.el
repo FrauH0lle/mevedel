@@ -29,6 +29,7 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace-instruction-hashes "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-directive-uuid)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-fs-read'
@@ -178,7 +179,7 @@ Use the recipient's selected components; never give a worker the root Goal."
           ;; startup failure/reopen cannot silently discard nested guidance.
           (when (and (not invocation)
                      ;; Fresh directives own request-local instruction hashes.
-                     (not (bound-and-true-p mevedel--current-directive-uuid))
+                     (not mevedel--current-directive-uuid)
                      (cl-some (lambda (entry)
                                 (and (equal "/root" (caar entry)) (null (cdr entry))))
                               (mevedel-session-workspace-instruction-hashes mevedel--session)))
