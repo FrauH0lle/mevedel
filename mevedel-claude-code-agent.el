@@ -62,6 +62,7 @@ its runtime canceller owns the transport without creating a gptel FSM."
                              nil nil #'equal))
          (directory (expand-file-name mevedel-claude-code-directory))
          record selected)
+    (mevedel-claude-code-history-assert-current history)
     (mevedel-agent-conversation-configure invocation buffer)
     (with-current-buffer buffer
       (unless (mevedel-claude-code-backend-p gptel-backend)
@@ -89,6 +90,7 @@ its runtime canceller owns the transport without creating a gptel FSM."
         (mevedel-acp-turn-start
          invocation
          (lambda (mcp hook)
+           (mevedel-claude-code-history-assert-current history)
            (when (and (plist-get history :id)
                       (not (and (eq 'claude-code (plist-get history :engine))
                                 (equal (system-name) (plist-get history :host))
@@ -113,9 +115,17 @@ its runtime canceller owns the transport without creating a gptel FSM."
             history))
          tools
          (lambda (id)
+           (mevedel-claude-code-history-assert-current history)
            (setq record (list :engine 'claude-code :id id :host (system-name)
                               :directory directory :state 'in-flight
                               :tool-calls (copy-tree (plist-get history :tool-calls))))
+           ;; Children keep one canonical transcript across compactions, rather
+           ;; than numbered root segments.  Zero identifies that private body.
+           (plist-put record :input-boundary
+                      (cons 0
+                            (- (marker-position
+                                (plist-get (mevedel-engine-info invocation) :position))
+                               (mevedel-session-artifacts-content-start buffer))))
            (setf (mevedel-engine-info invocation)
                  (plist-put (mevedel-engine-info invocation) :mevedel-claude-history record))
            (setf (alist-get scope (mevedel-session-external-conversations session)
@@ -125,11 +135,11 @@ its runtime canceller owns the transport without creating a gptel FSM."
          (lambda (outcome)
            (when (and (plist-get history :id) (not record))
              (mevedel-claude-code-history-unavailable invocation))
-           (when record
+           (when (and record (not (eq 'diverged (plist-get record :state))))
              (plist-put record :state
                         (if (eq 'success (plist-get outcome :status)) 'ready 'uncertain))))
          (lambda (status)
-           (mevedel-goal-charge-agent-progress invocation)
+           (mevedel-goal-charge-agent-progress invocation t)
            (funcall callback (pcase status ('success t) ('aborted 'abort) (_ nil))
                     (mevedel-engine-info invocation)))
          (lambda (done)

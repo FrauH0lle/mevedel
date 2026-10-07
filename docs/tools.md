@@ -133,6 +133,16 @@ discovery. Hook handlers complete asynchronously, allowing the runner to queue
 events, hook decisions and tool admission until target transport is idle.
 Reentrant arrivals cannot overtake an in-progress segment publication, and
 cancelled queued calls cannot acquire a replacement turn's authority.
+The connection retains ACP's own drain timers before notifications reach that
+queue, including timers scheduled by a drain callback. Ordinary TRAMP waits
+therefore cannot discard the upstream continuation. Startup and cancellation
+watchdogs verify their captured ownership before firing; a retired timer restored
+from a suspended list cannot close a healthy conversation. Cancellation drops
+queued work while preserving the owned terminal acknowledgement for usage
+accounting and aborted settlement. This also holds when the native reply already
+arrived but its publication is waiting for target transport. Cancelled queued
+hooks and tools receive failure replies without running their transactions,
+so they cannot block the peer's terminal acknowledgement.
 The Claude Code provider routes ordinary root submissions through
 this runner. The adapter normalizes final prompt usage separately from context
 occupancy and model-level quota reports: normalized input includes cache

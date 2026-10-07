@@ -147,7 +147,7 @@
   (let* ((goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'blocked
                 :reason "Need an API credential."
-                :token-budget 1000 :tokens-used 345
+                :token-budget 1000 :tokens-used 345 :tokens-incomplete-p nil
                 :time-used-seconds 12 :turns-run 4
                 :plan-reference "local/plans/accepted.md"
                 :created-at "created" :updated-at "updated"))
@@ -168,7 +168,7 @@
   :doc "rebuilds the current strict Goal schema"
   (let ((goal (mevedel-session-codec--goal-from-plist
                '(:id "g1" :objective "Ship" :status active :reason nil
-                 :token-budget 1000 :tokens-used 25
+                 :token-budget 1000 :tokens-used 25 :tokens-incomplete-p nil
                  :time-used-seconds 7 :turns-run 2
                  :plan-reference "local/plans/accepted.md"
                  :created-at "created" :updated-at "updated"))))
@@ -182,7 +182,7 @@
   (let ((goal (mevedel-session-codec--goal-from-plist
                '(:id "g2" :objective "Ship" :status budget-limited
                  :reason "Token budget reached: 110/100 tokens used"
-                 :token-budget 100 :tokens-used 110
+                 :token-budget 100 :tokens-used 110 :tokens-incomplete-p nil
                  :time-used-seconds 9 :turns-run 3
                  :plan-reference nil
                  :created-at "created" :updated-at "updated"))))
@@ -191,11 +191,22 @@
     (should (= 110 (mevedel-goal-tokens-used goal)))
     (should (equal "Token budget reached: 110/100 tokens used"
                    (mevedel-goal-reason goal))))
+  :doc "retains incomplete usage across a sidecar round trip"
+  (let* ((goal (mevedel-goal--create
+                :id "incomplete" :objective "Ship" :status 'budget-limited
+                :reason "Native usage unavailable" :token-budget 100
+                :tokens-used 12 :tokens-incomplete-p t
+                :time-used-seconds 2 :turns-run 1
+                :created-at "created" :updated-at "updated"))
+         (restored (mevedel-session-codec--goal-from-plist
+                    (mevedel-session-codec--goal-to-plist goal))))
+    (should (mevedel-goal-tokens-incomplete-p restored))
+    (should (= 12 (mevedel-goal-tokens-used restored))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-codec--goal-from-plist nil))
   :doc "rejects old, incomplete, and unsafe Goal records"
   (let ((valid '(:id "g1" :objective "Ship" :status active
-                 :reason nil :token-budget nil :tokens-used 0
+                 :reason nil :token-budget nil :tokens-used 0 :tokens-incomplete-p nil
                  :time-used-seconds 0 :turns-run 0 :plan-reference nil
                  :created-at "created" :updated-at "updated")))
     (dolist (change '((:id "../escape")
@@ -978,7 +989,7 @@
 
   :doc "demotes a persisted active Goal to paused on session resume"
   (let* ((goal '(:id "g1" :objective "Ship" :status active :reason nil
-                 :token-budget nil :tokens-used 9 :time-used-seconds 4
+                 :token-budget nil :tokens-used 9 :tokens-incomplete-p nil :time-used-seconds 4
                  :turns-run 2 :plan-reference nil
                  :created-at "created" :updated-at "updated"))
          (result
@@ -1161,6 +1172,17 @@
                  (history (plist-get readback :history)))
             (should (eq (car history) (cadr history)))))
       (when (file-exists-p tmp) (delete-file tmp)))))
+
+(mevedel-deftest mevedel-session-codec-validate-current-sidecar/native-admissions ()
+  (let* ((calls (cl-loop for i below 10000 collect (cons (format "tool-%d" i) "Read")))
+         (sidecar (test-mevedel-session-persistence--complete-sidecar nil))
+         (record (list "root" :engine 'claude-code :state 'ready :id "native"
+                       :host "test" :directory "/tmp/" :tool-calls calls)))
+    (setq sidecar (plist-put sidecar :external-conversations (list record)))
+    (should (eq sidecar (mevedel-session-codec-validate-current-sidecar sidecar)))
+    ;; Equal strings from distinct objects still identify the same admission.
+    (setcdr (last calls) (list (cons (copy-sequence "tool-0") "Write")))
+    (should-error (mevedel-session-codec-validate-current-sidecar sidecar))))
 
 (provide 'test-mevedel-session-codec)
 ;;; test-mevedel-session-codec.el ends here

@@ -315,6 +315,16 @@
                             "local/plans/accepted.md" "\n"))
             (should-not (string-match-p (regexp-quote needle) text)))))))
 
+  :doc "labels incomplete native usage as a lower bound"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create :id "g" :objective "Ship" :status 'budget-limited
+                               :turns-run 1 :tokens-used 12 :tokens-incomplete-p t
+                               :token-budget 100))
+    (with-current-buffer view-buf
+      (should (string-search "at least 12 (incomplete)/100 tokens"
+                             (mevedel-menu--goal-description)))))
+
   :doc "truncates a long objective so status and accounting fit"
   (mevedel-menu-test--with-buffers
     (setf (mevedel-session-goal session)

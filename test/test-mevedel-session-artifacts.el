@@ -4165,7 +4165,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (setf (mevedel-session-external-conversations session)
                   (list (list "root" :engine 'claude-code :id "native-id"
                               :host (system-name) :directory root :state 'in-flight)))
-            (mevedel-session-artifacts-publish-sidecar-state session buffer)
+            (let ((build (symbol-function 'mevedel-session-artifacts-build-sidecar))
+                  (builds 0))
+              (cl-letf (((symbol-function 'mevedel-session-artifacts-build-sidecar)
+                         (lambda (&rest args) (cl-incf builds) (apply build args))))
+                (mevedel-session-artifacts-publish-sidecar-state session buffer))
+              (should (= 1 builds)))
             (should (equal before (mevedel-session-artifacts-read-artifact session segment)))
             (should
              (equal (mevedel-session-external-conversations session)

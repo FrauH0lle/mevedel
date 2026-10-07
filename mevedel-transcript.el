@@ -1077,7 +1077,8 @@ stale `gptel' runs; incomplete controls remain ordinary transcript text."
 
 (defun mevedel-transcript--finish-segments (segments ranges scan-start scan-end)
   "Apply RANGES and canonical neighbor repairs to SEGMENTS in source bounds."
-  (let ((segments (mevedel-transcript--overlay-ranges segments ranges)))
+  (let ((segments (mevedel-transcript--overlay-ranges segments ranges))
+        repaired)
     (dolist (span
              (mevedel-transcript-audit-buffer-spans 'fork-point scan-start scan-end))
       (let ((prompt-start (plist-get span :end))
@@ -1093,9 +1094,14 @@ stale `gptel' runs; incomplete controls remain ordinary transcript text."
                    (string-match-p
                     "[^ \t\r\n]"
                     (buffer-substring-no-properties prompt-start prompt-end)))
-          (setq segments
+          (setq repaired t
+                segments
                 (mevedel-transcript--overlay-range
                  segments (list 'user prompt-start prompt-end))))))
+    ;; Repair stale prompt properties without changing authoritative controls
+    ;; inside that prefix, including acknowledged native context receipts.
+    (when repaired
+      (setq segments (mevedel-transcript--overlay-ranges segments ranges)))
     (mevedel-transcript--merge-adjacent-segments
      (mevedel-transcript--repair-response-fragment-segments
       (mevedel-transcript--repair-orphan-mailbox-tail-segments

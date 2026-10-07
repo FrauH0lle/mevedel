@@ -1175,6 +1175,23 @@ ARTIFACT-P selects whether its sidecar counts as committed."
             (should (= 1 callback-count))))
       (kill-buffer buffer)))
 
+  :doc "lets a native cancellation acknowledgement own asynchronous settlement"
+  (let* ((buffer (generate-new-buffer " *agent-runtime-deferred-abort*"))
+         (invocation (mevedel-agent-runtime-test--invocation buffer))
+         (cancel-count 0) settled)
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-runtime-cancel invocation)
+                (lambda () (cl-incf cancel-count) 'deferred))
+          (cl-letf (((symbol-function 'mevedel-agent-runtime--settle)
+                     (lambda (&rest _) (setq settled t))))
+            (should (string-match-p "stop" (mevedel-agent-runtime-interrupt invocation "stop")))
+            (mevedel-agent-runtime-interrupt invocation "stop again")
+            (should (= 2 cancel-count))
+            (should-not settled)
+            (should-not (mevedel-agent-invocation-runtime-settled-p invocation))))
+      (kill-buffer buffer)))
+
   :doc "leaves a turn unsettled when provider abort fails"
   (let* ((buffer (generate-new-buffer " *agent-runtime-abort-fail*"))
          (invocation (mevedel-agent-runtime-test--invocation buffer))

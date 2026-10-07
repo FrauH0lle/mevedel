@@ -31,11 +31,36 @@
 (defun mevedel-claude-code-history-excerpt (session &optional child)
   "Return labelled evidence before the current prompt for SESSION.
 CHILD selects its private transcript; root evidence excludes isolated turns.
+The effective compaction summary is retained once from its canonical bounds.
 Historical calls are evidence, never executable work or a native resume."
-  (let* ((ranges (list (cons (point-min) (mevedel-transcript-prompt-transform-start))))
-         (evidence (mevedel-transcript-project-evidence
-                    (if child ranges (mevedel-compact-evidence--regions-without-isolated-turns ranges))
-                    :tool-results-dir (mevedel-session-tool-results-directory session))))
+  (let* ((end (mevedel-transcript-prompt-transform-start))
+         (bounds (if child (mevedel-compact-evidence-agent-summary-bounds)
+                   (mevedel-session-artifacts-segment-summary-bounds)))
+         (bounds (and bounds (<= (plist-get bounds :end) end) bounds))
+         (ranges (if bounds
+                     (list (cons (point-min) (plist-get bounds :begin))
+                           (cons (plist-get bounds :end) end))
+                   (list (cons (point-min) end))))
+         ;; Views omit the leading root summary from ordinary segmentation.
+         ;; Read the authoritative body separately, including edits that inherit
+         ;; the closing wrapper's sticky ignore property, and include it once.
+         (summary (when bounds
+                    (mevedel-session-artifacts-strip-summary-handoff-prefix
+                     (string-trim
+                      (mevedel--strip-hook-audit-blocks
+                       (buffer-substring-no-properties
+                        (plist-get bounds :body-begin)
+                        (plist-get bounds :body-end)))))))
+         (evidence
+          (string-join
+           (delq nil
+                 (list (when (and summary (not (string-blank-p summary)))
+                         (mevedel-transcript--summary-evidence-item "compaction-summary" summary))
+                       (mevedel-transcript-project-evidence
+                        (if child ranges
+                          (mevedel-compact-evidence--regions-without-isolated-turns ranges))
+                        :tool-results-dir (mevedel-session-tool-results-directory session))))
+           "\n\n")))
     (unless (string-blank-p evidence)
       (concat "Excerpt continuation from mevedel's current transcript segment. "
               "This starts a new Claude conversation, not an exact native resume. "

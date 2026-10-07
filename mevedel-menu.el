@@ -193,6 +193,7 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-time-used-seconds "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-tokens-incomplete-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-authority-mode "mevedel-structs" (cl-x) t)
@@ -741,10 +742,13 @@ unavailable until it changes."
 
 (defun mevedel-menu--goal-budget-label (goal)
   "Return GOAL's token accounting as a compact label."
-  (let ((budget (mevedel-goal-token-budget goal)))
+  (let ((budget (mevedel-goal-token-budget goal))
+        (used (if (mevedel-goal-tokens-incomplete-p goal)
+                  (format "at least %d (incomplete)" (mevedel-goal-tokens-used goal))
+                (number-to-string (mevedel-goal-tokens-used goal)))))
     (if budget
-        (format "%d/%d tokens" (mevedel-goal-tokens-used goal) budget)
-      (format "%d tokens · unbounded" (mevedel-goal-tokens-used goal)))))
+        (format "%s/%d tokens" used budget)
+      (format "%s tokens · unbounded" used))))
 
 (defun mevedel-menu--goal-description ()
   "Return the one-line Goal cockpit status.

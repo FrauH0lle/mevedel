@@ -99,8 +99,7 @@
                   (should (= phase (length (plist-get history :tool-calls))))))
               (dolist (conversation (list buffer (mevedel-agent-record-conversation-buffer child)))
                 (with-current-buffer conversation
-                  (should (= 1 (how-many (format "RESTART-PATH-PHASE-%d" phase)
-                                        (point-min) (point-max))))))
+                  (should (= 1 (mevedel-engine-test--count-evidence (format "RESTART-PATH-PHASE-%d" phase))))))
               (when (= phase 2)
                 (should (string-search "root-history phase 1 complete" (buffer-string)))
                 (with-current-buffer (mevedel-agent-record-conversation-buffer child)

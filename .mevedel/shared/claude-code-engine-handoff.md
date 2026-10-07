@@ -5,10 +5,16 @@ Status: implemented and verified on `feature/claude-code-engine`. See the
 review results, and the [evidence log](claude-code-engine-progress.md) for
 chronological run details. Start with `M-x mevedel-claude-code-setup`.
 
-Validation: 9,387 test cases, zero unexpected results, 23 conditional skips;
-229 production files compile without warnings. Live subscription checks used
+Validation after the thorough review fixes (2026-10-07): 9,446 test cases,
+zero unexpected results, 24 conditional skips; 229 production files compile
+without warnings. The [review and fix report](claude-code-engine-review-2026-10-07.md)
+records all resolved findings, follow-up reviews, performance measurements,
+and final evidence. Live subscription checks used
 the existing Enterprise login, not a separate Pro/Max account. Session sidecars
 now require v0.5.9; older records are rejected without migration, not deleted.
+The strict Goal record additionally requires `:tokens-incomplete-p`; earlier
+development Goals missing it are dropped on normal restore. The standalone
+v0.5.6 converter preserves Goals by adding this field. No features were removed.
 
 ## Canonical implementation specification
 

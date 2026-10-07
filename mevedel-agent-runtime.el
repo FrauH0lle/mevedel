@@ -651,7 +651,9 @@ the result, and a held response settles after its last owned execution."
           gptel--request-alist))))
 
 (defun mevedel-agent-runtime-interrupt (invocation reason)
-  "Interrupt INVOCATION for REASON and settle its turn once."
+  "Interrupt INVOCATION for REASON and settle its turn once.
+A native runtime canceller may return `deferred' when it owns asynchronous
+terminal acknowledgement and will settle the invocation itself."
   (unless (mevedel-agent-invocation-p invocation)
     (error "Interrupt target has no live invocation"))
   (if (mevedel-agent-invocation-runtime-settled-p invocation)
@@ -661,11 +663,12 @@ the result, and a held response settles after its last owned execution."
            (response (mevedel-agent-runtime--interrupted-response
                       invocation reason))
            (previous-reason
-            (mevedel-agent-invocation-terminal-reason invocation)))
+            (mevedel-agent-invocation-terminal-reason invocation))
+           deferred)
       (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
       (condition-case err
           (if-let* ((cancel (mevedel-agent-invocation-runtime-cancel invocation)))
-              (funcall cancel)
+              (setq deferred (eq 'deferred (funcall cancel)))
             (when (mevedel-agent-runtime--request-live-p invocation)
               (let* ((info (gptel-fsm-info fsm))
                      (provider-callback (plist-get info :callback)))
@@ -681,9 +684,10 @@ the result, and a held response settles after its last owned execution."
          (setf (mevedel-agent-invocation-terminal-reason invocation)
                previous-reason)
          (signal (car err) (cdr err))))
-      (or (mevedel-agent-runtime--settle
-           invocation response
-           (list :mevedel-agent-terminal-status 'aborted :response response))
+      (or (unless deferred
+            (mevedel-agent-runtime--settle
+             invocation response
+             (list :mevedel-agent-terminal-status 'aborted :response response)))
           response))))
 
 

@@ -8,6 +8,11 @@ import shutil
 import sys
 import time
 
+if os.getenv("MEVEDEL_TEST_STATUS_LOG"):
+    with open(os.environ["MEVEDEL_TEST_STATUS_LOG"], "a", encoding="utf-8") as log:
+        log.write(os.path.basename(sys.argv[0]) + " " + " ".join(sys.argv[1:]) + "\n")
+time.sleep(float(os.getenv("MEVEDEL_TEST_STATUS_DELAY", "0")))
+
 if os.path.basename(sys.argv[0]) == "npm":
     target = pathlib.Path(sys.argv[sys.argv.index("--prefix") + 1])
     target.mkdir(parents=True, exist_ok=True)
@@ -34,6 +39,6 @@ elif sys.argv[1:] == ["--version"]:
 elif sys.argv[1:] == ["auth", "status"]:
     print(json.dumps({"loggedIn": True,
                       "authMethod": os.getenv("MEVEDEL_TEST_AUTH_METHOD", "claude.ai"),
-                      "apiProvider": "firstParty", "subscriptionType": "max"}))
+                      "apiProvider": os.getenv("MEVEDEL_TEST_AUTH_PROVIDER", "firstParty"), "subscriptionType": "max"}))
 else:
     sys.exit(2)

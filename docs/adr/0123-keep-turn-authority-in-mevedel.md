@@ -42,6 +42,24 @@ effects when that mapping is unavailable. These constraints are documented in
 [session lifecycle](../sessions.md#external-conversation-references), rather than hidden
 behind a transcript copy that claims exact model-history equivalence.
 
+Raw transcript edits mark the owning root or child native history divergent;
+continuation requires explicit excerpt recovery. Recovery reads the effective
+summary from its canonical root or child bounds and includes it once as labelled
+compaction evidence. Ordinary transcript segmentation omits leading root
+summaries for rendering, and edits can inherit the closing wrapper's ignored
+property; neither determines which summary the recovered model receives.
+
+Connection ownership includes the protocol library's deferred drains and
+watchdogs. A connection-local filter retains the library's newly scheduled
+continuations across ordinary TRAMP waits; those callbacks retain their
+successors too. Watchdogs validate their captured identity before closing the
+connection. An interrupted request still consumes its owned terminal
+acknowledgement for usage and settlement while discarding further work.
+Retained native invocations use the same bounded acknowledgement; their runtime
+canceller defers terminal settlement until the connection completes it. Queued
+hooks and tool calls receive failure replies after cancellation, allowing a
+peer waiting on those calls to reach its terminal reply without executing them.
+
 The choice was validated through real ACP/MCP permission waits, reviewed
 patches, compaction and context restoration, independent conversations and
 same-machine restart, plus deterministic session and failure tests. The bounded
@@ -49,3 +67,15 @@ live runs used an existing Enterprise subscription login through the same
 supported login path; they do not establish Pro/Max-specific allowance or
 performance claims. Detailed run evidence belongs in the working-material
 handoff, not in this ownership contract.
+
+## Decision history
+
+The initial callback queue protected work after ACP notifications were decoded.
+Deterministic subprocess tests then showed that an ordinary TRAMP wait could
+discard ACP's earlier drain timer, leaving its queue permanently busy, and
+restore a cancelled startup watchdog that closed an admitted conversation.
+Transport ownership now begins at the connection's process filter and follows
+its scheduled callbacks. A separate admitted-turn regression showed that
+cancellation discarded final usage already acknowledged by the native agent;
+terminal accounting therefore survives cancellation under the same owner,
+without reopening tool or continuation authority.

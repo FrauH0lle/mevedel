@@ -101,7 +101,7 @@ Child-agent, context-summary, and control requests are not Goal turns. A root tu
 captures its Goal identity at request start and charges tokens, wall time, and
 one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,
-with the request estimate as fallback. Agents started from a Goal turn,
+with the request estimate as fallback for gptel requests. Agents started from a Goal turn,
 including nested agents and the completion verifier started by `UpdateGoal`,
 are not Goal turns either, but they charge their normalized usage to the Goal
 that root request is accounted to: after each tool batch and when the agent
@@ -117,6 +117,20 @@ prompt totals replace the corresponding streamed totals; absent final fields
 retain known progress. The adapter's context-occupancy updates and cumulative
 model quota rows are not additional charges. These metrics do not measure
 subscription allowance or establish an exact monetary cost.
+
+If any submitted native prompt in a turn or attributed child lacks complete
+input and output counters at settlement, the durable Goal retains the known lower bound and marks its usage
+incomplete. No estimate is manufactured from absent gptel request data.
+`GetGoal` returns null `tokens_used` and `remaining_tokens`, alongside
+`known_tokens_used`; the cockpit labels the count as incomplete. Unbudgeted
+Goals can continue. A bounded active Goal becomes `budget-limited` at root
+settlement (or when a late child settles after the root), because
+its remaining allowance cannot be established. Raising its limit cannot repair
+missing usage; remove the limit or start a new Goal to continue. A completed or
+blocked decision still wins, and later known usage does not erase the gap.
+Known usage from earlier prompts remains in the lower bound. A startup failure
+before any prompt dispatch does not create a usage gap. While a prompt is still
+running without complete counters, `GetGoal` also reports its total as unknown.
 
 Automatic full-context continuation can use several native prompts within one
 admitted Goal turn. Each completed prompt contributes its usage once; later

@@ -854,6 +854,39 @@
                                   (car (mevedel-session-pending-reminders session)))))
       (kill-buffer root-buffer)))
 
+  :doc "records missing native child usage only at terminal settlement"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create :id "g" :objective "Ship" :status 'active
+                                      :token-budget 100 :tokens-used 0))
+           (session (mevedel-session--create :name "main" :goal goal))
+           (root (gptel-make-fsm :info (list :buffer (current-buffer)
+                                             :mevedel-goal-accounting-id "g")))
+           (backend (progn (require 'mevedel-claude-code)
+                           (mevedel-claude-code--make-backend :name "Native")))
+           (agent (gptel-make-fsm
+                   :info (list :backend backend :mevedel-acp-prompted t :tokens-full '(:input 12)
+                               :mevedel-agent-invocation
+                               (mevedel-agent-invocation--create :goal-owner root)))))
+      (setq-local mevedel--session session
+                  mevedel--current-request (mevedel-request--create :session session :fsm root))
+      (mevedel-goal-charge-agent-progress agent)
+      (should (= 12 (mevedel-goal-tokens-used goal)))
+      (should-not (mevedel-goal-tokens-incomplete-p goal))
+      (mevedel-goal-charge-agent-progress agent t)
+      (should (= 12 (mevedel-goal-tokens-used goal)))
+      (should (mevedel-goal-tokens-incomplete-p goal))
+      ;; The running root may still complete or block the Goal before settling.
+      (should (eq 'active (mevedel-goal-status goal)))
+      (should (assq 'goal-usage-incomplete (plist-get mevedel-reminders--turn-events :items)))
+      (plist-put (gptel-fsm-info root) :mevedel-goal-accounted t)
+      (mevedel-goal-charge-agent-progress agent t)
+      (should (eq 'budget-limited (mevedel-goal-status goal)))
+      ;; A late event must not poison a replacement Goal.
+      (setf (mevedel-session-goal session)
+            (mevedel-goal--create :id "replacement" :status 'active :tokens-used 0))
+      (mevedel-goal-charge-agent-progress agent t)
+      (should-not (mevedel-goal-tokens-incomplete-p (mevedel-session-goal session)))))
+
   :doc "leaves agents without a Goal uncharged"
   (let ((agent (gptel-make-fsm
                 :info (list :mevedel-agent-invocation
@@ -1095,6 +1128,17 @@
       (should saved)
       (should (eq 'paused (mevedel-goal-status goal)))
       (should (string-match-p "Provider unavailable" (mevedel-goal-reason goal))))))
+
+(mevedel-deftest mevedel-goal--native-usage-incomplete-p ()
+  (let ((backend (progn (require 'mevedel-claude-code)
+                         (mevedel-claude-code--make-backend :name "Native"))))
+    (should-not (mevedel-goal--native-usage-incomplete-p nil))
+    (dolist (fields '(nil (:tokens-full (:input 12))
+                      (:tokens-full (:input 12 :output 3) :mevedel-usage-pending t)
+                      (:tokens-full (:input 12 :output 3) :mevedel-usage-incomplete t)))
+      (should (mevedel-goal--native-usage-incomplete-p (cons :backend (cons backend fields)))))
+    (should-not (mevedel-goal--native-usage-incomplete-p
+                 (list :backend backend :tokens-full '(:input 0 :output 0))))))
 
 (provide 'test-mevedel-goal)
 ;;; test-mevedel-goal.el ends here

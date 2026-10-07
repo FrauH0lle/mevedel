@@ -55,6 +55,19 @@
        (delete-directory root t)
        (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-migrate-session--sidecar ()
+  (let* ((data (test-mevedel-session-persistence--complete-sidecar nil))
+         (goal '(:id "g" :objective "Keep the goal" :status active :reason nil
+                 :token-budget 100 :tokens-used 20 :time-used-seconds 1
+                 :turns-run 1 :plan-reference nil :created-at "created" :updated-at "updated")))
+    (cl-remf data :external-conversations)
+    (setq data (plist-put (plist-put data :version "v0.5.6") :goal goal))
+    (let ((restored (mevedel-session-codec--goal-from-plist
+                     (plist-get (mevedel-migrate-session--sidecar data) :goal))))
+      (should (= 20 (mevedel-goal-tokens-used restored)))
+      (should-not (mevedel-goal-tokens-incomplete-p restored)))
+    (should-not (plist-member goal :tokens-incomplete-p))))
+
 (mevedel-deftest mevedel-migrate-session-copy (:quiet t)
   ,test
   (test)
