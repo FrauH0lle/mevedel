@@ -2,19 +2,17 @@
 ;;; Commentary:
 ;; Native Claude owns its installer.  Adapter versions are staged separately;
 ;; checked runtime paths are selected only for new invocations.  Conversation
-;; storage and active processes never move with an update.
+;; storage and active processes never move with an update.  Reading the
+;; published state is cheap and side-effect free, also without Claude.  The
+;; bounded status-command runner is shared with launch preflight.
 ;;; Code:
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
 (require 'mevedel-recovery)
 (require 'mevedel-acp)
+(require 'mevedel-claude-code-backend)
 
-;; `mevedel-claude-code'
-(defvar mevedel-claude-code-directory)
-(defvar mevedel-claude-code-executable)
-(defvar mevedel-claude-code-adapter-executable)
-(defvar mevedel-claude-code--adapter-version)
 ;; `mevedel-transport'
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
@@ -27,6 +25,50 @@
 (autoload 'mevedel-readiness-runtime-changed "mevedel-readiness")
 (add-hook 'mevedel-claude-code-maintenance-changed-hook #'mevedel-readiness-runtime-changed)
 (defvar mevedel-claude-code-maintenance--timer nil)
+
+(defun mevedel-claude-code--command-output-async (command args ready failure &optional any-exit timeout)
+  "Run status COMMAND with ARGS asynchronously; return its canceller.
+READY receives stdout on success, or on every exit with ANY-EXIT.  FAILURE
+receives a safe diagnostic.  TIMEOUT defaults to 10 seconds.  Cancel and
+timeout release the child and both private output buffers."
+  (let ((check (mapconcat #'shell-quote-argument (cons (file-name-nondirectory command) args) " "))
+        (stdout (generate-new-buffer " *claude-status*"))
+        (stderr (generate-new-buffer " *claude-status-errors*"))
+        process timer finished)
+    (cl-labels
+        ((cleanup ()
+           (when timer (cancel-timer timer))
+           (when process
+             (set-process-sentinel process #'ignore)
+             (when (process-live-p process) (delete-process process)))
+           (when (buffer-live-p stdout) (kill-buffer stdout))
+           (when (buffer-live-p stderr) (kill-buffer stderr)))
+         (cancel () (setq finished t) (cleanup))
+         (fail (message)
+           (unless finished
+             (setq finished t)
+             (cleanup)
+             (funcall failure message)))
+         (exited (child _event)
+           (when (and (not finished) (memq (process-status child) '(exit signal)))
+             (if (not (or any-exit (zerop (process-exit-status child))))
+                 (fail (format "Setup check failed: %s; run it in a terminal" check))
+               (let ((output (with-current-buffer stdout (string-trim (buffer-string)))))
+                 (setq finished t)
+                 (cleanup)
+                 (funcall ready output))))))
+      (condition-case nil
+          (progn
+            (setq timer (mevedel-transport-run-at-time
+                         (or timeout 10) (lambda () (fail (format "Setup check timed out: %s; run it in a terminal" check)))))
+            (setq process (make-process :name "mevedel-claude-status"
+                                        :command (cons command args)
+                                        :buffer stdout :stderr stderr
+                                        :connection-type 'pipe :noquery t
+                                        :coding 'utf-8-unix :sentinel #'exited))
+            (when finished (cleanup)))
+        (error (fail (format "Setup check failed: %s; run it in a terminal" check))))
+      #'cancel)))
 
 (defun mevedel-claude-code-maintenance-state ()
   "Read the configured installation's last checked runtime and safe status."
@@ -98,35 +140,36 @@
 
 (defun mevedel-claude-code-maintenance-check (&optional force)
   "Check stable updates asynchronously when due, or now with FORCE.
-Return current state.  Concurrent sessions and hosts share an installation lock."
+Return current state.  Concurrent sessions and hosts share an installation
+lock.  A forced check reports a running check and its result in the echo area."
   (when (and mevedel-claude-code-auto-update (not mevedel-claude-code-maintenance--timer))
     (setq mevedel-claude-code-maintenance--timer
           (run-at-time 3600 3600 #'mevedel-claude-code-maintenance-check)))
   (let* ((directory (expand-file-name mevedel-claude-code-directory))
+         (lock (file-name-concat directory "runtime-update"))
          (state (mevedel-claude-code-maintenance-state))
          (last (or (plist-get state :checked) 0))
          (interval (if (equal (plist-get state :status) "failed") 3600 86400)))
     (when (and (or force mevedel-claude-code-auto-update)
                (not (file-remote-p directory))
-               (not (gethash directory mevedel-claude-code-maintenance--jobs))
                (or force (> (- (float-time) last) interval)))
-      (make-directory directory t)
-      (let* ((lock (file-name-concat directory "runtime-update"))
-             (cli (executable-find mevedel-claude-code-executable))
-             (npm (executable-find "npm"))
-             (old (copy-sequence state))
-             (configured-cli mevedel-claude-code-executable)
-             (configured-adapter mevedel-claude-code-adapter-executable)
-             process timer buffer connection stopped candidate adapter stage)
-        (unless (file-locked-p lock)
-          (lock-file lock)
+      (if (or (gethash directory mevedel-claude-code-maintenance--jobs) (file-locked-p lock))
+          (when force (message "mevedel: a Claude runtime update check is already running"))
+        (make-directory directory t)
+        ;; `lock-file' does nothing while `create-lockfiles' is nil.
+        (let ((create-lockfiles t)) (lock-file lock))
+        (when force (message "mevedel: checking Claude runtime updates..."))
+        (let* ((cli (executable-find mevedel-claude-code-executable))
+               (npm (executable-find "npm"))
+               (old (copy-sequence state))
+               (configured-cli mevedel-claude-code-executable)
+               (configured-adapter mevedel-claude-code-adapter-executable)
+               cancel-command timer connection stopped candidate adapter stage)
           (cl-labels
               ((clean ()
                  (when timer (cancel-timer timer))
                  (when connection (mevedel-acp-close connection))
-                 (when process (set-process-sentinel process #'ignore)
-                       (when (process-live-p process) (delete-process process)))
-                 (when (buffer-live-p buffer) (kill-buffer buffer))
+                 (when cancel-command (funcall cancel-command))
                  (unlock-file lock)
                  (remhash directory mevedel-claude-code-maintenance--jobs))
                (cancel () (setq stopped t) (clean))
@@ -146,41 +189,27 @@ Return current state.  Concurrent sessions and hosts share an installation lock.
                                     :previousCli (plist-get old :cli)
                                     :previousAdapter (plist-get old :adapter)
                                     :rejectedCli (and message candidate)
-                                    :rejectedAdapter (and message adapter)) nil)))))
+                                    :rejectedAdapter (and message adapter)) nil)))
+                   (when force (message "mevedel: %s" (or message "Claude runtime is up to date")))))
                (run (command next)
-                 (when (buffer-live-p buffer) (kill-buffer buffer))
-                 (setq buffer (generate-new-buffer " *mevedel-runtime-update*"))
-                 (condition-case nil
-                     (let ((default-directory temporary-file-directory))
-                       (setq process
-                             (make-process
-                              :name "mevedel-runtime-update" :buffer buffer
-                              :command command :noquery t :connection-type 'pipe
-                              :filter (lambda (child text)
-                                        (when (buffer-live-p (process-buffer child))
-                                          (with-current-buffer (process-buffer child)
-                                            (goto-char (point-max)) (insert text)
-                                            (when (> (buffer-size) 65536)
-                                              (delete-region (point-min) (- (point-max) 65536))))))
-                              :sentinel
-                              (lambda (child _event)
-                                (when (and (not stopped) (memq (process-status child) '(exit signal)))
-                                  (if (not (and (eq 'exit (process-status child))
-                                                (zerop (process-exit-status child))))
-                                      (finish "Claude update failed; the previous runtime remains selected. Check the native installer and npm on the host.")
-                                    (let ((output (with-current-buffer buffer (buffer-string))))
-                                      (condition-case nil
-                                          (funcall next output)
-                                        (error (finish "Runtime validation failed; the previous runtime remains selected"))))))))))
-                   (error (finish "Could not start the updater; check Claude, Node.js and npm on the host"))))
+                 (setq cancel-command
+                       (let ((default-directory temporary-file-directory))
+                         (mevedel-claude-code--command-output-async
+                          (car command) (cdr command)
+                          (lambda (output)
+                            (condition-case nil
+                                (funcall next output)
+                              (error (finish "Runtime validation failed; the previous runtime remains selected"))))
+                          (lambda (_)
+                            (finish "Claude update failed; the previous runtime remains selected. Check the native installer and npm on the host."))
+                          nil 300))))
                (validate-adapter ()
                  (if (and (not force) (equal candidate (plist-get old :rejectedCli))
                           (equal adapter (plist-get old :rejectedAdapter)))
                      (finish "This runtime was rejected previously; waiting for a newer release or an explicit update check")
                    (run (list adapter "--version")
-			(lambda (output)
-                          (if (not (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-					(version<= mevedel-claude-code--adapter-version (match-string 0 output))))
+                        (lambda (output)
+                          (if (not (mevedel-claude-code--version output mevedel-claude-code--adapter-version))
                               (finish "Adapter version is unsupported; the previous runtime remains selected")
                             (let ((process-environment (copy-sequence process-environment)))
                               (setenv "CLAUDE_CODE_EXECUTABLE" candidate)
@@ -191,9 +220,15 @@ Return current state.  Concurrent sessions and hosts share an installation lock.
                                      (lambda (checked)
                                        (if (eq t (alist-get 'loadSession (mevedel-acp-capabilities checked)))
                                            (finish nil)
-					 (finish "Adapter cannot retain conversations; previous runtime remains selected")))
+                                         (finish "Adapter cannot retain conversations; previous runtime remains selected")))
                                      (lambda (_message)
                                        (finish "Adapter protocol validation failed; previous runtime remains selected"))))))))))
+               (check-cli (next)
+                 (run (list candidate "--version")
+                      (lambda (output)
+                        (unless (mevedel-claude-code--version output mevedel-claude-code--cli-version)
+                          (error "Unsupported Claude version"))
+                        (funcall next))))
                (install-adapter ()
                  (if configured-adapter
                      (progn (setq adapter (executable-find configured-adapter))
@@ -213,47 +248,35 @@ Return current state.  Concurrent sessions and hosts share an installation lock.
                                            (concat "@agentclientprotocol/claude-agent-acp@" version))
                                      (lambda (_) (validate-adapter)))))))))))
             (puthash directory #'cancel mevedel-claude-code-maintenance--jobs)
-            (setq timer (mevedel-transport-run-at-time 300
-						       (lambda () (finish "Claude update timed out; the previous runtime remains selected"))))
+            (setq timer (mevedel-transport-run-at-time
+                         300 (lambda () (finish "Claude update timed out; the previous runtime remains selected"))))
             (condition-case nil
-		(cond
-		 ((not cli) (finish "Install native Claude Code on the host before enabling automatic updates"))
-		 ;; Native installer paths are versioned.  Do not replace a package-manager binary.
-		 ((not (string-match-p "/claude/versions/" (file-truename cli)))
-		  (setq candidate (file-truename cli))
-		  (run (list candidate "--version")
-                       (lambda (output)
-			 (unless (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-                                      (version<= "2.1.290" (match-string 0 output)))
-			   (error "Update externally managed Claude on the host"))
-			 (install-adapter))))
-		 (t
-		  ;; Preserve the checked executable before the native installer can prune it.
-		  (unless (plist-get old :cli)
+                (cond
+                 ((not cli) (finish "Install native Claude Code on the host before enabling automatic updates"))
+                 ;; Native installer paths are versioned.  Do not replace a package-manager binary.
+                 ((not (string-match-p "/claude/versions/" (file-truename cli)))
+                  (setq candidate (file-truename cli))
+                  (check-cli #'install-adapter))
+                 (t
+                  ;; Preserve the checked executable before the native installer can prune it.
+                  (unless (plist-get old :cli)
                     (setq old (plist-put old :cli (mevedel-claude-code-maintenance--pin cli directory))))
-		  (unless (plist-get old :adapter)
+                  (unless (plist-get old :adapter)
                     (setq old (plist-put old :adapter
-					 (let ((installed (file-name-concat directory "node_modules" ".bin" "claude-agent-acp")))
-					   (or mevedel-claude-code-adapter-executable
-                                               (and (file-executable-p installed) installed)
-                                               (executable-find "claude-agent-acp"))))))
-		  (let ((mevedel-claude-code-directory directory)
+                                         (or mevedel-claude-code-adapter-executable
+                                             (executable-find "claude-agent-acp")))))
+                  (let ((mevedel-claude-code-directory directory)
                         (mevedel-claude-code-executable configured-cli)
                         (mevedel-claude-code-adapter-executable configured-adapter))
                     (mevedel-claude-code-maintenance--write
                      (append (list :status "checking" :message "Checking stable Claude updates")
                              (cl-loop for (key value) on old by #'cddr
                                       unless (memq key '(:status :message)) append (list key value)))))
-		  (run (list cli "install" "stable")
+                  (run (list cli "install" "stable")
                        (lambda (_)
-			 (setq candidate (mevedel-claude-code-maintenance--pin cli directory))
-			 (run (list candidate "--version")
-                              (lambda (output)
-				(unless (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-                                             (version<= "2.1.290" (match-string 0 output)))
-				  (error "Unsupported Claude version"))
-				(install-adapter)))))))
-	      (error (finish "Runtime update preparation failed; previous runtime remains selected")))))))
+                         (setq candidate (mevedel-claude-code-maintenance--pin cli directory))
+                         (check-cli #'install-adapter)))))
+              (error (finish "Runtime update preparation failed; previous runtime remains selected")))))))
     state))
 
 (defun mevedel-claude-code-maintenance-stop ()

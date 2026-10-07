@@ -44,11 +44,20 @@
   (test)
   :doc "checked stable runtime is published only after a real ACP handshake"
   (mevedel-maintenance-test--with-installation
-   (mevedel-claude-code-maintenance-check t)
-   (should (= 1 (hash-table-count mevedel-claude-code-maintenance--jobs)))
-   (mevedel-claude-code-maintenance-check t)
-   (should (= 1 (hash-table-count mevedel-claude-code-maintenance--jobs)))
-   (await)
+   (let ((create-lockfiles nil) messages)
+     (cl-letf (((symbol-function 'message)
+                (lambda (format &rest args) (push (apply #'format-message format args) messages))))
+       (mevedel-claude-code-maintenance-check t)
+       ;; The installation lock holds even when the user disables lock files.
+       (should (file-locked-p (file-name-concat mevedel-claude-code-directory "runtime-update")))
+       (should (= 1 (hash-table-count mevedel-claude-code-maintenance--jobs)))
+       (mevedel-claude-code-maintenance-check t)
+       (should (= 1 (hash-table-count mevedel-claude-code-maintenance--jobs)))
+       (await))
+     (should (equal '("mevedel: Claude runtime is up to date"
+                      "mevedel: a Claude runtime update check is already running"
+                      "mevedel: checking Claude runtime updates...")
+                    messages)))
    (let* ((state (mevedel-claude-code-maintenance-state))
 	  (cli (plist-get state :cli)) (adapter (plist-get state :adapter)))
      (should (equal "ready" (plist-get state :status)))
@@ -75,6 +84,67 @@
      (await)
      (should (equal "ready" (plist-get (mevedel-claude-code-maintenance-state) :status)))
      (should (file-exists-p (file-name-concat bin "npm"))))))
+
+(mevedel-deftest mevedel-claude-code-maintenance--prune ()
+  ,test
+  (test)
+  :doc "pruning keeps current, previous, rejected and running versions"
+  (let* ((mevedel-claude-code-directory (make-temp-file "mevedel-prune-test-" t))
+         (runtime (lambda (version)
+                    (file-name-concat mevedel-claude-code-directory "runtimes" version)))
+         (adapter (lambda (version)
+                    (file-name-concat (funcall runtime version) "node_modules" ".bin" "claude-agent-acp")))
+         (cli (lambda (version)
+                (file-name-concat mevedel-claude-code-directory "executables" version)))
+         (process (make-process :name "mevedel-prune-test" :command '("cat") :noquery t)))
+    (unwind-protect
+        (progn
+          (dolist (version '("1.0.0" "1.1.0" "1.2.0" "2.0.0" "3.0.0"))
+            (make-directory (file-name-directory (funcall adapter version)) t)
+            (write-region "" nil (funcall adapter version) nil 'silent))
+          (make-directory (funcall cli "") t)
+          (dolist (version '("2.1.290" "2.1.291" "2.1.292" "2.1.293"))
+            (write-region "" nil (funcall cli version) nil 'silent))
+          (process-put process 'mevedel-acp-launch
+                       (list :command (funcall adapter "1.0.0")
+                             :environment (list (concat "CLAUDE_CODE_EXECUTABLE=" (funcall cli "2.1.290")))))
+          (mevedel-claude-code-maintenance--prune
+           (list :cli (funcall cli "2.1.293") :adapter (funcall adapter "2.0.0")
+                 :previousCli (funcall cli "2.1.292") :previousAdapter (funcall adapter "1.1.0")
+                 :rejectedAdapter (funcall adapter "3.0.0")))
+          (should (equal '("1.0.0" "1.1.0" "2.0.0" "3.0.0")
+                         (directory-files (funcall runtime "") nil "\\`[0-9]")))
+          (should (equal '("2.1.290" "2.1.292" "2.1.293")
+                         (directory-files (funcall cli "") nil "\\`[0-9]"))))
+      (delete-process process)
+      (delete-directory mevedel-claude-code-directory t))))
+
+(mevedel-deftest mevedel-claude-code-maintenance-state ()
+  ,test
+  (test)
+  :doc "a fresh mevedel reads runtime state without loading Claude or touching disk"
+  (let ((home (make-temp-file "mevedel-maintenance-cold-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((status (call-process
+                         (expand-file-name invocation-name invocation-directory) nil t nil
+                         "--batch" "-Q" "--eval"
+                         (prin1-to-string
+                          `(progn
+                             (setq load-path ',load-path
+                                   user-emacs-directory ,(file-name-as-directory home))
+                             (require 'mevedel)
+                             (require 'mevedel-claude-code-maintenance)
+                             (let ((files (directory-files-recursively ,home "" t)))
+                               (when (mevedel-claude-code-maintenance-state)
+                                 (error "Unexpected runtime state"))
+                               (when (featurep 'mevedel-claude-code)
+                                 (error "Runtime state loaded the Claude adapter"))
+                               (unless (equal files (directory-files-recursively ,home "" t))
+                                 (error "Runtime state wrote files"))))))))
+            (ert-info ((buffer-string))
+              (should (equal 0 status)))))
+      (delete-directory home t))))
 
 (mevedel-deftest mevedel-claude-code-maintenance-stop (:quiet t)
   (mevedel-maintenance-test--with-installation

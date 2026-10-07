@@ -26,9 +26,10 @@
                                                      :type 'user-error))))
           (dolist (foreign (list (plist-put (copy-sequence record) :host "other-machine")
                                  (plist-put (copy-sequence record) :directory "/other/installation")))
-            (should (string-search "another installation"
-                                   (cadr (should-error (mevedel-claude-code-history-assert-current foreign)
-                                                       :type 'user-error))))))
+            (let ((message (cadr (should-error (mevedel-claude-code-history-assert-current foreign)
+                                               :type 'user-error))))
+              (should (string-search "another installation" message))
+              (should (string-search "M-x mevedel-claude-code-recover-history" message)))))
       (delete-directory mevedel-claude-code-directory t))))
 
 (mevedel-deftest mevedel-claude-code-history-open ()

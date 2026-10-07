@@ -20,18 +20,20 @@
 (require 'mevedel-memory-list)
 (require 'mevedel-system)
 (require 'mevedel-claude-code)
+(require 'mevedel-engine-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-engine-test-support"))
 
 (defconst mevedel-test-memory-review--none
   "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes.")
-
-(defconst mevedel-test-memory-review--acp-peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
 
 (mevedel-deftest mevedel-memory-review-request/claude
     (:quiet t
      :vars* ((directory (make-temp-file "mevedel-memory-acp-" t))
              (workspace (mevedel-workspace--create :root directory))
+             (mevedel-claude-code-directory (file-name-concat directory "claude"))
              (mevedel-memory-dirs nil)
              (gptel--known-backends nil)
              (mevedel-model-context-limit 128000)
@@ -49,21 +51,16 @@
     (write-region "evidence: retained scope\n" nil (file-name-concat directory "source.txt") nil 'silent)
     (mevedel-claude-code-register)
     (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-               (lambda (_system mcp model _effort &optional id hook)
-                 (push model models) (should-not id)
-                 (should-not mevedel--session)
-                 (should-not mevedel--current-request)
-                 (list :command (executable-find "python3")
-                       :args (list mevedel-test-memory-review--acp-peer)
-                       :cwd directory :mcp mcp
-                       :tool-id-field :claudecode/toolUseId
-                       :control #'mevedel-claude-code--control
-                       :normalize-outcome #'mevedel-claude-code--outcome
-                       :meta `((hookCommand . ,hook) (responseText . ,response)
-                               (toolBatches . ,batches)
-                               (promptResponse . ((stopReason . "end_turn")
-                                                  (usage . ((inputTokens . 11) (cachedWriteTokens . 6)
-                                                            (cachedReadTokens . 20) (outputTokens . 3))))))))))
+               (mevedel-engine-test--claude-launch
+                (lambda (_system _mcp model _effort &optional id _hook)
+                  (push model models) (should-not id)
+                  (should-not mevedel--session)
+                  (should-not mevedel--current-request)
+                  (list :meta `((responseText . ,response)
+                                (toolBatches . ,batches)
+                                (promptResponse . ((stopReason . "end_turn")
+                                                   (usage . ((inputTokens . 11) (cachedWriteTokens . 6)
+                                                             (cachedReadTokens . 20) (outputTokens . 3)))))))))))
       (cl-labels ((start ()
                     (setq handle (mevedel-memory-review-request
                                   (mevedel-memory-scope-capture workspace) nil

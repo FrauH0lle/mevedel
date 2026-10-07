@@ -27,14 +27,18 @@
 ;; `mevedel-structs'
 (defvar mevedel--current-directive-uuid)
 
+(defun mevedel-claude-code--forget-instructions (session owner)
+  "Forget SESSION's path-instruction acknowledgements for conversation OWNER."
+  (setf (mevedel-session-workspace-instruction-hashes session)
+        (mapcar (lambda (entry)
+                  (cons (car entry) (unless (equal owner (caar entry)) (cdr entry))))
+                (mevedel-session-workspace-instruction-hashes session))))
+
 (defun mevedel-claude-code-reset-root-delivery (session)
   "Forget root context acknowledgements when SESSION changes engines.
 Child conversations keep their independent path-instruction acknowledgements."
-  (setf (mevedel-session-workspace-instruction-hashes session)
-        (mapcar (lambda (entry)
-                  (cons (car entry) (unless (equal "/root" (caar entry)) (cdr entry))))
-                (mevedel-session-workspace-instruction-hashes session))
-        (mevedel-session-mentions-shown session) (make-hash-table :test #'equal))
+  (mevedel-claude-code--forget-instructions session "/root")
+  (setf (mevedel-session-mentions-shown session) (make-hash-table :test #'equal))
   (mevedel-reminders-rearm-plan-reference session))
 
 (defun mevedel-claude-code-release-history (session &optional scope)
@@ -57,10 +61,7 @@ not call this operation."
           (mevedel-claude-code-reset-root-delivery session)
         (push (list scope :engine 'claude-code :state 'unstarted)
               (mevedel-session-external-conversations session))
-        (setf (mevedel-session-workspace-instruction-hashes session)
-              (mapcar (lambda (entry)
-                        (cons (car entry) (unless (equal scope (caar entry)) (cdr entry))))
-                      hashes)))
+        (mevedel-claude-code--forget-instructions session scope))
       (condition-case err
           (mevedel-session-artifacts-save session (current-buffer))
         (error

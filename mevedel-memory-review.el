@@ -22,6 +22,10 @@
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
 
+;; `mevedel-claude-code'
+(declare-function mevedel-claude-code-request-workload "mevedel-claude-code"
+                  (prompt system tools callback before-tool boundary))
+
 ;; `mevedel-structs'
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
@@ -431,8 +435,8 @@ its exact provider payload and per-step token usage are not exposed."
                     (remaining-output)
                     (setq round 1
                           cancel-engine
-                          (mevedel-engine-request-workload
-                           gptel-backend input system gptel-tools #'external-provider
+                          (mevedel-claude-code-request-workload
+                           input system gptel-tools #'external-provider
                            #'external-before-tool #'external-boundary))
                     (when (and settled cancel-engine) (funcall cancel-engine)))
                 (progn (mevedel-auth-assert-ready gptel-backend)

@@ -19,6 +19,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-engine-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-engine-test-support"))
 
 
 ;;
@@ -26,10 +31,6 @@
 
 (defvar mevedel-test--buddy-buffers nil
   "Buffers created by the buddy tests, killed in teardown.")
-
-(defconst mevedel-test--buddy-acp-peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
 
 (mevedel-deftest mevedel-buddy-guide/claude
     (:quiet t
@@ -39,20 +40,18 @@
              (mevedel-model-workloads '((buddy :provider "Claude Code:sonnet" :effort nil)))
              (mevedel-buddy-note--notes nil)
              (mevedel-buddy-max-iterations 8)
+             (mevedel-claude-code-directory (make-temp-file "mevedel-buddy-claude-" t))
              models batches)
-     :after-each (mevedel-test--buddy-cleanup))
+     :after-each ((mevedel-test--buddy-cleanup)
+                  (delete-directory mevedel-claude-code-directory t)))
   (progn
     (mevedel-claude-code-register)
     (with-current-buffer source
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (lambda (_system mcp model _effort &optional id hook)
-                   (should-not id) (push model models)
-                   (list :command (executable-find "python3")
-                         :args (list mevedel-test--buddy-acp-peer)
-                         :cwd temporary-file-directory :mcp mcp
-                         :tool-id-field :claudecode/toolUseId
-                         :control #'mevedel-claude-code--control
-                         :meta `((hookCommand . ,hook) (toolBatches . ,batches))))))
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system _mcp model _effort &optional id _hook)
+                    (should-not id) (push model models)
+                    (list :meta `((toolBatches . ,batches)))))))
         (cl-labels ((note (id buffer text)
                       `((name . "add_note") (id . ,id)
                         (args . ((buffer . ,(buffer-name buffer)) (line_number . 1)

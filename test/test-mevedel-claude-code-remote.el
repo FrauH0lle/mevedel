@@ -15,10 +15,6 @@
 (require 'tramp-container)
 (require 'tramp-sh)
 
-(defconst mevedel-claude-code-remote-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-claude-code/remote (:quiet t)
   (pcase-dolist (`(,variable ,method) '(("MEVEDEL_TEST_SSH_ROOT" ssh)
                                        ("MEVEDEL_TEST_PODMAN_ROOT" podman)))
@@ -45,7 +41,9 @@
                   (mevedel-session-sandbox-mode session) 'required)
             (mevedel-session-artifacts-ensure-files session buffer)
             (write-region "target evidence\n" nil (file-name-concat root "input.txt") nil 'silent)
-            (write-region "host decoy\n" nil (file-name-concat local "input.txt") nil 'silent)
+            ;; The adapter runs in the neutral conversation directory on the host.
+            (make-directory (file-name-concat mevedel-claude-code-directory "conversations") t)
+            (write-region "host decoy\n" nil (file-name-concat mevedel-claude-code-directory "conversations" "input.txt") nil 'silent)
             (mevedel-claude-code-register)
             (mevedel-model-set-session-provider
              session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
@@ -56,21 +54,17 @@
             (cl-letf (((symbol-function 'gptel-request)
                        (lambda (&rest _) (ert-fail "Native remote send reached the API")))
                       ((symbol-function 'mevedel-claude-code-launch)
-                       (lambda (_system mcp _model _effort &optional id _hook)
-                         (list :command (executable-find "python3")
-                               :args (list mevedel-claude-code-remote-test--peer)
-                               :cwd local :mcp mcp :session-id id
-                               :tool-id-field :claudecode/toolUseId
-                               :observe #'mevedel-claude-code-context-observe
-                               :check-context #'mevedel-claude-code-context-check
-                               :meta '((responseText . "Remote work completed")
-                                       (toolBatches . [[((name . "Read") (id . "remote-read")
-                                                        (args . ((file_path . "input.txt"))))]
-                                                      [((name . "ApplyPatch") (id . "remote-patch")
-                                                        (args . ((patch . "*** Begin Patch\n*** Update File: input.txt\n@@\n-target evidence\n+reviewed target evidence\n*** End Patch"))))]
-                                                      [((name . "Bash") (id . "remote-bash")
-                                                        (args . ((command . "cat input.txt > output.txt; cat output.txt")
-                                                                 (yield_time_ms . 1000))))]]))))))
+                       (mevedel-engine-test--claude-launch
+                        (lambda (&rest _)
+                          (list
+                           :meta '((responseText . "Remote work completed")
+                                   (toolBatches . [[((name . "Read") (id . "remote-read")
+                                                     (args . ((file_path . "input.txt"))))]
+                                                   [((name . "ApplyPatch") (id . "remote-patch")
+                                                     (args . ((patch . "*** Begin Patch\n*** Update File: input.txt\n@@\n-target evidence\n+reviewed target evidence\n*** End Patch"))))]
+                                                   [((name . "Bash") (id . "remote-bash")
+                                                     (args . ((command . "cat input.txt > output.txt; cat output.txt")
+                                                              (yield_time_ms . 1000))))]])))))))
               (mevedel--insert-user-turn "Read and update the target file, then verify it with Bash")
               (mevedel--send-request)
               (with-timeout (60 (mevedel-abort buffer) (ert-fail "Native remote turn did not settle"))
@@ -83,10 +77,11 @@
               (should (equal "reviewed target evidence\n"
                              (with-temp-buffer
                                (insert-file-contents (file-name-concat root name)) (buffer-string)))))
-            (should (equal "host decoy\n" (with-temp-buffer
-                                           (insert-file-contents (file-name-concat local "input.txt"))
-                                           (buffer-string))))
-            (should-not (file-exists-p (file-name-concat local "output.txt"))))
+            (let ((cwd (file-name-concat mevedel-claude-code-directory "conversations")))
+              (should (equal "host decoy\n" (with-temp-buffer
+                                             (insert-file-contents (file-name-concat cwd "input.txt"))
+                                             (buffer-string))))
+              (should-not (file-exists-p (file-name-concat cwd "output.txt")))))
         (mevedel-execution-teardown-session session)
         (test-mevedel-session-persistence--release-and-kill buffer session)
         (mevedel-workspace-clear-registry)

@@ -9,6 +9,12 @@
 
 (require 'mevedel-engine)
 
+(defun mevedel-claude-code-usage--add-base (target base tokens)
+  "Return TARGET with each TOKENS counter added to its BASE counter."
+  (cl-loop for (key value) on tokens by #'cddr
+           do (setq target (plist-put target key (+ value (or (plist-get base key) 0)))))
+  target)
+
 (defun mevedel-claude-code-usage-observe (owner notification)
   "Record live top-level SDK sample usage from NOTIFICATION for OWNER.
 Only nonnegative counters establish known usage.  Partial deltas retain prior
@@ -67,12 +73,8 @@ Cache creation contributes to normalized input; cached reads stay separate."
                                   (not (and (natnump (plist-get complete :input))
                                             (natnump (plist-get complete :output))))))
             (when (plist-member info :mevedel-claude-usage-base)
-              (let* ((base (plist-get info :mevedel-claude-usage-base))
-                     (accumulated (copy-sequence base)))
-                (while tokens
-                  (let ((key (pop tokens)) (value (pop tokens)))
-                    (setq accumulated (plist-put accumulated key (+ value (or (plist-get base key) 0))))))
-                (setq tokens accumulated)))
+              (let ((base (plist-get info :mevedel-claude-usage-base)))
+                (setq tokens (mevedel-claude-code-usage--add-base (copy-sequence base) base tokens))))
             (setq info (plist-put info :tokens-full tokens))))
         (setf (mevedel-engine-info owner)
               (plist-put (plist-put info :mevedel-claude-sample-id current)
@@ -95,9 +97,7 @@ retain a request-level incomplete marker even after later complete prompts."
     (setq info (plist-put info :mevedel-usage-pending (not complete)))
     (unless complete
       (setq info (plist-put info :mevedel-usage-incomplete t)))
-    (while tokens
-      (let ((key (pop tokens)) (value (pop tokens)))
-        (setq known (plist-put known key (+ value (or (plist-get base key) 0))))))
+    (setq known (mevedel-claude-code-usage--add-base known base tokens))
     (setf (mevedel-engine-info owner) (plist-put info :tokens-full known))
     (plist-put outcome :tokens known)))
 

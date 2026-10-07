@@ -23,23 +23,18 @@
     (mevedel-test--with-captured-diagnostics diagnostics
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (lambda (_system mcp model _effort &optional id hook)
-                       (let ((native (if mevedel--agent-invocation "child-history" "root-history")))
-                         (push (list native id model) launches)
-                         (should (equal (and (= phase 2) native) id))
-                         (should (equal "sonnet" model))
-                         (list :command (executable-find "python3") :args (list peer)
-                               :cwd root :mcp mcp :session-id id
-                               :tool-id-field :claudecode/toolUseId
-                               :observe #'mevedel-claude-code-context-observe
-                               :check-context #'mevedel-claude-code-context-check
-                               :control #'mevedel-claude-code--control
-                               :meta `((fixtureSessionId . ,native)
-                                       (hookCommand . ,hook)
-                                       (responseText . ,(format "%s phase %d complete" native phase))
-                                       (toolBatches . [[((name . "Read")
-                                                        (id . ,(format "%s-%d" native phase))
-                                                        (args . ((file_path . ,evidence))))]])))))))
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system _mcp model _effort &optional id _hook)
+                        (let ((native (if mevedel--agent-invocation "child-history" "root-history")))
+                          (push (list native id model) launches)
+                          (should (equal (and (= phase 2) native) id))
+                          (should (equal "sonnet" model))
+                          (list :args (list peer)
+                                :meta `((fixtureSessionId . ,native)
+                                        (responseText . ,(format "%s phase %d complete" native phase))
+                                        (toolBatches . [[((name . "Read")
+                                                         (id . ,(format "%s-%d" native phase))
+                                                         (args . ((file_path . ,evidence))))]]))))))))
             (mevedel-claude-code-register)
             (dolist (name '("Read" "ListAgents" "SendMessage")) (mevedel-tool-ensure name))
             (make-directory scope t)
