@@ -1,7 +1,8 @@
-;;; migrate-session-v0.5.6.el --- One-off session conversion -*- lexical-binding: t -*-
+;;; migrate-session-v0.5.6.el --- Convert v0.5.6/v0.5.9 sessions to v0.5.10 -*- lexical-binding: t -*-
 
 ;;; Commentary:
 ;; Explicit v0.5.6/v0.5.9 -> v0.5.10 conversion, outside the runtime loader.
+;; The file keeps the name of its first source format.
 ;; Copy a closed local session to a new directory; never change the source.
 ;; Convert all retained publication sidecars and their manifest checksums.
 ;; Run from the repository root:
@@ -71,11 +72,15 @@
     ("v0.5.6"
      (when (plist-member data :external-conversations)
        (error "Unexpected external histories in a v0.5.6 sidecar"))
-     (setq data (plist-put data :external-conversations nil))
-     (when-let* ((goal (plist-get data :goal)))
-       (setq data (plist-put data :goal (plist-put goal :tokens-incomplete-p nil)))))
+     (setq data (plist-put data :external-conversations nil)))
     ((or "v0.5.9" "v0.5.10") nil)
     (_ (error "Unsupported migration source version: %s" (plist-get data :version))))
+  ;; v0.5.6 and early v0.5.9 Goals predate incomplete-usage tracking.  The
+  ;; loader drops an invalid Goal silently, so validate it here instead.
+  (when-let* ((goal (plist-get data :goal)))
+    (unless (plist-member goal :tokens-incomplete-p)
+      (setq data (plist-put data :goal (plist-put goal :tokens-incomplete-p nil))))
+    (mevedel-session-codec--goal-from-plist (plist-get data :goal)))
   (unless (equal (plist-get data :version) "v0.5.10")
     ;; Older formats never persisted input queues or recovery issues.  Do not
     ;; silently discard unexpected values or invent previously unsaved work.

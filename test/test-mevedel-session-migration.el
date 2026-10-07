@@ -99,6 +99,21 @@
       (should (mevedel-session-pending-input-failure-paused loaded))
       (should (eq 'uncertain (plist-get (cdar (mevedel-session-external-conversations loaded)) :state)))))
 
+  :doc "v0.5.9 Goals gain incomplete-usage tracking and invalid Goals fail loudly"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let* ((goal '(:id "g" :objective "Keep the goal" :status active :reason nil
+                       :token-budget 100 :tokens-used 20 :time-used-seconds 1
+                       :turns-run 1 :plan-reference nil :created-at "created"
+                       :updated-at "updated"))
+           (converted (mevedel-migrate-session--sidecar
+                       (plist-put (copy-tree old) :goal (copy-tree goal))))
+           (loaded (plist-get (mevedel-session-codec-deserialize converted workspace)
+                              :session)))
+      (should (= 20 (mevedel-goal-tokens-used (mevedel-session-goal loaded))))
+      (should-error (mevedel-migrate-session--sidecar
+                     (plist-put (copy-tree old) :goal
+                                (plist-put (copy-tree goal) :status 'unknown))))))
+
   :doc "current sidecars retain queued input and recovery state unchanged"
   (let ((data (test-mevedel-session-persistence--complete-sidecar nil)))
     (setq data (plist-put data :pending-follow-ups '((:id 3 :category follow-up :input "Keep this")))

@@ -975,17 +975,19 @@ The entry holds `:body' and a delivery `:commit'."
               (t status))))))
 
 (defun mevedel-goal--transient-failure-p (reason)
-  "Return non-nil when REASON describes a retryable transport failure."
-  (and (eq (mevedel-recovery-category reason) 'request)
-  (string-match-p
-   (rx (or "timeout" "timed out" "temporar" "connection"
-           "network" "unavailable" "502" "503" "504"
-           ;; Name resolution, connect, partial transfer, timeout, TLS
-           ;; handshake, empty reply, send and receive failures.
-           (seq "curl failed with exit code "
-                (or "6" "7" "18" "28" "35" "52" "55" "56")
-                word-end)))
-	(downcase reason))))
+  "Return non-nil when REASON describes a retryable transport failure.
+Sign-in, runtime, configuration and history failures need the user; a
+model reported unavailable is often a transient overload and is retried."
+  (and (memq (mevedel-recovery-category reason) '(request model))
+       (string-match-p
+        (rx (or "timeout" "timed out" "temporar" "connection"
+                "network" "unavailable" "502" "503" "504"
+                ;; Name resolution, connect, partial transfer, timeout, TLS
+                ;; handshake, empty reply, send and receive failures.
+                (seq "curl failed with exit code "
+                     (or "6" "7" "18" "28" "35" "52" "55" "56")
+                     word-end)))
+        (downcase reason))))
 
 (defun mevedel-goal-settle-turn (fsm)
   "Charge successful Goal turn FSM."

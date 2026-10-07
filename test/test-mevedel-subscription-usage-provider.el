@@ -45,6 +45,10 @@
                (concat "\n" (make-string filled ?\u2588)
                        (make-string (- 20 filled) ?\u2591) "\n\n")
                text))))
+  :doc "a fractional window duration still formats"
+  (should (string-match-p "window: 5 hours"
+                          (mevedel-subscription-usage-provider--window
+                           "Primary" '((limit_window_seconds . 18000.0)))))
   :doc "malformed values are rejected"
   (should-error (mevedel-subscription-usage-provider--window "Primary" '((used_percent . "secret")))))
 
@@ -106,62 +110,68 @@
                 (lambda (text error) (setq result (list text error))))))
     (should-not (car result))
     (should (string-match-p "gptel-openai-oauth-login" (cadr result)))
-    (should-not (string-match-p "SECRET" (cadr result)))))
+    (should-not (string-match-p "SECRET" (cadr result))))
+  :doc "a renewal already under way asks for a later refresh, not a login"
+  (let ((mevedel-auth--operations (make-hash-table :test #'equal))
+        (mevedel-auth-changed-hook nil)
+        (backend (gptel--make-openai-oauth :name "Renewing"))
+        result)
+    (cl-letf (((symbol-function 'mevedel-auth-assert-ready)
+               (lambda (backend)
+                 (mevedel-auth--publish backend "refreshing" "Refreshing Codex login")
+                 (user-error "Codex login needs renewal"))))
+      (funcall (mevedel-subscription-usage-provider-fetch
+                backend (lambda (text error) (setq result (list text error))))))
+    (should-not (car result))
+    (should (string-match-p "renewing; refresh shortly" (cadr result)))))
 
 (mevedel-deftest mevedel-subscription-usage-provider--codex (:quiet t)
-  (let* ((original-retrieve (symbol-function 'url-retrieve))
-         (original-timer (symbol-function 'run-at-time))
-         (backend (gptel--make-openai-oauth :name "Selected"))
-         (server (make-network-process
-                  :name "usage-http-test" :server t :host "127.0.0.1" :service t :noquery t
-                  :filter
-                  (lambda (process text)
-                    (process-put process 'request (concat (process-get process 'request) text))
-                    (when (and ,status (string-match-p "\r\n\r\n" (process-get process 'request)))
-                      (process-send-string process
-                                           (format "HTTP/1.1 %s Test\r\nConnection: close\r\nContent-Length: %s\r\n\r\n%s"
-                                                   ,status (string-bytes ,body) ,body))))))
-         (url (format "http://127.0.0.1:%s/usage" (process-contact server :service)))
-         timer response cancel results)
-    (unwind-protect
-		       (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
-				 ((symbol-function 'gptel--openai-oauth-header)
-                   (lambda (_) (should (eq backend gptel-backend))
-                     '(("Authorization" . "Bearer test") ("ChatGPT-Account-Id" . "chosen"))))
-                  ((symbol-function 'url-retrieve)
-                   (lambda (requested callback &rest args)
-                     (should (equal requested "https://chatgpt.com/backend-api/wham/usage"))
-                     (should (equal "Bearer test" (cdr (assoc "Authorization" url-request-extra-headers))))
-                     (setq response (apply original-retrieve url callback args))))
-                  ((symbol-function 'run-at-time)
-                   (lambda (seconds repeat function &rest args)
-                     (if (eql seconds 30)
-                         (setq timer (apply original-timer 0.2 repeat function args))
-                       (apply original-timer seconds repeat function args)))))
-          (setq cancel (mevedel-subscription-usage-provider-fetch backend
-                         (lambda (text error) (push (list text error) results))))
-          (if ,cancel (funcall cancel)
-            (with-timeout (5 (ert-fail "HTTP quota request did not settle"))
-              (while (not results) (accept-process-output nil 0.01))))
-          (if ,cancel (should-not results)
-            (should (= 1 (length results)))
-            (should (string-match-p ,expected (or (caar results) (cadar results)))))
-          (funcall cancel)
-          (should-not (buffer-live-p response))
-          (should-not (memq timer timer-list)))
-      (when cancel (funcall cancel))
-      (dolist (process (process-list))
-        (when (or (eq process server) (eq (process-contact process :server) server))
-          (delete-process process)))))
+  (mevedel-test-http
+   (lambda (_request) (and ,status (list ,status "" ,body)))
+   (lambda (url)
+     (let* ((original-retrieve (symbol-function 'url-retrieve))
+            (original-timer (symbol-function 'mevedel-transport-run-at-time))
+            (backend (gptel--make-openai-oauth :name "Selected"))
+            (buffers (buffer-list))
+            timer cancel results)
+       (unwind-protect
+           (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
+                     ((symbol-function 'gptel--openai-oauth-header)
+                      (lambda (_) (should (eq backend gptel-backend))
+                        '(("Authorization" . "Bearer test") ("ChatGPT-Account-Id" . "chosen"))))
+                     ((symbol-function 'url-retrieve)
+                      (lambda (requested callback &rest args)
+                        (should (equal requested "https://chatgpt.com/backend-api/wham/usage"))
+                        (should (equal "Bearer test" (cdr (assoc "Authorization" url-request-extra-headers))))
+                        (apply original-retrieve (concat url "/usage") callback args)))
+                     ((symbol-function 'mevedel-transport-run-at-time)
+                      (lambda (seconds function &rest args)
+                        (setq timer (apply original-timer (if (eql seconds 30) 0.2 seconds)
+                                           function args)))))
+             (setq cancel (mevedel-subscription-usage-provider-fetch backend
+                            (lambda (text error) (push (list text error) results))))
+             (if ,cancel (funcall cancel)
+               (with-timeout (5 (ert-fail "HTTP quota request did not settle"))
+                 (while (not results) (accept-process-output nil 0.01))))
+             (if ,cancel (should-not results)
+               (should (= 1 (length results)))
+               (should (string-match-p ,expected (or (caar results) (cadar results))))
+               (should-not (string-match-p "SECRET" (format "%S" results))))
+             (funcall cancel)
+             (should-not (seq-difference (buffer-list) buffers))
+             (should-not (memq timer timer-list)))
+         (when cancel (funcall cancel))))))
   (status body expected cancel)
   :doc "real HTTP success cleans response and timeout"
-  200 "{\"plan_type\":\"plus\",\"rate_limit\":null}" "Account: chosen" nil
+  "200 OK" "{\"plan_type\":\"plus\",\"rate_limit\":null}" "Account: chosen" nil
   :doc "HTTP authentication error never exposes response body"
-  401 "SECRET" "access denied" nil
+  "401 Unauthorized" "SECRET" "access denied" nil
   :doc "HTTP service failure remains actionable"
-  503 "SECRET" "status 503" nil
+  "503 Unavailable" "SECRET" "status 503" nil
   :doc "malformed HTTP body is rejected"
-  200 "SECRET" "Unrecognized" nil
+  "200 OK" "SECRET" "Unrecognized" nil
+  :doc "a quota response that is not a success is never displayed"
+  "500 Error" "{\"plan_type\":\"plus\"}" "status 500" nil
   :doc "bounded HTTP request expires and cleans resources"
   nil "" "timed out" nil
   :doc "cancellation cleans resources without a terminal callback"

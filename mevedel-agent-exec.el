@@ -21,12 +21,10 @@
   ;; Without this, `(setf (gptel-fsm-handlers ...) ...)' below does not expand
   ;; to its slot-setter at compile time and falls back to looking up a
   ;; nonexistent `(setf gptel-fsm-handlers)' function at runtime.
-  (require 'gptel-request)
-  ;; Required for the cl-defstruct `setf' expanders on
-  ;; `mevedel-agent-invocation-*' slots referenced below.
-  (require 'mevedel-agents))
+  (require 'gptel-request))
 
 (require 'mevedel-agent-conversation)
+(require 'mevedel-agents)
 (require 'mevedel-compact-estimation)
 (require 'mevedel-models)
 
@@ -72,6 +70,7 @@
 (declare-function gptel-fsm-handlers "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
+(declare-function gptel-get-backend "ext:gptel-request" (name))
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (declare-function gptel-request "ext:gptel-request"
                   (&optional prompt &rest args))
@@ -420,6 +419,37 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 ;;
 ;;; Task runner
 
+(defun mevedel-agent-exec-refresh-provider (invocation)
+  "Return INVOCATION's frozen configuration, bound to a live provider.
+The configuration is copied onto INVOCATION before any change."
+  (let ((frozen (mevedel-agent-invocation-frozen-configuration invocation)))
+    (unless (mevedel-agent-configuration-p frozen)
+      (error "Agent request configuration is not frozen"))
+    (setq frozen (copy-mevedel-agent-configuration frozen))
+    (setf (mevedel-agent-invocation-frozen-configuration invocation) frozen)
+    ;; A frozen backend that is still the registered one keeps its frozen
+    ;; model, which gptel accepts even when the backend does not list it.
+    ;; Only a backend replaced or removed since freezing is re-resolved by
+    ;; name, falling back as the session's model recovery directs.
+    (when-let* ((backend (alist-get 'gptel-backend
+                                    (mevedel-agent-configuration-request-locals frozen)))
+                ((not (eq backend (ignore-errors
+                                    (gptel-get-backend (gptel-backend-name backend)))))))
+      (let* ((locals (copy-tree (mevedel-agent-configuration-request-locals frozen)))
+             (selector (format "%s:%s" (gptel-backend-name backend)
+                               (gptel--model-name (alist-get 'gptel-model locals))))
+             (provider (mevedel-model-recover-provider
+                        selector (mevedel-agent-invocation-parent-session invocation))))
+        (unless provider (user-error "Agent provider is unavailable; select a fallback"))
+        (setf (alist-get 'gptel-backend locals) (plist-get provider :backend)
+              (alist-get 'gptel-model locals) (plist-get provider :model))
+        (condition-case nil
+            (mevedel-model-validate-effort (plist-get provider :model)
+                                           (alist-get 'gptel-reasoning-effort locals))
+          (user-error (setf (alist-get 'gptel-reasoning-effort locals) nil)))
+        (setf (mevedel-agent-configuration-request-locals frozen) locals)))
+    frozen))
+
 (cl-defun mevedel-agent-exec-run (main-cb agent-type description
                                           invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
@@ -450,28 +480,7 @@ Returns the native FSM or external invocation handle."
     (error "Invalid sub-agent invocation"))
   (unless (buffer-live-p agent-buffer)
     (error "Sub-agent buffer is not live"))
-  (let ((frozen
-         (mevedel-agent-invocation-frozen-configuration invocation)))
-    (unless (mevedel-agent-configuration-p frozen)
-      (error "Agent request configuration is not frozen"))
-    (setq frozen (copy-mevedel-agent-configuration frozen))
-    (setf (mevedel-agent-invocation-frozen-configuration invocation) frozen)
-    (when (alist-get 'gptel-backend (mevedel-agent-configuration-request-locals frozen))
-      (let* ((locals (copy-tree (mevedel-agent-configuration-request-locals frozen)))
-             (backend (alist-get 'gptel-backend locals))
-             (model (alist-get 'gptel-model locals))
-             (selector (format "%s:%s" (gptel-backend-name backend)
-                               (gptel--model-name model)))
-             (provider (mevedel-model-recover-provider
-			selector (mevedel-agent-invocation-parent-session invocation))))
-	(unless provider (user-error "Agent provider is unavailable; select a fallback"))
-	(setf (alist-get 'gptel-backend locals) (plist-get provider :backend)
-              (alist-get 'gptel-model locals) (plist-get provider :model))
-	(condition-case nil
-            (mevedel-model-validate-effort (plist-get provider :model)
-                                           (alist-get 'gptel-reasoning-effort locals))
-          (user-error (setf (alist-get 'gptel-reasoning-effort locals) nil)))
-	(setf (mevedel-agent-configuration-request-locals frozen) locals)))
+  (let ((frozen (mevedel-agent-exec-refresh-provider invocation)))
     (when (mevedel-engine-external-p
            (alist-get 'gptel-backend (mevedel-agent-configuration-request-locals frozen)))
       (cl-return-from mevedel-agent-exec-run

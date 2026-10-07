@@ -9,6 +9,8 @@
 
 (require 'gptel-request)
 (require 'mevedel-agent-control)
+(require 'mevedel-agent-exec)
+(require 'mevedel-claude-code-backend)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
@@ -435,6 +437,50 @@
                                               (buffer-string))))))))
       (kill-buffer agent-buffer)
       (kill-buffer parent)))
+
+  :doc "copies forked context into the turn text only for an external engine"
+  (let* ((gptel--known-backends nil)
+         (claude (mevedel-claude-code-register))
+         sent)
+    (dolist (case `((nil . nil)
+                    (((gptel-backend . ,claude) (gptel-model . sonnet))
+                     . "PARENT TRANSCRIPT\n\nInitial task")))
+      (let ((parent (generate-new-buffer " *agent-runtime-fork-parent*"))
+            (agent-buffer (generate-new-buffer " *agent-runtime-fork-child*"))
+            (configuration
+             (mevedel-agent-configuration--create
+              :agent (mevedel-agent-runtime-test--agent)
+              :request-locals (car case))))
+        (unwind-protect
+            (with-current-buffer parent
+              (setq-local mevedel--session (mevedel-session--create :name "main"))
+              (cl-letf
+                  (((symbol-function 'mevedel-agent-conversation-open)
+                    (lambda (&rest _) agent-buffer))
+                   ((symbol-function 'mevedel-agent-conversation-configure) #'ignore)
+                   ((symbol-function 'mevedel-agent-runtime--setup-transcript)
+                    (lambda (invocation _buffer)
+                      (setf (mevedel-agent-invocation-transcript-relative-path
+                             invocation)
+                            "agents/explorer.chat.org")))
+                   ((symbol-function 'mevedel-agent-conversation-save)
+                    (lambda (&rest _) t))
+                   ((symbol-function 'mevedel-agent-exec-run)
+                    (lambda (_callback _role _description invocation _buffer)
+                      (setq sent (plist-get (mevedel-engine-info invocation)
+                                            :mevedel-agent-prompt))
+                      'provider-fsm)))
+                (mevedel-agent-runtime-dispatch
+                 (mevedel-agent-runtime-test--agent) "Explore" "Initial task"
+                 :path "/root/explore"
+                 :context-snapshot "PARENT TRANSCRIPT"
+                 :frozen-configuration configuration
+                 :prepared-turn '(:prompt "Initial task"))
+                (should (equal (cdr case) sent))
+                (with-current-buffer agent-buffer
+                  (should (string-match-p "PARENT TRANSCRIPT" (buffer-string))))))
+          (kill-buffer agent-buffer)
+          (kill-buffer parent)))))
 
   :doc "runs SubagentStart once for a retained conversation, not per turn"
   (let* ((parent (generate-new-buffer " *agent-runtime-start-parent*"))

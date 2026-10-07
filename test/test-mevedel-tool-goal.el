@@ -7,6 +7,8 @@
 
 (require 'mevedel)
 (require 'mevedel-tool-goal)
+(require 'mevedel-tools)
+(require 'mevedel-context-delivery)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-codec)
@@ -200,6 +202,8 @@ and `verify-callback' delivers the verifier outcome."
                                (plist-get (mevedel-tool-goal--handle-get nil) :result)
                                :object-type 'plist) :goal)))
         (should (= 25 (plist-get value :tokens_used)))
+        ;; Complete usage leaves no separate lower bound to report.
+        (should-not (plist-get value :known_tokens_used))
         (should (= 75 (plist-get value :remaining_tokens)))))
     (setf (mevedel-goal-id (mevedel-session-goal session)) "different")
     (plist-put (gptel-fsm-info fsm) :tokens-full '(:input 999))

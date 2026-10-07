@@ -9,9 +9,9 @@
 ;;; Code:
 
 (require 'mevedel-engine)
+(require 'mevedel-tool-registry)
 
 (eval-when-compile
-  (require 'mevedel-tool-registry)
   (require 'mevedel-structs)
   (require 'subr-x))
 
@@ -117,23 +117,25 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
           (json-serialize
            (list :goal
                  (when goal
-                   (list :id (mevedel-goal-id goal)
-                         :objective (mevedel-goal-objective goal)
-                         :status (symbol-name (mevedel-goal-status goal))
-                         :reason (mevedel-goal-reason goal)
-                         :token_budget budget :tokens_used (unless incomplete used)
-                         :known_tokens_used used
-                         :remaining_tokens (and budget (not incomplete) (max 0 (- budget used)))
-                         :time_used_seconds
-                         (+ (mevedel-goal-time-used-seconds goal)
-                            (if in-flight
-                                (max 0 (round (- (float-time)
-                                                 (or (plist-get info :mevedel-goal-started-at)
-                                                     (float-time)))))
-                              0))
-                         :turns_run (mevedel-goal-turns-run goal)
-                         :plan_reference plan-address
-                         :plan_reference_error plan-error)))
+                   (nconc
+                    (list :id (mevedel-goal-id goal)
+                          :objective (mevedel-goal-objective goal)
+                          :status (symbol-name (mevedel-goal-status goal))
+                          :reason (mevedel-goal-reason goal)
+                          :token_budget budget :tokens_used (unless incomplete used))
+                    ;; Complete usage has no separate lower bound to report.
+                    (when incomplete (list :known_tokens_used used))
+                    (list :remaining_tokens (and budget (not incomplete) (max 0 (- budget used)))
+                          :time_used_seconds
+                          (+ (mevedel-goal-time-used-seconds goal)
+                             (if in-flight
+                                 (max 0 (round (- (float-time)
+                                                  (or (plist-get info :mevedel-goal-started-at)
+                                                      (float-time)))))
+                               0))
+                          :turns_run (mevedel-goal-turns-run goal)
+                          :plan_reference plan-address
+                          :plan_reference_error plan-error))))
            :null-object nil :false-object :false))))
 
 (defun mevedel-tool-goal--handle-create (args)

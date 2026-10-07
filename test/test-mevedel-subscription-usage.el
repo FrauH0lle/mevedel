@@ -118,6 +118,45 @@
                 (should-not mevedel-subscription-usage--cancel)))
           (when (buffer-live-p report) (kill-buffer report)))))))
 
+(mevedel-deftest mevedel-subscription-usage-show/codex-http (:quiet t)
+  ;; Report, provider, credential check and HTTP run unmocked; only the
+  ;; fixed quota endpoint is redirected to a local server.
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((directory (make-temp-file "usage-codex-" t))
+             (gptel--openai-oauth-token-file (file-name-concat directory "token.el"))
+             (mevedel-auth--operations (make-hash-table :test #'equal))
+             (backend (gptel--make-openai-oauth :name "Selected Codex"))
+             (original-retrieve (symbol-function 'url-retrieve))
+             request report)
+        (gptel-oauth--write-token
+         gptel--openai-oauth-token-file
+         (list :access_token "current" :refresh_token "refresh"
+               :expires_at (+ (float-time) 3600)
+               :id_token '(:https://api.openai.com/auth (:chatgpt_account_id "chosen"))))
+        (unwind-protect
+            (mevedel-test-http
+             (lambda (line) (setq request line)
+               '("200 OK" "" "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":40}}}"))
+             (lambda (url)
+               (cl-letf (((symbol-function 'url-retrieve)
+                          (lambda (_requested callback &rest args)
+                            (apply original-retrieve (concat url "/wham/usage") callback args))))
+                 (with-current-buffer data-buf
+                   (setq-local gptel-backend backend gptel-model 'gpt-5.5))
+                 (with-current-buffer view-buf (mevedel-view-run-invocation "usage" ""))
+                 (setq report (buffer-local-value 'mevedel-subscription-usage--buffer data-buf))
+                 (with-timeout (5 (ert-fail "Usage report did not settle"))
+                   (while (with-current-buffer report mevedel-subscription-usage--cancel)
+                     (accept-process-output nil 0.01)))
+                 (with-current-buffer report
+                   (should (string-match-p "Account: chosen" (buffer-string)))
+                   (should (string-match-p "Plan: plus" (buffer-string)))
+                   (should (string-match-p "40% used" (buffer-string))))
+                 (should (string-prefix-p "GET /wham/usage" request)))))
+          (when (buffer-live-p report) (kill-buffer report))
+          (delete-directory directory t))))))
+
 (mevedel-deftest mevedel-cmd--usage ()
   (progn
    (should (assq 'mevedel-cmd--usage (mapcar (lambda (entry) (cons (cdr entry) (car entry))) mevedel-slash-commands)))

@@ -12,12 +12,7 @@
 (require 'mevedel-auth)
 (require 'mevedel-claude-code)
 (require 'mevedel-acp-text)
-(require 'url-http)
 (require 'json)
-
-;; `url-http'
-(defvar url-http-end-of-headers)
-(defvar url-http-response-status)
 
 (defun mevedel-subscription-usage-provider--value (value)
   "Format a JSON scalar VALUE, keeping missing values distinct from zero."
@@ -35,6 +30,7 @@
     (dolist (value (list used seconds reset))
       (unless (or (null value) (and (numberp value) (>= value 0)))
         (error "Invalid quota window")))
+    (when seconds (setq seconds (round seconds)))
     (format "%s: %s used; window: %s; resets: %s\n%s"
             label
             (if used (format "%s%%" used) "Unavailable")
@@ -89,66 +85,39 @@
   "Fetch BACKEND's Codex quotas, delivering CALLBACK; return a canceller.
 Keep gptel's private authentication API here, renewing before HTTP dispatch.
 Neither authentication errors nor HTTP bodies are included in diagnostics."
-  (let (response timer done headers)
-    (cl-labels
-        ((cleanup ()
-           (when timer (cancel-timer timer) (setq timer nil))
-           (when (buffer-live-p response)
-             (when-let* ((process (get-buffer-process response)))
-               (delete-process process))
-             (kill-buffer response)))
-         (finish (text error)
-           (unless done
-             (setq done t)
-             (cleanup)
-             (funcall callback text error)))
-         (cancel () (setq done t) (cleanup)))
-      (condition-case nil
-          (let ((gptel-backend backend))
-            (mevedel-auth-assert-ready backend)
-            (setq headers (gptel--openai-oauth-header nil)))
-        (error (finish nil "Codex authentication failed. Run M-x gptel-openai-oauth-login and refresh.")))
-      (unless done
-        (condition-case nil
-            (let ((url-request-method "GET")
-                  (url-request-extra-headers headers)
-                  (url-request-data nil)
-                  (url-show-status nil) (url-request-noninteractive t)
-                  (url-max-redirections 0))
-              (setq timer (run-at-time 30 nil (lambda () (finish nil "Codex usage request timed out; refresh to retry."))))
-              (setq response
-                    (url-retrieve
-                     "https://chatgpt.com/backend-api/wham/usage"
-                     (lambda (status)
-                       (setq response (current-buffer))
-                       (unless done
-                         (let ((code url-http-response-status))
-                           (cond
-                            ((memq code '(401 403))
-                             (finish nil "Codex usage access denied. Run M-x gptel-openai-oauth-login for the selected account and refresh."))
-                            ((or (plist-get status :error) (not (eql code 200)))
-                             (finish nil (format "Codex usage HTTP request failed (status %s); refresh to retry."
-                                                 (if (integerp code) code "unavailable"))))
-                            (t
-                             (let ((text
-                                    (condition-case nil
-                                        (progn
-                                          (goto-char url-http-end-of-headers)
-                                          (mevedel-subscription-usage-provider--codex-text
-                                           (json-parse-buffer :object-type 'alist :array-type 'list
-                                                              :null-object nil :false-object :false)
-                                           (cdr (assoc "ChatGPT-Account-Id" headers))))
-                                      (error nil))))
-                               (if text (finish text nil)
-                                 (finish nil "Unrecognized Codex usage response; check gptel/provider support and retry.")))))))
-                       (cleanup))
-                     nil t t))
-              (if done (cleanup)
-                (unless (buffer-live-p response)
-                  (finish nil "Codex usage connection could not be opened; refresh to retry."))))
-          (error (finish nil "Codex usage connection failed; check connectivity and refresh."))
-          (quit (cancel) (signal 'quit nil))))
-      #'cancel)))
+  (let (headers failure)
+    (condition-case nil
+        (let ((gptel-backend backend))
+          (mevedel-auth-assert-ready backend)
+          (setq headers (gptel--openai-oauth-header nil)))
+      (error
+       ;; Readiness starts an asynchronous renewal before it refuses.
+       (setq failure
+             (if (equal "refreshing" (plist-get (mevedel-auth-state backend) :status))
+                 "Codex login is renewing; refresh shortly."
+               "Codex login is required. Run M-x gptel-openai-oauth-login and refresh."))))
+    (if failure
+        (progn (funcall callback nil failure) #'ignore)
+      (mevedel-auth--http
+       "https://chatgpt.com/backend-api/wham/usage" nil nil
+       (lambda (text code)
+         (if (and text (eql code 200))
+             (funcall callback text nil)
+           (funcall callback nil
+                    (cond ((memq code '(401 403))
+                           "Codex usage access denied. Run M-x gptel-openai-oauth-login for the selected account and refresh.")
+                          ((eql code 200)
+                           "Unrecognized Codex usage response; check gptel/provider support and retry.")
+                          ((memq code '(0 nil))
+                           "Codex usage request failed or timed out; check connectivity and refresh.")
+                          (t (format "Codex usage HTTP request failed (status %s); refresh to retry."
+                                     code))))))
+       headers
+       (lambda ()
+         (mevedel-subscription-usage-provider--codex-text
+          (json-parse-buffer :object-type 'alist :array-type 'list
+                             :null-object nil :false-object :false)
+          (cdr (assoc "ChatGPT-Account-Id" headers))))))))
 
 (defun mevedel-subscription-usage-provider--claude-text (text)
   "Extract only the recognized subscription header and Limits from TEXT.

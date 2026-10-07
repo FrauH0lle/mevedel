@@ -739,7 +739,40 @@ fire-count and payload."
 			 (should (member "Bash" (mapcar #'gptel-tool-name
 							 captured-tools))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
-		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
+		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
+
+		 :doc "keeps a frozen model the registered backend does not list"
+		 ;; gptel sends any `gptel-model' symbol; an unlisted model on the
+		 ;; still-registered backend must not fall back to the default.
+		 (let* ((gptel--known-backends nil)
+			(backend (gptel-make-openai "Unlisted" :key "k"
+					     :models '(listed-model)))
+			(agent-buf (generate-new-buffer " *mev-agent-child*"))
+			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
+			      :agent (mevedel-agent-default)))
+			captured)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (let ((mevedel-agents--specs nil)
+			       (gptel-backend backend)
+			       (gptel-model 'unlisted-model)
+			       (gptel-stream nil)
+			       (gptel--fsm-last nil))
+			   (setf (mevedel-agent-invocation-frozen-configuration inv)
+				 (mevedel-agent-exec-freeze-configuration
+				  "default" inv
+				  (list :backend backend :model 'unlisted-model
+				        :effort nil)))
+			   (cl-letf (((symbol-function 'gptel-request)
+				      (lambda (&rest _)
+					(setq captured (cons gptel-backend gptel-model))))
+				     ((symbol-function 'gptel--update-status) #'ignore))
+			     (mevedel-agent-exec-run
+			      #'ignore "default" "task" inv agent-buf))
+			   (should (eq backend (car captured)))
+			   (should (eq 'unlisted-model (cdr captured)))))
+		     (kill-buffer agent-buf))))
 
 
 (mevedel-deftest mevedel-agent-exec--invocation-from-fsm ()

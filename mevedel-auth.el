@@ -7,10 +7,10 @@
 (require 'url-http)
 (require 'json)
 (require 'mevedel-recovery)
+(require 'mevedel-claude-code-backend)
 
 ;; `mevedel-claude-code'
 (declare-function mevedel-claude-code--prepare-launch "mevedel-claude-code" (checks cli environment ready failure))
-(declare-function mevedel-claude-code-backend-p "mevedel-claude-code-backend" (object))
 (defvar mevedel-claude-code--api-environment)
 (defvar mevedel-claude-code-executable)
 
@@ -37,8 +37,7 @@
 (defun mevedel-auth--key (backend)
   "Return the credential-store identity for BACKEND."
   (cond ((gptel-openai-oauth-p backend) (expand-file-name gptel--openai-oauth-token-file))
-        ((and (fboundp 'mevedel-claude-code-backend-p)
-              (mevedel-claude-code-backend-p backend))
+        ((mevedel-claude-code-backend-p backend)
          (concat "claude:" (or (getenv "CLAUDE_CONFIG_DIR") (expand-file-name "~/.claude"))))
         (t (user-error "This provider has no browser login"))))
 
@@ -69,39 +68,50 @@
                           (error nil))
                         nil))))
 
-(defun mevedel-auth--http (url data form callback)
-  "POST DATA to URL asynchronously; CALLBACK receives payload and HTTP code.
-FORM selects form encoding.  Return a canceller.
+(defun mevedel-auth--http (url data form callback &optional headers parse)
+  "Request URL asynchronously; CALLBACK receives payload and HTTP code.
+POST DATA, form-encoded when FORM, or GET when DATA is nil.  HEADERS are
+extra request headers.  PARSE, called at the response body, returns the
+payload and defaults to a JSON plist; a failed parse yields nil.  Code 0
+means no response within 30 seconds or no connection.  Return a canceller.
 Never expose HTTP bodies in errors."
-  (let (buffer timer done)
+  (let (buffers timer done)
     (cl-labels ((clean ()
                   (when timer (cancel-timer timer))
-                  (when (buffer-live-p buffer)
-                    (when-let* ((process (get-buffer-process buffer))) (delete-process process))
-                    (kill-buffer buffer)))
-		(finish (payload code)
+                  ;; url-http retries a 401 in a new buffer; kill each one.
+                  (dolist (buffer buffers)
+                    (when (buffer-live-p buffer)
+                      (when-let* ((process (get-buffer-process buffer))) (delete-process process))
+                      (kill-buffer buffer))))
+                (finish (payload code)
                   (unless done (setq done t) (clean) (funcall callback payload code)))
-		(cancel () (setq done t) (clean)))
+                (cancel () (setq done t) (clean)))
       (condition-case nil
-          (let ((url-request-method "POST")
-                (url-request-data (encode-coding-string
-                                   (if form (url-build-query-string data) (json-serialize data)) 'utf-8))
+          (let ((url-request-method (if data "POST" "GET"))
+                (url-request-data
+                 (and data (encode-coding-string
+                            (if form (url-build-query-string data) (json-serialize data)) 'utf-8)))
                 (url-request-extra-headers
-                 `(("Content-Type" . ,(if form "application/x-www-form-urlencoded" "application/json"))))
+                 (append (and data `(("Content-Type" . ,(if form "application/x-www-form-urlencoded"
+                                                          "application/json"))))
+                         headers))
                 (url-show-status nil) (url-request-noninteractive t) (url-max-redirections 0))
             (setq timer (mevedel-transport-run-at-time 30 (lambda () (finish nil 0))))
-            (setq buffer
-                  (url-retrieve url
-				(lambda (_status)
-				  (setq buffer (current-buffer))
-				  (let ((code url-http-response-status)
-					(payload (condition-case nil
-						     (progn (goto-char url-http-end-of-headers)
-							    (json-parse-buffer :object-type 'plist :null-object nil :false-object nil))
-						   (error nil))))
-				    (finish payload code))) nil t t))
+            (push (url-retrieve url
+                                (lambda (_status)
+                                  (push (current-buffer) buffers)
+                                  (let ((code url-http-response-status)
+                                        (payload (condition-case nil
+                                                     (progn (goto-char url-http-end-of-headers)
+                                                            (if parse (funcall parse)
+                                                              (json-parse-buffer :object-type 'plist :null-object nil
+                                                                                 :false-object nil)))
+                                                   (error nil))))
+                                    (finish payload code))) nil t t)
+                  buffers)
             (when done (clean)))
-        (error (finish nil 0)))
+        (error (finish nil 0))
+        (quit (cancel) (signal 'quit nil)))
       #'cancel)))
 
 (defun mevedel-auth-cancel (backend)
@@ -114,6 +124,13 @@ Never expose HTTP bodies in errors."
                       (lambda (observer)
                         (condition-case nil (funcall observer backend nil) (error nil)) nil))))
 
+(defun mevedel-auth--current-p (token)
+  "Return whether TOKEN holds an access token valid for 30 more seconds."
+  (and (proper-list-p token)
+       (stringp (plist-get token :access_token))
+       (numberp (plist-get token :expires_at))
+       (> (plist-get token :expires_at) (+ (float-time) 30))))
+
 (defun mevedel-auth-codex-ready-p (backend)
   "Reload BACKEND credentials and return whether its access token is current."
   (condition-case nil
@@ -121,9 +138,7 @@ Never expose HTTP bodies in errors."
         (unless (and (proper-list-p token) (cl-evenp (length token)))
           (setq token nil))
         (setf (gptel-openai-oauth-token backend) token)
-        (and (stringp (plist-get token :access_token))
-             (numberp (plist-get token :expires_at))
-             (> (plist-get token :expires_at) (+ (float-time) 30))))
+        (mevedel-auth--current-p token))
     (error (setf (gptel-openai-oauth-token backend) nil) nil)))
 
 (defun mevedel-auth--codex-persist (backend payload)
@@ -148,7 +163,8 @@ Never expose HTTP bodies in errors."
       (when (file-locked-p lock)
         (mevedel-auth--publish backend "failed" "Another host process is renewing Codex login; retry shortly")
         (user-error "Another host process is renewing Codex login; retry shortly"))
-      (lock-file lock)
+      ;; `lock-file' does nothing while `create-lockfiles' is nil.
+      (let ((create-lockfiles t)) (lock-file lock))
       (plist-put (gethash (mevedel-auth--key backend) mevedel-auth--operations) :lock lock))))
 
 (defun mevedel-auth-assert-ready (backend)
@@ -169,6 +185,9 @@ Begin asynchronous renewal; callers retain their ordinary failure lifecycle."
     (if (not (and (gptel-openai-oauth-p backend) (buffer-live-p buffer)
                   (or (buffer-local-value 'mevedel-auth--managed buffer)
                       (buffer-local-value 'mevedel--session buffer))
+                  ;; Every request and tool round trip passes here; reread the
+                  ;; credential file only once the loaded token is stale.
+                  (not (mevedel-auth--current-p (gptel-openai-oauth-token backend)))
                   (not (mevedel-auth-codex-ready-p backend))))
         (funcall original fsm)
       (condition-case nil (mevedel-auth-refresh backend) (error nil))

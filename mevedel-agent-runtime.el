@@ -73,10 +73,13 @@
 (declare-function mevedel-agent-exec-freeze-configuration
                   "mevedel-agent-exec"
                   (agent-type invocation &optional model-policy))
+(declare-function mevedel-agent-exec-refresh-provider
+                  "mevedel-agent-exec" (invocation))
 (declare-function mevedel-agent-exec-run
                   "mevedel-agent-exec"
                   (main-cb agent-type description invocation agent-buffer))
 (autoload 'mevedel-agent-exec-freeze-configuration "mevedel-agent-exec")
+(autoload 'mevedel-agent-exec-refresh-provider "mevedel-agent-exec")
 (autoload 'mevedel-agent-exec-run "mevedel-agent-exec")
 
 ;; `mevedel-agent-persistence'
@@ -1058,11 +1061,19 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                                (mevedel-agent-runtime--insert-prompt
                                 invocation buffer description (plist-get turn :prompt)
                                 context-snapshot retained-p (plist-get turn :audits))))
-              (setf (mevedel-engine-info invocation)
-                    (plist-put (mevedel-engine-info invocation) :mevedel-agent-prompt
-                               (if (and context-snapshot (not (string-empty-p context-snapshot)))
-                                   (concat context-snapshot "\n\n" (plist-get turn :prompt))
-                                 (plist-get turn :prompt))))
+              ;; Only an external engine sends the turn as one text; gptel
+              ;; reads it from the buffer, so skip the transcript-sized copy.
+              (when (mevedel-engine-external-p
+                     (alist-get 'gptel-backend
+                                (mevedel-agent-configuration-request-locals
+                                 (mevedel-agent-exec-refresh-provider invocation))))
+                (setf (mevedel-engine-info invocation)
+                      (plist-put (mevedel-engine-info invocation) :mevedel-agent-prompt
+                                 (if (and context-snapshot
+                                          (not (string-empty-p context-snapshot)))
+                                     (concat context-snapshot "\n\n"
+                                             (plist-get turn :prompt))
+                                   (plist-get turn :prompt)))))
               (when (and pending-hook-context on-hook-context)
                 (funcall on-hook-context nil))
               (when (and on-settle
