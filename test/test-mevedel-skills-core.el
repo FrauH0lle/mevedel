@@ -1691,11 +1691,25 @@ description: Review changed code
   ,test
   (test)
   :doc "defaults prefer local mevedel/agents dirs before global dirs"
-  (should (equal '(".mevedel/skills/"
-                   ".agents/skills/"
-                   "~/.mevedel/skills/"
-                   "~/.agents/skills/")
+  (should (equal (list ".mevedel/skills/"
+                       ".agents/skills/"
+                       (file-name-concat mevedel-user-dir "skills/")
+                       "~/.agents/skills/")
                  mevedel-skill-dirs)))
+
+(mevedel-deftest mevedel-skills--source-family-from-dir ()
+  ,test
+  (test)
+  :doc "skills under a relocated `mevedel-user-dir' belong to the mevedel family"
+  (let ((mevedel-user-dir "/srv/state/mevedel/"))
+    (should (eq 'mevedel (mevedel-skills--source-family-from-dir
+                          "/srv/state/mevedel/skills/")))
+    (should (eq 'mevedel (mevedel-skills--source-family-from-dir
+                          "/proj/.mevedel/skills")))
+    (should (eq 'agents (mevedel-skills--source-family-from-dir
+                         "~/.agents/skills/")))
+    (should-not (mevedel-skills--source-family-from-dir
+                 "/srv/state/other/skills/"))))
 
 
 ;;

@@ -70,7 +70,8 @@ the shared baseline. Its description is discoverable with the other skills;
 the body loads through `Skill(name="frontend")` or an explicit `$frontend`
 invocation, without automatically activating for every source-file read.
 The default search order is `.mevedel/skills/`,
-`.agents/skills/`, `~/.mevedel/skills/`, then `~/.agents/skills/`.
+`.agents/skills/`, `skills/` under `mevedel-user-dir` (default
+`~/.mevedel/`), then `~/.agents/skills/`.
 Unique names stay unqualified. When non-plugin skills from different
 sources share a name, all colliding entries are exposed with the shortest
 deterministic prefix that disambiguates them, such as `mevedel:review`,

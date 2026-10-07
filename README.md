@@ -137,6 +137,21 @@ a request.
 
 Run `mevedel-uninstall` to deactivate `mevedel`.
 
+To keep global user state somewhere other than `~/.mevedel/`, set
+`mevedel-user-dir` before mevedel loads, for example with `:custom` (or a
+`setq` in `:init`). The defaults of `mevedel-skill-dirs` and
+`mevedel-memory-dirs` are computed from it at load time; a later change
+does not move them.
+
+``` emacs-lisp
+(use-package mevedel
+  :after gptel
+  :custom
+  (mevedel-user-dir (expand-file-name "mevedel/" user-emacs-directory))
+  :config
+  (mevedel-install))
+```
+
 ### Claude Pro/Max subscriptions
 
 Install the unmodified Claude CLI using its
@@ -325,7 +340,7 @@ memory roots, the configured plans directory, and manually configured roots.
 | Custom Variable               | Variable Description                                             |
 |-------------------------------|------------------------------------------------------------------|
 | `mevedel-default-chat-preset` | Default preset when `mevedel` is invoked without prefix arg.     |
-| `mevedel-user-dir`            | Global user-state directory for skills, config, and permissions. |
+| `mevedel-user-dir`            | Global user-state directory for skills, memory, plugins, config, and permissions. Set before mevedel loads. |
 
 - If the region mark started from outside the reference/directive overlay and a
   part of it is within the selected region, the instruction will be "shrunk" to
@@ -1164,7 +1179,7 @@ Useful commands:
 
 A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `.mevedel/skills/`, `.agents/skills/`,
-`~/.mevedel/skills/`, `~/.agents/skills/`, and from the directories listed in
+`skills/` under `mevedel-user-dir` (default `~/.mevedel/`), `~/.agents/skills/`, and from the directories listed in
 `mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
 (for example `review`, `analyze-log`, `learn`, and `clean-work`); name conflicts are exposed with
 deterministic visible prefixes.
@@ -1268,7 +1283,8 @@ When a prompt profile selects memory, the first 200 lines of each configured
 memory index are included. Main and worker profiles select it;
 Explorer, verifier, reviewer, guardian, and context-summary requests do not. The default
 memory roots are `.mevedel/memory/`,
-`.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
+`.agents/memory/`, `memory/` under `mevedel-user-dir` (default
+`~/.mevedel/`), and `~/.agents/memory/`.
 `MEMORY.md` is an index; durable memory bodies live in linked topic files with
 frontmatter that classifies them as user, feedback, project, or reference
 memories. The native `/remember [focus]` command reviews journal evidence and
