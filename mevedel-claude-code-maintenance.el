@@ -153,7 +153,8 @@ installing anything else would silently move the user to another channel."
       "latest")))
 
 (defun mevedel-claude-code-maintenance-check (&optional force)
-  "Check updates on the CLI's own channel asynchronously when due, or now with FORCE.
+  "Check updates asynchronously when due, or now with FORCE.
+The native CLI follows its own configured channel.
 Return current state.  Concurrent sessions and hosts share an installation
 lock.  A forced check reports a running check and its result in the echo area."
   (when (and mevedel-claude-code-auto-update (not mevedel-claude-code-maintenance--timer))
